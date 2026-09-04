@@ -30,7 +30,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { formatFeatureTaskEntry } from "../../shared/lib/absolution.mjs";
+import { formatFeatureTaskEntry, matchesAbsolution } from "../../shared/lib/absolution.mjs";
 import { checkFrozen, checkScope } from "../../shared/lib/capture-oracle.mjs";
 import { mergeGateStatePatch } from "../../shared/lib/gate-state-shape.mjs";
 import { computeGitState } from "../../shared/lib/git-state.mjs";
@@ -66,9 +66,11 @@ import {
 } from "./pi-adapter-map.mjs";
 import { loadPiGateStateFromDisk } from "./pi-gate-state.mjs";
 import { piGateStatePath } from "./pi-paths.mjs";
+import { readPiSpecApproval, readPiSpecDraft } from "./spec-approval.mjs";
 import {
   claimPiDispatchForRuntime,
   listPiHandRecordsForFeature,
+  readPiCanonicalTaskPolicy,
   readPiDispatchRecord,
   removePiDispatchRecord,
   writePiHandRecord,
@@ -402,6 +404,9 @@ export async function decidePiBashGate(input = {}) {
  *   loadGateStateFn?: (root: string, opts: {sessionId?: string|null}) => object,
  *   isAncestorFn?: (sha: string) => boolean|null,
  *   claimDispatchFn?: (root: string, args: object, deps: object) => object,
+ *   readCanonicalTaskPolicyFn?: (root: string, featureId: string, taskId: string) => object,
+ *   readSpecDraftFn?: (context: object) => object,
+ *   readSpecApprovalFn?: (context: object) => object,
  * }} input
  * @returns {{ok: boolean, decision: "allow"|"deny", reason: string, details?: unknown}}
  */
@@ -468,39 +473,129 @@ export function decidePiDispatchGate(input = {}) {
   const dispatchFeatureId =
     identity.featureIdSource === "runtime-envelope" ? identity.featureId : optionalIds.featureId;
   const taskId = identity.taskId || optionalIds.taskId;
+  const bareRole = toOcRole(input.subagentType);
+
+  // `no_tests` não é um argumento de dispatch: é uma propriedade validada da tarefa estável.
+  // Só o executor normal a consome; test-author continua sem caminhos para produzir e sniper
+  // continua no rail de fidelidade de correção. O hash volta no claim para não liberar uma tarefa
+  // cuja política mudou entre esta leitura e a reivindicação atômica do escopo.
+  let canonicalNoTests = false;
+  let noTestsPlanHash = "";
+  if (isExecutorRole(bareRole) && featureId && taskId) {
+    const readPolicy =
+      typeof input.readCanonicalTaskPolicyFn === "function"
+        ? input.readCanonicalTaskPolicyFn
+        : readPiCanonicalTaskPolicy;
+    const policy = readPolicy(projectRoot, featureId, taskId);
+    if (!policy?.ok) {
+      return {
+        ok: false,
+        decision: "deny",
+        reason: `${PREFIX} Blocked: canonical task policy unavailable: ${String(policy?.reason ?? "unknown")}`,
+      };
+    }
+    canonicalNoTests = policy.noTests === true;
+    if (canonicalNoTests) {
+      if (typeof policy.planHash !== "string" || policy.planHash.length === 0) {
+        return { ok: false, decision: "deny", reason: `${PREFIX} Blocked: canonical no_tests policy lacks plan hash.` };
+      }
+      noTestsPlanHash = policy.planHash;
+    }
+  }
 
   const isAncestorFn =
     typeof input.isAncestorFn === "function"
       ? input.isAncestorFn
       : (sha) => piIsAncestor(sha, projectRoot);
 
+  if (isWritingHandRole(input.subagentType) && taskId && Array.isArray(gateState.regate_pending)) {
+    const own = formatFeatureTaskEntry(featureId, taskId);
+    const unresolvedOther = gateState.regate_pending.some(
+      (pending) => typeof pending === "string" && pending !== own &&
+        !matchesAbsolution(pending, gateState.regate_passed, isAncestorFn),
+    );
+    if (unresolvedOther) {
+      return { ok: false, decision: "deny", reason: `${PREFIX} Blocked: another task requires adversary re-gate before writing hand dispatch.` };
+    }
+  }
+
+  // decideEntryTask é compartilhado com OC e ainda não conhece no_tests. A cópia é efêmera e
+  // localizada: só satisfaz o seu consumer de fidelidade para a tarefa canônica sem testes;
+  // não persiste nem remove qualquer outro rail do gate-state original.
+  const entryGateState = canonicalNoTests
+    ? {
+        ...gateState,
+        fidelity_pass: [
+          ...(Array.isArray(gateState.fidelity_pass) ? gateState.fidelity_pass : []),
+          formatFeatureTaskEntry(featureId, taskId),
+        ],
+      }
+    : gateState;
   const entryDecision = decideEntryTask({
     subagentType: role,
-    gateState,
+    gateState: entryGateState,
     featureId,
     dispatchFeatureId,
     taskId,
     isAncestorFn,
+    allowAdversaryBeforeBrainstorm: role === "adversary",
   });
   if (entryDecision.decision === "deny") return entryDecision;
 
+  // O único desvio Pi da ordem legada é o adversary sobre uma draft host-owned, antes da
+  // aprovação humana. Nenhum outro papel ganha essa exceção. Fazemos essa checagem DEPOIS da
+  // cerimônia comum para preservar as mensagens de triagem ausente/ordem do pipeline.
+  if (role === "adversary" && gateState.spec_status === "draft") {
+    const readDraft = typeof input.readSpecDraftFn === "function" ? input.readSpecDraftFn : readPiSpecDraft;
+    const draft = readDraft({ projectRoot, sessionId, featureId });
+    if (!draft?.ok) {
+      return { ok: false, decision: "deny", reason: `${PREFIX} Blocked: ${String(draft?.reason ?? "current canonical spec draft required")}` };
+    }
+  }
+  if (role === "planner") {
+    const readApproval = typeof input.readSpecApprovalFn === "function" ? input.readSpecApprovalFn : readPiSpecApproval;
+    const approved = readApproval({ projectRoot, sessionId, featureId });
+    if (!approved?.ok) {
+      return { ok: false, decision: "deny", reason: `${PREFIX} Blocked: ${String(approved?.reason ?? "current adversary-reviewed spec required")}` };
+    }
+  }
+
   if (isWritingHandRole(input.subagentType)) {
     const callId = typeof input.toolCallId === "string" ? input.toolCallId : "";
-    if (!sessionId || !callId || !taskId) {
-      if (env.HARNESS_FIX_MODE === "1") {
-        return {
-          ok: false,
-          decision: "deny",
-          reason: `${PREFIX} exact dispatch identity required in fix mode`,
-        };
-      }
-      return { ...ALLOW, reason: "writing-hand-without-exact-identity" };
+    if (!sessionId || !callId || !taskId || !featureId) {
+      return {
+        ok: false,
+        decision: "deny",
+        reason: `${PREFIX} exact dispatch identity required for writing hand`,
+      };
+    }
+
+    // A fidelidade não pode vazar de uma task para outra. A decisão compartilhada preserva
+    // compatibilidade feature-wide para outras lanes; aqui, onde a mão é amarrada a um
+    // dispatch-record por tarefa, executor e sniper consomem o fato exato.
+    if (
+      (isExecutorRole(bareRole) || isSniperRole(bareRole)) &&
+      !canonicalNoTests &&
+      !hasFidelityPass(gateState.fidelity_pass, featureId, taskId)
+    ) {
+      return {
+        ok: false,
+        decision: "deny",
+        reason: `${PREFIX} Blocked: ${bareRole} requires task-scoped fidelity-pass for ${featureId}/${taskId} before spawn.`,
+      };
     }
     const claimFn =
       typeof input.claimDispatchFn === "function" ? input.claimDispatchFn : claimPiDispatchForRuntime;
     const claimed = claimFn(
       projectRoot,
-      { sessionId, callId, role: input.subagentType, taskId, featureId },
+      {
+        sessionId,
+        callId,
+        role: input.subagentType,
+        taskId,
+        featureId,
+        ...(noTestsPlanHash ? { expectedPlanHash: noTestsPlanHash } : {}),
+      },
       { env, isAncestorFn },
     );
     if (!claimed || !claimed.ok) {

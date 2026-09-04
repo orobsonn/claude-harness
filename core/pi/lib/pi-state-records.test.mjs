@@ -491,6 +491,31 @@ test("frozen_paths vêm do plano estável e test-author escreve só o teste trav
   } finally { f.close(); }
 });
 
+test("claim recusa plano alterado após a política canônica no_tests", () => {
+  const f = planFixtureWith([{
+    id: "task-1", scope_paths: ["src/a.ts"], criterion_refs: ["#ac-1"], locked_tests: [], no_tests: true,
+  }]);
+  try {
+    const planPath = path.join(f.root, ".pi", "harness", "plans", f.featureId, "execution-plan.json");
+    const expectedPlanHash = crypto.createHash("sha256").update(fs.readFileSync(planPath)).digest("hex");
+    const changed = JSON.parse(fs.readFileSync(planPath, "utf8"));
+    delete changed.tasks[0].no_tests;
+    changed.tasks[0].locked_tests = [{ id: "lt-1", path: "tests/a.test.mjs", assertion: "observable" }];
+    fs.writeFileSync(planPath, JSON.stringify(changed));
+
+    assert.deepEqual(
+      claimActivePiDispatch(f.root, {
+        sessionId: f.sessionId,
+        callId: "changed-no-tests-policy",
+        role: "harness-executor",
+        taskId: "task-1",
+        expectedPlanHash,
+      }),
+      { ok: false, reason: "canonical task changed since policy check" },
+    );
+  } finally { f.close(); }
+});
+
 test("limpeza de uma chamada ausente não remove o registro irmão", () => {
   const f = planFixture();
   try {

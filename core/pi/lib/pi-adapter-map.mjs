@@ -25,6 +25,18 @@ const READ_TOOL_NAMES = new Set(["read", "grep", "find", "ls"]);
 // subagente já em execução e não carregam schema de dispatch.
 const DISPATCH_TOOL_NAMES = new Set(["subagent"]);
 
+/** UI capability and existing automation signals define workflow mode, not identity.
+ * A remote interactive TUI is local for this purpose; SSH/VPS alone is not headless.
+ * RPC exposes UI methods to its client, but remains an automated entrypoint.
+ * @param {{hasUI?: boolean, mode?: string} | undefined} ctx
+ * @param {NodeJS.ProcessEnv} [env]
+ */
+export function isPiHeadlessContext(ctx, env = process.env) {
+  return ctx?.mode === "rpc" || ctx?.hasUI !== true || [
+    "CLAUDE_CODE_REMOTE", "HARNESS_NOTIFY_PROJECT", "HARNESS_OBSERVABILITY_RUN_PATH",
+  ].some((key) => typeof env[key] === "string" && env[key].length > 0);
+}
+
 /**
  * @description Normaliza o nome de tool para minúsculas; qualquer valor não-string vira "".
  * @param {unknown} name

@@ -43,14 +43,14 @@ later re-run can update deliberately.
 - **Source:** the claude-harness git URL (preferred) or a local clone path. If the operator has not
   configured a URL yet (the repo may be unpublished), use a local clone path.
 - **Runtime shell** — which shell(s) to vendor:
-  - **explicit operator intent wins (first-class):** if the operator asks for `opencode`, `claude`, `codex`,
+  - **explicit operator intent wins (first-class):** if the operator asks for `opencode`, `claude`, `codex`, `pi`,
     `both`, or `all`, honor it verbatim — including `both` on a project that today has only Claude Code (the
     common way to add OpenCode to an existing project).
   - **default (fresh project, no intent given):** `all`: Claude Code, OpenCode, Codex and Pi.
   - **LOCAL/HEADLESS:** never ask merely to choose a runtime; use `all` unless the operator explicitly
     requests a smaller installation.
 
-  This maps to the engine's **`--runtime claude|opencode|codex|both|all`** flag. Do **not** confuse it with
+  This maps to the engine's **`--runtime claude|opencode|codex|pi|both|all`** flag. Do **not** confuse it with
   `--target`, which is the destination **directory** — passing a runtime word to `--target` is
   rejected by the engine (it would create a junk `./both/` dir).
 
@@ -59,13 +59,13 @@ Run the deterministic installer (Node builtins only, no install needed):
 
 ```bash
 node .claude/skills/initializing-projects/references/vendor-core.mjs \
-  --source <git-url-or-local-path> [--ref <tag>] [--target <project-dir>] [--runtime claude|opencode|codex|both|all]
+  --source <git-url-or-local-path> [--ref <tag>] [--target <project-dir>] [--runtime claude|opencode|codex|pi|both|all]
 ```
 
 `--runtime opencode` (or `both`/`all`) vendors the OpenCode shell into `.opencode/` (agents, skills, plugins,
 tools, `AGENTS.md`, `opencode.json`, `harness.routing.json`); `--runtime claude` vendors the
 Claude shell into `.claude/`; `--runtime codex` (or `all`) vendors Codex into `.codex/` and
-`.agents/skills/`; `--runtime all` also writes a Pi launcher in `.pi/harness/pi-harness.mjs` pinned
+`.agents/skills/`; `--runtime pi` vendors only Pi; `--runtime all` also writes a Pi launcher in `.pi/harness/pi-harness.mjs` pinned
 to the same harness release. All destinations are idempotent and non-clobber (see contract below).
 
 It performs, **idempotently**:

@@ -4,7 +4,8 @@
  *
  * Portable source resolution (Fase C, option b): the source is the claude-harness
  * repo. Pass a local path that contains `core/`, or a git URL to shallow-clone.
- * Node builtins only — no install, no node_modules (Anthropic skill best practice).
+ * Node builtins only in the installer. Selecting Pi also provisions its pinned
+ * user/host runtime before vendoring; it never installs node_modules in the product.
  *
  * Usage:
  *   node vendor-core.mjs --source <path-or-git-url> [--ref <tag/branch>]
@@ -46,7 +47,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   MANIFEST_FILENAME,
   isValidOpencodeConfigShape,
@@ -98,11 +99,13 @@ audit/
 
 // `harness/state/` and `harness/plans/` are the Pi lane's mirror of `.opencode/plans/.state/` and
 // `.opencode/plans/` — gate-state, hand/dispatch records, locks and execution plans. Ephemeral by
-// construction: never committed. `harness/runtime/` is Pi's own data dir (real auth.json, sessions,
-// mutated model store): ignored, machine-local, and NEVER written by the vendor — the launcher seeds
-// it from the committed `harness/runtime-defaults/`, which is what a fresh clone actually ships.
+// construction: never committed. `harness/runtime/` is Pi's worktree-local runtime configuration
+// (roles, settings and model cache): ignored and NEVER written by the vendor — the launcher seeds it
+// from the committed `harness/runtime-defaults/`, which is what a fresh clone actually ships. Pi auth
+// is deliberately in the host profile, and sessions live in `harness/sessions/`.
 const PI_GITIGNORE = `# Pi Harness — local sessions and package cache, never commit
 harness/runtime/
+harness/sessions/
 harness/state/
 harness/plans/
 sessions/
@@ -221,28 +224,44 @@ export const FRESH_NATIVE_PATHS = {
 const REQUIRED_PI_SOURCE = [
   { rel: "bin/pi-harness.mjs", kind: "file" },
   { rel: "prompts/harness-runtime.md", kind: "file" },
+  { rel: "skills/harness-grill/SKILL.md", kind: "file" },
+  { rel: "skills/harness-grill/references/lavish-usage.md", kind: "file" },
   { rel: "runtime/subagents.json", kind: "file" },
   { rel: "runtime/models-store.json", kind: "file" },
   { rel: "runtime/settings.json", kind: "file" },
+  { rel: "runtime-deps/package.json", kind: "file" },
+  { rel: "runtime-deps/package-lock.json", kind: "file" },
   { rel: "runtime/agents", kind: "directory" },
+  ...[
+    "harness-planner", "harness-plan-reviewer", "harness-adversary",
+    "harness-security", "harness-compliance", "harness-test-author",
+    "harness-executor", "harness-sniper", "harness-shipper", "harness-harvester",
+    "harness-discussion-adversary",
+  ].map((role) => ({ rel: `runtime/agents/${role}.md`, kind: "file" })),
   { rel: "lib/classify.mjs", kind: "file" },
+  { rel: "lib/ceremony-mode.mjs", kind: "file" },
   { rel: "lib/context-files.mjs", kind: "file" },
   { rel: "lib/dispatch-rail.mjs", kind: "file" },
   { rel: "lib/entry-gate.mjs", kind: "file" },
   { rel: "lib/marker-authority.mjs", kind: "file" },
+  { rel: "lib/native-bootstrap.mjs", kind: "file" },
   { rel: "lib/obs.mjs", kind: "file" },
+  { rel: "lib/parent-session-recovery.mjs", kind: "file" },
   { rel: "lib/pi-adapter-map.mjs", kind: "file" },
+  { rel: "lib/pi-auth-path-patch.mjs", kind: "file" },
   { rel: "lib/pi-child-identity.mjs", kind: "file" },
   { rel: "lib/pi-gate-state.mjs", kind: "file" },
   { rel: "lib/pi-paths.mjs", kind: "file" },
+  { rel: "lib/pi-result-text.mjs", kind: "file" },
+  { rel: "lib/pi-runtime-cache.mjs", kind: "file" },
   { rel: "lib/pi-state-records.mjs", kind: "file" },
   { rel: "lib/plan-gate.mjs", kind: "file" },
   { rel: "lib/plan-tracker.mjs", kind: "file" },
   { rel: "lib/plan-write-decide.mjs", kind: "file" },
   { rel: "lib/policy.mjs", kind: "file" },
   { rel: "lib/roles.mjs", kind: "file" },
-  { rel: "lib/run-hand.mjs", kind: "file" },
   { rel: "lib/session-state.mjs", kind: "file" },
+  { rel: "lib/spec-approval.mjs", kind: "file" },
   { rel: "lib/version-check.mjs", kind: "file" },
   { rel: "extensions/harness-bootstrap.ts", kind: "file" },
   { rel: "extensions/harness-classify.ts", kind: "file" },
@@ -258,7 +277,7 @@ const REQUIRED_PI_SOURCE = [
   { rel: "extensions/harness-plan-write-gate.ts", kind: "file" },
   { rel: "extensions/harness-policy.ts", kind: "file" },
   { rel: "extensions/harness-reinject-state.ts", kind: "file" },
-  { rel: "extensions/harness-run-hand.ts", kind: "file" },
+  { rel: "extensions/harness-spec.ts", kind: "file" },
   { rel: "extensions/harness-version-check.ts", kind: "file" },
 ];
 
@@ -391,15 +410,15 @@ export function resolveCodexDir(coreDir) {
 }
 
 /** @description Tokens that name a runtime shell (never a project directory). */
-export const RUNTIME_TOKENS = new Set(["claude", "opencode", "oc", "codex", "both", "all"]);
+export const RUNTIME_TOKENS = new Set(["claude", "opencode", "oc", "codex", "pi", "both", "all"]);
 
 /**
- * @description Normalize runtime target flag: claude | opencode | codex | both | all.
+ * @description Normalize runtime target flag: claude | opencode | codex | pi | both | all.
  * Fails LOUD on an unrecognized non-empty value instead of silently defaulting
  * to all — a typo / stale-binary / wrong-flag must never masquerade as a
  * successful partial vendor. Only an ABSENT (or empty) value defaults to all.
  * @param {unknown} raw
- * @returns {"claude"|"opencode"|"codex"|"both"|"all"}
+ * @returns {"claude"|"opencode"|"codex"|"pi"|"both"|"all"}
  * @throws {Error} when raw is a non-empty string that is not a known token
  */
 export function normalizeRuntimeTarget(raw) {
@@ -408,10 +427,11 @@ export function normalizeRuntimeTarget(raw) {
   if (v === "claude") return "claude";
   if (v === "opencode" || v === "oc") return "opencode";
   if (v === "codex") return "codex";
+  if (v === "pi") return "pi";
   if (v === "both") return "both";
   if (v === "all") return "all";
   throw new Error(
-    `invalid --runtime "${raw}" — expected one of: claude | opencode | codex | both | all`,
+    `invalid --runtime "${raw}" — expected one of: claude | opencode | codex | pi | both | all`,
   );
 }
 
@@ -1871,6 +1891,28 @@ export function rewritePiImportsForVendor(content, relFromPiRoot) {
 }
 
 /**
+ * @description Rewrites the Codex-oriented paths in the shared skill prose to the
+ * Pi vendored tree. Pi deliberately does not require a parallel `.codex/` install:
+ * its skills, routing contract, and pure plan/review adapters live under
+ * `.pi/harness/`. Keeping these references valid is essential — otherwise the
+ * parent can start a ceremony without the contracts it is required to read.
+ * @param {string} content
+ * @returns {string}
+ */
+export function rewritePiSkillPathsForVendor(content) {
+  if (typeof content !== "string") return content;
+  return content
+    .split(".codex/skills/")
+    .join(".pi/harness/skills/")
+    .split(".codex/lib/")
+    .join(".pi/harness/vendor/codex/lib/")
+    .split(".codex/model-routing.mjs")
+    .join(".pi/harness/vendor/codex/model-routing.mjs")
+    .split(".codex/.harness-version")
+    .join(".pi/.harness-version");
+}
+
+/**
  * @description Rewrites the launcher copy so its package root is the vendored `.pi/harness/`
  * itself instead of the monorepo root: `../../../` becomes `../` (from `bin/`), and the
  * `core/pi/…` / `core/codex/skills` prefixes collapse onto the vendored tree. `core/pi/runtime`
@@ -1894,12 +1936,21 @@ export function rewritePiLauncherForVendor(content) {
     .join('"');
 }
 
-// Pi's own data dir (`.pi/harness/runtime/`) is git-ignored and machine-local: the operator's real
-// credentials and sessions live there. The vendor therefore ships the immutable defaults to
-// `runtime-defaults/`, which IS committed, and the launcher seeds the data dir from it on first run.
-// `auth.json` is never packaged at all — a placeholder token file has no business in a repo, and
-// copying one would silently overwrite a live login on every re-vendor.
+// Pi's worktree runtime (`.pi/harness/runtime/`) is git-ignored and machine-local, but it never owns
+// credentials: the launcher binds Pi to one host-profile auth file with Pi's real single-file lock.
+// The vendor ships immutable runtime defaults to `runtime-defaults/`, which IS committed. `auth.json`
+// is never packaged — copying it would duplicate a secret and break the host-level login contract.
 const PI_RUNTIME_CREDENTIALS = "runtime/auth.json";
+
+// The common skill prose uses these small, pure Codex adapters. They are not
+// imported by the Pi runtime, so include them explicitly rather than depending
+// on an accidental `.codex/` sibling being present in the target project.
+const PI_SKILL_RUNTIME_FILES = [
+  "codex/harness.routing.json",
+  "codex/model-routing.mjs",
+  "codex/lib/plan-contract.mjs",
+  "codex/lib/review-contracts.mjs",
+];
 
 /**
  * @description Destination of a `core/pi` file inside `.pi/harness/`, POSIX-relative. Identity for
@@ -1939,7 +1990,15 @@ export function preflightPiVendor(coreDir, targetDir) {
   if (!existsSync(skillsSource)) throw new Error("Pi source missing: core/codex/skills");
 
   const piFiles = collectPiSourceFiles(piSource).filter((rel) => rel !== PI_RUNTIME_CREDENTIALS);
-  const vendorFiles = collectPiVendorClosure(coreReal, piFiles);
+  const vendorFiles = [...new Set([
+    ...collectPiVendorClosure(coreReal, piFiles),
+    ...PI_SKILL_RUNTIME_FILES,
+  ])].sort();
+  for (const rel of vendorFiles) {
+    if (!existsSync(join(coreReal, ...rel.split("/")))) {
+      throw new Error(`Pi source missing skill runtime dependency: core/${rel}`);
+    }
+  }
   const skillFiles = collectPiSourceFiles(skillsSource);
   const files = [
     ...piFiles.map((rel) => ({
@@ -1957,7 +2016,7 @@ export function preflightPiVendor(coreDir, targetDir) {
     ...skillFiles.map((rel) => ({
       source: join(skillsSource, ...rel.split("/")),
       destination: `.pi/harness/skills/${rel}`,
-      transform: "raw",
+      transform: "skill",
       rel,
     })),
   ];
@@ -1979,8 +2038,8 @@ export function preflightPiVendor(coreDir, targetDir) {
 /**
  * @description Source of the `.pi/harness/pi-harness.mjs` shim: it runs the LOCAL vendored
  * launcher (`node .pi/harness/bin/pi-harness.mjs`) — no npx, no network, no per-invocation
- * package resolution. Pi and pi-subagents come from the project's own `node_modules` (deps pinned
- * in the project `package.json`) or from `.pi/harness/node_modules`, resolved by the launcher.
+ * package resolution. Pi and pi-subagents come only from the verified user/host
+ * cache provisioned by the lifecycle, never from the product's dependencies.
  * @param {string} version
  * @returns {string}
  */
@@ -1989,8 +2048,8 @@ export function piLauncherSource(version) {
 /**
  * Claude Harness ${version} — vendored Pi entry point.
  * Runs the LOCAL launcher under .pi/harness/bin/. No download, no network: @earendil-works/pi-coding-agent
- * and @gotgenes/pi-subagents are resolved from the project's node_modules (pinned in package.json)
- * or from .pi/harness/node_modules. Every flag, --verify included, is forwarded verbatim.
+ * and @gotgenes/pi-subagents are resolved from the verified user/host runtime cache.
+ * Every flag, --verify included, is forwarded verbatim.
  */
 import { spawnSync } from "node:child_process";
 import { dirname, join } from "node:path";
@@ -2030,6 +2089,8 @@ export function vendorPi({ coreDir, targetDir, version, stampDate }) {
     const rewritten =
       entry.transform === "launcher"
         ? rewritePiLauncherForVendor(rewritePiImportsForVendor(text, entry.rel))
+        : entry.transform === "skill"
+          ? rewritePiSkillPathsForVendor(text)
         : rewritePiImportsForVendor(text, entry.rel);
     writeFileSync(dest, rewritten, entry.transform === "launcher" ? { mode: 0o755 } : undefined);
   }
@@ -2928,12 +2989,21 @@ if (
     const doClaude = runtime === "claude" || runtime === "both" || runtime === "all";
     const doOc = runtime === "opencode" || runtime === "both" || runtime === "all";
     const doCodex = runtime === "codex" || runtime === "all";
-    const doPi = runtime === "all";
+    const doPi = runtime === "pi" || runtime === "all";
 
     // The all-runtime path must reject a foreign Pi harness before any other
     // runtime can write to the project. The individual vendors retain their
     // own complete preflight immediately before their writes.
-    if (doPi) preflightPiVendor(coreDir, target);
+    if (doPi) {
+      preflightPiVendor(coreDir, target);
+      // The selected source/release owns its runtime definition. Finish setup
+      // before writing any project harness; launchers only consume the cache.
+      step("Preparing Pi runtime for this user/host...");
+      const { ensurePiRuntime } = await import(pathToFileURL(join(coreDir, "pi/lib/pi-runtime-cache.mjs")).href);
+      const runtimeReady = ensurePiRuntime();
+      if (!runtimeReady.ok) throw new Error(`Pi runtime setup failed: ${runtimeReady.reason}`);
+      ok(`Pi runtime → ${runtimeReady.cacheDir}`);
+    }
 
     if (doClaude) {
       step("Vendoring Claude harness → .claude/");

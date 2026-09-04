@@ -19,3 +19,25 @@ test("planner Pi recebe o mesmo contrato estrutural de plano validado da lane Op
   assert.match(prompt, /Self-check/);
   assert.match(prompt, /validate-plan/);
 });
+
+test("planner Pi usa a spec selada e o routing vendored sem exigir artefatos externos", () => {
+  const prompt = readFileSync(plannerPath, "utf8");
+
+  assert.match(prompt, /sealed spec is the complete delivery authority/i);
+  assert.match(prompt, /do not\s+ask for the original issue body/i);
+  assert.match(prompt, /never\s+ask the operator for it/i);
+  assert.match(prompt, /"low": "openai-codex\/gpt-5\.6-luna"/);
+  assert.match(prompt, /"medium": "openai-codex\/gpt-5\.6-terra"/);
+  assert.match(prompt, /"planner": "openai-codex\/gpt-5\.6-sol"/);
+  assert.match(prompt, /"plan-reviewer": "openai-codex\/gpt-6-astra"/);
+  assert.doesNotMatch(prompt, /"plan-reviewer": "openai-codex\/gpt-5\.6-sol"/);
+});
+
+test("planner Pi recebe contexto de revisão sem depender de resposta posterior do pai", () => {
+  const prompt = readFileSync(plannerPath, "utf8");
+
+  assert.match(prompt, /HARNESS_PLAN_REVIEW_CONTEXT/);
+  assert.match(prompt, /do\s+not ask the parent to run commands/i);
+  assert.match(prompt, /do\s+not wait for an answer/i);
+  assert.match(prompt, /do\s+not\s+request or use `resume`/i);
+});

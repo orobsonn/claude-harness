@@ -12,6 +12,7 @@
  */
 import test from "node:test";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -19,6 +20,7 @@ import { join } from "node:path";
 import harnessEntryGate from "./harness-entry-gate.ts";
 import { readPiChildIdentity } from "../lib/pi-child-identity.mjs";
 import { claimPiDispatchForRuntime, readPiDispatchRecord } from "../lib/pi-state-records.mjs";
+import { writePiSpecDraft } from "../lib/spec-approval.mjs";
 
 /** @description Fake do barramento de eventos do Pi (pi.events), por canal. */
 function fakeEvents() {
@@ -50,11 +52,11 @@ const SESSION = "ses-pi-adapter";
 const FEATURE = "feat-pi-adapter";
 
 /** @description ctx do Pi: sessionId do sessionManager e sessão filha por header.parentSession. */
-function ctxOf(cwd, { child = false } = {}) {
+function ctxOf(cwd, { child = false, sessionId = SESSION } = {}) {
   return {
     cwd,
     sessionManager: {
-      getSessionId: () => SESSION,
+      getSessionId: () => sessionId,
       getHeader: () => (child ? { parentSession: "ses-pi-parent" } : {}),
     },
   };
@@ -105,6 +107,7 @@ function fixture() {
     join(root, ".pi", "harness", "state", SESSION, "gate-state.json"),
     JSON.stringify({ session_id: SESSION, feature_id: FEATURE, classified: true, mode: "FULL" }),
   );
+  writePiSpecDraft({ content: "# Draft\n" }, { projectRoot: root, sessionId: SESSION });
   mkdirSync(join(root, ".github", "ISSUE_TEMPLATE"), { recursive: true });
   writeFileSync(join(root, ".github", "ISSUE_TEMPLATE", "harness-task.yml"), "name: harness\n");
   return { root, close: () => rmSync(root, { recursive: true, force: true }) };
@@ -213,6 +216,23 @@ test("sem os args memorizados o fim de execução não tem papel nem task e nada
   } finally {
     f.close();
   }
+});
+
+test("discussion adversary never binds delivery identity or mutates gate state", async () => {
+  const f = fixture();
+  try {
+    const events = fakeEvents();
+    const h = handlers(events);
+    const args = { subagent_type: "harness-discussion-adversary", prompt: "critique", description: "discussion" };
+    const before = readFileSync(join(f.root, ".pi", "harness", "state", SESSION, "gate-state.json"), "utf8");
+    h.get("session_start")({}, ctxOf(f.root));
+    h.get("tool_execution_start")({ toolName: "subagent", toolCallId: "call-discussion", args });
+    assert.equal(await h.get("tool_call")({ toolName: "subagent", toolCallId: "call-discussion", input: args }, ctxOf(f.root)), undefined);
+    events.emit("subagents:child:session-created", { sessionId: CHILD_SESSION, parentSessionId: SESSION });
+    assert.equal(readPiChildIdentity(f.root, CHILD_SESSION).absent, true);
+    h.get("tool_execution_end")({ toolName: "subagent", toolCallId: "call-discussion", result: { details: { status: "completed", agentId: "discussion" } }, isError: false }, ctxOf(f.root));
+    assert.equal(readFileSync(join(f.root, ".pi", "harness", "state", SESSION, "gate-state.json"), "utf8"), before);
+  } finally { f.close(); }
 });
 
 test("tool_call de subagent nega com a reason da peça state-records quando não há plano estável", () => {
@@ -369,6 +389,178 @@ test("o fim do dispatch retira a identidade da filha", () => {
     );
 
     assert.equal(readPiChildIdentity(f.root, CHILD_SESSION).absent, true);
+  } finally {
+    f.close();
+  }
+});
+
+test("só a conclusão host-confirmada do adversary cria a evidência que libera a próxima fase", () => {
+  const f = fixture();
+  try {
+    const events = fakeEvents();
+    const h = handlers(events);
+    h.get("session_start")({}, ctxOf(f.root));
+    h.get("tool_execution_start")({
+      toolName: "subagent",
+      toolCallId: "call-adversary",
+      args: { subagent_type: "harness-adversary", prompt: "ataque", description: "adversary" },
+    });
+    events.emit("subagents:child:session-created", { sessionId: CHILD_SESSION, parentSessionId: SESSION });
+
+    h.get("tool_execution_end")(
+      {
+        toolName: "subagent",
+        toolCallId: "call-adversary",
+        result: { content: [{ type: "text", text: "review" }], details: { status: "completed", agentId: "agent-adversary" } },
+        isError: false,
+      },
+      ctxOf(f.root),
+    );
+
+    const state = JSON.parse(readFileSync(join(f.root, ".pi", "harness", "state", SESSION, "gate-state.json"), "utf8"));
+    assert.deepEqual(state.adversary_completion_evidence, {
+      written_by: "host-subagent-completion",
+      parent_session_id: SESSION,
+      feature_id: FEATURE,
+      role: "harness-adversary",
+      dispatch_call_id: "call-adversary",
+      child_session_id: CHILD_SESSION,
+      agent_id: "agent-adversary",
+      status: "completed",
+      spec_sha256: JSON.parse(readFileSync(join(f.root, ".pi", "harness", "state", SESSION, "gate-state.json"), "utf8")).spec_sha256,
+    });
+  } finally {
+    f.close();
+  }
+});
+
+test("erro da filha adversária nunca vira evidência de conclusão", () => {
+  const f = fixture();
+  try {
+    const events = fakeEvents();
+    const h = handlers(events);
+    h.get("session_start")({}, ctxOf(f.root));
+    h.get("tool_execution_start")({
+      toolName: "subagent",
+      toolCallId: "call-timeout",
+      args: { subagent_type: "harness-adversary", prompt: "ataque", description: "adversary" },
+    });
+    events.emit("subagents:child:session-created", { sessionId: CHILD_SESSION, parentSessionId: SESSION });
+    h.get("tool_execution_end")(
+      {
+        toolName: "subagent",
+        toolCallId: "call-timeout",
+        result: { content: [{ type: "text", text: "Agent failed: WebSocket idle timeout after 300000ms" }], details: { status: "error", agentId: "agent-adversary" } },
+        isError: false,
+      },
+      ctxOf(f.root),
+    );
+
+    const state = JSON.parse(readFileSync(join(f.root, ".pi", "harness", "state", SESSION, "gate-state.json"), "utf8"));
+    assert.equal(state.adversary_completion_evidence, undefined);
+  } finally {
+    f.close();
+  }
+});
+
+test("adversary de tarefa grava recibo host-owned preso ao marcador e ao HEAD", async () => {
+  const f = fixture();
+  try {
+    execFileSync("git", ["init"], { cwd: f.root });
+    execFileSync("git", ["add", "."], { cwd: f.root });
+    execFileSync("git", ["-c", "user.name=Pi", "-c", "user.email=pi@example.test", "commit", "-m", "fixture"], { cwd: f.root });
+    const statePath = join(f.root, ".pi", "harness", "state", SESSION, "gate-state.json");
+    const state = JSON.parse(readFileSync(statePath, "utf8"));
+    writeFileSync(statePath, JSON.stringify({ ...state, spec_status: "adversary-reviewed", adversary_fired: true }));
+    const events = fakeEvents();
+    const h = handlers(events);
+    const args = {
+      subagent_type: "harness-adversary",
+      prompt: '[HARNESS_TASK_CONTEXT]{"task_id":"task-1"}[/HARNESS_TASK_CONTEXT] attack task',
+      description: "task adversary",
+    };
+    h.get("session_start")({}, ctxOf(f.root));
+    h.get("tool_execution_start")({ toolName: "subagent", toolCallId: "call-task-adversary", args });
+    assert.equal(await h.get("tool_call")({ toolName: "subagent", toolCallId: "call-task-adversary", input: args }, ctxOf(f.root)), undefined);
+    events.emit("subagents:child:session-created", { sessionId: CHILD_SESSION, parentSessionId: SESSION });
+    h.get("tool_execution_end")({
+      toolName: "subagent", toolCallId: "call-task-adversary",
+      result: { details: { status: "completed", agentId: "agent-task-adversary" } }, isError: false,
+    }, ctxOf(f.root));
+    const saved = JSON.parse(readFileSync(statePath, "utf8"));
+    assert.deepEqual(saved.task_adversary_evidence[`${FEATURE}/task-1`], {
+      written_by: "host-subagent-completion", parent_session_id: SESSION, feature_id: FEATURE,
+      task_id: "task-1", role: "harness-adversary", dispatch_call_id: "call-task-adversary",
+      child_session_id: CHILD_SESSION, agent_id: "agent-task-adversary", status: "completed",
+      reviewed_head_sha: execFileSync("git", ["rev-parse", "HEAD"], { cwd: f.root, encoding: "utf8" }).trim(),
+    });
+  } finally { f.close(); }
+});
+
+test("olhos finais gravam recibos host-owned no HEAD agregado", async () => {
+  const f = fixture();
+  try {
+    execFileSync("git", ["init"], { cwd: f.root });
+    execFileSync("git", ["add", "."], { cwd: f.root });
+    execFileSync("git", ["-c", "user.name=Pi", "-c", "user.email=pi@example.test", "commit", "-m", "fixture"], { cwd: f.root });
+    const statePath = join(f.root, ".pi", "harness", "state", SESSION, "gate-state.json");
+    const state = JSON.parse(readFileSync(statePath, "utf8"));
+    writeFileSync(statePath, JSON.stringify({ ...state, spec_status: "adversary-reviewed", adversary_fired: true }));
+    const events = fakeEvents();
+    const h = handlers(events);
+    h.get("session_start")({}, ctxOf(f.root));
+    for (const [role, callId, agentId] of [
+      ["harness-adversary", "call-final-adversary", "agent-final-adversary"],
+      ["harness-compliance", "call-final-compliance", "agent-final-compliance"],
+    ]) {
+      const args = { subagent_type: role, prompt: "[HARNESS_FINAL_REVIEW] review aggregate diff", description: "final review" };
+      h.get("tool_execution_start")({ toolName: "subagent", toolCallId: callId, args });
+      assert.equal(await h.get("tool_call")({ toolName: "subagent", toolCallId: callId, input: args }, ctxOf(f.root)), undefined);
+      events.emit("subagents:child:session-created", { sessionId: `${CHILD_SESSION}-${callId}`, parentSessionId: SESSION });
+      h.get("tool_execution_end")({
+        toolName: "subagent", toolCallId: callId,
+        result: { details: { status: "completed", agentId } }, isError: false,
+      }, ctxOf(f.root));
+    }
+    const saved = JSON.parse(readFileSync(statePath, "utf8"));
+    const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: f.root, encoding: "utf8" }).trim();
+    assert.deepEqual(saved.final_review_evidence.adversary, {
+      written_by: "host-subagent-completion", parent_session_id: SESSION, feature_id: FEATURE,
+      role: "harness-adversary", dispatch_call_id: "call-final-adversary",
+      child_session_id: `${CHILD_SESSION}-call-final-adversary`, agent_id: "agent-final-adversary",
+      status: "completed", reviewed_head_sha: head,
+    });
+    assert.deepEqual(saved.final_review_evidence.compliance, {
+      written_by: "host-subagent-completion", parent_session_id: SESSION, feature_id: FEATURE,
+      role: "harness-compliance", dispatch_call_id: "call-final-compliance",
+      child_session_id: `${CHILD_SESSION}-call-final-compliance`, agent_id: "agent-final-compliance",
+      status: "completed", reviewed_head_sha: head,
+    });
+  } finally { f.close(); }
+});
+
+test("shipper não pode escrever produto mesmo quando sua identidade de olho é conhecida", async () => {
+  const f = fixture();
+  try {
+    const events = fakeEvents();
+    const h = handlers(events);
+    h.get("session_start")({}, ctxOf(f.root));
+    h.get("tool_execution_start")({
+      toolName: "subagent",
+      toolCallId: "call-shipper",
+      args: { subagent_type: "harness-shipper", prompt: "entregue", description: "ship" },
+    });
+    events.emit("subagents:child:session-created", { sessionId: CHILD_SESSION, parentSessionId: SESSION });
+
+    const planWrite = await import("./harness-plan-write-gate.ts");
+    const writes = new Map();
+    planWrite.default({ on: (name, fn) => writes.set(name, fn) });
+    const blocked = writes.get("tool_call")(
+      { toolName: "write", input: { path: "src/product.ts", content: "unsafe" } },
+      ctxOf(f.root, { child: true, sessionId: CHILD_SESSION }),
+    );
+    assert.equal(blocked?.block, true);
+    assert.match(blocked?.reason ?? "", /shipper.*must not write product/i);
   } finally {
     f.close();
   }

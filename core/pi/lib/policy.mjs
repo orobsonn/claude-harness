@@ -31,6 +31,83 @@ const PI_PROTECTED = /(?:^|[/\s"\x27`])\.pi(?:[/\s"\x27`]|$)/
 const MUTATION_VERB = /\b(?:rm|mv|cp|install|touch|mkdir|chmod|chown|truncate|tee|sed|perl)\b|(?:^|[^<])>{1,2}/
 
 const ALLOW = { block: false }
+const PARENT_ORCHESTRATOR_REASON =
+  "Parent orchestrator may only observe, verify, and dispatch during an active LIGHT/FULL ceremony; delegate product changes and commits to a designated writing hand."
+
+// Espelho literal de core/claude-code/settings.json → permissions.allow → Bash(...).
+// Não mantemos uma segunda interpretação menor no Pi: se Claude Code aceita uma chamada,
+// o pai Pi também a aceita nesta fronteira. Os denies e gates de entrega seguem aplicados
+// depois, como no Claude Code.
+export const CLAUDE_CODE_BASH_ALLOWLIST = Object.freeze([
+  "Bash(git status:*)", "Bash(git log:*)", "Bash(git diff:*)", "Bash(git show:*)",
+  "Bash(git add:*)", "Bash(git commit:*)", "Bash(git push)",
+  "Bash(git push --force-with-lease:*)", "Bash(git push * --force-with-lease:*)",
+  "Bash(git branch:*)", "Bash(git checkout:*)", "Bash(git switch:*)", "Bash(git fetch:*)",
+  "Bash(git pull)", "Bash(git stash:*)", "Bash(git restore:*)", "Bash(gh:*)",
+  "Bash(ls:*)", "Bash(cat:*)", "Bash(head:*)", "Bash(tail:*)", "Bash(wc:*)",
+  "Bash(find:*)", "Bash(grep:*)", "Bash(rg:*)", "Bash(which:*)", "Bash(pwd)",
+  "Bash(echo:*)", "Bash(sort:*)", "Bash(uniq:*)", "Bash(sed:*)", "Bash(awk:*)",
+  "Bash(diff:*)", "Bash(stat:*)", "Bash(file:*)", "Bash(jq:*)", "Bash(mkdir:*)",
+  "Bash(touch:*)", "Bash(cp:*)", "Bash(mv:*)", "Bash(npm test:*)", "Bash(npm run:*)",
+  "Bash(npm ci:*)", "Bash(npm list:*)", "Bash(npm info:*)", "Bash(pnpm test:*)",
+  "Bash(pnpm run:*)", "Bash(yarn test:*)", "Bash(bun test:*)", "Bash(bun run:*)",
+  "Bash(vitest:*)", "Bash(vitest run:*)", "Bash(jest:*)", "Bash(tsc --noEmit:*)",
+  "Bash(eslint:*)", "Bash(prettier:*)", "Bash(node:*)",
+])
+
+function claudeBashPatternMatches(pattern, command) {
+  const inner = pattern.slice("Bash(".length, -1)
+  const normalized = inner.endsWith(":*") ? `${inner.slice(0, -2)} *` : inner
+  const boundary = normalized.endsWith(" *")
+  const body = boundary ? normalized.slice(0, -2) : normalized
+  const escaped = body.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*")
+  return new RegExp(`^${escaped}${boundary ? "(?: .*)?" : ""}$`).test(command)
+}
+
+/**
+ * @description Uma cerimônia ativa muda a autoridade do pai: LIGHT/FULL é executado por
+ * mãos despachadas, nunca pela sessão que orquestra. QUICK permanece intencionalmente fora
+ * desse rail para não transformar uma correção pequena em ceremony artificial.
+ */
+function isActiveDeliveryCeremony(gateState) {
+  if (!gateState || typeof gateState !== "object" || Array.isArray(gateState)) return false
+  if (gateState.classified !== true) return false
+  if (gateState.ceremony_status === "suspended-inline") return false
+  const mode = typeof gateState.mode === "string" ? gateState.mode.toLowerCase() : ""
+  return mode === "light" || mode === "full"
+}
+
+/**
+ * @description Mesma allowlist Bash do Claude Code. O Pi não tem prompt de permissão nativo
+ * compatível, por isso aplica a lista explicitamente apenas nesta fronteira do pai.
+ */
+function isParentVerificationCommand(command) {
+  return typeof command === "string" && CLAUDE_CODE_BASH_ALLOWLIST.some((pattern) => claudeBashPatternMatches(pattern, command))
+}
+
+/**
+ * @description Decisão de autoridade do pai durante cerimônia. Exportada para que os testes
+ * provem a fronteira sem depender do adaptador de eventos do Pi.
+ */
+export function decidePiParentOrchestratorPolicy(call = {}, options = {}) {
+  const status = options?.gateState?.ceremony_status
+  if (options?.isChild !== true && ["suspended-inline", "reconciling"].includes(status)) {
+    const tool = call?.toolName
+    const input = call?.input ?? {}
+    const blocked = { block: true, reason: `Ceremony is ${status}; use classify resume-ceremony to reconcile before delivery.` }
+    if (tool === "classify" && !["suspend-inline", "resume-ceremony"].includes(input.action)) return blocked
+    if (tool === "mark" || tool === "harness_spec_write" || tool === "seal_spec_review") return blocked
+    if (tool === "harness_plan" && input.action !== "show") return blocked
+    if (tool === "subagent" && (status === "suspended-inline" || !["harness-planner", "harness-plan-reviewer"].includes(input.subagent_type))) return blocked
+  }
+  if (options?.isChild === true || (options?.isHeadless !== true && !isActiveDeliveryCeremony(options?.gateState))) return ALLOW
+  const toolName = call?.toolName
+  if (isPiWriteTool(toolName)) return { block: true, reason: PARENT_ORCHESTRATOR_REASON }
+  if (isPiBashTool(toolName) && !isParentVerificationCommand(call?.input?.command)) {
+    return { block: true, reason: PARENT_ORCHESTRATOR_REASON }
+  }
+  return ALLOW
+}
 
 /** @description Caminho é protegido do harness na lane Pi: `.pi`, `.codex` ou `.agents`. */
 export function piProtectablePath(path) {
@@ -87,6 +164,9 @@ export function decidePiPolicy(call = {}, options = {}) {
   const toolName = call?.toolName
   const input = call?.input && typeof call.input === 'object' ? call.input : {}
 
+  const parentAuthority = decidePiParentOrchestratorPolicy({ toolName, input }, options)
+  if (parentAuthority.block) return parentAuthority
+
   if (isPiReadTool(toolName)) {
     return isSecretReadPath(input.path, options) ? { block: true, reason: SECRET_REASON } : ALLOW
   }
@@ -137,4 +217,4 @@ export function recordPiPolicyAudit({ sessionId, toolCallId, toolName, auditDir 
   }, { auditDir })
 }
 
-export { PROTECTED_REASON, SECRET_REASON }
+export { PARENT_ORCHESTRATOR_REASON, PROTECTED_REASON, SECRET_REASON }

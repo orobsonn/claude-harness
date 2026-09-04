@@ -132,6 +132,12 @@ export default function harnessPlanWriteGate(pi: ExtensionAPI) {
       : { ok: false, reason: authority.reason };
     const actingRole = authority.role;
 
+    // Shipper é olho de entrega: pode preparar evidência e staging por Bash, mas nunca corrigir
+    // produto. A negativa explícita cobre runtimes antigos que ainda exponham edit/write.
+    if (actingRole === "harness-shipper") {
+      return { block: true, reason: "[plan-write-gate] Blocked: shipper must not write product files." };
+    }
+
     // 1. Anti-forja + autoridade de plano canônico sobre o caminho cru (sem rail de escopo).
     const antiForge = decidePiPlanWrite({ filePath }, { actingRole, isSubagent, plannerIdentity });
     if (antiForge.allow === false) return { block: true, reason: antiForge.reason };

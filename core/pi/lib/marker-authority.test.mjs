@@ -8,12 +8,13 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import crypto from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
 import { createPiMarkerAuthority, MARKER_ACTIONS, markerResponse } from "./marker-authority.mjs";
-import { piGateStatePath, piHandRecordPath } from "./pi-paths.mjs";
+import { piExecutionPlanPath, piGateStatePath, piHandRecordPath, piSpecPath } from "./pi-paths.mjs";
 import {
   normalizeProjectPath,
   piDispatchRecordPath,
@@ -59,6 +60,53 @@ function readGateState(root) {
   return JSON.parse(fs.readFileSync(resolved.path, "utf8"));
 }
 
+function seedDraftSpec(root) {
+  const spec = piSpecPath({ projectRoot: root, featureId: FEATURE });
+  const content = "# Draft\n";
+  const sha = crypto.createHash("sha256").update(content).digest("hex");
+  fs.mkdirSync(path.dirname(spec.path), { recursive: true });
+  fs.writeFileSync(spec.path, content);
+  const state = readGateState(root);
+  fs.writeFileSync(piGateStatePath({ projectRoot: root, sessionId: SESSION }).path, JSON.stringify({ ...state, mode: "FULL", spec_status: "draft", spec_sha256: sha }));
+  return sha;
+}
+
+function seedApprovedSpec(root) {
+  const sha = seedDraftSpec(root);
+  const state = readGateState(root);
+  fs.writeFileSync(piGateStatePath({ projectRoot: root, sessionId: SESSION }).path, JSON.stringify({
+    ...state, adversary_fired: true, adversary_spec_sha256: sha,
+    spec_status: "adversary-reviewed", reviewed_spec_sha256: sha,
+  }));
+  return sha;
+}
+
+/** Evidência gravada pelo host quando a filha adversária termina com sucesso. */
+function seedSuccessfulAdversary(root) {
+  const state = readGateState(root);
+  state.adversary_completion_evidence = {
+    written_by: "host-subagent-completion",
+    role: "harness-adversary",
+    parent_session_id: SESSION,
+    feature_id: FEATURE,
+    dispatch_call_id: "adversary-call",
+    child_session_id: "ses-adversary-child",
+    agent_id: "agent-adversary",
+    status: "completed",
+    spec_sha256: state.spec_sha256,
+  };
+  const resolved = piGateStatePath({ projectRoot: root, sessionId: SESSION });
+  fs.writeFileSync(resolved.path, JSON.stringify(state, null, 2), "utf8");
+}
+
+/** @description Plano mínimo já congelado: este teste da autoridade só precisa provar a cobertura de tarefas. */
+function seedPlan(root, tasks = [{ id: TASK }]) {
+  const resolved = piExecutionPlanPath({ projectRoot: root, featureId: FEATURE });
+  assert.equal(resolved.ok, true);
+  fs.mkdirSync(path.dirname(resolved.path), { recursive: true });
+  fs.writeFileSync(resolved.path, JSON.stringify({ feature_id: FEATURE, tasks }, null, 2), "utf8");
+}
+
 /** @description Grava um hand-record sob .pi/harness/state/hand-records/<feature>/<session>/<task>.json. */
 function seedHandRecord(root, overrides = {}) {
   const resolved = piHandRecordPath({ projectRoot: root, sessionId: SESSION, featureId: FEATURE }, TASK);
@@ -87,6 +135,8 @@ function readHandRecord(root) {
 /** @description Autoridade com dispatch-records falsos e git determinístico. */
 function makeAuthority(root, overrides = {}) {
   const removals = [];
+  const dispatchRole = overrides.dispatchRole ?? "executor";
+  const { dispatchRole: _ignoredDispatchRole, ...authorityOverrides } = overrides;
   const authority = createPiMarkerAuthority({
     projectRoot: root,
     readDispatchRecord: (_root, { parentSessionId, callId }) =>
@@ -98,7 +148,7 @@ function makeAuthority(root, overrides = {}) {
               dispatch_call_id: PRODUCER_CALL,
               feature_id: FEATURE,
               task_id: TASK,
-              role: "executor",
+              role: dispatchRole,
             },
           }
         : { ok: false, reason: "dispatch record absent" },
@@ -109,7 +159,7 @@ function makeAuthority(root, overrides = {}) {
     resolveHeadSha: () => SHA,
     isAncestorSha: () => true,
     now: () => "2026-01-01T00:00:00.000Z",
-    ...overrides,
+    ...authorityOverrides,
   });
   return { authority, removals };
 }
@@ -265,6 +315,7 @@ test("gate-state com JSON válido mas não-objeto nega com a reason de identidad
 test("replay do mesmo toolCallId é rejeitado depois do consumo", () => {
   const root = makeRoot();
   seedGateState(root);
+  seedApprovedSpec(root);
   const { authority } = makeAuthority(root);
   const first = call(authority, { action: "brainstormed" });
   assert.equal(first.result.ok, true);
@@ -276,6 +327,7 @@ test("replay do mesmo toolCallId é rejeitado depois do consumo", () => {
 test("clone dos args, sessionId divergente e ação trocada falham o binding", () => {
   const root = makeRoot();
   seedGateState(root);
+  seedApprovedSpec(root);
 
   const cloneAuthority = makeAuthority(root).authority;
   const input = { action: "brainstormed" };
@@ -312,28 +364,84 @@ test("clone dos args, sessionId divergente e ação trocada falham o binding", (
 
 // ---------------------------------------------------------------- mutation preconditions
 
-test("brainstormed persiste e adversary_fired exige brainstormed antes", () => {
+test("adversary_fired exige a draft corrente e evidência host-owned da filha", () => {
   const root = makeRoot();
   seedGateState(root);
+  seedDraftSpec(root);
   const { authority } = makeAuthority(root);
 
   const denied = call(authority, { action: "adversary_fired" }, { toolCallId: "c1" });
-  assert.equal(reasonOf(denied.result), "adversary_fired requires brainstormed first");
+  assert.equal(reasonOf(denied.result), "adversary_fired requires host-owned evidence for the current spec hash");
   assert.equal(readGateState(root).adversary_fired, undefined);
 
-  assert.equal(call(authority, { action: "brainstormed" }, { toolCallId: "c2" }).result.ok, true);
-  assert.equal(readGateState(root).brainstormed, true);
+  assert.equal(
+    reasonOf(call(authority, { action: "adversary_fired" }, { toolCallId: "c2" }).result),
+    "adversary_fired requires host-owned evidence for the current spec hash",
+  );
 
+  seedSuccessfulAdversary(root);
   assert.equal(call(authority, { action: "adversary_fired" }, { toolCallId: "c3" }).result.ok, true);
   assert.equal(readGateState(root).adversary_fired, true);
 });
 
-test("final-review e demo-done são booleanos de feature sem task_id", () => {
+test("adversary_fired rejeita evidência de filha interrompida, mesmo com todos os outros campos válidos", () => {
+  const root = makeRoot();
+  seedGateState(root);
+  seedDraftSpec(root);
+  seedSuccessfulAdversary(root);
+  const state = readGateState(root);
+  state.adversary_completion_evidence.status = "steered";
+  const resolved = piGateStatePath({ projectRoot: root, sessionId: SESSION });
+  fs.writeFileSync(resolved.path, JSON.stringify(state, null, 2), "utf8");
+
+  const { authority } = makeAuthority(root);
+  const result = call(authority, { action: "adversary_fired" }, { toolCallId: "interrupted" }).result;
+  assert.equal(reasonOf(result), "adversary_fired requires successful host-owned adversary completion evidence");
+  assert.equal(readGateState(root).adversary_fired, undefined);
+});
+
+test("final-review exige capturas verificadas e recibos host-owned atuais dos dois olhos finais", () => {
   const root = makeRoot();
   seedGateState(root);
   const { authority } = makeAuthority(root);
-  assert.equal(call(authority, { action: "final-review" }, { toolCallId: "c1" }).result.ok, true);
-  assert.equal(call(authority, { action: "demo-done" }, { toolCallId: "c2" }).result.ok, true);
+
+  assert.equal(
+    reasonOf(call(authority, { action: "final-review" }, { toolCallId: "c1" }).result),
+    "final-review requires a readable canonical execution plan",
+  );
+
+  seedPlan(root);
+  seedHandRecord(root, { capturedVerifiedAt: "2025-12-31T00:00:00.000Z" });
+  seedGateState(root, {
+    hand_finished: [`${FEATURE}/${TASK}`],
+    capture_verified: [`${FEATURE}/${TASK}@${SHA}`],
+  });
+  assert.equal(
+    reasonOf(call(authority, { action: "final-review" }, { toolCallId: "c2" }).result),
+    "final-review requires current host-owned final adversary evidence",
+  );
+  const stateWithAdversary = readGateState(root);
+  stateWithAdversary.final_review_evidence = {
+    adversary: {
+      written_by: "host-subagent-completion", role: "harness-adversary", parent_session_id: SESSION,
+      feature_id: FEATURE, dispatch_call_id: "final-adversary", child_session_id: "child-adversary",
+      agent_id: "agent-adversary", status: "completed", reviewed_head_sha: SHA,
+    },
+  };
+  fs.writeFileSync(piGateStatePath({ projectRoot: root, sessionId: SESSION }).path, JSON.stringify(stateWithAdversary));
+  assert.equal(
+    reasonOf(call(authority, { action: "final-review" }, { toolCallId: "c3" }).result),
+    "final-review requires current host-owned final compliance evidence",
+  );
+  const stateWithBothEyes = readGateState(root);
+  stateWithBothEyes.final_review_evidence.compliance = {
+    written_by: "host-subagent-completion", role: "harness-compliance", parent_session_id: SESSION,
+    feature_id: FEATURE, dispatch_call_id: "final-compliance", child_session_id: "child-compliance",
+    agent_id: "agent-compliance", status: "completed", reviewed_head_sha: SHA,
+  };
+  fs.writeFileSync(piGateStatePath({ projectRoot: root, sessionId: SESSION }).path, JSON.stringify(stateWithBothEyes));
+  assert.equal(call(authority, { action: "final-review" }, { toolCallId: "c4" }).result.ok, true);
+  assert.equal(call(authority, { action: "demo-done" }, { toolCallId: "c5" }).result.ok, true);
   const state = readGateState(root);
   assert.equal(state.final_review_done, true);
   assert.equal(state.demo_done, true);
@@ -350,18 +458,25 @@ test("task_id inseguro é rejeitado com a mensagem da ação", () => {
   assert.deepEqual(Object.keys(readGateState(root)).sort(), ["feature_id", "session_id"]);
 });
 
-test("fidelity e regate-pending gravam as entradas canônicas", () => {
+test("fidelity exige o hand-record exato do test-author; regate-pending grava a entrada canônica", () => {
   const root = makeRoot();
   seedGateState(root);
-  const { authority } = makeAuthority(root);
-  assert.equal(call(authority, { action: "fidelity", task_id: TASK }, { toolCallId: "c1" }).result.ok, true);
-  assert.equal(call(authority, { action: "regate-pending", task_id: TASK }, { toolCallId: "c2" }).result.ok, true);
+  const absent = makeAuthority(root).authority;
+  assert.equal(
+    reasonOf(call(absent, { action: "fidelity", task_id: TASK }, { toolCallId: "c1" }).result),
+    "fidelity requires a capture-eligible test-author hand-record",
+  );
+
+  seedHandRecord(root, { agent: "test-author" });
+  const { authority } = makeAuthority(root, { dispatchRole: "test-author" });
+  assert.equal(call(authority, { action: "fidelity", task_id: TASK }, { toolCallId: "c2" }).result.ok, true);
+  assert.equal(call(authority, { action: "regate-pending", task_id: TASK }, { toolCallId: "c3" }).result.ok, true);
   const state = readGateState(root);
   assert.deepEqual(state.fidelity_pass, [`${FEATURE}/${TASK}@${SHA}`]);
   assert.deepEqual(state.regate_pending, [`${FEATURE}/${TASK}`]);
 });
 
-test("regate-passed exige regate_pending e um SHA resolvido", () => {
+test("regate-passed exige recibo host-owned do adversary para a tarefa e SHA atual", () => {
   const root = makeRoot();
   seedGateState(root);
   const { authority } = makeAuthority(root);
@@ -373,7 +488,27 @@ test("regate-passed exige regate_pending e um SHA resolvido", () => {
   assert.equal(reasonOf(deniedSha.result), "regate-passed requires a resolved commit SHA");
 
   assert.equal(call(authority, { action: "regate-pending", task_id: TASK }, { toolCallId: "c3" }).result.ok, true);
-  assert.equal(call(authority, { action: "regate-passed", task_id: TASK }, { toolCallId: "c4" }).result.ok, true);
+  assert.equal(
+    reasonOf(call(authority, { action: "regate-passed", task_id: TASK }, { toolCallId: "c4" }).result),
+    "regate-passed requires current host-owned task adversary evidence",
+  );
+  const state = readGateState(root);
+  state.task_adversary_evidence = {
+    [`${FEATURE}/${TASK}`]: {
+      written_by: "host-subagent-completion",
+      role: "harness-adversary",
+      parent_session_id: SESSION,
+      feature_id: FEATURE,
+      task_id: TASK,
+      dispatch_call_id: "adversary-task-call",
+      child_session_id: "ses-adversary-task-child",
+      agent_id: "agent-adversary-task",
+      status: "completed",
+      reviewed_head_sha: SHA,
+    },
+  };
+  seedGateState(root, state);
+  assert.equal(call(authority, { action: "regate-passed", task_id: TASK }, { toolCallId: "c5" }).result.ok, true);
   assert.deepEqual(readGateState(root).regate_passed, [`${FEATURE}/${TASK}@${SHA}`]);
 });
 
@@ -505,16 +640,28 @@ test("hand-finished e capture-verified recusam um record de identidade estrangei
   assert.deepEqual(removals, []);
 });
 
-test("capture-verified é da sessão PAI: a sessão filha é negada antes de qualquer mutação", () => {
+test("marcadores de workflow são da sessão PAI: a sessão filha é negada antes de qualquer mutação", () => {
   const root = makeRoot();
   seedGateState(root, { hand_finished: [`${FEATURE}/${TASK}`] });
   seedHandRecord(root);
   const { authority, removals } = makeAuthority(root);
   const denied = call(authority, { action: "capture-verified", task_id: TASK }, { toolCallId: "c1", isChild: true });
-  assert.equal(reasonOf(denied.result), "capture-verified is restricted to the parent build agent");
+  assert.equal(reasonOf(denied.result), "privileged workflow markers are restricted to the parent orchestrator");
   assert.equal(readGateState(root).capture_verified, undefined);
   assert.equal(readHandRecord(root).capturedVerifiedAt, undefined);
   assert.deepEqual(removals, []);
+});
+
+test("filha não pode forjar a conclusão de brainstorming", () => {
+  const root = makeRoot();
+  seedGateState(root);
+  seedApprovedSpec(root);
+  const { authority } = makeAuthority(root);
+
+  const denied = call(authority, { action: "brainstormed" }, { toolCallId: "child-brainstorm", isChild: true });
+
+  assert.equal(reasonOf(denied.result), "privileged workflow markers are restricted to the parent orchestrator");
+  assert.equal(readGateState(root).brainstormed, undefined);
 });
 
 test("capture-verified feliz carimba capturedVerifiedAt e remove o dispatch-record do produtor", () => {

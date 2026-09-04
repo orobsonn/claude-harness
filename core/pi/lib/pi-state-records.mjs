@@ -379,6 +379,25 @@ function readPiCanonicalTask(projectRoot, featureId, taskId) {
 }
 
 /**
+ * @description Lê a única exceção de cerimônia que pertence à tarefa, depois de validar o plano
+ * estável inteiro. O valor nunca vem do prompt/descriptor: só `no_tests:true` canônico com
+ * `locked_tests: []` (validado por validatePlan) pode dispensar o produtor de teste.
+ * @param {string} projectRoot
+ * @param {string} featureId
+ * @param {string} taskId
+ * @returns {{ ok: true, noTests: boolean, planHash: string } | { ok: false, reason: string }}
+ */
+export function readPiCanonicalTaskPolicy(projectRoot, featureId, taskId) {
+  const bound = readPiCanonicalTask(projectRoot, featureId, taskId);
+  if (!bound.ok) return bound;
+  return {
+    ok: true,
+    noTests: bound.task.no_tests === true,
+    planHash: bound.planHash,
+  };
+}
+
+/**
  * @description Deriva o escopo de uma mão escritora a partir do plano estável validado do Pi.
  * @param {string} projectRoot
  * @param {string} featureId
@@ -449,7 +468,7 @@ function piLifecycleLockTarget(realRoot, sessionId) {
 }
 
 /** @description Cria o registro imutável de escopo desta chamada exata, sob lock de ciclo de vida. */
-function claimResolvedPiDispatch(projectRoot, { sessionId, callId, role, taskId, now = Date.now(), lockOptions } = {}, resolveCanonical) {
+function claimResolvedPiDispatch(projectRoot, { sessionId, callId, role, taskId, expectedPlanHash, now = Date.now(), lockOptions } = {}, resolveCanonical) {
   if (![sessionId, callId, role, taskId].every((value) => typeof value === "string" && value)) return { ok: false, reason: "runtime session, call, role, and task required" };
   if (!isSafeSessionId(sessionId) || !isSafeTaskId(taskId) || !writingHand(role)) return { ok: false, reason: "runtime session, task, or writing role invalid" };
   let realRoot;
@@ -461,6 +480,12 @@ function claimResolvedPiDispatch(projectRoot, { sessionId, callId, role, taskId,
   try {
     const canonical = resolveCanonical(realRoot);
     if (!canonical.ok) return canonical;
+    if (
+      typeof expectedPlanHash === "string" && expectedPlanHash.length > 0 &&
+      canonical.planHash !== expectedPlanHash
+    ) {
+      return { ok: false, reason: "canonical task changed since policy check" };
+    }
     const worktreeBaseline = snapshotWorktreeBaseline(realRoot);
     const record = {
       parent_session_id: sessionId, dispatch_call_id: callId, child_session_id: null,
@@ -490,10 +515,10 @@ function claimResolvedPiDispatch(projectRoot, { sessionId, callId, role, taskId,
 /**
  * @description Reivindica atomicamente o escopo canônico do planner para esta chamada de dispatch.
  * @param {string} projectRoot
- * @param {{ sessionId?: string, callId?: string, role?: string, taskId?: string, now?: number, lockOptions?: object }} args
+ * @param {{ sessionId?: string, callId?: string, role?: string, taskId?: string, expectedPlanHash?: string, now?: number, lockOptions?: object }} args
  */
-export function claimActivePiDispatch(projectRoot, { sessionId, callId, role, taskId, now = Date.now(), lockOptions } = {}) {
-  return claimResolvedPiDispatch(projectRoot, { sessionId, callId, role, taskId, now, lockOptions }, (realRoot) => {
+export function claimActivePiDispatch(projectRoot, { sessionId, callId, role, taskId, expectedPlanHash, now = Date.now(), lockOptions } = {}) {
+  return claimResolvedPiDispatch(projectRoot, { sessionId, callId, role, taskId, expectedPlanHash, now, lockOptions }, (realRoot) => {
     const loaded = loadCanonicalPiState(realRoot, sessionId);
     if (!loaded.ok) return loaded;
     if (loaded.state.session_id !== sessionId) return { ok: false, reason: "gate-state session identity mismatch" };

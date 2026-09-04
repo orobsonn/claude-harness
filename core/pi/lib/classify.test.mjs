@@ -81,6 +81,24 @@ for (const mode of ["no-ceremony", "QUICK", "LIGHT", "FULL"]) {
   });
 }
 
+test("headless classification refuses inline modes without creating state", () => {
+  const root = mkRoot("headless");
+  try {
+    for (const mode of ["QUICK", "no-ceremony"]) {
+      const result = executePiClassify({ mode, feature_id: "pi-feature" }, {
+        projectRoot: root, sessionId: SESSION, isChild: false, isHeadless: true,
+      });
+      assert.equal(result.details.error, "headless requires LIGHT or FULL ceremony");
+      assert.equal(fs.existsSync(statePathOf(root)), false);
+    }
+    const valid = executePiClassify({ mode: "FULL", feature_id: "pi-feature" }, {
+      projectRoot: root, sessionId: SESSION, isChild: false, isHeadless: true,
+    });
+    assert.equal(valid.details.mode, "FULL");
+    assert.equal(readState(root).mode, "FULL");
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
 test("plan_path é estável entre sessões diferentes para a mesma feature", () => {
   const root = mkRoot("stable");
   try {
@@ -128,10 +146,26 @@ test("rebaixamento FULL → QUICK é negado com a mensagem da lane OC", () => {
   }
 });
 
-test("troca de feature no meio da run é negada", () => {
+test("typo do feature_id inicial é corrigível antes de plano ou evidência de cerimônia", () => {
   const root = mkRoot("switch");
   try {
+    classify(root, "FULL", "pi-feature-typo");
+    const payload = payloadOf(classify(root, "FULL", "pi-feature"));
+
+    assert.equal(payload.action, "fresh");
+    assert.equal(payload.feature_id, "pi-feature");
+    assert.equal(readState(root).feature_id, "pi-feature");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("troca de feature no meio da run é negada após evidência de cerimônia", () => {
+  const root = mkRoot("switch-after-evidence");
+  try {
     classify(root, "LIGHT", "pi-feature");
+    const statePath = statePathOf(root);
+    fs.writeFileSync(statePath, JSON.stringify({ ...readState(root), brainstormed: true }));
     const payload = payloadOf(classify(root, "LIGHT", "outra-feature"));
 
     assert.equal(

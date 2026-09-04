@@ -28,7 +28,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync, existsSync } from "node:fs";
+import { relative, resolve } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { decideMergeChecks } from "../shared/lib/merge-check-gate.mjs";
+import { loadSkills } from "../../node_modules/@earendil-works/pi-coding-agent/dist/core/skills.js";
+import { buildPiHarnessInvocation } from "../pi/bin/pi-harness.mjs";
 
 const REPO_ROOT = new URL("../../", import.meta.url);
 
@@ -87,6 +91,33 @@ const SHELLS = discoverShells(CORE);
 
 const RELEASE_SKILL_DIR = /(?:^|-)releasing-versions$/;
 
+// Pi loads the shared Codex catalogue through its real launcher invocation.
+// It must not grow a second, stale copy only to satisfy this cross-shell gate.
+const PI_DEPENDENCIES = Object.freeze({
+  piCli: "/runtime/pi-cli.js",
+  piPackage: "/runtime/pi-package.json",
+  subagentsExtension: "/runtime/pi-subagents.ts",
+  subagentsPackage: "/runtime/pi-subagents-package.json",
+});
+const PI_RELEASE_SKILL_NAME = "harness-releasing-versions";
+
+function piLoadedReleaseSkill() {
+  const root = fileURLToPath(REPO_ROOT);
+  const invocation = buildPiHarnessInvocation({ root, argv: [], env: {}, dependencyPaths: PI_DEPENDENCIES });
+  const skillPaths = invocation.args.filter((arg, index) => invocation.args[index - 1] === "--skill");
+  const loaded = loadSkills({ cwd: root, agentDir: root, skillPaths, includeDefaults: false });
+  const expectedPath = resolve(root, "core/codex/skills/harness-releasing-versions/SKILL.md");
+  const skill = loaded.skills.find((entry) => entry.name === PI_RELEASE_SKILL_NAME && entry.filePath === expectedPath);
+  if (!skill) return null;
+  return {
+    shell: "pi",
+    dir: skill.name,
+    url: pathToFileURL(skill.filePath),
+    label: relative(root, skill.filePath),
+    name: skill.name,
+  };
+}
+
 /**
  * @description The release skill a shell ships, or null. The guide row is keyed by the frontmatter
  * `name:` (claude-code → `releasing-versions`, opencode → `oc-releasing-versions`), never by the
@@ -96,6 +127,7 @@ const RELEASE_SKILL_DIR = /(?:^|-)releasing-versions$/;
  * the SKIP-gated tests report the problem cleanly.
  */
 function releaseSkillOf(shell) {
+  if (shell === "pi") return piLoadedReleaseSkill();
   const skills = new URL(`${shell}/skills/`, CORE);
   const dirs = readdirSync(skills, { withFileTypes: true })
     .filter((entry) => entry.isDirectory() && RELEASE_SKILL_DIR.test(entry.name))
@@ -121,6 +153,7 @@ const SKILL_LANGUAGE = {
   "claude-code": { twice: /duas vezes/i, never: /NUNCA/, manualHeadings: ["## MODO OPEN", "## MODO FINISH"] },
   codex: { twice: /duas vezes/i, never: /NUNCA/, manualHeadings: ["## MODO OPEN", "## MODO FINISH"] },
   opencode: { twice: /twice/i, never: /NEVER/, manualHeadings: ["## OPEN mode", "## FINISH mode"] },
+  pi: { twice: /duas vezes/i, never: /NUNCA/, manualHeadings: ["## MODO OPEN", "## MODO FINISH"] },
 };
 
 const TARGETS = RELEASE_SKILLS.filter((skill) => SKILL_LANGUAGE[skill.shell]).map((skill) => ({

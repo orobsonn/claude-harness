@@ -23,7 +23,7 @@ test("buildLifecycleUpdateInvocation always synchronizes all runtime harnesses",
   );
 });
 
-test("buildLifecycleUpdateInvocation rejects a tag that could alter argv or a partial target", () => {
+test("buildLifecycleUpdateInvocation rejects a tag or target that could alter argv", () => {
   assert.throws(
     () => buildLifecycleUpdateInvocation({ tag: "v1.2.3 --admin", hasOpenCode: true, hasClaude: false }),
     /invalid release tag/i,
@@ -34,18 +34,15 @@ test("buildLifecycleUpdateInvocation rejects a tag that could alter argv or a pa
   );
 });
 
-test("buildLifecycleUpdateInvocation accepts only the all-runtimes target", () => {
-  const invocation = buildLifecycleUpdateInvocation({
-    tag: "v1.2.3",
-    hasOpenCode: false,
-    hasClaude: false,
-    requestedTarget: "all",
-  });
-
-  assert.equal(invocation.target, "all");
-  assert.deepEqual(invocation.args.slice(-4), ["--target", "all", "--ref", "v1.2.3"]);
-  assert.throws(
-    () => buildLifecycleUpdateInvocation({ tag: "v1.2.3", hasOpenCode: true, hasClaude: false, requestedTarget: "both" }),
-    /invalid lifecycle target/i,
-  );
+test("buildLifecycleUpdateInvocation defaults to all four runtimes and preserves every explicit target", () => {
+  for (const target of [undefined, "claude", "opencode", "codex", "pi", "both", "all"]) {
+    const invocation = buildLifecycleUpdateInvocation({
+      tag: "v1.2.3",
+      hasOpenCode: false,
+      hasClaude: false,
+      requestedTarget: target,
+    });
+    assert.equal(invocation.target, target ?? "all");
+    assert.deepEqual(invocation.args.slice(-4), ["--target", target ?? "all", "--ref", "v1.2.3"]);
+  }
 });

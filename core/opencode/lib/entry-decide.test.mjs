@@ -129,8 +129,19 @@ test("planner: stale input.featureId alone (no dispatchFeatureId) never triggers
   assert.equal(decision.ok, true);
 });
 
-test("adversary role is allowed after LIGHT/FULL classification before adversary_fired", () => {
+test("adversary without brainstormed → CEREMONY_PROOF_REQUIRED brainstorming deny", () => {
   const decision = decideEntryTask({ subagentType: "adversary-family-1", gateState: { mode: "FULL" } });
+  assert.equal(decision.ok, false);
+  const denial = JSON.parse(decision.reason.slice(decision.reason.indexOf("{")));
+  assert.equal(denial.missing_proof, "brainstorming_completion_evidence");
+  assert.deepEqual(denial.next_transition, { phase: "brainstorming", action: "resume", marker: "brainstormed" });
+});
+
+test("adversary role is allowed after LIGHT/FULL classification and a sealed brainstorm", () => {
+  const decision = decideEntryTask({
+    subagentType: "adversary-family-1",
+    gateState: { mode: "FULL", brainstormed: true },
+  });
   assert.equal(decision.ok, true);
   assert.equal(decision.reason, "adversary-allowed");
 });

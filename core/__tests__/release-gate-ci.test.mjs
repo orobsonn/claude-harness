@@ -1,8 +1,10 @@
 import { test } from "node:test";
 import { strict as assert } from "node:assert";
 import { readFileSync, readdirSync, existsSync } from "node:fs";
-import { resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { relative, resolve } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { loadSkills } from "../../node_modules/@earendil-works/pi-coding-agent/dist/core/skills.js";
+import { buildPiHarnessInvocation } from "../pi/bin/pi-harness.mjs";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 
@@ -99,9 +101,37 @@ function discoverShells(core) {
 const SHELLS = discoverShells(CORE);
 const RELEASE_SKILL_DIR = /(?:^|-)releasing-versions$/;
 
+// `pi` is a real shell, but its launcher deliberately shares the Codex skill
+// catalogue instead of copying a stale release skill into core/pi/skills. Keep
+// this discovery tied to the same invocation and loader Pi uses at runtime.
+const PI_DEPENDENCIES = Object.freeze({
+  piCli: "/runtime/pi-cli.js",
+  piPackage: "/runtime/pi-package.json",
+  subagentsExtension: "/runtime/pi-subagents.ts",
+  subagentsPackage: "/runtime/pi-subagents-package.json",
+});
+const PI_RELEASE_SKILL_NAME = "harness-releasing-versions";
+
+function piLoadedReleaseSkill() {
+  const root = fileURLToPath(REPO_ROOT);
+  const invocation = buildPiHarnessInvocation({ root, argv: [], env: {}, dependencyPaths: PI_DEPENDENCIES });
+  const skillPaths = invocation.args.filter((arg, index) => invocation.args[index - 1] === "--skill");
+  const loaded = loadSkills({ cwd: root, agentDir: root, skillPaths, includeDefaults: false });
+  const expectedPath = resolve(root, "core/codex/skills/harness-releasing-versions/SKILL.md");
+  const skill = loaded.skills.find((entry) => entry.name === PI_RELEASE_SKILL_NAME && entry.filePath === expectedPath);
+  if (!skill) return null;
+  return {
+    shell: "pi",
+    dir: skill.name,
+    url: pathToFileURL(skill.filePath),
+    label: relative(root, skill.filePath),
+  };
+}
+
 /** The releasing-versions skill a shell ships, or null. Keyed on directory name, per the spec —
  *  the gate is about file content, not the frontmatter `name:` used for guide-row lookups. */
 function releaseSkillOf(shell) {
+  if (shell === "pi") return piLoadedReleaseSkill();
   const skills = new URL(`${shell}/skills/`, CORE);
   if (!existsSync(skills)) return null;
   const dirs = readdirSync(skills, { withFileTypes: true })

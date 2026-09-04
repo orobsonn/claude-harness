@@ -51,7 +51,9 @@ export function hasFidelityPass(fidelityPass, featureId, taskId) {
  * @description Decide whether a task subagent dispatch is allowed.
  * Gate 1: every delivery role (including executor/sniper) requires mode LIGHT or FULL — mirrors
  * Claude Code entry-gate.mjs's triage-mode check, which has no per-role exemption.
- * Planner ceremony: brainstormed + adversary_fired, bound to the dispatched feature.
+ * Ceremony order: planner requires brainstormed + adversary_fired, bound to the dispatched
+ * feature. A host with a native draft-spec approval rail may let only its adversary inspect that
+ * draft before brainstormed; every other lane keeps the sealed-design order.
  * Fidelity rail: executor blocked until a feature-level fidelity_pass exists; test-author and
  * sniper are always exempt.
  * Gate 3: shipper blocked while any regate_pending has no matching ancestral regate_passed.
@@ -64,6 +66,7 @@ export function hasFidelityPass(fidelityPass, featureId, taskId) {
  *   featureId?: unknown,
  *   dispatchFeatureId?: unknown,
  *   taskId?: unknown,
+ *   allowAdversaryBeforeBrainstorm?: unknown,
  *   isAncestorFn?: (sha: string) => boolean | null,
  * }} input
  * @returns {Decision}
@@ -135,9 +138,16 @@ export function decideEntryTask(input = {}) {
       }
     }
 
-    // Adversary dispatch is allowed after LIGHT/FULL classification so it can produce the review;
-    // adversary_fired is recorded only after that result is accepted.
+    // The Pi's native spec rail is the sole exception: it may dispatch ONLY the adversary against
+    // a persisted draft before operator approval. OC keeps its historic sealed-design order.
     if (isAdversaryRole(sub)) {
+      if (input.allowAdversaryBeforeBrainstorm !== true && gs.brainstormed !== true) {
+        return {
+          ok: false,
+          decision: "deny",
+          reason: `[entry-gate] ${JSON.stringify({ code: "CEREMONY_PROOF_REQUIRED", missing_proof: "brainstorming_completion_evidence", next_transition: { phase: "brainstorming", action: "resume", marker: "brainstormed" } })}`,
+        };
+      }
       return { ok: true, decision: "allow", reason: "adversary-allowed" };
     }
 

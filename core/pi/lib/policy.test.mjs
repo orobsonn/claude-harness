@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import test from 'node:test'
 
 import {
+  CLAUDE_CODE_BASH_ALLOWLIST,
   decidePiPolicy,
   isSecretReadPath,
   piAuditDir,
@@ -16,6 +17,11 @@ import {
 const bash = (command) => decidePiPolicy({ toolName: 'bash', input: { command } })
 const HOME = '/home/tester'
 const readPath = (path) => decidePiPolicy({ toolName: 'read', input: { path } }, { home: HOME, cwd: '/repo' })
+
+test('a allowlist Bash do Pi é cópia exata da configuração do Claude Code', () => {
+  const settings = JSON.parse(readFileSync(new URL('../../claude-code/settings.json', import.meta.url), 'utf8'))
+  assert.deepEqual(CLAUDE_CODE_BASH_ALLOWLIST, settings.permissions.allow.filter((rule) => rule.startsWith('Bash(')))
+})
 
 test('bloqueia force push antes do bash rodar, com a mensagem da lane OC', () => {
   const out = bash('git push --force origin main')
@@ -101,6 +107,53 @@ test('write e edit não mutam caminhos do harness (.codex, .agents, .pi)', () =>
     assert.equal(out.reason, 'Harness-owned paths are protected from direct tool mutation.')
   }
   assert.deepEqual(decidePiPolicy({ toolName: 'write', input: { path: 'src/app.ts' } }), { block: false })
+})
+
+test('em cerimônia LIGHT/FULL o pai aplica a mesma allowlist Bash do Claude Code; escrita nativa continua bloqueada', () => {
+  const fullParent = { gateState: { classified: true, mode: 'FULL' }, isChild: false }
+  const fullChild = { gateState: { classified: true, mode: 'FULL' }, isChild: true }
+
+  for (const call of [
+    { toolName: 'write', input: { path: 'src/app.ts' } },
+    { toolName: 'edit', input: { path: 'tests/app.test.mjs' } },
+    { toolName: 'bash', input: { command: 'printf x > src/app.ts' } },
+  ]) {
+    const out = decidePiPolicy(call, fullParent)
+    assert.equal(out.block, true, JSON.stringify(call))
+    assert.match(out.reason, /parent orchestrator/i)
+  }
+
+  for (const command of [
+    'git status --short',
+    'git diff --check',
+    'gh issue view 17 --json number,title,body,labels,state,url',
+    'gh pr list --state all --json number,title,state,url',
+    'gh pr view 42 --json number,title,state,url',
+    'gh pr status',
+    'npm test',
+    'npm run typecheck',
+    'node --test test/unit.test.mjs',
+  ]) {
+    assert.deepEqual(decidePiPolicy({ toolName: 'bash', input: { command } }, fullParent), { block: false }, command)
+  }
+
+  assert.deepEqual(
+    decidePiPolicy({ toolName: 'bash', input: { command: 'git commit -m "delegated hand commit"' } }, fullParent),
+    { block: false },
+  )
+  assert.deepEqual(
+    decidePiPolicy({ toolName: 'bash', input: { command: 'node -e "require(\'node:fs\').writeFileSync(\'src/app.ts\', \'x\')"' } }, fullParent),
+    { block: false },
+  )
+
+  assert.deepEqual(
+    decidePiPolicy({ toolName: 'write', input: { path: 'src/app.ts' } }, fullChild),
+    { block: false },
+  )
+  assert.deepEqual(
+    decidePiPolicy({ toolName: 'write', input: { path: 'src/app.ts' } }, { gateState: { mode: 'QUICK' }, isChild: false }),
+    { block: false },
+  )
 })
 
 test('plano canônico é delegado ao plan-write-gate, não bloqueado pela policy genérica', () => {

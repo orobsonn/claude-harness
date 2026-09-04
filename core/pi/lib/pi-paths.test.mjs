@@ -6,6 +6,7 @@ import {
   piStateRoot,
   piPlanDir,
   piExecutionPlanPath,
+  piSpecPath,
   piGateStateDir,
   piGateStatePath,
   piHandRecordPath,
@@ -43,6 +44,12 @@ test('pi-plan-dir: featureId maiúsculo/underscore rejeitado', () => {
 test('pi-execution-plan-path: caminho exato', () => {
   const r = piExecutionPlanPath({ projectRoot: '/tmp/project', featureId: 'pi-paths' })
   assert.deepEqual(r, { ok: true, path: '/tmp/project/.pi/harness/plans/pi-paths/execution-plan.json' })
+})
+
+test('pi-spec-path: caminho canônico da spec', () => {
+  const r = piSpecPath({ projectRoot: '/tmp/project', featureId: 'pi-paths' })
+  assert.deepEqual(r, { ok: true, path: '/tmp/project/.pi/harness/plans/pi-paths/spec.md' })
+  assert.deepEqual(piSpecPath({ projectRoot: '/tmp/project', featureId: '../escape' }), { ok: false, reason: 'invalid featureId' })
 })
 
 test('pi-gate-state-dir: caminho exato', () => {

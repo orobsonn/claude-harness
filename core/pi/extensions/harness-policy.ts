@@ -1,7 +1,8 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import { decidePiPolicy, piAuditDir, recordPiPolicyAudit, shouldAuditPiTool } from "../lib/policy.mjs";
-import { piSessionId } from "../lib/pi-adapter-map.mjs";
+import { isChildSession, isPiHeadlessContext, piSessionId } from "../lib/pi-adapter-map.mjs";
+import { loadPiGateStateFromDisk } from "../lib/pi-gate-state.mjs";
 
 /** @description Adaptador fino da peça policy: traduz eventos do Pi para a lógica pura de
  * core/pi/lib/policy.mjs. `tool_call` nega antes da execução (nunca `terminate`);
@@ -12,7 +13,14 @@ import { piSessionId } from "../lib/pi-adapter-map.mjs";
 export default function harnessPolicy(pi: ExtensionAPI) {
   pi.on("tool_call", (event: any, ctx: any) => {
     const cwd = typeof ctx?.cwd === "string" && ctx.cwd.length > 0 ? ctx.cwd : process.cwd();
-    const decision = decidePiPolicy({ toolName: event?.toolName, input: event?.input }, { cwd });
+    const loaded = loadPiGateStateFromDisk(cwd, { sessionId: piSessionId(ctx) || null });
+    if (!loaded.ok && !["read", "grep", "find", "ls", "get_subagent_result"].includes(event?.toolName)) {
+      return { block: true, reason: "Ceremony state cannot be read safely; inspect and repair it before further actions." };
+    }
+    const decision = decidePiPolicy(
+      { toolName: event?.toolName, input: event?.input },
+      { cwd, isChild: isChildSession(ctx), isHeadless: isPiHeadlessContext(ctx), gateState: loaded.ok ? loaded.state : {} },
+    );
     if (decision.block) return { block: true, reason: decision.reason };
   });
 

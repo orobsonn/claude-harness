@@ -2,6 +2,10 @@
 
 const EYE_TOOLS = Object.freeze(["read", "grep", "find", "ls"]);
 const HAND_TOOLS = Object.freeze(["read", "grep", "find", "ls", "bash", "edit", "write"]);
+// O shipper é a mão de entrega, não de produto: precisa de Bash para staging/commit, mas não
+// recebe Write/Edit. Uma proteção redundante no plan-write-gate nega essas tools se um runtime
+// antigo ainda as expuser.
+const SHIPPER_TOOLS = Object.freeze(["read", "grep", "find", "ls", "bash"]);
 /**
  * O planner é um olho sobre o CÓDIGO (nunca implementa), mas precisa gravar UM arquivo: o plano
  * canônico `.pi/harness/plans/<feature>/execution-plan.json` — a mesma autoridade que o planner da
@@ -26,19 +30,40 @@ export const HAND_ROLES = Object.freeze([
   "harness-test-author",
 ]);
 
-export const CANONICAL_ROLES = Object.freeze([...EYE_ROLES, ...HAND_ROLES]);
+/** As dez roles que participam do plano, marcadores, captura e aprovação final. */
+export const DELIVERY_ROLES = Object.freeze([...EYE_ROLES, ...HAND_ROLES]);
+/** Olho local de discussão: não pertence à cerimônia de delivery. */
+export const DISCUSSION_ROLES = Object.freeze(["harness-discussion-adversary"]);
+/** Tudo que o runtime pode materializar, sombrear e despachar. */
+export const RUNTIME_ROLES = Object.freeze([...DELIVERY_ROLES, ...DISCUSSION_ROLES]);
+// Compatibilidade para consumidores de delivery: "canonical" continua sendo as dez roles.
+export const CANONICAL_ROLES = DELIVERY_ROLES;
 
 const POLICIES = Object.freeze(Object.fromEntries([
   ...EYE_ROLES.map((name) => [
     name,
     Object.freeze({ tools: name === "harness-planner" ? PLANNER_TOOLS : EYE_TOOLS, kind: "eye" }),
   ]),
-  ...HAND_ROLES.map((name) => [name, Object.freeze({ tools: HAND_TOOLS, kind: "hand" })]),
+  ...HAND_ROLES.map((name) => [
+    name,
+    Object.freeze({ tools: name === "harness-shipper" ? SHIPPER_TOOLS : HAND_TOOLS, kind: "hand" }),
+  ]),
+  ...DISCUSSION_ROLES.map((name) => [name, Object.freeze({ tools: EYE_TOOLS, kind: "discussion" })]),
 ]));
 
 /** @param {unknown} name */
 export function isCanonicalRole(name) {
   return typeof name === "string" && CANONICAL_ROLES.includes(name);
+}
+
+/** @param {unknown} name */
+export function isDiscussionRole(name) {
+  return typeof name === "string" && DISCUSSION_ROLES.includes(name);
+}
+
+/** @param {unknown} name */
+export function isRuntimeRole(name) {
+  return typeof name === "string" && RUNTIME_ROLES.includes(name);
 }
 
 /** @param {unknown} name */

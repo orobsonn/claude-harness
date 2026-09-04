@@ -189,8 +189,16 @@ export function decidePiPlanGate(event = {}, deps = {}) {
 
     const taskId = marker.ok ? marker.taskId : ids.taskId;
     const tasks = Array.isArray(plan.tasks) ? plan.tasks : [];
-    if (taskId && !tasks.some((task) => task?.id === taskId)) {
+    const task = taskId ? tasks.find((candidate) => candidate?.id === taskId) : null;
+    if (taskId && !task) {
       return deny("dispatch task_id does not exist in stable plan");
+    }
+    if (requiresTaskId) {
+      const declaredComplexity = typeof event.input?.complexity === "string" ? event.input.complexity : "";
+      const plannedComplexity = typeof task?.complexity === "string" ? task.complexity : "";
+      if (!declaredComplexity || declaredComplexity !== plannedComplexity) {
+        return deny(`dispatch complexity conflicts with stable plan task (${declaredComplexity || "(missing)"} != ${plannedComplexity || "(missing)"})`);
+      }
     }
 
     // Deliberadamente NÃO muta args.prompt: o brief é o transporte do modelo.

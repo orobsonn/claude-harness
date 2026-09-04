@@ -35,6 +35,14 @@ import { piExecutionPlanPath, piGateStatePath } from "./pi-paths.mjs";
 /** Marcador de sessão filha usado como parentSessionId sintético (o Pi não expõe o id do pai
  * no header do filho de forma canônica; para a autoridade basta "existe pai"). */
 const CHILD_PARENT_MARKER = "<child>";
+const PRISTINE_CLASSIFY_KEYS = new Set([
+  "session_id",
+  "feature_id",
+  "mode",
+  "peak_mode",
+  "classified",
+  "triaged",
+]);
 
 /**
  * @description Monta o resultado de erro da tool no MESMO formato da lane OC
@@ -89,11 +97,31 @@ function readPriorState(statePath) {
 }
 
 /**
+ * @description A parent can correct a typo in its initial feature id only before
+ * any ceremony evidence exists. `classify` itself writes exactly the six fields
+ * below and never creates a plan; every later gate appends evidence to this state
+ * or creates the stable plan. This deliberately small recovery window prevents a
+ * harmless spelling mistake from requiring a new TUI while preserving the
+ * anti-laundering feature binding once work has started.
+ * @param {Record<string, unknown>} prior
+ * @param {string} projectRoot
+ * @returns {boolean}
+ */
+function canCorrectInitialFeatureId(prior, projectRoot) {
+  if (!prior || typeof prior !== "object" || Array.isArray(prior)) return false;
+  if (Object.keys(prior).some((key) => !PRISTINE_CLASSIFY_KEYS.has(key))) return false;
+  if (prior.classified !== true || prior.triaged !== true) return false;
+  if (typeof prior.feature_id !== "string" || typeof prior.mode !== "string") return false;
+  const priorPlan = piExecutionPlanPath({ projectRoot, featureId: prior.feature_id });
+  return priorPlan.ok && !fs.existsSync(priorPlan.path);
+}
+
+/**
  * @description Executa a classify da lane Pi: valida identidade e autoridade, decide a
  * transição (escalate-only), persiste apenas fatos de triagem no gate-state e devolve o
  * caminho estável do plano. NUNCA cria nem altera plano. Nunca lança.
  * @param {{mode?: unknown, feature_id?: unknown}} args
- * @param {{projectRoot?: unknown, sessionId?: unknown, isChild?: unknown}} context
+ * @param {{projectRoot?: unknown, sessionId?: unknown, isChild?: unknown, isHeadless?: boolean}} context
  * @param {{persistClassifyState?: Function, obsAppend?: Function}} [deps] injeção só para teste
  * @returns {{content: Array<{type: 'text', text: string}>, details: Record<string, unknown>}}
  */
@@ -125,19 +153,34 @@ export function executePiClassify(args = {}, context = {}, deps = {}) {
   }
 
   const gsPath = piGateStatePath({ projectRoot, sessionId });
+  if (context.isHeadless === true && mode !== "LIGHT" && mode !== "FULL") {
+    return piClassifyErrorResult(
+      "headless requires LIGHT or FULL ceremony",
+      "Inline work is available only to an interactive local parent; classify the autonomous delivery before dispatch.",
+      mode,
+    );
+  }
   if (!gsPath.ok) {
     return piClassifyErrorResult("invalid gate-state path", gsPath.reason, sessionId);
   }
 
   const prior = readPriorState(gsPath.path);
 
+  // A typo in the first classify call is recoverable while there is provably no
+  // plan or gate evidence. Once any evidence lands, use the shared strict
+  // transition unchanged: a feature may not be swapped mid-ceremony.
+  const correctingInitialFeatureId =
+    prior.classified === true &&
+    typeof prior.feature_id === "string" &&
+    prior.feature_id !== featureId &&
+    canCorrectInitialFeatureId(prior, projectRoot);
   const transition = decideClassifyTransition({
     requestedMode: mode,
     requestedFeatureId: featureId,
-    currentMode: prior.mode,
-    currentFeatureId: prior.feature_id,
-    peakMode: prior.peak_mode,
-    classified: prior.classified === true || prior.triaged === true,
+    currentMode: correctingInitialFeatureId ? undefined : prior.mode,
+    currentFeatureId: correctingInitialFeatureId ? undefined : prior.feature_id,
+    peakMode: correctingInitialFeatureId ? undefined : prior.peak_mode,
+    classified: correctingInitialFeatureId ? false : prior.classified === true || prior.triaged === true,
   });
   if (!transition.ok) {
     return piClassifyErrorResult(

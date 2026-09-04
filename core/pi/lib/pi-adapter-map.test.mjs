@@ -12,6 +12,7 @@ import {
   toOcRole,
   piSessionId,
   isChildSession,
+  isPiHeadlessContext,
   isDeliveryRole,
   isExecutorRole,
   isPlannerRole,
@@ -21,6 +22,19 @@ import {
   isPlanReviewerRole,
 } from "./pi-adapter-map.mjs";
 import { CANONICAL_ROLES } from "./roles.mjs";
+
+test("headless context uses Pi UI capability and established automation signals, never host location", () => {
+  assert.equal(isPiHeadlessContext({ hasUI: false }, {}), true);
+  assert.equal(isPiHeadlessContext(undefined, {}), true);
+  assert.equal(isPiHeadlessContext({}, {}), true);
+  assert.equal(isPiHeadlessContext({ hasUI: true }, {}), false);
+  assert.equal(isPiHeadlessContext({ hasUI: true, mode: "rpc" }, {}), true);
+  assert.equal(isPiHeadlessContext({ hasUI: true }, { SSH_CONNECTION: "remote-tui" }), false);
+  for (const key of ["CLAUDE_CODE_REMOTE", "HARNESS_NOTIFY_PROJECT", "HARNESS_OBSERVABILITY_RUN_PATH"]) {
+    assert.equal(isPiHeadlessContext({ hasUI: true }, { [key]: "automation" }), true);
+    assert.equal(isPiHeadlessContext({ hasUI: true }, { [key]: "" }), false);
+  }
+});
 
 // --- predicados de tool ---
 

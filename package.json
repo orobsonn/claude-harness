@@ -45,12 +45,24 @@
   },
   "pi": {
     "extensions": [
+      "./core/pi/extensions/harness-policy.ts",
       "./core/pi/extensions/harness-bootstrap.ts",
       "./node_modules/@gotgenes/pi-subagents/src/index.ts",
-      "./core/pi/extensions"
+      "./core/pi/extensions/harness-dispatch.ts",
+      "./core/pi/extensions/harness-entry-gate.ts",
+      "./core/pi/extensions/harness-plan-gate.ts",
+      "./core/pi/extensions/harness-plan-write-gate.ts",
+      "./core/pi/extensions/harness-marker.ts",
+      "./core/pi/extensions/harness-classify.ts",
+      "./core/pi/extensions/harness-spec.ts",
+      "./core/pi/extensions/harness-lavish-gate.ts",
+      "./core/pi/extensions/harness-obs.ts",
+      "./core/pi/extensions/harness-idle-nudge.ts",
+      "./core/pi/extensions/harness-reinject-state.ts",
+      "./core/pi/extensions/harness-version-check.ts",
+      "./core/pi/extensions/harness-context-files.ts",
+      "./core/pi/extensions/harness-plan-tracker.ts"
     ],
-    "skills": [
-      "./core/codex/skills"
-    ]
+    "skills": ["./core/codex/skills", "./core/pi/skills"]
   }
 }

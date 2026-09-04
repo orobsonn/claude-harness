@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import {
@@ -16,9 +17,18 @@ import {
   piSubagentArgs,
 } from "../lib/pi-adapter-map.mjs";
 import { loadPiGateStateFromDisk } from "../lib/pi-gate-state.mjs";
+import { mergeGateState } from "../lib/pi-gate-state.mjs";
+import { piGateStatePath } from "../lib/pi-paths.mjs";
+import { readPiSpecDraft } from "../lib/spec-approval.mjs";
 import { removePiChildIdentity, writePiChildIdentity } from "../lib/pi-child-identity.mjs";
 import { bindPiChildSession, removePiDispatchRecord } from "../lib/pi-state-records.mjs";
 import { parseTaskDispatchIdentity } from "../../opencode/lib/task-dispatch-identity.mjs";
+import { isDiscussionRole } from "../lib/roles.mjs";
+
+/** Marcador de escopo do olho que revisa o diff agregado imediatamente antes do shipper. */
+function isFinalReviewDispatch(prompt: unknown) {
+  return typeof prompt === "string" && prompt.startsWith("[HARNESS_FINAL_REVIEW]");
+}
 
 /**
  * @description Adaptador fino do entry-gate na lane Pi. Só traduz eventos do Pi para a lógica de
@@ -57,8 +67,19 @@ export default function harnessEntryGate(pi: ExtensionAPI) {
   const pendingAdvisory = new Map<string, string>();
   /** sessão filha ligada a cada dispatch em voo, por toolCallId (para limpar no fim). */
   const boundChildren = new Map<string, { parentSessionId: string; childSessionId: string }>();
+  /** SHA observado pelo host antes de cada olho que precisa provar o diff que revisou. */
+  const reviewHeads = new Map<string, string>();
   /** True quando ESTA instância roda numa sessão filha: só o pai liga filhas. */
   let ownSessionIsChild = false;
+
+  /** Só o resultado estruturado da tool nativa, não a prosa da filha, prova término saudável. */
+  const successfulForegroundOutcome = (result: any, isError: unknown) => {
+    const details = result && typeof result === "object" && !Array.isArray(result) ? result.details : null;
+    if (isError === true || !details || typeof details !== "object" || Array.isArray(details)) return null;
+    const status = (details as any).status;
+    const agentId = (details as any).agentId;
+    return status === "completed" && typeof agentId === "string" && agentId.length > 0 ? { status, agentId } : null;
+  };
 
   pi.on("session_start", (_event, ctx: any) => {
     if (typeof ctx?.cwd === "string" && ctx.cwd.length > 0) projectRoot = ctx.cwd;
@@ -80,6 +101,7 @@ export default function harnessEntryGate(pi: ExtensionAPI) {
       const [callId, dispatched] = [...pendingArgs.entries()][0];
       const role = piSubagentArgs(dispatched).subagent_type;
       if (typeof role !== "string" || !role) return;
+      if (isDiscussionRole(role)) return;
       const written = writePiChildIdentity(projectRoot, { parentSessionId, childSessionId, role, callId });
       if (written.ok !== true) return;
       boundChildren.set(callId, { parentSessionId, childSessionId });
@@ -124,6 +146,8 @@ export default function harnessEntryGate(pi: ExtensionAPI) {
 
     if (!isPiDispatchTool(event?.toolName)) return;
     const args = piSubagentArgs(event?.input);
+    // Discussão não inicia cerimônia e não ganha dispatch-record, identidade ou recibo de delivery.
+    if (isDiscussionRole(args.subagent_type)) return;
     const decision = decidePiDispatchGate({
       projectRoot,
       sessionId,
@@ -132,6 +156,12 @@ export default function harnessEntryGate(pi: ExtensionAPI) {
       toolCallId: event?.toolCallId,
     });
     if (decision.decision === "deny") return { block: true, reason: decision.reason };
+    const reviewsCurrentHead =
+      (args.subagent_type === "harness-adversary" && parseTaskDispatchIdentity(args.prompt).ok) ||
+      ((args.subagent_type === "harness-adversary" || args.subagent_type === "harness-compliance") && isFinalReviewDispatch(args.prompt));
+    if (reviewsCurrentHead && typeof event?.toolCallId === "string") {
+      try { reviewHeads.set(event.toolCallId, execFileSync("git", ["rev-parse", "HEAD"], { cwd: projectRoot, encoding: "utf8" }).trim()); } catch { /* receipt stays absent */ }
+    }
   });
 
   pi.on("tool_result", (event: any) => {
@@ -154,14 +184,64 @@ export default function harnessEntryGate(pi: ExtensionAPI) {
     try {
       const callId = typeof event?.toolCallId === "string" ? event.toolCallId : "";
       if (callId) pendingAdvisory.delete(callId);
+      const reviewedHead = callId ? reviewHeads.get(callId) : undefined;
+      if (callId) reviewHeads.delete(callId);
       const dispatched = callId ? pendingArgs.get(callId) : undefined;
       if (callId) pendingArgs.delete(callId);
       const bound = callId ? boundChildren.get(callId) : undefined;
       if (callId) boundChildren.delete(callId);
-      if (bound) removePiChildIdentity(projectRoot, bound);
       if (!isPiDispatchTool(event?.toolName)) return;
       const args = piSubagentArgs(dispatched);
       const sessionId = piSessionId(ctx);
+      if ((args.subagent_type === "harness-adversary" || args.subagent_type === "harness-compliance") && bound && sessionId && callId) {
+        const outcome = successfulForegroundOutcome(event?.result, event?.isError);
+        const loaded: any = loadPiGateStateFromDisk(projectRoot, { sessionId });
+        const featureId = loaded?.ok === true && typeof loaded.state?.feature_id === "string" ? loaded.state.feature_id : "";
+        const statePath = piGateStatePath({ projectRoot, sessionId });
+        if (outcome && featureId && statePath.ok && isFinalReviewDispatch(args.prompt) && reviewedHead) {
+          const key = args.subagent_type === "harness-adversary" ? "adversary" : "compliance";
+          const prior = loaded?.state?.final_review_evidence;
+          mergeGateState(statePath.path, {
+            final_review_evidence: {
+              ...(prior && typeof prior === "object" && !Array.isArray(prior) ? prior : {}),
+              [key]: {
+                written_by: "host-subagent-completion", parent_session_id: sessionId, feature_id: featureId,
+                role: args.subagent_type, dispatch_call_id: callId, child_session_id: bound.childSessionId,
+                agent_id: outcome.agentId, status: outcome.status, reviewed_head_sha: reviewedHead,
+              },
+            },
+          });
+        } else if (outcome && featureId && statePath.ok && args.subagent_type === "harness-adversary") {
+          const draft: any = readPiSpecDraft({ projectRoot, sessionId, featureId });
+          if (draft?.ok && typeof draft.sha256 === "string") {
+            mergeGateState(statePath.path, {
+              adversary_completion_evidence: {
+                written_by: "host-subagent-completion", parent_session_id: sessionId, feature_id: featureId,
+                role: "harness-adversary", dispatch_call_id: callId, child_session_id: bound.childSessionId,
+                agent_id: outcome.agentId, status: outcome.status, spec_sha256: draft.sha256,
+              },
+            });
+          } else {
+            const task = parseTaskDispatchIdentity(args.prompt);
+            if (task.ok && reviewedHead) {
+              const key = `${featureId}/${task.taskId}`;
+              const prior = loaded?.state?.task_adversary_evidence;
+              mergeGateState(statePath.path, {
+                task_adversary_evidence: {
+                  ...(prior && typeof prior === "object" && !Array.isArray(prior) ? prior : {}),
+                  [key]: {
+                    written_by: "host-subagent-completion", parent_session_id: sessionId, feature_id: featureId,
+                    task_id: task.taskId, role: "harness-adversary", dispatch_call_id: callId,
+                    child_session_id: bound.childSessionId, agent_id: outcome.agentId, status: outcome.status,
+                    reviewed_head_sha: reviewedHead,
+                  },
+                },
+              });
+            }
+          }
+        }
+      }
+      if (bound) removePiChildIdentity(projectRoot, bound);
       // Dispatch que terminou em ERRO não deixa dispatch-record órfão — espelho do handler
       // `event` da lane OC (message.part.updated com state.status === "error" → removeDispatchRecord).
       if (event?.isError === true) {
@@ -194,6 +274,13 @@ export default function harnessEntryGate(pi: ExtensionAPI) {
         outputText: piResultText(event?.result),
         background: args.run_in_background === true,
       });
+      if (
+        completion.ok === true && completion.capturePending === true &&
+        /^(?:harness-)?(?:executor|sniper)(?:-(?:low|medium|high))?$/.test(String(args.subagent_type))
+      ) {
+        const statePath = piGateStatePath({ projectRoot, sessionId });
+        if (statePath.ok) mergeGateState(statePath.path, { regate_pending: [`${featureId}/${taskId}`] });
+      }
       if (completion.ok === true && completion.terminal === true && completion.capturePending !== true) {
         removePiDispatchRecord(projectRoot, { sessionId, callId });
       }

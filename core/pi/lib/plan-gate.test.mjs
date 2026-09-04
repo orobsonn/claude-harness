@@ -69,7 +69,7 @@ function fixture(plan = validPlan(), state = {}) {
 
 /** @description Executa a decisão como o adaptador `tool_call` faria. */
 function dispatch(root, { role = "harness-executor", prompt = MARKER, sessionId = SESSION, extra = {} } = {}) {
-  const input = { subagent_type: role, description: "d", prompt, ...extra };
+  const input = { subagent_type: role, description: "d", prompt, complexity: "medium", ...extra };
   const decision = decidePiPlanGate({ projectRoot: root, sessionId, toolName: "subagent", input });
   return { decision, input };
 }
@@ -142,6 +142,17 @@ test("task_id inexistente no plano estável é negado", () => {
       dispatch(f.root, { prompt }).decision.reason,
       "[plan-gate] denied: dispatch task_id does not exist in stable plan",
     );
+  } finally { f.close(); }
+});
+
+test("complexidade declarada da mão precisa ser a mesma da tarefa canônica", () => {
+  const f = fixture();
+  try {
+    assert.equal(
+      dispatch(f.root, { extra: { complexity: "high" } }).decision.reason,
+      "[plan-gate] denied: dispatch complexity conflicts with stable plan task (high != medium)",
+    );
+    assert.equal(dispatch(f.root, { extra: { complexity: "medium" } }).decision.block, false);
   } finally { f.close(); }
 });
 
@@ -266,7 +277,7 @@ test("validador quebrado abre com warn (fail-open do decidePlanGate), sem bloque
   const f = fixture();
   try {
     const decision = decidePiPlanGate(
-      { projectRoot: f.root, sessionId: SESSION, toolName: "subagent", input: { subagent_type: "harness-executor", prompt: MARKER } },
+      { projectRoot: f.root, sessionId: SESSION, toolName: "subagent", input: { subagent_type: "harness-executor", prompt: MARKER, complexity: "medium" } },
       { validatePlanFn: () => { throw new Error("boom"); } },
     );
     assert.equal(decision.block, false);

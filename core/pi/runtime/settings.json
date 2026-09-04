@@ -1,3 +1,5 @@
 {
-  "defaultModel": "openai-codex/gpt-5.6-terra"
+  "defaultProvider": "openai-codex",
+  "defaultModel": "gpt-5.6-sol",
+  "httpIdleTimeoutMs": 900000
 }

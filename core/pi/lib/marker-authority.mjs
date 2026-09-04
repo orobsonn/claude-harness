@@ -29,7 +29,9 @@ import { formatFeatureTaskEntry } from "../../shared/lib/absolution.mjs";
 import { isSafeFeatureId, isSafeTaskId } from "../../shared/lib/feature-id.mjs";
 import { validateOcCaptureEligibleHandRecord } from "../../opencode/lib/hand-records.mjs";
 import { isAncestorSha as defaultIsAncestorSha, resolveHeadSha as defaultResolveHeadSha } from "../../opencode/plugin/lib/host-hand-capture.mjs";
-import { piGateStatePath, piHandRecordPath } from "./pi-paths.mjs";
+import { toOcRole } from "./pi-adapter-map.mjs";
+import { piExecutionPlanPath, piGateStatePath, piHandRecordPath } from "./pi-paths.mjs";
+import { readPiSpecApproval, readPiSpecDraft } from "./spec-approval.mjs";
 
 /** @description Conjunto exato de ações privilegiadas aceitas pela tool `mark`. Mesmo Set da lane OC. */
 export const MARKER_ACTIONS = new Set([
@@ -48,6 +50,118 @@ export const MARKER_ACTIONS = new Set([
 export const MARKER_TOOL_NAME = "mark";
 
 const DENY_PREFIX = "[marker-authority]";
+
+/**
+ * @description O selo de revisão final é a fronteira entre executar tarefas e liberar entrega.
+ * Ele só vale quando TODAS as tarefas do plano canônico ainda têm a captura independente
+ * válida na sessão atual. O estado sozinho não basta: um record pode ter sido substituído após
+ * seu carimbo, por isso esta leitura confere o arquivo factual de cada task novamente.
+ */
+function checkFinalReviewEvidence(previous, authorization, isAncestorSha) {
+  const planPath = piExecutionPlanPath({ projectRoot: authorization.projectRoot, featureId: authorization.featureId });
+  if (!planPath.ok) return { ok: false, reason: "final-review requires a readable canonical execution plan" };
+  let plan;
+  try { plan = JSON.parse(fs.readFileSync(planPath.path, "utf8")); } catch {
+    return { ok: false, reason: "final-review requires a readable canonical execution plan" };
+  }
+  if (!plan || typeof plan !== "object" || Array.isArray(plan) || plan.feature_id !== authorization.featureId || !Array.isArray(plan.tasks)) {
+    return { ok: false, reason: "final-review requires a readable canonical execution plan" };
+  }
+  const taskIds = plan.tasks.map((task) => task?.id);
+  if (taskIds.length === 0 || taskIds.some((taskId) => !isSafeTaskId(taskId)) || new Set(taskIds).size !== taskIds.length) {
+    return { ok: false, reason: "final-review requires a readable canonical execution plan" };
+  }
+
+  for (const taskId of taskIds) {
+    const bare = formatFeatureTaskEntry(authorization.featureId, taskId);
+    if (!Array.isArray(previous.hand_finished) || !previous.hand_finished.includes(bare)) {
+      return { ok: false, reason: `final-review missing hand-finished evidence for ${bare}` };
+    }
+    const recordPath = piHandRecordPath(
+      { projectRoot: authorization.projectRoot, sessionId: authorization.sessionId, featureId: authorization.featureId },
+      taskId,
+    );
+    if (!recordPath.ok) return { ok: false, reason: `final-review hand-record path is invalid for ${bare}` };
+    let record;
+    try { record = JSON.parse(fs.readFileSync(recordPath.path, "utf8")); } catch {
+      return { ok: false, reason: `final-review hand-record missing or unreadable for ${bare}` };
+    }
+    if (!isCaptureEligibleHandRecord(record)) {
+      return { ok: false, reason: `final-review hand-record is not capture-eligible for ${bare}` };
+    }
+    const identity = validateOcCaptureEligibleHandRecord(record, {
+      featureId: authorization.featureId,
+      taskId,
+      sessionId: authorization.sessionId,
+    });
+    if (!identity.ok) return { ok: false, reason: `final-review hand-record identity mismatch for ${bare}` };
+    const violations = recordViolations(record);
+    if (violations.scope.length > 0 || violations.frozen.length > 0) {
+      return { ok: false, reason: `final-review hand-record contains scope or frozen violations for ${bare}` };
+    }
+    if (typeof record.capturedVerifiedAt !== "string" || record.capturedVerifiedAt.length === 0) {
+      return { ok: false, reason: `final-review capture is not stamped for ${bare}` };
+    }
+    const sha = record.freezeCommitSha;
+    if (typeof sha !== "string" || sha.length === 0 || isAncestorSha(authorization.projectRoot, sha) !== true) {
+      return { ok: false, reason: `final-review capture lineage is not proven for ${bare}` };
+    }
+    const payload = formatFeatureTaskEntry(authorization.featureId, taskId, sha);
+    if (!Array.isArray(previous.capture_verified) || !previous.capture_verified.includes(payload)) {
+      return { ok: false, reason: `final-review missing capture-verified evidence for ${bare}` };
+    }
+  }
+  return { ok: true };
+}
+
+/**
+ * @description O avanço após revisão adversarial é permitido apenas quando o adaptador do host
+ * registrou a conclusão da filha exatamente despachada. O texto da resposta nunca é prova: no
+ * Pi uma falha de WebSocket pode voltar como resultado de tool com `isError=false`.
+ */
+function hasSuccessfulAdversaryCompletion(previous, authorization) {
+  const evidence = previous?.adversary_completion_evidence;
+  if (!evidence || typeof evidence !== "object" || Array.isArray(evidence)) return false;
+  return evidence.written_by === "host-subagent-completion" &&
+    evidence.role === "harness-adversary" &&
+    evidence.parent_session_id === authorization.sessionId &&
+    evidence.feature_id === authorization.featureId &&
+    typeof evidence.dispatch_call_id === "string" && evidence.dispatch_call_id.length > 0 &&
+    typeof evidence.child_session_id === "string" && evidence.child_session_id.length > 0 &&
+    typeof evidence.agent_id === "string" && evidence.agent_id.length > 0 &&
+    evidence.status === "completed";
+}
+
+/** @description Uma revisão de spec não absolve a revisão do diff de uma tarefa. */
+function hasCurrentTaskAdversaryCompletion(previous, authorization, taskId, headSha) {
+  const key = formatFeatureTaskEntry(authorization.featureId, taskId);
+  const evidence = previous?.task_adversary_evidence?.[key];
+  if (!evidence || typeof evidence !== "object" || Array.isArray(evidence)) return false;
+  return evidence.written_by === "host-subagent-completion" &&
+    evidence.role === "harness-adversary" &&
+    evidence.parent_session_id === authorization.sessionId &&
+    evidence.feature_id === authorization.featureId &&
+    evidence.task_id === taskId &&
+    typeof evidence.dispatch_call_id === "string" && evidence.dispatch_call_id.length > 0 &&
+    typeof evidence.child_session_id === "string" && evidence.child_session_id.length > 0 &&
+    typeof evidence.agent_id === "string" && evidence.agent_id.length > 0 &&
+    evidence.status === "completed" && evidence.reviewed_head_sha === headSha;
+}
+
+/** A revisão final não é inferida de uma revisão de tarefa ou da spec: ela precisa cobrir o diff agregado atual. */
+function hasCurrentFinalReviewCompletion(previous, authorization, role, headSha) {
+  const key = role === "harness-adversary" ? "adversary" : "compliance";
+  const evidence = previous?.final_review_evidence?.[key];
+  if (!evidence || typeof evidence !== "object" || Array.isArray(evidence)) return false;
+  return evidence.written_by === "host-subagent-completion" &&
+    evidence.role === role &&
+    evidence.parent_session_id === authorization.sessionId &&
+    evidence.feature_id === authorization.featureId &&
+    typeof evidence.dispatch_call_id === "string" && evidence.dispatch_call_id.length > 0 &&
+    typeof evidence.child_session_id === "string" && evidence.child_session_id.length > 0 &&
+    typeof evidence.agent_id === "string" && evidence.agent_id.length > 0 &&
+    evidence.status === "completed" && evidence.reviewed_head_sha === headSha;
+}
 
 /**
  * @description Monta o resultado da tool `mark` no mesmo formato de corpo da lane OC
@@ -188,14 +302,33 @@ export function createPiMarkerAuthority(options = {}) {
       let patch;
       let payload;
       if (action === "brainstormed") {
+        const approval = readPiSpecApproval({ projectRoot, sessionId: authorization.sessionId, featureId: authorization.featureId });
+        if (!approval.ok) return approval;
         patch = { brainstormed: true };
       } else if (action === "adversary_fired") {
-        if (previous.brainstormed !== true) {
-          return { ok: false, reason: "adversary_fired requires brainstormed first" };
+        const draft = readPiSpecDraft({ projectRoot, sessionId: authorization.sessionId, featureId: authorization.featureId });
+        if (!draft.ok) return draft;
+        if (previous.adversary_completion_evidence?.spec_sha256 !== draft.sha256) {
+          return { ok: false, reason: "adversary_fired requires host-owned evidence for the current spec hash" };
         }
-        patch = { adversary_fired: true };
+        if (!hasSuccessfulAdversaryCompletion(previous, authorization)) {
+          return { ok: false, reason: "adversary_fired requires successful host-owned adversary completion evidence" };
+        }
+        patch = { adversary_fired: true, adversary_spec_sha256: draft.sha256 };
       } else if (action === "final-review" || action === "demo-done") {
-        // Pré-condições de ship com escopo de feature (#385) — sem task_id; boolean no gate-state.
+        // Demo é uma evidência adicional; revisão final é o ponto que fecha a cobertura de todo o plano.
+        if (action === "final-review") {
+          const evidence = checkFinalReviewEvidence(previous, { ...authorization, projectRoot }, isAncestorSha);
+          if (!evidence.ok) return evidence;
+          const headSha = resolveHeadSha(projectRoot);
+          if (!headSha) return { ok: false, reason: "final-review requires a resolved commit SHA" };
+          if (!hasCurrentFinalReviewCompletion(previous, authorization, "harness-adversary", headSha)) {
+            return { ok: false, reason: "final-review requires current host-owned final adversary evidence" };
+          }
+          if (!hasCurrentFinalReviewCompletion(previous, authorization, "harness-compliance", headSha)) {
+            return { ok: false, reason: "final-review requires current host-owned final compliance evidence" };
+          }
+        }
         const field = action === "final-review" ? "final_review_done" : "demo_done";
         patch = { [field]: true };
       } else {
@@ -205,7 +338,21 @@ export function createPiMarkerAuthority(options = {}) {
         const taskId = args.task_id;
         const bare = formatFeatureTaskEntry(authorization.featureId, taskId);
         if (action === "fidelity") {
-          const sha = typeof args.sha === "string" && args.sha ? args.sha : resolveHeadSha(projectRoot);
+          const recordPath = piHandRecordPath(
+            { projectRoot, sessionId: authorization.sessionId, featureId: authorization.featureId },
+            taskId,
+          );
+          let record;
+          try { record = recordPath.ok ? JSON.parse(fs.readFileSync(recordPath.path, "utf8")) : null; } catch { record = null; }
+          if (!isCaptureEligibleHandRecord(record) || toOcRole(record?.agent) !== "test-author") {
+            return { ok: false, reason: "fidelity requires a capture-eligible test-author hand-record" };
+          }
+          const fidelityIdentity = validateExactProducer(record, authorization, taskId);
+          if (!fidelityIdentity.ok) return fidelityIdentity;
+          const sha = typeof record.freezeCommitSha === "string" && record.freezeCommitSha ? record.freezeCommitSha : "";
+          if (!sha || isAncestorSha(projectRoot, sha) !== true) {
+            return { ok: false, reason: "fidelity requires the test-author record SHA to be ancestral to HEAD" };
+          }
           payload = formatFeatureTaskEntry(authorization.featureId, taskId, sha);
           patch = { fidelity_pass: [payload] };
         } else if (action === "regate-pending") {
@@ -228,10 +375,13 @@ export function createPiMarkerAuthority(options = {}) {
           if (!hfIdentity.ok) return hfIdentity;
           patch = { hand_finished: [bare] };
         } else if (action === "regate-passed") {
-          const sha = typeof args.sha === "string" && args.sha ? args.sha : resolveHeadSha(projectRoot);
+          const sha = resolveHeadSha(projectRoot);
           if (!sha) return { ok: false, reason: "regate-passed requires a resolved commit SHA" };
           if (!Array.isArray(previous.regate_pending) || !previous.regate_pending.includes(bare)) {
             return { ok: false, reason: "regate_pending does not contain feature/task" };
+          }
+          if (!hasCurrentTaskAdversaryCompletion(previous, authorization, taskId, sha)) {
+            return { ok: false, reason: "regate-passed requires current host-owned task adversary evidence" };
           }
           payload = formatFeatureTaskEntry(authorization.featureId, taskId, sha);
           patch = { regate_passed: [payload] };
@@ -365,7 +515,7 @@ export function createPiMarkerAuthority(options = {}) {
 
     /**
      * @description Corpo da tool `mark`: consome a autorização (uma única vez), confere
-     * toolCallId/sessionId/action, aplica a restrição de sessão PAI ao capture-verified e
+     * toolCallId/sessionId/action, aplica a restrição de sessão PAI a todo marcador e
      * então muta o gate-state. Sem autorização válida nada é lido nem escrito.
      */
     execute(call) {
@@ -390,8 +540,8 @@ export function createPiMarkerAuthority(options = {}) {
         authorization.action !== params.action ||
         (boundToParams !== undefined && boundToParams !== authorization)
       ) return markerResponse(false, "marker authorization missing, cloned, replayed, or binding-mismatched");
-      if (authorization.action === "capture-verified" && call?.isChild === true) {
-        return markerResponse(false, "capture-verified is restricted to the parent build agent");
+      if (call?.isChild === true) {
+        return markerResponse(false, "privileged workflow markers are restricted to the parent orchestrator");
       }
       const result = mutate(params, authorization);
       if (!result.ok) return markerResponse(false, String(result.reason ?? "marker failed"));

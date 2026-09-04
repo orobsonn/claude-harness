@@ -61,6 +61,13 @@ export function piExecutionPlanPath(roots) {
   return { ok: true, path: `${dir.path}/execution-plan.json` }
 }
 
+/** @description Especificação humana canônica da feature, revisada antes do planner. */
+export function piSpecPath(roots) {
+  const dir = piPlanDir(roots)
+  if (!dir.ok) return dir
+  return { ok: true, path: `${dir.path}/spec.md` }
+}
+
 /** @description Diretório de estado da sessão: <stateRoot>/<sessionId> */
 export function piGateStateDir(roots) {
   const bad = invalidRoots(roots)

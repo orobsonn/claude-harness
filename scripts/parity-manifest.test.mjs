@@ -386,8 +386,12 @@ const OC_TEST_MODULE_RE = /\.(?:test|spec)\.(?:ts|tsx|js|jsx|mjs|cjs|mts|cts)$/;
 const OC_EXCLUDED_LIVE_DIRS = new Set([".git", "__fixtures__", "__tests__", "fixtures", "history", "node_modules", "test", "tests"]);
 const OC_IMPORT_EXTENSIONS = ["", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts"];
 const OC_IMPORT_INDEX_FILES = ["index.ts", "index.tsx", "index.js", "index.jsx", "index.mjs", "index.cjs", "index.mts", "index.cts"];
+const PARITY_MANIFEST_LOADER = "pathToFileURL(join(pluginDir, name)).href";
+const VENDOR_CORE_LOADER_PATH = "core/claude-code/skills/initializing-projects/references/vendor-core.mjs";
+const VENDOR_CORE_PI_RUNTIME_LOADER = "pathToFileURL(join(coreDir, \"pi/lib/pi-runtime-cache.mjs\")).href";
 const OC_OPAQUE_LOADER_ALLOWLIST = new Map([
-  ["scripts/parity-manifest.mjs", new Set(["pathToFileURL(join(pluginDir, name)).href"])],
+  ["scripts/parity-manifest.mjs", new Set([PARITY_MANIFEST_LOADER])],
+  [VENDOR_CORE_LOADER_PATH, new Set([VENDOR_CORE_PI_RUNTIME_LOADER])],
 ]);
 function slashPath(path) {
   return path.split(sep).join("/");
@@ -1698,21 +1702,24 @@ describe("parity-manifest", () => {
   });
 
   /**
-   * @description #807 — the allowlist shrank from three audited live loader expressions to one
-   * once `core/vps/run-cron-review.mjs` (the other two) died with the retired engine. This test
-   * used to prove all three; now it proves the single survivor, both that the exact expression is
-   * allowed and that a one-character mutation of it throws. This is the one place in the #807
-   * extraction where the assertion COUNT legitimately shrinks — because the allowlist itself did.
+   * @description #807 left one parity-loader exception. Pi provisioning adds a separate
+   * vendor-core exception that loads only the fixed runtime-cache implementation from the
+   * selected core source before vendor writes. Both expressions are exact and mutation-tested.
    */
-  it("t12-module-manifest: allows only the one exact audited live loader expression left after #807", () => {
+  it("t12-module-manifest: allows only the two exact audited live loader expressions", () => {
     const tmp = mkdtempSync(join(tmpdir(), "oc-loader-allowlist-"));
     try {
       mkdirSync(join(tmp, "core/opencode/plugin/lib"), { recursive: true });
       mkdirSync(join(tmp, "scripts"), { recursive: true });
+      mkdirSync(join(tmp, dirname(VENDOR_CORE_LOADER_PATH)), { recursive: true });
       writeFileSync(join(tmp, "core/opencode/plugin/lib/doomed.mjs"), "export default 1\n");
       writeFileSync(
         join(tmp, "scripts/parity-manifest.mjs"),
-        "await import(pathToFileURL(join(pluginDir, name)).href)\n",
+        `await import(${PARITY_MANIFEST_LOADER})\n`,
+      );
+      writeFileSync(
+        join(tmp, VENDOR_CORE_LOADER_PATH),
+        `await import(${VENDOR_CORE_PI_RUNTIME_LOADER})\n`,
       );
       assert.deepEqual(liveImportersOf("plugin/lib/doomed.mjs", tmp), []);
 
@@ -1722,10 +1729,10 @@ describe("parity-manifest", () => {
       );
       assert.throws(() => liveImportersOf("plugin/lib/doomed.mjs", tmp), /opaque module loader is not allowlisted/);
 
-      writeFileSync(join(tmp, "scripts/parity-manifest.mjs"), "export default 1\n");
+      writeFileSync(join(tmp, "scripts/parity-manifest.mjs"), `await import(${PARITY_MANIFEST_LOADER})\n`);
       writeFileSync(
-        join(tmp, "scripts/parity-manifest-copy.mjs"),
-        "await import(pathToFileURL(join(pluginDir, name)).href)\n",
+        join(tmp, VENDOR_CORE_LOADER_PATH),
+        "await import(pathToFileURL(join(coreDir, 'pi/lib/pi-runtime-cache.mjs')).href)\n",
       );
       assert.throws(() => liveImportersOf("plugin/lib/doomed.mjs", tmp), /opaque module loader is not allowlisted/);
     } finally {

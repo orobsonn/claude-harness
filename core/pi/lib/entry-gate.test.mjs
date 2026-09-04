@@ -23,7 +23,7 @@ import {
   isWritingHandRole,
   recordPiTaskCompletion,
 } from "./entry-gate.mjs";
-import { claimPiDispatchForRuntime } from "./pi-state-records.mjs";
+import { claimPiDispatchForRuntime, readPiDispatchRecord } from "./pi-state-records.mjs";
 
 const ROOT = "/tmp/pi-entry-gate-fake-root";
 const SESSION = "018f6b0c-8f2a-7c1d-9e3b-5a1c2d3e4f50";
@@ -42,6 +42,7 @@ function dispatch(overrides = {}) {
     env: {},
     isAncestorFn: () => null,
     claimDispatchFn: () => ({ ok: true }),
+    readCanonicalTaskPolicyFn: () => ({ ok: true, noTests: false, planHash: "" }),
     ...overrides,
   });
 }
@@ -86,10 +87,12 @@ test("ceremony ausente (sem classified e sem mode) nega com a mensagem de ceremo
   );
 });
 
-test("LIGHT permite o adversary e FULL permite o executor com fidelity-pass", () => {
+test("LIGHT permite o adversary de spec draft e FULL permite o executor com fidelity-pass", () => {
   const light = dispatch({
     subagentType: "harness-adversary",
-    loadGateStateFn: stateOf({ classified: true, mode: "LIGHT", feature_id: FEATURE }),
+    loadGateStateFn: stateOf({ classified: true, mode: "LIGHT", feature_id: FEATURE, spec_status: "draft", spec_sha256: "a".repeat(64) }),
+    readSpecApprovalFn: () => ({ ok: false, reason: "current adversary-reviewed spec required" }),
+    readSpecDraftFn: () => ({ ok: true, sha256: "a".repeat(64) }),
   });
   assert.equal(light.decision, "allow");
 
@@ -105,6 +108,36 @@ test("LIGHT permite o adversary e FULL permite o executor com fidelity-pass", ()
     }),
   });
   assert.equal(full.decision, "allow");
+});
+
+test("adversary pós-implementação não exige uma spec que já foi selada", () => {
+  const out = dispatch({
+    subagentType: "harness-adversary",
+    loadGateStateFn: stateOf({
+      classified: true,
+      mode: "FULL",
+      feature_id: FEATURE,
+      brainstormed: true,
+      adversary_fired: true,
+      spec_status: "adversary-reviewed",
+    }),
+    readSpecDraftFn: () => ({ ok: false, reason: "current canonical spec draft required" }),
+  });
+  assert.equal(out.decision, "allow");
+});
+
+test("planner Pi exige spec revisada pelo adversário e vinculada ao hash atual", () => {
+  const state = { classified: true, mode: "FULL", feature_id: FEATURE, brainstormed: true, adversary_fired: true };
+  const absent = dispatch({ subagentType: "harness-planner", loadGateStateFn: stateOf(state), readSpecApprovalFn: () => ({ ok: false, reason: "current adversary-reviewed spec required" }) });
+  assert.equal(absent.decision, "deny");
+  assert.match(absent.reason, /current adversary-reviewed spec required/);
+
+  const allowed = dispatch({
+    subagentType: "harness-planner",
+    loadGateStateFn: stateOf(state),
+    readSpecApprovalFn: () => ({ ok: true, sha256: "a".repeat(64) }),
+  });
+  assert.equal(allowed.decision, "allow");
 });
 
 test("planner sem brainstormed devolve o JSON CEREMONY_PROOF_REQUIRED literal", () => {
@@ -132,7 +165,7 @@ test("planner com brainstormed mas sem adversary_fired pede a prova do spec-adve
   assert.match(out.reason, /spec_adversary_completion_evidence/);
 });
 
-test("executor sem fidelity-pass é negado nomeando a feature", () => {
+test("executor e sniper exigem fidelity-pass da tarefa exata", () => {
   const out = dispatch({
     subagentType: "harness-executor",
     toolCallId: "call-1",
@@ -144,6 +177,40 @@ test("executor sem fidelity-pass é negado nomeando a feature", () => {
     out.reason,
     `[entry-gate] Blocked: executor requires fidelity-pass for feature '${FEATURE}' before spawn; dispatch test-author first.`,
   );
+
+  for (const subagentType of ["harness-executor", "harness-sniper"]) {
+    const wrongTask = dispatch({
+      subagentType,
+      toolCallId: "call-exact",
+      toolArgs: { prompt: '[HARNESS_TASK_CONTEXT]{"task_id":"t2"}[/HARNESS_TASK_CONTEXT]' },
+      loadGateStateFn: stateOf({
+        classified: true,
+        mode: "FULL",
+        feature_id: FEATURE,
+        fidelity_pass: [`${FEATURE}/t1`],
+      }),
+    });
+    assert.equal(wrongTask.decision, "deny", subagentType);
+    assert.equal(
+      wrongTask.reason,
+      `[entry-gate] Blocked: ${subagentType.replace("harness-", "")} requires task-scoped fidelity-pass for ${FEATURE}/t2 before spawn.`,
+    );
+  }
+});
+
+test("re-gate pendente de outra tarefa bloqueia nova mão escritora", () => {
+  const out = dispatch({
+    subagentType: "harness-executor",
+    toolCallId: "call-other-task",
+    toolArgs: { prompt: '[HARNESS_TASK_CONTEXT]{"task_id":"t2"}[/HARNESS_TASK_CONTEXT]' },
+    isAncestorFn: () => false,
+    loadGateStateFn: stateOf({
+      classified: true, mode: "FULL", feature_id: FEATURE,
+      fidelity_pass: [`${FEATURE}/t2`], regate_pending: [`${FEATURE}/t1`], regate_passed: [],
+    }),
+  });
+  assert.equal(out.decision, "deny");
+  assert.match(out.reason, /another task requires adversary re-gate/);
 });
 
 test("shipper com regate_pending sem regate_passed é negado", () => {
@@ -207,11 +274,11 @@ test("papel não-delivery passa mesmo com falha de identidade de sessão", () =>
   assert.equal(out.decision, "allow");
 });
 
-test("fix mode sem identidade exata nega a mão que escreve", () => {
+test("toda mão escritora sem identidade exata é negada, inclusive fora de fix mode", () => {
   const out = dispatch({
     subagentType: "harness-executor",
     toolArgs: {},
-    env: { HARNESS_FIX_MODE: "1" },
+    env: {},
     loadGateStateFn: stateOf({
       classified: true,
       mode: "FULL",
@@ -220,7 +287,7 @@ test("fix mode sem identidade exata nega a mão que escreve", () => {
     }),
   });
   assert.equal(out.decision, "deny");
-  assert.equal(out.reason, "[entry-gate] exact dispatch identity required in fix mode");
+  assert.equal(out.reason, "[entry-gate] exact dispatch identity required for writing hand");
 });
 
 test("dispatch-record recusado nega com a reason da peça state-records", () => {
@@ -498,7 +565,7 @@ const MODEL_STRATEGY = {
 };
 
 /** @description Projeto Pi real com plano estável + gate-state FULL, para o caminho de conclusão. */
-function completionFixture() {
+function completionFixture({ noTests = false } = {}) {
   const root = mkdtempSync(join(tmpdir(), "pi-entry-gate-completion-"));
   const sessionId = "ses-pi-completion";
   const featureId = "feat-pi-completion";
@@ -513,9 +580,10 @@ function completionFixture() {
         id: "task-1",
         scope_paths: ["src/a.ts"],
         criterion_refs: ["#ac-1"],
-        locked_tests: [
-          { id: "lt-1", path: "tests/a.test.mjs", assertion: "Given task, When complete, Then observable a" },
-        ],
+        locked_tests: noTests
+          ? []
+          : [{ id: "lt-1", path: "tests/a.test.mjs", assertion: "Given task, When complete, Then observable a" }],
+        ...(noTests ? { no_tests: true } : {}),
         title: "Implement task-1",
         description: "Implement task-1.",
         depends_on: [],
@@ -558,6 +626,77 @@ test("artefatos internos do runtime Pi não são atribuídos à mão como mudan�
     ".pi/harness/plans/feat-pi-completion/execution-plan.json",
     "src/a.ts",
   ]);
+});
+
+test("plano canônico no_tests despacha executor e ainda exige hand/captura", async () => {
+  const f = completionFixture({ noTests: true });
+  try {
+    const dispatched = decidePiDispatchGate({
+      projectRoot: f.root,
+      sessionId: f.sessionId,
+      subagentType: "harness-executor",
+      toolCallId: "call-no-tests",
+      toolArgs: { prompt: '[HARNESS_TASK_CONTEXT]{"task_id":"task-1"}[/HARNESS_TASK_CONTEXT]' },
+      env: {},
+      isAncestorFn: () => null,
+    });
+    assert.equal(dispatched.decision, "allow", dispatched.reason);
+
+    const dispatchRecord = readPiDispatchRecord(f.root, {
+      parentSessionId: f.sessionId,
+      callId: "call-no-tests",
+    });
+    assert.equal(dispatchRecord.ok, true, dispatchRecord.reason);
+    assert.equal(dispatchRecord.record.role, "harness-executor");
+    assert.deepEqual(dispatchRecord.record.frozen_paths, []);
+
+    writeFileSync(join(f.root, "src", "a.ts"), "export const value = 2;\n");
+    const completed = recordPiTaskCompletion({
+      projectRoot: f.root,
+      sessionId: f.sessionId,
+      featureId: f.featureId,
+      taskId: "task-1",
+      role: "harness-executor",
+      producerCallId: "call-no-tests",
+      outputText: "Status: DONE",
+    });
+    assert.equal(completed.ok, true, completed.reason);
+    assert.equal(completed.capturePending, true);
+
+    const beforeCapture = await decidePiBashGate({
+      projectRoot: f.root,
+      sessionId: f.sessionId,
+      command: "git push origin feat/no-tests",
+      env: {},
+      gitStateFn: () => ({ branch: "feat/no-tests", commitsAhead: 1, defaultBranch: "main" }),
+    });
+    assert.equal(beforeCapture.decision, "deny");
+    assert.match(beforeCapture.reason, /still await independent capture\/verification/);
+  } finally {
+    f.close();
+  }
+});
+
+test("no_tests declarado no prompt não libera tarefa canônica com teste travado", () => {
+  const f = completionFixture();
+  try {
+    const out = decidePiDispatchGate({
+      projectRoot: f.root,
+      sessionId: f.sessionId,
+      subagentType: "harness-executor",
+      toolCallId: "call-forged-no-tests",
+      toolArgs: {
+        no_tests: true,
+        prompt: '[HARNESS_TASK_CONTEXT]{"task_id":"task-1"}[/HARNESS_TASK_CONTEXT]',
+      },
+      env: {},
+      isAncestorFn: () => null,
+    });
+    assert.equal(out.decision, "deny");
+    assert.match(out.reason, /requires fidelity-pass/);
+  } finally {
+    f.close();
+  }
 });
 
 test("capture real ignora só runtime/state do host e mantém o arquivo de produto atribuído", () => {

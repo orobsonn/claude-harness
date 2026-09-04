@@ -46,6 +46,12 @@ test("parseCliArgs", () => {
     runtimeTarget: "codex",
     releaseRef: undefined,
   });
+  assert.deepEqual(parseCliArgs(["node", "cli.mjs", "init", "--target", "pi"]), {
+    command: "init",
+    withCodex: false,
+    runtimeTarget: "pi",
+    releaseRef: undefined,
+  });
   assert.deepEqual(parseCliArgs(["node", "cli.mjs", "init", "--target", "all"]), {
     command: "init",
     withCodex: false,
@@ -128,6 +134,20 @@ test("an existing Codex installation uses the isolated update path", () => {
     writeFileSync(join(root, ".codex", ".harness-version"), "v0.59.1\n");
 
     assert.equal(hasInstalledHarness(root, "codex"), true);
+    assert.equal(hasInstalledHarness(root, "all"), true);
+    assert.equal(hasInstalledHarness(root, "opencode"), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("an existing Pi installation uses the isolated update path", () => {
+  const root = mkdtempSync(join(tmpdir(), "cli-existing-pi-harness-"));
+  try {
+    mkdirSync(join(root, ".pi"), { recursive: true });
+    writeFileSync(join(root, ".pi", ".harness-version"), "v0.59.1\n");
+
+    assert.equal(hasInstalledHarness(root, "pi"), true);
     assert.equal(hasInstalledHarness(root, "all"), true);
     assert.equal(hasInstalledHarness(root, "opencode"), false);
   } finally {
