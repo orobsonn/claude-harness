@@ -5,7 +5,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -13,11 +13,15 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   createAgentSession,
   DefaultResourceLoader,
+  ModelRegistry,
   ModelRuntime,
   parseFrontmatter,
   SessionManager,
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
+import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
+import { AuthStorage } from "../../../node_modules/@earendil-works/pi-coding-agent/dist/core/auth-storage.js";
+import { createJiti } from "../../../node_modules/@earendil-works/pi-coding-agent/node_modules/jiti/lib/jiti-static.mjs";
 import { fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
 import harnessBootstrap from "./harness-bootstrap.ts";
 import { RUNTIME_ROLES } from "../lib/roles.mjs";
@@ -62,7 +66,12 @@ function nativeHome(t) {
 
 function register() {
   const handlers = new Map();
-  harnessBootstrap({ on: (event, handler) => handlers.set(event, handler) });
+  const providers = [];
+  harnessBootstrap({
+    on: (event, handler) => handlers.set(event, handler),
+    registerProvider: (provider) => providers.push(provider),
+  });
+  handlers.providers = providers;
   return handlers;
 }
 
@@ -77,6 +86,225 @@ function parentCtx(overrides = {}) {
 function childCtx(overrides = {}) {
   return { sessionManager: { getHeader: () => ({ parentSession: "parent-session" }) }, ...overrides };
 }
+
+async function runtimeWithSyntheticCodexCredential(modelsPath = null) {
+  return ModelRuntime.create({
+    credentials: AuthStorage.inMemory({
+      "openai-codex": {
+        type: "oauth",
+        access: "synthetic-test-access",
+        refresh: "synthetic-test-refresh",
+        expires: Date.now() + 60_000,
+      },
+    }),
+    modelsPath,
+    allowModelNetwork: false,
+    refreshOnCreate: true,
+  });
+}
+
+async function loadCreateSubagentSession() {
+  const jiti = createJiti(import.meta.url, { moduleCache: false, tsconfigPaths: true });
+  return jiti.import(join(PACKAGE_ROOT, "node_modules/@gotgenes/pi-subagents/src/lifecycle/create-subagent-session.ts"));
+}
+
+test("bootstrap registra o fallback Astra antes do subagents, preservando o catálogo Codex e a herança da filha", async (t) => {
+  const previous = process.env.PI_HARNESS_LAUNCHER;
+  process.env.PI_HARNESS_LAUNCHER = "1";
+  t.after(() => {
+    if (previous === undefined) delete process.env.PI_HARNESS_LAUNCHER;
+    else process.env.PI_HARNESS_LAUNCHER = previous;
+  });
+
+  const handlers = register();
+  assert.equal(handlers.providers.length, 1, "o alias precisa ser registrado mesmo no launcher, antes do retorno do bootstrap");
+  const provider = handlers.providers[0];
+  const builtin = builtinProviders().find((entry) => entry.id === "openai-codex");
+  assert.ok(builtin);
+  assert.equal(provider.id, "openai-codex");
+  assert.equal(provider.auth.oauth?.name, builtin.auth.oauth?.name, "não pode reconfigurar nem ler a autenticação do provider");
+  assert.equal(typeof provider.auth.oauth?.toAuth, "function", "o wrapper conserva o OAuth do provider pinado");
+  assert.equal(typeof provider.stream, "function", "o wrapper conserva o stream do provider pinado");
+  const expectedIds = builtin.getModels().map((model) => model.id);
+  const wrapped = provider.getModels();
+  assert.deepEqual(
+    wrapped.filter((model) => model.id !== "gpt-6-astra").map((model) => model.id),
+    expectedIds,
+    "o wrapper não pode apagar Sol/Terra/Luna nem outros modelos Codex",
+  );
+  assert.equal(wrapped.filter((model) => model.id === "gpt-6-astra").length, 1, "Astra só pode ser acrescentado uma vez");
+
+  const parentRuntime = await runtimeWithSyntheticCodexCredential();
+  const parentRegistry = new ModelRegistry(parentRuntime);
+  parentRegistry.registerProvider(provider);
+  assert.ok(parentRegistry.getAvailable().some((model) => model.provider === "openai-codex" && model.id === "gpt-6-astra"));
+  const reloaded = register().providers[0];
+  parentRegistry.registerProvider(reloaded);
+  assert.equal(
+    parentRegistry.getAll().filter((model) => model.provider === "openai-codex" && model.id === "gpt-6-astra").length,
+    1,
+    "um reload registra um provider novo, sem acumular clones Astra",
+  );
+
+  const childRuntime = await runtimeWithSyntheticCodexCredential();
+  const childRegistry = new ModelRegistry(childRuntime);
+  childRegistry.registerProvider(parentRegistry.getRegisteredNativeProvider("openai-codex"));
+  assert.ok(childRegistry.find("openai-codex", "gpt-6-astra"), "a runtime filha aceita o provider registrado sem rede");
+  for (const id of ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]) {
+    assert.ok(childRegistry.find("openai-codex", id), `a filha preserva ${id}`);
+  }
+
+  const configDir = mkdtempSync(join(tmpdir(), "pi-astra-model-config-"));
+  t.after(() => rmSync(configDir, { recursive: true, force: true }));
+  const modelsPath = join(configDir, "models.json");
+  writeFileSync(modelsPath, JSON.stringify({
+    providers: {
+      "openai-codex": {
+        models: [{ id: "operator-custom-codex" }],
+        modelOverrides: { "gpt-5.6-sol": { name: "Operator Sol", contextWindow: 65432 } },
+      },
+    },
+  }));
+  const configuredRuntime = await runtimeWithSyntheticCodexCredential(modelsPath);
+  const configuredRegistry = new ModelRegistry(configuredRuntime);
+  configuredRegistry.registerProvider(provider);
+  assert.ok(configuredRegistry.find("openai-codex", "operator-custom-codex"), "models.json do operador continua composto sobre o wrapper");
+  assert.deepEqual(
+    configuredRegistry.find("openai-codex", "gpt-5.6-sol") && {
+      name: configuredRegistry.find("openai-codex", "gpt-5.6-sol").name,
+      contextWindow: configuredRegistry.find("openai-codex", "gpt-5.6-sol").contextWindow,
+    },
+    { name: "Operator Sol", contextWindow: 65432 },
+    "modelOverrides do operador continua composto sobre o wrapper",
+  );
+});
+
+test("createSubagentSession real aceita Astra pela registry filha sem rede", async (t) => {
+  const previous = process.env.PI_HARNESS_LAUNCHER;
+  process.env.PI_HARNESS_LAUNCHER = "1";
+  t.after(() => {
+    if (previous === undefined) delete process.env.PI_HARNESS_LAUNCHER;
+    else process.env.PI_HARNESS_LAUNCHER = previous;
+  });
+  const directory = mkdtempSync(join(tmpdir(), "pi-astra-child-session-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+
+  const { providers } = register();
+  const parentRuntime = await runtimeWithSyntheticCodexCredential();
+  const parentRegistry = new ModelRegistry(parentRuntime);
+  parentRegistry.registerProvider(providers[0]);
+  const childRuntime = await runtimeWithSyntheticCodexCredential();
+  const childRegistry = new ModelRegistry(childRuntime);
+  childRegistry.registerProvider(parentRegistry.getRegisteredNativeProvider("openai-codex"));
+  const { createSubagentSession } = await loadCreateSubagentSession();
+  const createdModels = [];
+  const loader = new DefaultResourceLoader({
+    cwd: directory,
+    agentDir: join(directory, "agent"),
+    noExtensions: true,
+    noSkills: true,
+    noPromptTemplates: true,
+    noThemes: true,
+  });
+  await loader.reload();
+
+  const child = await createSubagentSession({
+    type: "harness-plan-reviewer",
+    snapshot: {
+      cwd: directory,
+      systemPrompt: "parent prompt",
+      model: parentRegistry.find("openai-codex", "gpt-5.6-sol"),
+      modelRegistry: parentRegistry,
+    },
+  }, {
+    exec: async () => ({ code: 1, stdout: "", stderr: "" }),
+    registry: {
+      resolveAgentConfig: () => ({
+        name: "harness-plan-reviewer",
+        description: "test reviewer",
+        promptMode: "replace",
+        systemPrompt: "review",
+        model: "openai-codex/gpt-6-astra",
+        toolNames: [],
+      }),
+      getToolNamesForType: () => [],
+    },
+    lifecycle: {
+      spawning: () => {}, sessionCreated: () => {}, bound: () => {}, completed: () => {}, disposed: () => {},
+    },
+    io: {
+      detectEnv: async () => ({ isGitRepo: false, branch: "", platform: process.platform }),
+      getAgentDir: () => join(directory, "agent"),
+      deriveSessionDir: () => join(directory, "sessions"),
+      createResourceLoader: () => loader,
+      createSessionManager: () => SessionManager.inMemory(directory),
+      createSettingsManager: () => SettingsManager.inMemory(),
+      createLoaderSettingsManager: (settings) => settings,
+      createSession: async (options) => {
+        createdModels.push(options.model);
+        return createAgentSession({
+          cwd: options.cwd,
+          agentDir: options.agentDir,
+          sessionManager: options.sessionManager,
+          settingsManager: options.settingsManager,
+          resourceLoader: options.resourceLoader,
+          modelRuntime: childRuntime,
+          model: options.model,
+          tools: options.tools,
+          excludeTools: options.excludeTools,
+        });
+      },
+      assemblerIO: { buildAgentPrompt: (config) => config.systemPrompt },
+    },
+  });
+  t.after(() => child.dispose());
+
+  assert.deepEqual(createdModels.map((model) => model && `${model.provider}/${model.id}`), ["openai-codex/gpt-6-astra"]);
+  assert.deepEqual(child.session.model && `${child.session.model.provider}/${child.session.model.id}`, "openai-codex/gpt-6-astra");
+  assert.ok(childRegistry.find("openai-codex", "gpt-6-astra"), "a runtime filha mantém o provider/API que recebeu por herança");
+});
+
+test("bootstrap vendorizado sem node_modules do produto resolve as bibliotecas do Pi e registra Astra", async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), "pi-vendored-bootstrap-"));
+  const vendorRoot = join(directory, "vendor");
+  const agentDir = join(directory, "agent");
+  cpSync(join(PACKAGE_ROOT, "core", "pi"), join(vendorRoot, "core", "pi"), { recursive: true });
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const previous = process.env.PI_HARNESS_LAUNCHER;
+  process.env.PI_HARNESS_LAUNCHER = "1";
+  t.after(() => {
+    if (previous === undefined) delete process.env.PI_HARNESS_LAUNCHER;
+    else process.env.PI_HARNESS_LAUNCHER = previous;
+  });
+
+  const loader = new DefaultResourceLoader({
+    cwd: directory,
+    agentDir,
+    noExtensions: true,
+    noSkills: true,
+    noPromptTemplates: true,
+    noThemes: true,
+    additionalExtensionPaths: [join(vendorRoot, "core/pi/extensions/harness-bootstrap.ts")],
+  });
+  await loader.reload();
+  assert.deepEqual(loader.getExtensions().errors, []);
+
+  const runtime = await runtimeWithSyntheticCodexCredential();
+  const { session } = await createAgentSession({
+    cwd: directory,
+    agentDir,
+    resourceLoader: loader,
+    modelRuntime: runtime,
+    model: runtime.getModel("openai-codex", "gpt-5.6-sol"),
+    sessionManager: SessionManager.inMemory(directory),
+    settingsManager: SettingsManager.inMemory(),
+    noTools: "all",
+  });
+  t.after(() => session.dispose());
+  await session.bindExtensions({});
+  assert.ok(runtime.getModel("openai-codex", "gpt-6-astra"));
+  assert.ok(runtime.getModels("openai-codex").some((model) => model.id === "gpt-5.6-sol"));
+});
 
 test("native bootstrap respeita agentDir customizado, materializa RUNTIME_ROLES e injeta a prosa", async (t) => {
   const home = nativeHome(t);
