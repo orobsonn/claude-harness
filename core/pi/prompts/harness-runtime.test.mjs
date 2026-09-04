@@ -2,9 +2,14 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { parseHandStatusFromOutput } from "../../opencode/lib/hand-records.mjs";
 
 const promptPath = fileURLToPath(new URL("./harness-runtime.md", import.meta.url));
+const executorPath = fileURLToPath(new URL("../runtime/agents/harness-executor.md", import.meta.url));
 const sniperPath = fileURLToPath(new URL("../runtime/agents/harness-sniper.md", import.meta.url));
+const testAuthorPath = fileURLToPath(new URL("../runtime/agents/harness-test-author.md", import.meta.url));
+
+const writingHandPaths = [executorPath, sniperPath, testAuthorPath];
 
 test("parent orchestration stays local and dispatches only canonical harness roles", () => {
   const prompt = readFileSync(promptPath, "utf8");
@@ -119,4 +124,35 @@ test("achado tardio que pede nova cobertura volta ao autor de testes, não ao sn
   assert.match(prompt, /achado.*novo.*teste.*congelado.*harness-test-author.*fidelity/is);
   assert.match(sniper, /never edit.*frozen acceptance test/i);
   assert.match(sniper, /return.*parent.*harness-test-author/is);
+});
+
+test("toda mão escritora ensina um status terminal compatível com o parser do hand-record", () => {
+  const acceptedStatuses = ["DONE", "DONE_WITH_CONCERNS", "NEEDS_CONTEXT", "BLOCKED"];
+
+  for (const agentPath of writingHandPaths) {
+    const instructions = readFileSync(agentPath, "utf8");
+    assert.match(
+      instructions,
+      /final line.*exactly.*`Status: <DONE\|DONE_WITH_CONCERNS\|NEEDS_CONTEXT\|BLOCKED>`/is,
+      agentPath,
+    );
+  }
+
+  for (const status of acceptedStatuses) {
+    assert.equal(
+      parseHandStatusFromOutput(`Evidence: bounded task report.\nStatus: ${status}`),
+      status,
+    );
+  }
+  assert.equal(parseHandStatusFromOutput("Evidence: bounded task report.\nOutcome: DONE"), null);
+});
+
+test("o pai mantém relatório inválido bloqueado sem inferir sucesso nem pedir mutação cosmética", () => {
+  const prompt = readFileSync(promptPath, "utf8");
+
+  assert.match(prompt, /linha terminal.*`Status: <DONE\|DONE_WITH_CONCERNS\|NEEDS_CONTEXT\|BLOCKED>`/is);
+  assert.match(prompt, /não infira sucesso/i);
+  assert.match(prompt, /permanece.*BLOCKED.*erro de contrato/is);
+  assert.match(prompt, /não peça.*mutação cosmética/i);
+  assert.doesNotMatch(prompt, /novo despacho delimitado.*corrija somente o relatório/is);
 });

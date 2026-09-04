@@ -44,3 +44,12 @@ then show the unchanged healthy implementation passing. Report both actual comma
 results and isolation method for compliance. No artificial failing assertion, product
 rollback or unrelated mutation. If only production changed and the locked test did not,
 its prior fidelity evidence remains valid; fresh implementation review is the obligation.
+
+End your result with one final line exactly in this form:
+`Status: <DONE|DONE_WITH_CONCERNS|NEEDS_CONTEXT|BLOCKED>`
+Choose one value honestly. A valid executable expected-red is DONE for this test-author assignment:
+it is evidence that the requested product behavior is still absent, not a claim that production is
+GREEN. Use DONE_WITH_CONCERNS only when the assigned evidence is complete with a material residual
+concern, NEEDS_CONTEXT when required task context is missing, and BLOCKED for invalid RED or another
+condition that prevents completion. Put commands, evidence and blockers before the status line, with
+no text after it. Do not substitute `Outcome:` for `Status:`.
