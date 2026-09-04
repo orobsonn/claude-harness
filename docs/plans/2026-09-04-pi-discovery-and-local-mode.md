@@ -141,10 +141,92 @@ para esconder essa condição; a prova equivalente foi executada no host dispon�
 O scanner de segredos do pacote também passou. As runs live de update e retomada
 continuam sendo condições de fechamento, não presumidas a partir destes testes.
 
-## Fechamento ainda obrigatório
+### 7. Candidato final: Astra no filho real e update inline
 
-Verificar cache/pacote final Mac+VPS após bootstrap e novos recursos; exclusividade
-do pai; retomada live/virgem de plano aprovado; tarefas sem testes/parent-only;
-redução de loops com evidência; run live de update-harness instalando os quatro;
-completion audit, commit/CI e release pelo regime do projeto. Estes subtestes não
-encerram o objetivo de paridade.
+O smoke CLI de Astra não bastava: o resolvedor estrito de `pi-subagents` consulta
+o catálogo disponível e recusou a primeira revisão live. O bootstrap passou a
+registrar Astra pelo resolvedor público do Pi, preservando provider, autenticação
+e overrides do operador. Regressão e filha SDK reais passaram; suíte focada final
+43/43 GREEN. A compatibilidade do catálogo não é uma afirmação de preços ou
+limites oficiais do modelo. As revisões live posteriores chamaram Astra de fato,
+inclusive retornando REVISE com problemas concretos antes de APPROVE.
+
+Pacote final SHA256
+`0e1b32ccbf0fbb82b945e1ee4bc4abaa4d43e4a1bc761a66f3f497657c5e6dd8`:
+
+| Prova final | Mac arm64 / Node 22.22.2 | VPS x64 / Node 22.23.1 |
+| --- | --- | --- |
+| Vendor frio, quatro provedores por default | 15,421s | 24,934s |
+| Segundo vendor byte-idêntico | 3,925s | 2,343s |
+| Loader real | 17 extensões, zero erro; Grill e 11 roles | Mesmo resultado |
+| Cache sem npm / dependências ausentes do produto | Confirmado | Confirmado |
+
+A TUI real, sem `-p` nem override de modelo, selecionou Sol e completou
+`update-harness` inline na sessão `cae60e00-2526-45c4-ab02-f5fa1cdcd391`.
+O ensaio pré-release usou `vendor-core` do pacote local aprovado; não simulou o
+CLI público, que seleciona release remota. O transcript registra classificação
+`no-ceremony`, zero subagentes, duas atualizações dos quatro provedores e
+`pi-harness --verify` saudável. A segunda atualização convergiu; o Git da fixture
+ficou limpo e o comentário de configuração do operador permaneceu byte-idêntico
+(SHA256 `202e0ea1e72f8ab98229c835657695f39ad12c320c6ae0d24fc83d67b1ad0955`).
+Não houve commit, PR, push ou publicação pelo Pi. Encerramento normal com exit 0
+removeu o lock. A suíte completa de vendor tentada pela TUI excedeu 180s; isso foi
+reportado, não convertido em sucesso. O teste comportamental focado de default
+all/convergência passou (1/1, zero skip), além do CI completo verde do candidato.
+
+### 8. Retomada exata após aprovação: prova concluída
+
+A sessão FULL `63309b3e-ab13-4708-b190-eff99c2297f5` foi retomada após revendor do
+candidato final. Astra revisou de fato o plano, pediu correções de escopo/TDD e
+finalmente aprovou; o processo encerrou normalmente antes de qualquer mão. Uma
+segunda retomada pelo launcher usou o mesmo arquivo, header, ID, cwd e histórico,
+sem sessão substituta. O plano aprovado permaneceu com SHA256
+`d3ced5a11f0fdd53831aaf1044b6e8ab93289da3d2f481b0bb76b2a83d19d010` e a spec selada
+com `d52f607fbcdb5787c03079643f747bf85ad705b399a5a2e0163c4648c4a69c3d`.
+
+O pai despachou Luna para a task-0 canônica `no_tests`, um scaffold real separado
+do ciclo TDD da task-1. O encerramento final foi exit 0, sem lock e sem iniciar
+task-1. A mão terminou DONE, somente `src/normalize-title.mjs` mudou, sem violação
+de escopo/frozen; captura independente e regate foram registrados e o adversário
+aprovou o resultado atual. Não houve commit, remote ou PR. Esta prova cobre
+retomada exata do pai FULL existente, não adoção de plano por sessão virgem, resume
+LIGHT ou entrega integral da fixture.
+
+O ensaio também expôs atrito real: a prosa da mão omitia a linha terminal que o
+parser compartilhado exige. Resultado sem linha, ou `Outcome: DONE`, foi tratado
+como BLOCKED; `Status: DONE` foi reconhecido. Não se alterou recibo manualmente.
+A correção pré-release explicitou esse contrato nos três consumidores reais
+(executor, sniper e test-author) e na orientação do pai. O parser e os gates não
+mudaram. Relatório inválido continua BLOCKED: não se cria novo produtor apenas
+para corrigir texto nem se pede alteração cosmética no produto. Expected RED
+válido pode concluir a tarefa do test-author, sem declarar o produto GREEN.
+TDD observou falhas antes da alteração; focal 12/12, captura/roles 69/69 e
+integração/preflight 10/10 passaram. O pacote também passou na verificação
+independente prosa/parser (21/21) e no scanner de segredos. A redução geral de loops não foi quantificada por
+este ensaio; houve revisões legítimas e esse atrito evitável de formato.
+
+### 9. Pacote após a correção de prosa
+
+SHA256 `a05641cc97f8a49332184d272e317272fff5d4050f27068deef21c32ef4e52fb`.
+Repetição fria final: Mac 16,403s/4,060s; VPS como usuário `orca`
+17,147s/1,672s (primeira/segunda atualização). Nos dois hosts a árvore convergiu
+byte a byte, os quatro marcadores estavam presentes e o produto não recebeu
+dependências. Cache hit sem npm, Pi 0.84.4, subagents 21.2.0, 17 extensões sem
+erro, Grill e 11 roles nativas confirmados novamente. O pacote ainda usa 2.2.1
+como versão pré-release; o release-please permanece responsável pelo bump.
+
+O probe final chamou `createSubagentSession` e `DefaultResourceLoader` reais com
+o asset executor desse pacote, Luna/high e um pedido genérico para criar/verificar
+um módulo ESM. O pedido não citou Status, Outcome ou formato. O agente produziu
+somente o arquivo solicitado, verificou sintaxe/import/valor e encerrou com
+`Status: DONE`, reconhecido pelo parser real, sem abort/steer. Uma tentativa
+anterior cujo test double descartava o system prompt foi diagnosticada e excluída
+da evidência. A prova válida usou nova fixture e o loader real.
+
+## Fechamento técnico
+
+Completion audit independente aprovado, incluindo a correção final de prosa e
+seus limites. Cache/pacote Mac+VPS, update live inline, Astra real e retomada exata
+após aprovação foram verificados. As alterações e evidências seguem por PR/CI e
+release-please; esta auditoria não substitui o sucesso desses passos de publicação.
+A qualidade funcional da issue 17 fica para revisão do operador.

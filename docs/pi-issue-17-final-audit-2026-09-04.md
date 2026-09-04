@@ -142,3 +142,11 @@ lock sem owner, além da mudança solicitada de plan-reviewer para Astra high.
 Revalidar o pacote final após consolidá-las. Estes resultados não comprovam a
 instalação nativa `pi install`, uma run TUI/headless de modelo, a retomada live de
 plano aprovado nem o `update-harness` autônomo solicitado para fechamento.
+
+### Evidência posterior do harness
+
+O snapshot acima é histórico. A instalação final Mac/VPS, a correção do catálogo
+Astra para filhas reais e o update autônomo inline dos quatro provedores estão
+registrados em [Pi discovery e modo local](plans/2026-09-04-pi-discovery-and-local-mode.md).
+A avaliação da qualidade funcional da issue 17 permanece separada deste fechamento
+do harness; não foi reaberta para aprovar a release.

@@ -78,3 +78,10 @@ Exclusividade do pai em todos os modos de abrir sessão; retomada live com plano
 aprovado; contrato de tarefas sem teste e verificação final parent-only; redução
 medida dos loops de testes; consolidar e publicar as alterações já verificadas.
 Este plano não redefine o objetivo como apenas instalar o runtime.
+
+As provas posteriores de cache final Mac/VPS, update live inline e retomada exata
+do pai FULL após aprovação estão em
+[Pi discovery e modo local](2026-09-04-pi-discovery-and-local-mode.md).
+Esse registro também separa os limites de suporte e o atrito de formato terminal
+encontrado no ensaio; não pressupõe paridade universal ou redução quantitativa de
+loops a partir de uma fixture.
