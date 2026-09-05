@@ -425,7 +425,7 @@ export function runPiHarnessCli(argv, options = {}) {
     errorSink(`Pi harness: ${error instanceof Error ? error.message : String(error)}`);
     return { exitCode: 1 };
   } finally {
-    parentLock?.release();
+    parentLock?.release?.();
   }
 }
 
