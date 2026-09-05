@@ -80,6 +80,20 @@ test('bloqueia leitura de shell em caminhos com segredo', () => {
   assert.deepEqual(bash('cat package.json'), { block: false })
 })
 
+test('git add seletivo continua negando arquivos .env e .dev.vars', () => {
+  for (const command of [
+    'git add -- .env',
+    'git add -- .env.local',
+    'git add -- apps/api/.env.production',
+    'git add -- .dev.vars',
+    'git add -- packages/api/.dev.vars',
+  ]) {
+    const out = bash(command)
+    assert.equal(out.block, true, command)
+    assert.equal(out.reason, 'Secret-bearing paths are blocked from shell access by the delivery harness.')
+  }
+})
+
 test('bloqueia os dois subcomandos inseguros do lavish sem barrar o resto', () => {
   for (const command of [
     'npx lavish-axi share mockup',
@@ -137,10 +151,26 @@ test('em cerimônia LIGHT/FULL o pai aplica a mesma allowlist Bash do Claude Cod
     assert.deepEqual(decidePiPolicy({ toolName: 'bash', input: { command } }, fullParent), { block: false }, command)
   }
 
-  assert.deepEqual(
-    decidePiPolicy({ toolName: 'bash', input: { command: 'git commit -m "delegated hand commit"' } }, fullParent),
-    { block: false },
+  for (const command of [
+    'git add -- tests/app.test.mjs',
+    'git add -- src/app.ts',
+    'git commit -m "test(app): freeze locked test for task-1"',
+    'git commit -m "feat(app): implement task-1"',
+  ]) {
+    assert.deepEqual(
+      decidePiPolicy({ toolName: 'bash', input: { command } }, fullParent),
+      { block: false },
+      command,
+    )
+  }
+
+  const nativeWrite = decidePiPolicy(
+    { toolName: 'write', input: { path: 'src/app.ts' } },
+    fullParent,
   )
+  assert.equal(nativeWrite.block, true)
+  assert.match(nativeWrite.reason, /Claude Code Bash allowlist.*selective commits/i)
+  assert.doesNotMatch(nativeWrite.reason, /delegate product changes and commits/i)
   assert.deepEqual(
     decidePiPolicy({ toolName: 'bash', input: { command: 'node -e "require(\'node:fs\').writeFileSync(\'src/app.ts\', \'x\')"' } }, fullParent),
     { block: false },

@@ -739,6 +739,47 @@ test("com git real, capture-verified aceita o SHA ancestral do record e recusa u
   );
 });
 
+test("commits locais freeze e impl preservam a linhagem real de fidelity e capture", () => {
+  const root = makeRoot();
+  execFileSync("git", ["init", "-q", "-b", "feat/task-commits"], { cwd: root });
+  execFileSync("git", ["config", "user.email", "harness@example.com"], { cwd: root });
+  execFileSync("git", ["config", "user.name", "harness"], { cwd: root });
+  fs.writeFileSync(path.join(root, "README.md"), "fixture\n", "utf8");
+  execFileSync("git", ["add", "--", "README.md"], { cwd: root });
+  execFileSync("git", ["commit", "-qm", "chore: seed"], { cwd: root });
+  const handSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
+
+  seedGateState(root);
+  seedHandRecord(root, { agent: "test-author", freezeCommitSha: handSha });
+  const { authority } = makeAuthority(root, {
+    dispatchRole: "test-author",
+    resolveHeadSha: undefined,
+    isAncestorSha: undefined,
+  });
+
+  fs.mkdirSync(path.join(root, "tests"), { recursive: true });
+  fs.writeFileSync(path.join(root, "tests", "app.test.mjs"), "// expected-red locked test\n", "utf8");
+  execFileSync("git", ["add", "--", "tests/app.test.mjs"], { cwd: root });
+  execFileSync("git", ["commit", "-qm", "test(app): freeze locked test for task-one"], { cwd: root });
+  const freezeCommit = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
+
+  assert.equal(call(authority, { action: "hand-finished", task_id: TASK }, { toolCallId: "real-hf" }).result.ok, true);
+  assert.equal(call(authority, { action: "fidelity", task_id: TASK }, { toolCallId: "real-fidelity" }).result.ok, true);
+  assert.equal(call(authority, { action: "capture-verified", task_id: TASK }, { toolCallId: "real-capture" }).result.ok, true);
+  assert.deepEqual(readGateState(root).fidelity_pass, [`${FEATURE}/${TASK}@${handSha}`]);
+  assert.deepEqual(readGateState(root).capture_verified, [`${FEATURE}/${TASK}@${handSha}`]);
+
+  fs.mkdirSync(path.join(root, "src"), { recursive: true });
+  fs.writeFileSync(path.join(root, "src", "app.ts"), "export const ready = true;\n", "utf8");
+  execFileSync("git", ["add", "--", "src/app.ts"], { cwd: root });
+  execFileSync("git", ["commit", "-qm", "feat(app): implement task-one"], { cwd: root });
+  const implCommit = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
+
+  assert.equal(execFileSync("git", ["merge-base", "--is-ancestor", handSha, freezeCommit], { cwd: root }).length, 0);
+  assert.equal(execFileSync("git", ["merge-base", "--is-ancestor", freezeCommit, implCommit], { cwd: root }).length, 0);
+  assert.equal(execFileSync("git", ["status", "--porcelain", "--untracked-files=no"], { cwd: root, encoding: "utf8" }), "");
+});
+
 // ------------------------------------------- fiação real com core/pi/lib/pi-state-records.mjs
 
 test("com dispatch-records reais da lane Pi, hand-finished valida o produtor e capture-verified o remove", () => {

@@ -8,6 +8,7 @@ const promptPath = fileURLToPath(new URL("./harness-runtime.md", import.meta.url
 const executorPath = fileURLToPath(new URL("../runtime/agents/harness-executor.md", import.meta.url));
 const sniperPath = fileURLToPath(new URL("../runtime/agents/harness-sniper.md", import.meta.url));
 const testAuthorPath = fileURLToPath(new URL("../runtime/agents/harness-test-author.md", import.meta.url));
+const shipperPath = fileURLToPath(new URL("../runtime/agents/harness-shipper.md", import.meta.url));
 
 const writingHandPaths = [executorPath, sniperPath, testAuthorPath];
 
@@ -15,8 +16,10 @@ test("parent orchestration stays local and dispatches only canonical harness rol
   const prompt = readFileSync(promptPath, "utf8");
 
   assert.match(prompt, /agente principal faz triagem/i);
-  assert.match(prompt, /não escreve, edita nem commita produto/i);
-  assert.match(prompt, /adversary.*planner.*plan-reviewer.*shipper.*harvester/is);
+  assert.match(prompt, /não escreve nem edita código de produto ou testes/i);
+  for (const role of ["harness-adversary", "harness-planner", "harness-plan-reviewer", "harness-shipper", "harness-harvester"]) {
+    assert.match(prompt, new RegExp(role));
+  }
   assert.match(prompt, /harness_spec_write.*harness-adversary.*seal_spec_review.*mark.*brainstormed.*planner/is);
   assert.match(prompt, /Nunca reutilize uma spec de sessão anterior/i);
   assert.match(prompt, /funciona igual no TUI e headless/i);
@@ -31,6 +34,65 @@ test("parent orchestration stays local and dispatches only canonical harness rol
   assert.match(prompt, /Ao fim de \*\*todo\*\* despacho de planner.*leia o plano canônico/is);
   assert.match(prompt, /plan-reviewer.*REVISE/is);
   assert.doesNotMatch(prompt, /Delegue somente aos agentes `harness-\*`/);
+});
+
+test("cerimônia commita cada tarefa antes da revisão final e o shipper publica a série existente", () => {
+  const prompt = readFileSync(promptPath, "utf8");
+  const shipper = readFileSync(shipperPath, "utf8");
+
+  assert.match(prompt, /freeze-commit.*antes.*mão de implementação/is);
+  assert.match(prompt, /impl-commit.*antes.*revisão final/is);
+  assert.match(prompt, /fix-commit.*antes.*revisão final/is);
+  assert.match(shipper, /commits.*já existem.*antes.*revisão final/is);
+  assert.match(shipper, /não (?:crie|cria).*commit (?:único|de feature)/is);
+});
+
+test("revisão final alimenta o harvester somente leitura antes do shipper", () => {
+  const prompt = readFileSync(promptPath, "utf8");
+  const shipper = readFileSync(shipperPath, "utf8");
+
+  assert.match(prompt, /compliance e adversary finais → harvester → shipper/i);
+  assert.match(prompt, /harvester.*somente leitura.*relatório.*shipper/is);
+  assert.match(prompt, /artefato durável.*commit.*reconcili.*(?:olhos|revisões) finais/is);
+  assert.match(shipper, /relatório.*harvester.*somente leitura/is);
+  assert.match(shipper, /artefato durável.*commit.*(?:reconcili|revisões).*novo HEAD/is);
+});
+
+test("pai e shipper preservam a lista de never-stage do Claude Code", () => {
+  const prompt = readFileSync(promptPath, "utf8");
+  const shipper = readFileSync(shipperPath, "utf8");
+  const exclusions = [
+    ".dev.vars",
+    ".env*",
+    ".env.local",
+    ".local.*",
+    ".claude/settings.local.json",
+    ".claude/plans/",
+    ".pi/harness/",
+    ".DS_Store",
+    "*.log",
+    "node_modules/",
+    "dist/",
+    "coverage/",
+    "credential",
+    "token",
+  ];
+
+  for (const exclusion of exclusions) {
+    assert.ok(prompt.includes(exclusion), `parent prompt missing never-stage exclusion: ${exclusion}`);
+    assert.ok(shipper.includes(exclusion), `shipper missing never-stage exclusion: ${exclusion}`);
+  }
+});
+
+test("freeze-commit órfão vira risco explícito no PR sem bypass de CI", () => {
+  const prompt = readFileSync(promptPath, "utf8");
+  const shipper = readFileSync(shipperPath, "utf8");
+
+  for (const text of [prompt, shipper]) {
+    assert.match(text, /(?:orphan freeze-commit|freeze-commit órfão)/i);
+    assert.match(text, /risco\s+explícito.*PR/is);
+    assert.match(text, /(?:nunca|não).*(?:bypass|ignorar).*(?:CI|checks)/is);
+  }
 });
 
 test("o prompt fornece ids literais de modelo para todo despacho", () => {
@@ -58,7 +120,7 @@ test("o prompt descreve os rails que existem e não promete sandbox", () => {
   assert.match(prompt, /não sandbox|não é sandbox/i);
   assert.match(prompt, /execution-plan\.json/);
   assert.match(prompt, /cada.*tarefa.*plano canônico/is);
-  assert.match(prompt, /um comando de leitura por chamada/i);
+  assert.match(prompt, /um comando permitido por chamada/i);
   assert.match(prompt, /sem `&&`.*pipes.*redirecionamentos/is);
   assert.match(prompt, /`npm test`.*não use `npx`/i);
   assert.match(prompt, /HARNESS_FINAL_REVIEW.*compliance.*adversary.*serialmente/is);
