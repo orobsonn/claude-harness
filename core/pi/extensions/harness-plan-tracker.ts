@@ -46,10 +46,10 @@ export default function harnessPlanTracker(pi: ExtensionAPI) {
   pi.registerTool({
     name: "harness_plan",
     label: "Harness plan",
-    description: "Informational plan tracker for a FULL harness run. Record the plan only after explicit user approval, then update implementation and, when declared, validation for each task. This is not a scheduler, permission gate, or proof that repository work is complete.",
-    promptSnippet: "Track the active FULL plan with harness_plan after explicit user approval; update implementation and applicable validation lanes as the pipeline advances.",
+    description: "Informational plan tracker for a LIGHT or FULL harness run. Record the plan after plan-reviewer approval for its exact current version and within the operator's delivery authorization, then update implementation and, when declared, validation for each task. This is not a scheduler, permission gate, or proof that repository work is complete.",
+    promptSnippet: "Track the active LIGHT or FULL plan with harness_plan after plan-reviewer approval; update implementation and applicable validation lanes as the pipeline advances.",
     promptGuidelines: [
-      "Call action=record only after the user explicitly approves the plan; the tracker records agent-reported progress and does not itself prove approval.",
+      "Call action=record only after plan-reviewer approval for the exact current plan and within the operator's delivery authorization; the tracker records agent-reported progress and does not itself prove approval.",
       "For every update, use the exact planId and revision returned by the previous tracker result.",
       "Declare validation: true for a task that needs its own validation lane. After implementation is completed, call action=validate when that validation starts, passes, or fails.",
       "Only the parent session tracks the plan; do not ask subagents to call this tool.",

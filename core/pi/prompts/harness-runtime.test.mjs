@@ -126,6 +126,15 @@ test("o prompt descreve os rails que existem e não promete sandbox", () => {
   assert.match(prompt, /HARNESS_FINAL_REVIEW.*compliance.*adversary.*serialmente/is);
 });
 
+test("o plano aprovado alimenta o tracker tanto em LIGHT quanto em FULL", () => {
+  const prompt = readFileSync(promptPath, "utf8");
+  const tracker = readFileSync(new URL("../extensions/harness-plan-tracker.ts", import.meta.url), "utf8");
+
+  assert.match(prompt, /trabalho LIGHT ou FULL.*aprovação do plan-reviewer.*harness_plan/is);
+  assert.match(tracker, /LIGHT or FULL/i);
+  assert.match(tracker, /plan-reviewer approval for the exact current plan/i);
+});
+
 test("o pai recupera uma única vez dependência declarada com npm ci antes de bloquear a validação", () => {
   const prompt = readFileSync(promptPath, "utf8");
 
