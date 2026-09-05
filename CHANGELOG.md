@@ -5,6 +5,13 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [2.3.0](https://github.com/orobsonn/claude-harness/compare/v2.2.1...v2.3.0) (2026-09-04)
+
+
+### Features
+
+* **pi:** complete portable delivery runtime and lifecycle defaults ([e43c308](https://github.com/orobsonn/claude-harness/commit/e43c30890e84a609b774b26bf68f01e66c889529))
+
 ## [2.2.1](https://github.com/orobsonn/claude-harness/compare/v2.2.0...v2.2.1) (2026-09-01)
 
 
