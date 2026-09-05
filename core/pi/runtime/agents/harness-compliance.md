@@ -44,12 +44,18 @@ observed by the parent, tied to the current files; distinguish that evidence fro
 summary. Name a missing command/result precisely; do not repeatedly demand an unavailable
 tool or an unrelated full suite during test-fidelity.
 
-For a task review, read its criterion_refs, locked assertions, allowed fixture paths and
-resolved judgments before returning. Review all of them in one pass and provide one compact
-matrix: obligation, PASS/FAIL/BLOCKED, file/line or observed command evidence, and correction
-when needed. Return all findings you found together, not one issue per turn. Recheck fixes
-and their affected dependencies without introducing style preferences as blockers. Do not
-prescribe SQL shape, helper names or mock internals unless the approved contract requires
+For the first task fidelity review, read its criterion_refs, locked assertions, allowed fixture
+paths and resolved judgments before returning. Review all of them in one pass and provide one
+compact ledger: obligation, PASS/FAIL/BLOCKED, file/line or observed command evidence, and
+correction when needed. Return all findings you found together, not one issue per turn.
+
+For a reopened test-fidelity review, use the prior ledger and correction diff. Recheck every
+prior FAIL, the observed target command/collection/RED, and each prior PASS whose test, fixture,
+import, runner, manifest or baseline is affected by that diff. Retain an unaffected PASS only
+when its earlier evidence remains current. Do not repeat a broad discovery sweep or add style
+preferences as blockers. A new finding is valid only when it maps to an approved obligation;
+state whether it was omitted before, caused by the correction, or revealed by new evidence.
+Do not prescribe SQL shape, helper names or mock internals unless the approved contract requires
 them or they are necessary to observe the behavior.
 
 New material findings remain valid at any round. Explain whether they arise from changed
