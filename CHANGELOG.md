@@ -5,6 +5,13 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [2.4.2](https://github.com/orobsonn/claude-harness/compare/v2.4.1...v2.4.2) (2026-09-05)
+
+
+### Bug Fixes
+
+* **pi:** resume light ceremonies safely ([#894](https://github.com/orobsonn/claude-harness/issues/894)) ([d33e97c](https://github.com/orobsonn/claude-harness/commit/d33e97cb835d6e023433593d70441916d544ff16))
+
 ## [2.4.1](https://github.com/orobsonn/claude-harness/compare/v2.4.0...v2.4.1) (2026-09-05)
 
 
