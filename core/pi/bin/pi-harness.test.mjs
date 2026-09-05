@@ -237,6 +237,7 @@ test("every ported gate is loaded, policy first and the UI tracker last", () => 
     join(root, "core/pi/extensions/harness-bootstrap.ts"),
     DEPENDENCIES.subagentsExtension,
     join(root, "core/pi/extensions/harness-dispatch.ts"),
+    join(root, "core/pi/extensions/harness-memory.ts"),
     join(root, "core/pi/extensions/harness-entry-gate.ts"),
     join(root, "core/pi/extensions/harness-plan-gate.ts"),
     join(root, "core/pi/extensions/harness-plan-write-gate.ts"),

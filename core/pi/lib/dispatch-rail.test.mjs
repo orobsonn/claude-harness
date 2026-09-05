@@ -3,6 +3,14 @@ import test from "node:test";
 
 import { findShadowedCanonicalRoles, piDispatchRoute, validateSubagentDispatch } from "./dispatch-rail.mjs";
 
+const INDEPENDENT_REVIEW_ROUTES = Object.freeze({
+  "harness-adversary": { model: "openai-codex/gpt-5.6-sol", thinking: "medium" },
+  "harness-discussion-adversary": { model: "openai-codex/gpt-5.6-sol", thinking: "medium" },
+  "harness-plan-reviewer": { model: "openai-codex/gpt-6-astra", thinking: "high" },
+  "harness-compliance": { model: "openai-codex/gpt-5.6-terra", thinking: "high" },
+  "harness-security": { model: "openai-codex/gpt-5.6-sol" },
+});
+
 test("dispatch admits only canonical foreground roles within the finite 144-turn cap", () => {
   assert.deepEqual(
     validateSubagentDispatch({ subagent_type: "harness-planner", max_turns: 144, model: "openai-codex/gpt-5.6-sol", thinking: "high" }),
@@ -88,6 +96,26 @@ test("dispatch rejects a role shadowed by the issue project", () => {
     validateSubagentDispatch({ subagent_type: "harness-planner", model: "openai-codex/gpt-5.6-sol", thinking: "high" }, { shadowedRoles }),
     { ok: true },
   );
+});
+
+test("independent reviewers reject inherited conversation context, including malformed truthy input", () => {
+  for (const [subagent_type, route] of Object.entries(INDEPENDENT_REVIEW_ROUTES)) {
+    assert.deepEqual(
+      validateSubagentDispatch({ subagent_type, ...route, inherit_context: false }),
+      { ok: true },
+      `${subagent_type} must accept an explicit fresh-context dispatch`,
+    );
+    assert.deepEqual(
+      validateSubagentDispatch({ subagent_type, ...route, inherit_context: true }),
+      { ok: false, reason: "context-inheritance-disabled" },
+      `${subagent_type} must reject boolean context inheritance`,
+    );
+    assert.deepEqual(
+      validateSubagentDispatch({ subagent_type, ...route, inherit_context: "true" }),
+      { ok: false, reason: "context-inheritance-disabled" },
+      `${subagent_type} must reject malformed values that the subagent runtime treats as truthy`,
+    );
+  }
 });
 
 test("project role scan identifies only canonical shadow files", () => {

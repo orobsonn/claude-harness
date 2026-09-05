@@ -24,6 +24,9 @@ test("npm pack dry-run includes native issue skill, rule, template, VPS setup en
     "core/codex/hooks.json",
     "core/codex/agents/planner.toml",
     "core/codex/skills/harness-triage/SKILL.md",
+    "core/pi/extensions/harness-memory.ts",
+    "core/pi/lib/memory-cycle.mjs",
+    "core/pi/lib/release-only.mjs",
   ]) {
     assert.ok(files.has(path), `published artifact missing ${path}`);
   }

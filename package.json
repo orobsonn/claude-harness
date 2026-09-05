@@ -49,6 +49,7 @@
       "./core/pi/extensions/harness-bootstrap.ts",
       "./node_modules/@gotgenes/pi-subagents/src/index.ts",
       "./core/pi/extensions/harness-dispatch.ts",
+      "./core/pi/extensions/harness-memory.ts",
       "./core/pi/extensions/harness-entry-gate.ts",
       "./core/pi/extensions/harness-plan-gate.ts",
       "./core/pi/extensions/harness-plan-write-gate.ts",

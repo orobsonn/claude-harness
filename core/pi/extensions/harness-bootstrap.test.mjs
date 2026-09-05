@@ -36,6 +36,7 @@ const EXPECTED_EXTENSION_BASENAMES = [
   "harness-bootstrap.ts",
   "index.ts",
   "harness-dispatch.ts",
+  "harness-memory.ts",
   "harness-entry-gate.ts",
   "harness-plan-gate.ts",
   "harness-plan-write-gate.ts",

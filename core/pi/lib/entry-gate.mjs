@@ -1,11 +1,12 @@
 /**
  * @description Entry-gate da lane Pi — rails de bash e de dispatch de subagente.
  *
- * NADA de decisão é reimplementado aqui: bash-decide.mjs e entry-decide.mjs da lane OC são
- * PUROS e host-agnósticos (o gate-state chega como objeto), então são reusados INTEGRALMENTE
- * por import — decideBashAdvisory/applyAdvisory/decideBashDelivery/isDeliveryCommand/
- * isRoutineSession/detectHarnessLabelWrite/decideBashHarnessLabel e decideEntryTask/
- * hasFidelityPass. O que este arquivo faz é orquestrar a MESMA ordem do
+ * As decisões compartilhadas de bash e dispatch não são reimplementadas aqui:
+ * bash-decide.mjs e entry-decide.mjs da lane OC são PUROS e host-agnósticos (o gate-state chega
+ * como objeto), então são reusados INTEGRALMENTE por import. Este adaptador acrescenta apenas a
+ * prova mecânica Pi de release-only: numa cópia efêmera do estado, retira obrigações de tasks com
+ * SHA antigo comprovadamente fora da ancestry; nenhum marker persistido é alterado. O restante
+ * orquestra a MESMA ordem do
  * core/opencode/plugin/entry-gate.ts com os caminhos da lane Pi (`.pi/harness/state/`) e com
  * os sinais do runtime do Pi (sessão filha por ctx.sessionManager.getHeader().parentSession,
  * em vez do session.parentID do SDK do OpenCode).
@@ -18,7 +19,8 @@
  * - dispatch: gate-state ilegível → fail-OPEN apenas quando a reason começa com 'gate-state'
  *   (log em console.error); falha de IDENTIDADE (sessionId ausente/inseguro) é fail-CLOSED.
  * - `gh pr merge` é fail-CLOSED (evidência de CI ausente/pendente/vermelha nega), preservando a
- *   exceção do merge lifecycle-only sem CI.
+ *   exceção do merge lifecycle-only sem CI; a release-only também exige que HEAD/base/branches do
+ *   PR observado correspondam exatamente à prova local.
  * - denylist de frota só é consultada sob HARNESS_NOTIFY_PROJECT; módulo ausente = fail-open
  *   RUIDOSO (console.error), nunca silencioso.
  *
@@ -66,6 +68,11 @@ import {
 } from "./pi-adapter-map.mjs";
 import { loadPiGateStateFromDisk } from "./pi-gate-state.mjs";
 import { piGateStatePath } from "./pi-paths.mjs";
+import {
+  piReleaseMergeMatchesProof,
+  resolvePiReleaseProof,
+  scopePiReleaseOnlyTaskState,
+} from "./release-only.mjs";
 import { readPiSpecApproval, readPiSpecDraft } from "./spec-approval.mjs";
 import {
   claimPiDispatchForRuntime,
@@ -167,6 +174,154 @@ export function piMergeCheckRollup(target, projectRoot) {
   }
 }
 
+/** @description Lê CI e identidade do mesmo PR numa única observação, evitando que a prova local
+ * de release libere um target diferente. Null em qualquer falha; o chamador nega fail-closed.
+ * @param {string|null} target
+ * @param {string} projectRoot
+ * @returns {unknown} */
+export function piMergeCheckEvidence(target, projectRoot) {
+  try {
+    const output = execFileSync(
+      "gh",
+      [
+        "pr",
+        "view",
+        ...(target === null ? [] : [target]),
+        "--json",
+        "statusCheckRollup,headRefOid,headRefName,baseRefName,baseRefOid",
+      ],
+      { cwd: projectRoot, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 15000 },
+    );
+    const parsed = JSON.parse(output);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function releaseProofForGate(input, projectRoot) {
+  try {
+    if (typeof input.resolveReleaseProofFn === "function") {
+      return input.resolveReleaseProofFn(projectRoot);
+    }
+    if (typeof input.classifyReleaseOnlyFn === "function") {
+      const injected = input.classifyReleaseOnlyFn(projectRoot);
+      return injected?.ok ? { ...injected, phase: injected.phase ?? "pre-merge" } : injected;
+    }
+    return resolvePiReleaseProof(projectRoot, {
+      readMergedReleaseEvidenceFn: input.readMergedReleaseEvidenceFn,
+    });
+  } catch (error) {
+    return { ok: false, reason: error instanceof Error ? error.message : "release proof unavailable" };
+  }
+}
+
+function releaseOnlyScope({ gateState, isAncestorFn, proof }) {
+  try {
+    if (!proof?.ok) return { active: false, gateState, proof: null };
+    const scoped = scopePiReleaseOnlyTaskState(gateState, isAncestorFn);
+    if (!scoped.ok || scoped.ignoredTasks.length === 0) {
+      return { active: false, gateState, proof: null };
+    }
+    return { active: true, gateState: scoped.state, proof };
+  } catch {
+    return { active: false, gateState, proof: null };
+  }
+}
+
+function deliveryMayUseReleaseScope(command, proof) {
+  if (proof?.ok !== true || proof.phase !== "pre-merge" || typeof command !== "string") {
+    return false;
+  }
+  const trimmed = command.trim();
+  return trimmed === `git push origin ${proof.branch}` || isGhPrMergeCommand(trimmed);
+}
+
+function isGitTagMutation(command) {
+  if (typeof command !== "string") return false;
+  const match = /(?:^|[\s/])git\s+(?:(?:-C\s+\S+|-c\s+\S+|--git-dir(?:=|\s+)\S+|--work-tree(?:=|\s+)\S+)\s+)*tag(?:\s|$)([\s\S]*)/.exec(
+    command.trim(),
+  );
+  if (!match) return false;
+  const args = match[1].trim();
+  return args !== "" && !/^(?:-l|--list|--points-at|--contains)(?:\s|$)/.test(args);
+}
+
+function isGhReleaseCreate(command) {
+  return typeof command === "string" && /\bgh\s+release\s+create\b/.test(command);
+}
+
+function isTagPushAttempt(command) {
+  return (
+    typeof command === "string" &&
+    /\bgit\s+[\s\S]*\bpush\b[\s\S]*(?:--tags\b|refs\/tags\/|(?:^|\s)v(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:\s|$))/.test(command)
+  );
+}
+
+function tagPointsAtHead(projectRoot, proof) {
+  try {
+    return runGit(["rev-parse", `refs/tags/${proof.tag}^{commit}`], projectRoot) === proof.headSha;
+  } catch {
+    return false;
+  }
+}
+
+function exactPostMergeTagCommand(command, proof) {
+  return proof?.ok === true && proof.phase === "post-merge" && command.trim() === `git tag ${proof.tag}`;
+}
+
+function exactPostMergeTagPush(command, proof, projectRoot) {
+  return Boolean(
+    proof?.ok === true &&
+      proof.phase === "post-merge" &&
+      command.trim() === `git push origin ${proof.tag}` &&
+      tagPointsAtHead(projectRoot, proof),
+  );
+}
+
+function exactPostMergeReleaseCreate(command, proof, projectRoot) {
+  if (
+    proof?.ok !== true ||
+    proof.phase !== "post-merge" ||
+    typeof command !== "string" ||
+    /["'`$\\();|&]/.test(command) ||
+    !tagPointsAtHead(projectRoot, proof)
+  ) {
+    return false;
+  }
+  const tokens = command.trim().split(/\s+/);
+  if (tokens.length < 4 || tokens[0] !== "gh" || tokens[1] !== "release" || tokens[2] !== "create") {
+    return false;
+  }
+  if (tokens[3] !== proof.tag) return false;
+  const values = new Map();
+  const booleans = new Set();
+  for (let index = 4; index < tokens.length; index += 1) {
+    const token = tokens[index];
+    if (["--latest", "--verify-tag"].includes(token)) {
+      if (booleans.has(token)) return false;
+      booleans.add(token);
+      continue;
+    }
+    if (["--target", "--title", "--notes-file"].includes(token)) {
+      const value = tokens[index + 1];
+      if (!value || value.startsWith("-") || values.has(token)) return false;
+      values.set(token, value);
+      index += 1;
+      continue;
+    }
+    return false;
+  }
+  return (
+    values.get("--target") === proof.headSha &&
+    values.get("--title") === proof.tag &&
+    typeof values.get("--notes-file") === "string" &&
+    /^[A-Za-z0-9_./-]+$/.test(values.get("--notes-file")) &&
+    booleans.has("--latest") &&
+    booleans.has("--verify-tag")
+  );
+}
+
 /** @description Um update de lifecycle só pode mergear sem CI quando o branch atual tem a forma
  * exata do helper E todo caminho commitado está no manifesto de arquivos do harness. Fail-closed
  * em qualquer dúvida de git/manifesto. Ported 1:1 de defaultIsLifecycleOnlyMerge (entry-gate.ts).
@@ -239,7 +394,11 @@ export function piIsLifecycleOnlyMerge(projectRoot) {
  *   isAncestorFn?: (sha: string) => boolean|null,
  *   listHandRecordsForFeatureFn?: (featureId: string) => unknown[],
  *   readMergeCheckRollupFn?: (target: string|null) => unknown,
+ *   readMergeCheckEvidenceFn?: (target: string|null) => unknown,
  *   isLifecycleOnlyMergeFn?: () => boolean,
+ *   classifyReleaseOnlyFn?: (root: string) => object,
+ *   resolveReleaseProofFn?: (root: string) => object,
+ *   readMergedReleaseEvidenceFn?: (headSha: string) => unknown,
  *   importDenylistFn?: () => Promise<object>,
  * }} input
  * @returns {Promise<{ok: boolean, decision: "allow"|"deny", reason: string, advisory?: string, details?: unknown}>}
@@ -252,6 +411,7 @@ export async function decidePiBashGate(input = {}) {
   const env = input.env ?? process.env;
   const command = input.command;
   const commandText = typeof command === "string" ? command : "";
+  const releaseMutation = isGitTagMutation(command) || isGhReleaseCreate(command) || isTagPushAttempt(command);
 
   // 1. Choke-point de frota (#516): re-checa o comando cru contra a denylist endurecida,
   // independente de qualquer permissão resolvida pelo host. Escopo deliberadamente restrito a
@@ -344,27 +504,86 @@ export async function decidePiBashGate(input = {}) {
     }
   }
 
+  const releaseProof = isDeliveryCommand(command) || releaseMutation
+    ? releaseProofForGate(input, projectRoot)
+    : { ok: false, reason: "release proof not requested" };
+  const releaseScope = deliveryMayUseReleaseScope(command, releaseProof)
+    ? releaseOnlyScope({
+        gateState,
+        isAncestorFn,
+        proof: releaseProof,
+      })
+    : { active: false, gateState, proof: null };
+
+  if (isGitTagMutation(command)) {
+    return exactPostMergeTagCommand(commandText, releaseProof)
+      ? { ...ALLOW, ...advisory }
+      : {
+          ok: false,
+          decision: "deny",
+          reason: `${PREFIX} Blocked: release tag creation requires the exact verified post-merge version on origin/main.`,
+          ...advisory,
+        };
+  }
+  if (isGhReleaseCreate(command)) {
+    return exactPostMergeReleaseCreate(commandText, releaseProof, projectRoot)
+      ? { ...ALLOW, ...advisory }
+      : {
+          ok: false,
+          decision: "deny",
+          reason: `${PREFIX} Blocked: GitHub Release creation requires the exact verified post-merge tag and target commit.`,
+          ...advisory,
+        };
+  }
+  if (isTagPushAttempt(command)) {
+    return exactPostMergeTagPush(commandText, releaseProof, projectRoot)
+      ? { ...ALLOW, ...advisory }
+      : {
+          ok: false,
+          decision: "deny",
+          reason: `${PREFIX} Blocked: tag push requires literal 'git push origin <verified-tag>' after the verified release merge.`,
+          ...advisory,
+        };
+  }
+
   // 6. `gh pr merge` é o único verbo de delivery que precisa de evidência externa. Fail-CLOSED.
   if (isGhPrMergeCommand(command)) {
-    const readRollupFn =
-      typeof input.readMergeCheckRollupFn === "function"
-        ? input.readMergeCheckRollupFn
-        : (target) => piMergeCheckRollup(target, projectRoot);
     const isLifecycleOnlyMergeFn =
       typeof input.isLifecycleOnlyMergeFn === "function"
         ? input.isLifecycleOnlyMergeFn
         : () => piIsLifecycleOnlyMerge(projectRoot);
     const target = mergeTargetFromCommand(command);
+    let evidence = null;
+    if (target !== undefined) {
+      if (typeof input.readMergeCheckEvidenceFn === "function") {
+        evidence = input.readMergeCheckEvidenceFn(target);
+      } else if (typeof input.readMergeCheckRollupFn === "function") {
+        evidence = { statusCheckRollup: input.readMergeCheckRollupFn(target) };
+      } else {
+        evidence = piMergeCheckEvidence(target, projectRoot);
+      }
+    }
     const checkDecision =
       target === undefined
         ? { ok: false, reason: "PR target is ambiguous; merge is denied." }
-        : decideMergeChecks(readRollupFn(target));
+        : decideMergeChecks(evidence?.statusCheckRollup);
     const allowsLifecycleWithoutCi =
       target === null &&
       checkDecision.ok === false &&
       "state" in checkDecision &&
       checkDecision.state === "missing" &&
       isLifecycleOnlyMergeFn();
+    if (
+      releaseScope.active &&
+      !piReleaseMergeMatchesProof(releaseScope.proof, evidence)
+    ) {
+      return {
+        ok: false,
+        decision: "deny",
+        reason: `${PREFIX} Blocked: release-only proof does not match the exact PR HEAD, branch, and base.`,
+        ...advisory,
+      };
+    }
     if (!checkDecision.ok && !allowsLifecycleWithoutCi) {
       return {
         ok: false,
@@ -378,7 +597,7 @@ export async function decidePiBashGate(input = {}) {
   // 7. Rails de delivery puros.
   const delivery = decideBashDelivery({
     command,
-    gateState,
+    gateState: releaseScope.gateState,
     sessionId: sessionId ?? null,
     isAncestorFn,
     listHandRecordsForFeatureFn,
@@ -407,6 +626,9 @@ export async function decidePiBashGate(input = {}) {
  *   readCanonicalTaskPolicyFn?: (root: string, featureId: string, taskId: string) => object,
  *   readSpecDraftFn?: (context: object) => object,
  *   readSpecApprovalFn?: (context: object) => object,
+ *   classifyReleaseOnlyFn?: (root: string) => object,
+ *   resolveReleaseProofFn?: (root: string) => object,
+ *   readMergedReleaseEvidenceFn?: (headSha: string) => unknown,
  * }} input
  * @returns {{ok: boolean, decision: "allow"|"deny", reason: string, details?: unknown}}
  */
@@ -508,6 +730,17 @@ export function decidePiDispatchGate(input = {}) {
       ? input.isAncestorFn
       : (sha) => piIsAncestor(sha, projectRoot);
 
+  const releaseProof = bareRole === "shipper"
+    ? releaseProofForGate(input, projectRoot)
+    : { ok: false, reason: "release proof not requested" };
+  const releaseScope = bareRole === "shipper"
+    ? releaseOnlyScope({
+        gateState,
+        isAncestorFn,
+        proof: releaseProof,
+      })
+    : { active: false, gateState, proof: null };
+
   if (isWritingHandRole(input.subagentType) && taskId && Array.isArray(gateState.regate_pending)) {
     const own = formatFeatureTaskEntry(featureId, taskId);
     const unresolvedOther = gateState.regate_pending.some(
@@ -524,13 +757,13 @@ export function decidePiDispatchGate(input = {}) {
   // não persiste nem remove qualquer outro rail do gate-state original.
   const entryGateState = canonicalNoTests
     ? {
-        ...gateState,
+        ...releaseScope.gateState,
         fidelity_pass: [
           ...(Array.isArray(gateState.fidelity_pass) ? gateState.fidelity_pass : []),
           formatFeatureTaskEntry(featureId, taskId),
         ],
       }
-    : gateState;
+    : releaseScope.gateState;
   const entryDecision = decideEntryTask({
     subagentType: role,
     gateState: entryGateState,
@@ -893,6 +1126,7 @@ export default {
   piIsAncestor,
   piIsLifecycleOnlyMerge,
   piMergeCheckRollup,
+  piMergeCheckEvidence,
   recordPiHandFinished,
   recordPiTaskCompletion,
 };

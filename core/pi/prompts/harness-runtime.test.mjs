@@ -8,6 +8,7 @@ const promptPath = fileURLToPath(new URL("./harness-runtime.md", import.meta.url
 const executorPath = fileURLToPath(new URL("../runtime/agents/harness-executor.md", import.meta.url));
 const sniperPath = fileURLToPath(new URL("../runtime/agents/harness-sniper.md", import.meta.url));
 const testAuthorPath = fileURLToPath(new URL("../runtime/agents/harness-test-author.md", import.meta.url));
+const harvesterPath = fileURLToPath(new URL("../runtime/agents/harness-harvester.md", import.meta.url));
 const shipperPath = fileURLToPath(new URL("../runtime/agents/harness-shipper.md", import.meta.url));
 
 const writingHandPaths = [executorPath, sniperPath, testAuthorPath];
@@ -47,15 +48,65 @@ test("cerimônia commita cada tarefa antes da revisão final e o shipper publica
   assert.match(shipper, /não (?:crie|cria).*commit (?:único|de feature)/is);
 });
 
-test("revisão final alimenta o harvester somente leitura antes do shipper", () => {
+test("harvest runs once after functional commits and before final reviews", () => {
   const prompt = readFileSync(promptPath, "utf8");
+  const harvester = readFileSync(harvesterPath, "utf8");
   const shipper = readFileSync(shipperPath, "utf8");
 
-  assert.match(prompt, /compliance e adversary finais → harvester → shipper/i);
-  assert.match(prompt, /harvester.*somente leitura.*relatório.*shipper/is);
-  assert.match(prompt, /artefato durável.*commit.*reconcili.*(?:olhos|revisões) finais/is);
-  assert.match(shipper, /relatório.*harvester.*somente leitura/is);
-  assert.match(shipper, /artefato durável.*commit.*(?:reconcili|revisões).*novo HEAD/is);
+  assert.match(prompt, /tarefas funcionais verificadas e\s+commitadas/i);
+  assert.match(prompt, /harness-harvester.*somente uma vez/is);
+  assert.match(prompt, /antes dos olhos finais/i);
+  assert.match(prompt, /primeira linha.*\[HARNESS_HARVEST\]/is);
+  assert.match(harvester, /zero to three.*durable deltas/is);
+  for (const field of ["path", "preimage", "replacement", "evidence", "invalidation"]) {
+    assert.match(harvester, new RegExp(field, "i"));
+  }
+  assert.equal(
+    harvester.trim().split("\n").at(-1),
+    '`[HARNESS_HARVEST_RESULT]{"changes":[{"path":"MEMORY.md","before_sha256":"<hash from harness_memory read or null absent>","content":"<entire resulting file>","evidence":"<verified sources>","invalidation":"<when recheck>"}]}[/HARNESS_HARVEST_RESULT]`',
+  );
+  assert.match(harvester, /before_sha256.*content.*evidence.*invalidation/is);
+  assert.match(harvester, /24 KiB/i);
+  assert.match(harvester, /three distinct root paths.*MEMORY\.md.*CONTEXT\.md.*kaizen\.md/is);
+  assert.match(harvester, /before_sha256/i);
+  assert.match(harvester, /never replace content received in truncated form/i);
+  assert.match(harvester, /`append`.*host computes.*full\s+preimage/is);
+  assert.match(prompt, /zero deltas.*não cria.*tarefa/is);
+  assert.match(prompt, /delta não vazio.*HARNESS_HARVEST_CONTEXT.*planner/is);
+  assert.match(prompt, /nova hash do plano.*plan-reviewer/is);
+  assert.match(prompt, /no_tests: true.*locked_tests: \[\].*depends_on.*tarefas existentes/is);
+  assert.match(prompt, /executor.*captura.*re-gate.*commit.*olhos finais.*novo HEAD/is);
+  assert.match(prompt, /recibo host-owned.*persistid.*git.*limpo.*HEAD atual.*mudança não-memória/is);
+  assert.match(prompt, /escrita posterior.*invalida.*revisões finais/is);
+  assert.doesNotMatch(prompt, /harvest-ready/);
+  assert.match(shipper, /harvest.*antes.*olhos finais/is);
+});
+
+test("session memory is bounded, resume-explicit and finalized only after delivery receipts", () => {
+  const prompt = readFileSync(promptPath, "utf8");
+
+  assert.match(prompt, /início.*harness_memory.*action.*read.*MEMORY\.md.*CONTEXT\.md.*kaizen\.md/is);
+  assert.match(prompt, /dicas.*não.*autoridade/is);
+  assert.match(prompt, /action.*update.*8 KiB.*shared_context\.md/is);
+  assert.match(prompt, /retom.*mesma sessão.*action.*read/is);
+  assert.match(prompt, /sessão nova.*nunca.*shared_context.*sessões antigas/is);
+  assert.match(prompt, /brief.*seletiv.*runner.*fixtures.*test-author/is);
+  assert.match(prompt, /olhos.*nunca.*diário completo/is);
+  assert.match(prompt, /action.*finalize.*recibo host-owned do shipper.*revisões finais.*HEAD atual.*git limpo/is);
+  assert.match(prompt, /shutdown|abort.*preserva.*shared_context/is);
+  assert.match(prompt, /runs futuras.*documentos duráveis.*mergeados/is);
+});
+
+test("writing roles keep test authorship and genuine no-tests documentation distinct", () => {
+  const executor = readFileSync(executorPath, "utf8");
+  const testAuthor = readFileSync(testAuthorPath, "utf8");
+  const sniper = readFileSync(sniperPath, "utf8");
+
+  assert.match(testAuthor, /selective task context.*runner.*fixtures/is);
+  assert.match(executor, /frozen tests.*test-author.*RED.*minimum production change.*GREEN/is);
+  assert.doesNotMatch(executor, /write a failing test/i);
+  assert.match(executor, /no_tests:true.*documentation.*do not create a RED/is);
+  assert.match(sniper, /selective finding context/i);
 });
 
 test("pai e shipper preservam a lista de never-stage do Claude Code", () => {
