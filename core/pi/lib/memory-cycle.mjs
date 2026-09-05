@@ -146,7 +146,9 @@ export function completeHarvest(snapshot, text, agentId) {
     if (before.truncated && !append) throw new Error("Use append for large memory; never replace a truncated excerpt");
     const original = readSmall(join(snapshot.project_root, change.path), 1024 * 1024);
     if ((original === null ? null : sha(original)) !== before.sha256) throw new Error("Harvest preimage changed during dispatch");
-    const after_sha256 = sha(append ? (original ?? "") + change.append : change.content);
+    const resulting = append ? (original ?? "") + change.append : change.content;
+    if (Buffer.byteLength(resulting) > 1024 * 1024) throw new Error("Harvest result exceeds the durable memory read limit; reduce the proposal");
+    const after_sha256 = sha(resulting);
     if (after_sha256 === before.sha256) throw new Error("Unchanged memory is zero delta; omit it");
     return { path: change.path, before_sha256: before.sha256, after_sha256, ...(append ? { append: change.append } : { content: change.content }), evidence: change.evidence, invalidation: change.invalidation };
   });
@@ -250,7 +252,7 @@ export function completeMemoryShipment(snapshot, text, agentId) {
   if (ready.head !== snapshot.head) {
     const before = snapshot.release;
     const after = ready.release;
-    if (before?.phase !== "pre-merge" || after?.phase !== "post-merge" || before.version !== after.version || before.branch !== after.releaseBranch || after.releaseHeadSha !== snapshot.head) {
+    if (before?.phase !== "pre-merge" || after?.phase !== "post-merge" || before.version !== after.version || before.branch !== after.releaseBranch || before.baseSha !== after.baseSha || after.releaseHeadSha !== snapshot.head) {
       throw new Error("Shipper changed HEAD after review; restore the verified checkout for a functional merge, then confirm the remote effect before retrying completion");
     }
   }

@@ -276,6 +276,27 @@ function tagPointsAtHead(projectRoot, proof) {
   }
 }
 
+function remoteTagPointsAtHead(projectRoot, proof) {
+  try {
+    const directRef = `refs/tags/${proof.tag}`;
+    const peeledRef = `${directRef}^{}`;
+    const output = execFileSync("git", ["ls-remote", "origin", directRef, peeledRef], {
+      cwd: projectRoot, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 15000,
+    }).trim();
+    if (output === "") return false;
+    const refs = new Map();
+    for (const line of output.split("\n")) {
+      const match = /^([0-9a-f]{40}|[0-9a-f]{64})\t(.+)$/.exec(line);
+      if (!match || ![directRef, peeledRef].includes(match[2]) || refs.has(match[2])) return false;
+      refs.set(match[2], match[1]);
+    }
+    if (!refs.has(directRef)) return false;
+    return (refs.get(peeledRef) ?? refs.get(directRef)) === proof.headSha;
+  } catch {
+    return false;
+  }
+}
+
 function exactPostMergeTagCommand(command, proof) {
   return proof?.ok === true && proof.phase === "post-merge" && command.trim() === `git tag ${proof.tag}`;
 }
@@ -342,8 +363,9 @@ function exactPostMergeReleaseCreate(command, proof, projectRoot) {
     proof?.ok !== true ||
     proof.phase !== "post-merge" ||
     typeof command !== "string" ||
-    /["'`$\\();|&]/.test(command) ||
-    !tagPointsAtHead(projectRoot, proof)
+    /[\r\n"'`$\\();|&]/.test(command) ||
+    !tagPointsAtHead(projectRoot, proof) ||
+    !remoteTagPointsAtHead(projectRoot, proof)
   ) {
     return false;
   }

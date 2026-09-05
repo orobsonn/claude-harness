@@ -360,7 +360,7 @@ test("harness-memory release: prova pós-merge usa somente o PR exato fornecido 
 });
 
 test("native shipper can complete only the exact proven release pre-to-post merge transition", async (t) => {
-  for (const outcome of ["exact", "wrong-pr-head", "product-change"]) {
+  for (const outcome of ["exact", "wrong-pr-head", "product-change", "base-advanced"]) {
     await t.test(outcome, async (st) => {
       const f = releaseFixture(st);
       const api = register();
@@ -369,6 +369,12 @@ test("native shipper can complete only the exact proven release pre-to-post merg
       completeHarvest(api, f.root);
       let mergedHead;
       completeShipper(api, f.root, () => {
+        if (outcome === "base-advanced") {
+          git(f.root, ["switch", "-q", "main"]);
+          writeFileSync(join(f.root, "src", "concurrent.ts"), "export const upstream = true;\n");
+          const base = commit(f.root, "feat: concurrent upstream commit");
+          git(f.root, ["update-ref", "refs/remotes/origin/main", base]);
+        }
         mergedHead = mergeRelease(f.root);
         installFakeGh(st, f.root, mergedHead, 42, outcome === "wrong-pr-head" ? "f".repeat(40) : f.headSha);
         if (outcome === "product-change") {

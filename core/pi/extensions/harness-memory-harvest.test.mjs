@@ -335,6 +335,17 @@ test("only generated Pi directories are exempt; new vendored tooling blocks harv
   await assertBlocked(await api.handlers.get("tool_call")(event, ctx(root)));
 });
 
+test("harvest refuses an append whose result would exceed the durable read limit", async (t) => {
+  const root = fixture(t);
+  const original = "m".repeat(1024 * 1024);
+  writeFileSync(join(root, "MEMORY.md"), original);
+  execFileSync("git", ["add", "MEMORY.md"], { cwd: root });
+  commit(root, "fixture memory at supported limit");
+  const api = register();
+  emitHarvest(api, root, { changes: [{ path: "MEMORY.md", before_sha256: sha256(original), append: "\nnew fact\n", evidence: "verified", invalidation: "recheck" }] });
+  await assertNoReceipt(api, root);
+});
+
 test("harness-memory harvest: read expõe documentos duráveis com hash e o recibo host-owned da sessão", async (t) => {
   const root = fixture(t);
   const api = register();

@@ -84,6 +84,8 @@ function fixtureGit(root, args) {
 
 function postMergeGateFixture() {
   const root = mkdtempSync(join(tmpdir(), "pi-entry-release-finish-"));
+  const remoteRoot = mkdtempSync(join(tmpdir(), "pi-entry-release-remote-"));
+  fixtureGit(remoteRoot, ["init", "--bare", "-q"]);
   fixtureGit(root, ["init", "-q", "-b", "main"]);
   fixtureGit(root, ["config", "user.name", "Release Gate Test"]);
   fixtureGit(root, ["config", "user.email", "release-gate@example.test"]);
@@ -96,7 +98,8 @@ function postMergeGateFixture() {
   fixtureGit(root, ["add", "."]);
   fixtureGit(root, ["commit", "-q", "-m", "feat: milestone"]);
   const baseSha = fixtureGit(root, ["rev-parse", "HEAD"]);
-  fixtureGit(root, ["update-ref", "refs/remotes/origin/main", baseSha]);
+  fixtureGit(root, ["remote", "add", "origin", remoteRoot]);
+  fixtureGit(root, ["push", "-q", "-u", "origin", "main"]);
   fixtureGit(root, ["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"]);
   fixtureGit(root, ["switch", "-q", "-c", "chore/release-1.2.4"]);
   writeFileSync(
@@ -113,6 +116,7 @@ function postMergeGateFixture() {
 
   return {
     root,
+    baseSha,
     merge() {
       fixtureGit(root, ["switch", "-q", "main"]);
       fixtureGit(root, ["merge", "-q", "--squash", "chore/release-1.2.4"]);
@@ -134,7 +138,10 @@ function postMergeGateFixture() {
         },
       };
     },
-    close: () => rmSync(root, { recursive: true, force: true }),
+    close() {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(remoteRoot, { recursive: true, force: true });
+    },
   };
 }
 
@@ -723,6 +730,22 @@ test("fluxo pós-merge libera shipper, tag exata e publicação presa ao commit 
     });
     assert.equal(push.decision, "allow");
 
+    const missingRemoteTag = await decidePiBashGate({
+      ...deps,
+      command: `gh release create v1.2.4 --target ${merged.headSha} --title v1.2.4 --notes-file ${notesPath} --verify-tag --latest`,
+    });
+    assert.equal(missingRemoteTag.decision, "deny");
+
+    fixtureGit(f.root, ["tag", "-a", "remote-release-v1.2.4", "-m", "release", merged.headSha]);
+    fixtureGit(f.root, ["push", "-q", "origin", "remote-release-v1.2.4:refs/tags/v1.2.4"]);
+    fixtureGit(f.root, ["tag", "-d", "remote-release-v1.2.4"]);
+
+    const multilinePublish = await decidePiBashGate({
+      ...deps,
+      command: `gh release create v1.2.4 --target ${merged.headSha} --title v1.2.4 --notes-file ${notesPath} --verify-tag\n--latest`,
+    });
+    assert.equal(multilinePublish.decision, "deny");
+
     const publish = await decidePiBashGate({
       ...deps,
       command: `gh release create v1.2.4 --target ${merged.headSha} --title v1.2.4 --notes-file ${notesPath} --verify-tag --latest`,
@@ -793,6 +816,13 @@ test("pós-merge mantém bloqueados tag/target errados, flags de push e push de 
       readMergedReleaseEvidenceFn: () => merged.evidence,
       gitStateFn: () => ({ branch: "main", commitsAhead: 0, defaultBranch: "main" }),
     };
+    writeFileSync(notesPath, "## [1.2.4]\n\n- New.\n\n");
+    fixtureGit(f.root, ["push", "-q", "origin", `${f.baseSha}:refs/tags/v1.2.4`]);
+    const wrongRemoteTag = await decidePiBashGate({
+      ...deps,
+      command: `gh release create v1.2.4 --target ${merged.headSha} --title v1.2.4 --notes-file ${notesPath} --verify-tag --latest`,
+    });
+    assert.equal(wrongRemoteTag.decision, "deny");
     writeFileSync(notesPath, "not the verified changelog block\n");
     for (const command of [
       "git tag v1.2.5",
