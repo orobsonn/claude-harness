@@ -59,6 +59,35 @@ Se o arquivo ou o preflight não conferirem, o launcher não cria substituta.
 Os seletores nativos de sessão do Pi são recusados pelo launcher; texto depois
 de `--` é apenas prompt. Executar `pi` diretamente não recebe esse contrato.
 
+## Memória e aprendizados
+
+No início, o pai recebe a memória durável como dados de referência temporários e consulta
+`harness_memory` para os hashes e o contexto da própria run. Ela reúne, com
+limites, `MEMORY.md` (lições técnicas), `CONTEXT.md` (glossário de negócio) e
+`kaizen.md` (hipóteses de melhoria). O conteúdo orienta a execução, mas não supera
+o pedido atual, a spec, o plano ou a evidência do repositório. A injeção automática
+usa o evento `context`, sem gravar cópias no histórico ou elevar os documentos a
+instruções de sistema.
+
+Durante a run, fatos úteis ficam em um `shared_context.md` de até 8 KiB, isolado
+pela sessão. Em retomada, o pai relê explicitamente a mesma sessão. Uma sessão nova
+não varre buffers antigos. Os agentes recebem apenas os trechos pertinentes; o autor
+de testes recebe também orientações relevantes de runner e fixtures.
+
+Depois que as tarefas funcionais estão verificadas e commitadas, o harvester somente
+leitura propõe até três deltas para os documentos duráveis. Sem delta, o fluxo segue
+direto. Com delta, planner e plan-reviewer acrescentam uma tarefa real de documentação,
+o executor aplica e verifica o conteúdo, e o commit ocorre antes dos olhos finais.
+Assim, as revisões finais sempre observam o HEAD que será entregue.
+
+Na conclusão entregue, `harness_memory finalize` exige recibos finais e do shipper no
+HEAD atual e git limpo antes de apagar o buffer e os payloads transitórios da própria
+sessão. Uma continuação exclusiva de release tem prova específica de versão/changelog,
+PR e CI para não repetir tarefas anteriores ao squash. Propostas duráveis pendentes
+não podem ser descartadas por essa exceção. Abort, shutdown ou run
+incompleta preserva o buffer para retomada. Runs futuras usam apenas aprendizado durável
+que chegou à branch mergeada.
+
 ## Papéis e modelo
 
 O fluxo separa os dez papéis de entrega (`planner`, revisão de plano,

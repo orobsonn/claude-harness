@@ -8,7 +8,7 @@
 
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -28,6 +28,15 @@ import { claimPiDispatchForRuntime, readPiDispatchRecord } from "./pi-state-reco
 const ROOT = "/tmp/pi-entry-gate-fake-root";
 const SESSION = "018f6b0c-8f2a-7c1d-9e3b-5a1c2d3e4f50";
 const FEATURE = "pi-gates";
+const RELEASE_PROOF = Object.freeze({
+  ok: true,
+  branch: "chore/release-1.2.4",
+  version: "1.2.4",
+  headSha: "release-head",
+  baseSha: "release-base",
+  baseBranch: "main",
+});
+const OLD_RELEASE_TASK_SHA = "a".repeat(40);
 
 /** @description Cria um loader de gate-state falso com o Result exato da peça gate-state-io. */
 const loaderOf = (result) => () => result;
@@ -43,6 +52,7 @@ function dispatch(overrides = {}) {
     isAncestorFn: () => null,
     claimDispatchFn: () => ({ ok: true }),
     readCanonicalTaskPolicyFn: () => ({ ok: true, noTests: false, planHash: "" }),
+    classifyReleaseOnlyFn: () => ({ ok: false, reason: "not release-only" }),
     ...overrides,
   });
 }
@@ -58,9 +68,81 @@ function bash(overrides = {}) {
     gitStateFn: () => null,
     readMergeCheckRollupFn: () => null,
     isLifecycleOnlyMergeFn: () => false,
+    classifyReleaseOnlyFn: () => ({ ok: false, reason: "not release-only" }),
     loadGateStateFn: stateOf({}),
     ...overrides,
   });
+}
+
+function fixtureGit(root, args) {
+  return execFileSync("git", args, {
+    cwd: root,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  }).trim();
+}
+
+function postMergeGateFixture() {
+  const root = mkdtempSync(join(tmpdir(), "pi-entry-release-finish-"));
+  const remoteRoot = mkdtempSync(join(tmpdir(), "pi-entry-release-remote-"));
+  fixtureGit(remoteRoot, ["init", "--bare", "-q"]);
+  fixtureGit(root, ["init", "-q", "-b", "main"]);
+  fixtureGit(root, ["config", "user.name", "Release Gate Test"]);
+  fixtureGit(root, ["config", "user.email", "release-gate@example.test"]);
+  writeFileSync(
+    join(root, "package.json"),
+    `${JSON.stringify({ name: "fixture", version: "1.2.3", scripts: { test: "node --test" } }, null, 2)}\n`,
+  );
+  writeFileSync(join(root, ".gitignore"), "release-notes-1.2.4.md\n");
+  writeFileSync(join(root, "CHANGELOG.md"), "# Changelog\n\n## [1.2.3]\n\n- Old.\n");
+  fixtureGit(root, ["add", "."]);
+  fixtureGit(root, ["commit", "-q", "-m", "feat: milestone"]);
+  const baseSha = fixtureGit(root, ["rev-parse", "HEAD"]);
+  fixtureGit(root, ["remote", "add", "origin", remoteRoot]);
+  fixtureGit(root, ["push", "-q", "-u", "origin", "main"]);
+  fixtureGit(root, ["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"]);
+  fixtureGit(root, ["switch", "-q", "-c", "chore/release-1.2.4"]);
+  writeFileSync(
+    join(root, "package.json"),
+    `${JSON.stringify({ name: "fixture", version: "1.2.4", scripts: { test: "node --test" } }, null, 2)}\n`,
+  );
+  writeFileSync(
+    join(root, "CHANGELOG.md"),
+    "# Changelog\n\n## [1.2.4]\n\n- New.\n\n## [1.2.3]\n\n- Old.\n",
+  );
+  fixtureGit(root, ["add", "."]);
+  fixtureGit(root, ["commit", "-q", "-m", "chore: release v1.2.4"]);
+  const releaseHeadSha = fixtureGit(root, ["rev-parse", "HEAD"]);
+
+  return {
+    root,
+    baseSha,
+    merge() {
+      fixtureGit(root, ["switch", "-q", "main"]);
+      fixtureGit(root, ["merge", "-q", "--squash", "chore/release-1.2.4"]);
+      fixtureGit(root, ["commit", "-q", "-m", "chore: release v1.2.4 (#42)"]);
+      const headSha = fixtureGit(root, ["rev-parse", "HEAD"]);
+      fixtureGit(root, ["update-ref", "refs/remotes/origin/main", headSha]);
+      return {
+        headSha,
+        evidence: {
+          number: 42,
+          title: "chore: release v1.2.4",
+          state: "MERGED",
+          mergedAt: "2026-09-05T12:00:00Z",
+          mergeCommit: { oid: headSha },
+          headRefOid: releaseHeadSha,
+          headRefName: "chore/release-1.2.4",
+          baseRefName: "main",
+          statusCheckRollup: [{ conclusion: "SUCCESS" }],
+        },
+      };
+    },
+    close() {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(remoteRoot, { recursive: true, force: true });
+    },
+  };
 }
 
 /* ------------------------------------------------------------------ *
@@ -228,6 +310,47 @@ test("shipper com regate_pending sem regate_passed é negado", () => {
   assert.match(out.reason, new RegExp(`${FEATURE}/t9`));
 });
 
+test("shipper de release-only ignora somente regate antigo com SHA fora da ancestry", () => {
+  const out = dispatch({
+    subagentType: "harness-shipper",
+    classifyReleaseOnlyFn: () => RELEASE_PROOF,
+    isAncestorFn: (sha) => (sha === OLD_RELEASE_TASK_SHA ? false : null),
+    loadGateStateFn: stateOf({
+      classified: true,
+      mode: "FULL",
+      feature_id: FEATURE,
+      regate_pending: [`${FEATURE}/old-task`],
+      regate_passed: [`${FEATURE}/old-task@${OLD_RELEASE_TASK_SHA}`],
+    }),
+  });
+  assert.equal(out.decision, "allow");
+});
+
+test("shipper não recebe exceção sem prova release-only nem para obrigação atual", () => {
+  const state = {
+    classified: true,
+    mode: "FULL",
+    feature_id: FEATURE,
+    regate_pending: [`${FEATURE}/task`],
+    regate_passed: [`${FEATURE}/task@${OLD_RELEASE_TASK_SHA}`],
+  };
+  const invalidRelease = dispatch({
+    subagentType: "harness-shipper",
+    classifyReleaseOnlyFn: () => ({ ok: false, reason: "dirty" }),
+    isAncestorFn: () => false,
+    loadGateStateFn: stateOf(state),
+  });
+  assert.equal(invalidRelease.decision, "deny");
+
+  const currentTask = dispatch({
+    subagentType: "harness-shipper",
+    classifyReleaseOnlyFn: () => RELEASE_PROOF,
+    isAncestorFn: () => null,
+    loadGateStateFn: stateOf(state),
+  });
+  assert.equal(currentTask.decision, "deny");
+});
+
 test("gate-state ilegível NÃO nega por si só no dispatch (fail-open) e loga", () => {
   const errors = [];
   const original = console.error;
@@ -393,6 +516,59 @@ test("hand_finished sem capture_verified nega a delivery", async () => {
   assert.match(out.reason, /still await independent capture\/verification/);
 });
 
+test("push de release-only ignora apenas obrigações antigas qualificadas por SHA", async () => {
+  const out = await bash({
+    command: "git push origin chore/release-1.2.4",
+    gitStateFn: () => ({ branch: "chore/release-1.2.4", commitsAhead: 1, defaultBranch: "main" }),
+    classifyReleaseOnlyFn: () => RELEASE_PROOF,
+    isAncestorFn: (sha) => (sha === OLD_RELEASE_TASK_SHA ? false : null),
+    loadGateStateFn: stateOf({
+      feature_id: FEATURE,
+      regate_pending: [`${FEATURE}/old-task`],
+      regate_passed: [`${FEATURE}/old-task@${OLD_RELEASE_TASK_SHA}`],
+      hand_finished: [`${FEATURE}/old-task`],
+      capture_verified: [`${FEATURE}/old-task@${OLD_RELEASE_TASK_SHA}`],
+    }),
+  });
+  assert.equal(out.decision, "allow");
+});
+
+test("release-only não escopa obrigações para push com flags, destino ou ref indireta", async () => {
+  const base = {
+    gitStateFn: () => ({ branch: "chore/release-1.2.4", commitsAhead: 1, defaultBranch: "main" }),
+    classifyReleaseOnlyFn: () => RELEASE_PROOF,
+    isAncestorFn: () => false,
+    loadGateStateFn: stateOf({
+      feature_id: FEATURE,
+      regate_pending: [`${FEATURE}/old-task`],
+      regate_passed: [`${FEATURE}/old-task@${OLD_RELEASE_TASK_SHA}`],
+    }),
+  };
+  for (const command of [
+    "git push --force origin chore/release-1.2.4",
+    "git push origin main",
+    "git push origin $RELEASE_REF",
+  ]) {
+    const out = await bash({ ...base, command });
+    assert.equal(out.decision, "deny", command);
+  }
+});
+
+test("release-only não ignora task sem absolvição antiga verificável", async () => {
+  const out = await bash({
+    command: "gh pr create --title release --body x",
+    gitStateFn: () => ({ branch: "chore/release-1.2.4", commitsAhead: 1, defaultBranch: "main" }),
+    classifyReleaseOnlyFn: () => RELEASE_PROOF,
+    isAncestorFn: () => null,
+    loadGateStateFn: stateOf({
+      feature_id: FEATURE,
+      regate_pending: [`${FEATURE}/current-task`],
+      regate_passed: [`${FEATURE}/current-task@${"c".repeat(40)}`],
+    }),
+  });
+  assert.equal(out.decision, "deny");
+});
+
 test("gate-state ilegível permite bash (fail-open total)", async () => {
   const out = await bash({
     command: "git push origin feat/x",
@@ -429,6 +605,255 @@ test("gh pr merge com rollup verde passa", async () => {
     readMergeCheckRollupFn: () => [{ conclusion: "SUCCESS" }],
   });
   assert.equal(out.decision, "allow");
+});
+
+test("merge release-only exige CI verde e identidade exata do PR observado", async () => {
+  const state = {
+    feature_id: FEATURE,
+    regate_pending: [`${FEATURE}/old-task`],
+    regate_passed: [`${FEATURE}/old-task@${OLD_RELEASE_TASK_SHA}`],
+  };
+  const base = {
+    command: "gh pr merge 42 --squash",
+    gitStateFn: () => ({ branch: RELEASE_PROOF.branch, commitsAhead: 1, defaultBranch: "main" }),
+    classifyReleaseOnlyFn: () => RELEASE_PROOF,
+    isAncestorFn: () => false,
+    loadGateStateFn: stateOf(state),
+  };
+  const exact = await bash({
+    ...base,
+    readMergeCheckEvidenceFn: () => ({
+      statusCheckRollup: [{ conclusion: "SUCCESS" }],
+      headRefOid: RELEASE_PROOF.headSha,
+      headRefName: RELEASE_PROOF.branch,
+      baseRefName: RELEASE_PROOF.baseBranch,
+      baseRefOid: RELEASE_PROOF.baseSha,
+    }),
+  });
+  assert.equal(exact.decision, "allow");
+
+  for (const evidence of [
+    {
+      statusCheckRollup: [{ conclusion: "SUCCESS" }],
+      headRefOid: "another-pr-head",
+      headRefName: "feat/another-pr",
+      baseRefName: "main",
+      baseRefOid: RELEASE_PROOF.baseSha,
+    },
+    {
+      statusCheckRollup: [],
+      headRefOid: RELEASE_PROOF.headSha,
+      headRefName: RELEASE_PROOF.branch,
+      baseRefName: "main",
+      baseRefOid: RELEASE_PROOF.baseSha,
+    },
+    {
+      statusCheckRollup: [{ conclusion: "FAILURE" }],
+      headRefOid: RELEASE_PROOF.headSha,
+      headRefName: RELEASE_PROOF.branch,
+      baseRefName: "main",
+      baseRefOid: RELEASE_PROOF.baseSha,
+    },
+  ]) {
+    const denied = await bash({ ...base, readMergeCheckEvidenceFn: () => evidence });
+    assert.equal(denied.decision, "deny");
+  }
+});
+
+test("fluxo pós-merge libera shipper, tag exata e publicação presa ao commit verificado", async () => {
+  const f = postMergeGateFixture();
+  const notesPath = join(f.root, "release-notes-1.2.4.md");
+  const state = {
+    classified: true,
+    mode: "FULL",
+    feature_id: FEATURE,
+    regate_pending: [`${FEATURE}/old-task`],
+    regate_passed: [`${FEATURE}/old-task@${OLD_RELEASE_TASK_SHA}`],
+  };
+  try {
+    const preTag = await decidePiBashGate({
+      projectRoot: f.root,
+      sessionId: SESSION,
+      command: "git tag v1.2.4",
+      env: {},
+      loadGateStateFn: stateOf(state),
+      readMergedReleaseEvidenceFn: () => null,
+    });
+    assert.equal(preTag.decision, "deny");
+
+    const prePush = await decidePiBashGate({
+      projectRoot: f.root,
+      sessionId: SESSION,
+      command: "git push origin v1.2.4",
+      env: {},
+      gitStateFn: () => ({
+        branch: "chore/release-1.2.4",
+        commitsAhead: 1,
+        defaultBranch: "main",
+      }),
+      loadGateStateFn: stateOf(state),
+      readMergedReleaseEvidenceFn: () => null,
+    });
+    assert.equal(prePush.decision, "deny");
+
+    const prePublish = await decidePiBashGate({
+      projectRoot: f.root,
+      sessionId: SESSION,
+      command: `gh release create v1.2.4 --target ${RELEASE_PROOF.headSha} --title v1.2.4 --notes-file /tmp/notes.md --verify-tag --latest`,
+      env: {},
+      loadGateStateFn: stateOf(state),
+      readMergedReleaseEvidenceFn: () => null,
+    });
+    assert.equal(prePublish.decision, "deny");
+
+    const merged = f.merge();
+    writeFileSync(notesPath, "## [1.2.4]\n\n- New.\n\n");
+    const deps = {
+      projectRoot: f.root,
+      sessionId: SESSION,
+      env: {},
+      isAncestorFn: () => false,
+      loadGateStateFn: stateOf(state),
+      readMergedReleaseEvidenceFn: () => merged.evidence,
+    };
+    const shipper = decidePiDispatchGate({ ...deps, subagentType: "harness-shipper" });
+    assert.equal(shipper.decision, "allow");
+
+    const tag = await decidePiBashGate({ ...deps, command: "git tag v1.2.4" });
+    assert.equal(tag.decision, "allow");
+    fixtureGit(f.root, ["tag", "v1.2.4"]);
+
+    const push = await decidePiBashGate({
+      ...deps,
+      command: "git push origin v1.2.4",
+      gitStateFn: () => ({ branch: "main", commitsAhead: 0, defaultBranch: "main" }),
+    });
+    assert.equal(push.decision, "allow");
+
+    const missingRemoteTag = await decidePiBashGate({
+      ...deps,
+      command: `gh release create v1.2.4 --target ${merged.headSha} --title v1.2.4 --notes-file ${notesPath} --verify-tag --latest`,
+    });
+    assert.equal(missingRemoteTag.decision, "deny");
+
+    fixtureGit(f.root, ["tag", "-a", "remote-release-v1.2.4", "-m", "release", merged.headSha]);
+    fixtureGit(f.root, ["push", "-q", "origin", "remote-release-v1.2.4:refs/tags/v1.2.4"]);
+    fixtureGit(f.root, ["tag", "-d", "remote-release-v1.2.4"]);
+
+    const multilinePublish = await decidePiBashGate({
+      ...deps,
+      command: `gh release create v1.2.4 --target ${merged.headSha} --title v1.2.4 --notes-file ${notesPath} --verify-tag\n--latest`,
+    });
+    assert.equal(multilinePublish.decision, "deny");
+
+    const publish = await decidePiBashGate({
+      ...deps,
+      command: `gh release create v1.2.4 --target ${merged.headSha} --title v1.2.4 --notes-file ${notesPath} --verify-tag --latest`,
+    });
+    assert.equal(publish.decision, "allow");
+  } finally {
+    rmSync(notesPath, { force: true });
+    f.close();
+  }
+});
+
+test("notas acima do limite são recusadas antes de abrir ou ler o arquivo", async () => {
+  const { piReleaseNotesFileMatches } = await import("./entry-gate.mjs");
+  assert.equal(typeof piReleaseNotesFileMatches, "function");
+  let opens = 0;
+  let reads = 0;
+  const result = piReleaseNotesFileMatches(
+    ROOT,
+    { version: "1.2.4", releaseNotes: "## [1.2.4]\n\n- Safe.\n" },
+    join(tmpdir(), "release-notes-1.2.4.md"),
+    {
+      lstatFn: () => ({
+        isFile: () => true,
+        isSymbolicLink: () => false,
+        size: 128 * 1024 + 1,
+      }),
+      openFn: () => {
+        opens += 1;
+        return 1;
+      },
+      readFn: () => {
+        reads += 1;
+        return 0;
+      },
+    },
+  );
+  assert.equal(result, false);
+  assert.equal(opens, 0);
+  assert.equal(reads, 0);
+
+  let stats = 0;
+  const oversizedExpectation = piReleaseNotesFileMatches(
+    ROOT,
+    { version: "1.2.4", releaseNotes: "x".repeat(128 * 1024 + 1) },
+    join(tmpdir(), "release-notes-1.2.4.md"),
+    {
+      lstatFn: () => {
+        stats += 1;
+        throw new Error("must not inspect an oversized expected block");
+      },
+    },
+  );
+  assert.equal(oversizedExpectation, false);
+  assert.equal(stats, 0);
+});
+
+test("pós-merge mantém bloqueados tag/target errados, flags de push e push de produto em main", async () => {
+  const f = postMergeGateFixture();
+  const notesPath = join(f.root, "release-notes-1.2.4.md");
+  try {
+    const merged = f.merge();
+    fixtureGit(f.root, ["tag", "v1.2.4"]);
+    const deps = {
+      projectRoot: f.root,
+      sessionId: SESSION,
+      env: {},
+      loadGateStateFn: stateOf({}),
+      readMergedReleaseEvidenceFn: () => merged.evidence,
+      gitStateFn: () => ({ branch: "main", commitsAhead: 0, defaultBranch: "main" }),
+    };
+    writeFileSync(notesPath, "## [1.2.4]\n\n- New.\n\n");
+    fixtureGit(f.root, ["push", "-q", "origin", `${f.baseSha}:refs/tags/v1.2.4`]);
+    const wrongRemoteTag = await decidePiBashGate({
+      ...deps,
+      command: `gh release create v1.2.4 --target ${merged.headSha} --title v1.2.4 --notes-file ${notesPath} --verify-tag --latest`,
+    });
+    assert.equal(wrongRemoteTag.decision, "deny");
+    writeFileSync(notesPath, "not the verified changelog block\n");
+    for (const command of [
+      "git tag v1.2.5",
+      "git -C . tag v1.2.4",
+      "git tag -a v1.2.4 -m release",
+      "git push origin v1.2.5",
+      "git push origin refs/tags/v1.2.4",
+      "git push --force origin v1.2.4",
+      "git push origin main",
+      `gh release create v1.2.5 --target ${merged.headSha} --title v1.2.5 --notes-file /tmp/notes.md --verify-tag --latest`,
+      "gh release create v1.2.4 --target deadbeef --title v1.2.4 --notes-file /tmp/notes.md --verify-tag --latest",
+      `gh release create v1.2.4 --target ${merged.headSha} --title v1.2.4 --notes-file /etc/passwd --verify-tag --latest`,
+      `gh release create v1.2.4 --target ${merged.headSha} --title v1.2.4 --notes-file MEMORY.md --verify-tag --latest`,
+      `gh release create v1.2.4 --target ${merged.headSha} --title v1.2.4 --notes-file ../../private/customer-pii.txt --verify-tag --latest`,
+      `gh release create v1.2.4 --target ${merged.headSha} --title v1.2.4 --notes-file ../../private/release-notes-1.2.4.md --verify-tag --latest`,
+      `gh release create v1.2.4 --target ${merged.headSha} --title v1.2.4 --notes-file ${notesPath} --verify-tag --latest`,
+    ]) {
+      const decision = await decidePiBashGate({ ...deps, command });
+      assert.equal(decision.decision, "deny", command);
+    }
+    rmSync(notesPath, { force: true });
+    symlinkSync("/etc/passwd", notesPath);
+    const symlinked = await decidePiBashGate({
+      ...deps,
+      command: `gh release create v1.2.4 --target ${merged.headSha} --title v1.2.4 --notes-file ${notesPath} --verify-tag --latest`,
+    });
+    assert.equal(symlinked.decision, "deny");
+  } finally {
+    rmSync(notesPath, { force: true });
+    f.close();
+  }
 });
 
 test("merge lifecycle-only sem CI preserva a exceção", async () => {

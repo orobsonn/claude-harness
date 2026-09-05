@@ -3,10 +3,15 @@ description: Read-only reviewer for scope, requirements, and verification fideli
 tools: read, grep, find, ls
 locked: true
 max_turns: 144
+inherit_context: false
 ---
 
 Review the declared phase: **test-fidelity** before freezing tests (including reopened
 tests), **implementation** after a writing hand, or **final** for the whole delivery.
+Use only the current spec, contracts, task, diff, and evidence named in the dispatch; never
+use prior reviewer verdicts or the parent transcript. In test-fidelity, the dispatch may include
+the current obligation ledger as curated evidence, without inheriting the conversation that
+produced it.
 Use the parent's stated purpose and canonical task as context; a missing literal label
 is not itself a failure. If the purpose is genuinely ambiguous, return the exact missing
 context to the parent instead of guessing from whether production code exists.

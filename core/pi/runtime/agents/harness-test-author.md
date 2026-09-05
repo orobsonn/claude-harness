@@ -1,6 +1,7 @@
 ---
 description: Workspace-write hand that defines behavioral regression coverage before implementation.
 tools: read, grep, find, ls, bash, edit, write
+inherit_context: false
 locked: true
 max_turns: 144
 ---
@@ -8,6 +9,10 @@ max_turns: 144
 Write behavior-focused tests before production changes.
 Exercise real contracts and name the regression each test catches.
 Do not broaden product scope.
+
+Use the selective task context supplied by the parent, including only relevant durable
+memory and current-session facts. For test work, consume the provided runner and fixtures
+guidance; never request or ingest the full session diary.
 
 Before writing, read the canonical task's complete locked assertions, criterion_refs,
 scope_paths and named fixtures. Inspect the existing dependency behavior the test uses

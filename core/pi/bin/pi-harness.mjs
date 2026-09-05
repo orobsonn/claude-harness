@@ -35,6 +35,7 @@ const EXTENSIONS_BEFORE_SUBAGENTS = [
  */
 const EXTENSIONS_AFTER_SUBAGENTS = [
   "core/pi/extensions/harness-dispatch.ts",
+  "core/pi/extensions/harness-memory.ts",
   "core/pi/extensions/harness-entry-gate.ts",
   "core/pi/extensions/harness-plan-gate.ts",
   "core/pi/extensions/harness-plan-write-gate.ts",
@@ -58,6 +59,7 @@ const REQUIRED_LIBS = [
   "core/pi/lib/dispatch-rail.mjs",
   "core/pi/lib/entry-gate.mjs",
   "core/pi/lib/marker-authority.mjs",
+  "core/pi/lib/memory-cycle.mjs",
   "core/pi/lib/native-bootstrap.mjs",
   "core/pi/lib/obs.mjs",
   "core/pi/lib/parent-session-recovery.mjs",
@@ -74,6 +76,7 @@ const REQUIRED_LIBS = [
   "core/pi/lib/plan-write-decide.mjs",
   "core/pi/lib/policy.mjs",
   "core/pi/lib/roles.mjs",
+  "core/pi/lib/release-only.mjs",
   "core/pi/lib/session-state.mjs",
   "core/pi/lib/spec-approval.mjs",
   "core/pi/lib/version-check.mjs",

@@ -7,6 +7,14 @@ import { RUNTIME_ROLES, isRuntimeRole } from "./roles.mjs";
 // headroom that the parent does not re-dispatch a healthy eye solely at 16 turns.
 const MAX_TURNS = 144;
 
+const INDEPENDENT_REVIEW_ROLES = new Set([
+  "harness-adversary",
+  "harness-discussion-adversary",
+  "harness-plan-reviewer",
+  "harness-compliance",
+  "harness-security",
+]);
+
 /** Rotas fixas da lane Pi. O pai escolhe a complexidade do plano, mas não o modelo/effort. */
 const FIXED_PI_ROUTES = Object.freeze({
   "harness-planner": Object.freeze({ model: "openai-codex/gpt-5.6-sol", thinking: "high" }),
@@ -52,6 +60,9 @@ export function validateSubagentDispatch(input, options = {}) {
   const role = data.subagent_type;
   if (!isRuntimeRole(role)) return deny("unknown-role");
   if (options.shadowedRoles?.has(role)) return deny("shadowed-role");
+  if (INDEPENDENT_REVIEW_ROLES.has(role) && Boolean(data.inherit_context)) {
+    return deny("context-inheritance-disabled");
+  }
   // Uma cerimônia é uma execução nova, ligada ao dispatch-record atual. Reusar uma sessão filha
   // não emite o evento de identidade de filho e pode ligar estado de outra tentativa.
   if (data.resume != null) return deny("resume-disabled");
