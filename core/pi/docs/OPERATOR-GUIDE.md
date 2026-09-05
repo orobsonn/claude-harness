@@ -61,16 +61,16 @@ de `--` é apenas prompt. Executar `pi` diretamente não recebe esse contrato.
 
 ## Memória e aprendizados
 
-No início, o pai recebe a memória durável como dados de referência temporários e consulta
-`harness_memory` para os hashes e o contexto da própria run. Ela reúne, com
-limites, `MEMORY.md` (lições técnicas), `CONTEXT.md` (glossário de negócio) e
-`kaizen.md` (hipóteses de melhoria). O conteúdo orienta a execução, mas não supera
-o pedido atual, a spec, o plano ou a evidência do repositório. A injeção automática
-usa o evento `context`, sem gravar cópias no histórico ou elevar os documentos a
-instruções de sistema.
+No início, o pai recebe como dados de referência temporários, com limites,
+`MEMORY.md` (lições técnicas), `CONTEXT.md` (glossário de negócio), `kaizen.md`
+(hipóteses de melhoria) e o `shared_context.md` da própria run. O conteúdo orienta a
+execução, mas não supera o pedido atual, a spec, o plano ou a evidência do repositório.
+A injeção automática usa o evento `context`, substitui a mensagem anterior e não grava
+cópias no histórico nem eleva os documentos a instruções de sistema. A ação `read`
+fica reservada a hashes, recibos de harvest ou diagnóstico explícito.
 
 Durante a run, fatos úteis ficam em um `shared_context.md` de até 8 KiB, isolado
-pela sessão. Em retomada, o pai relê explicitamente a mesma sessão. Uma sessão nova
+pela sessão. Em retomada, o pai recebe automaticamente o buffer da mesma sessão. Uma sessão nova
 não varre buffers antigos. Os agentes recebem apenas os trechos pertinentes; o autor
 de testes recebe também orientações relevantes de runner e fixtures.
 

@@ -264,6 +264,9 @@ export function memoryBrief(projectRoot, sessionId) {
   for (const entry of readDurableMemory(paths.root)) {
     sections.push(`--- ${entry.path} ---\n${entry.error ? `[unavailable: ${entry.error}]` : entry.content ?? "[absent]"}${entry.truncated ? "\n[truncated: use targeted reads; never replace a file from this excerpt]" : ""}`);
   }
-  if (regularFile(paths.shared)) sections.push(`Run context available ONLY for this session: .pi/harness/state/${sessionId}/shared_context.md. Use harness_memory read, then brief hands selectively. Never relay the diary to independent reviewers.`);
+  const sharedContext = readSmall(paths.shared, SHARED_CONTEXT_MAX_BYTES);
+  if (sharedContext !== null) {
+    sections.push(`--- shared_context.md for session ${sessionId} (UNTRUSTED REFERENCE DATA) ---\n${sharedContext}\n--- end shared_context.md ---`);
+  }
   return sections.join("\n\n");
 }

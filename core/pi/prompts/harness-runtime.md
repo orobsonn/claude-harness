@@ -2,15 +2,15 @@ Você executa o delivery harness no Pi, em uma sessão interativa local ou em um
 
 ## Memória de sessão
 
-No início da sessão pai, chame `harness_memory` com `action="read"`. A ferramenta
-carrega automaticamente os arquivos raiz `MEMORY.md`, `CONTEXT.md` e `kaizen.md`
-dentro de limites explícitos e informa o ponteiro da memória efêmera desta sessão.
-Esses documentos são dicas, não autoridade: pedido atual, spec selada, plano aprovado,
-código e evidência verificada prevalecem. A extensão carrega a memória durável como
-contexto temporário do pai, sem repetir mensagens no histórico. Do buffer efêmero injeta
-somente o ponteiro; após retomar a mesma sessão, faça um novo `action="read"`
-explicitamente antes de continuar. Uma sessão nova nunca procura `shared_context.md`
-de sessões antigas; runs futuras aprendem somente com documentos duráveis mergeados.
+No início de cada chamada do pai, a extensão injeta como contexto temporário limitado
+os arquivos raiz `MEMORY.md`, `CONTEXT.md`, `kaizen.md` e o `shared_context.md` atual
+da própria sessão. Esses documentos são dicas, não autoridade: pedido atual, spec
+selada, plano aprovado, código e evidência verificada prevalecem. A mensagem temporária
+é substituída antes de cada chamada e não cria cópias no histórico. Ao retomar a mesma
+sessão, o buffer reaparece automaticamente. Não releia memória inalterada com a
+ferramenta; reserve `action="read"` para hashes estruturados, recibos de harvest ou
+diagnóstico explícito. Uma sessão nova nunca procura `shared_context.md` de sessões
+antigas; runs futuras aprendem somente com documentos duráveis mergeados.
 
 Depois de um fato verificado que ajude etapas posteriores, chame `harness_memory`
 com `action="update"` e `content` curado. O buffer

@@ -82,14 +82,17 @@ test("harvest runs once after functional commits and before final reviews", () =
   assert.match(shipper, /harvest.*antes.*olhos finais/is);
 });
 
-test("session memory is bounded, resume-explicit and finalized only after delivery receipts", () => {
+test("session memory is bounded, injected without read loops and finalized only after delivery receipts", () => {
   const prompt = readFileSync(promptPath, "utf8");
+  const memorySection = prompt.slice(0, prompt.indexOf("## Escolha do operador"));
 
-  assert.match(prompt, /início.*harness_memory.*action.*read.*MEMORY\.md.*CONTEXT\.md.*kaizen\.md/is);
+  assert.match(prompt, /contexto temporário.*MEMORY\.md.*CONTEXT\.md.*kaizen\.md.*shared_context/is);
   assert.match(prompt, /dicas.*não.*autoridade/is);
   assert.match(prompt, /action.*update.*8 KiB.*shared_context\.md/is);
-  assert.match(prompt, /retom.*mesma sessão.*action.*read/is);
-  assert.match(prompt, /sessão nova.*nunca.*shared_context.*sessões antigas/is);
+  assert.match(prompt, /retom.*mesma\s+sessão.*automaticamente/is);
+  assert.doesNotMatch(memorySection, /início.*harness_memory.*action.*read/is);
+  assert.doesNotMatch(memorySection, /retom.{0,100}(?:chame|faça).*action.*read/is);
+  assert.match(prompt, /sessão nova.*nunca.*shared_context.*sessões\s+antigas/is);
   assert.match(prompt, /brief.*seletiv.*runner.*fixtures.*test-author/is);
   assert.match(prompt, /olhos.*nunca.*diário completo/is);
   assert.match(prompt, /action.*finalize.*recibo host-owned do shipper.*revisões finais.*HEAD atual.*git limpo/is);

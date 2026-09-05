@@ -11,6 +11,7 @@ import { homedir } from 'node:os'
 import { basename, isAbsolute, resolve, sep } from 'node:path'
 
 import { evaluateHook, protectablePath } from '../../codex/hooks/policy.mjs'
+import { isSafeFeatureId } from '../../shared/lib/feature-id.mjs'
 import {
   isPiBashTool,
   isPiDispatchTool,
@@ -78,11 +79,25 @@ function isActiveDeliveryCeremony(gateState) {
 }
 
 /**
- * @description Mesma allowlist Bash do Claude Code. O Pi não tem prompt de permissão nativo
- * compatível, por isso aplica a lista explicitamente apenas nesta fronteira do pai.
+ * @description Mesma allowlist Bash do Claude Code, mais o hash estrito dos dois artefatos
+ * canônicos da feature ativa. O Pi não tem prompt de permissão nativo compatível, por isso
+ * aplica essas permissões explicitamente apenas nesta fronteira do pai.
  */
-function isParentVerificationCommand(command) {
-  return typeof command === "string" && CLAUDE_CODE_BASH_ALLOWLIST.some((pattern) => claudeBashPatternMatches(pattern, command))
+function isCanonicalPlanDigestCommand(command, gateState) {
+  if (!isActiveDeliveryCeremony(gateState) || !isSafeFeatureId(gateState?.feature_id)) return false
+  const root = `.pi/harness/plans/${gateState.feature_id}`
+  const spec = `${root}/spec.md`
+  const plan = `${root}/execution-plan.json`
+  return command === `sha256sum ${spec}` ||
+    command === `sha256sum ${plan}` ||
+    command === `sha256sum ${spec} ${plan}`
+}
+
+function isParentVerificationCommand(command, gateState) {
+  return typeof command === "string" && (
+    isCanonicalPlanDigestCommand(command, gateState) ||
+    CLAUDE_CODE_BASH_ALLOWLIST.some((pattern) => claudeBashPatternMatches(pattern, command))
+  )
 }
 
 /**
@@ -103,7 +118,7 @@ export function decidePiParentOrchestratorPolicy(call = {}, options = {}) {
   if (options?.isChild === true || (options?.isHeadless !== true && !isActiveDeliveryCeremony(options?.gateState))) return ALLOW
   const toolName = call?.toolName
   if (isPiWriteTool(toolName)) return { block: true, reason: PARENT_ORCHESTRATOR_REASON }
-  if (isPiBashTool(toolName) && !isParentVerificationCommand(call?.input?.command)) {
+  if (isPiBashTool(toolName) && !isParentVerificationCommand(call?.input?.command, options?.gateState)) {
     return { block: true, reason: PARENT_ORCHESTRATOR_REASON }
   }
   return ALLOW

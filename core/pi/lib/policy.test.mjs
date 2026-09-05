@@ -186,6 +186,63 @@ test('em cerimônia LIGHT/FULL o pai aplica a mesma allowlist Bash do Claude Cod
   )
 })
 
+test('pai calcula hash somente dos artefatos canônicos de plano sem aceitar injeção', () => {
+  const gateState = { classified: true, mode: 'FULL', feature_id: 'normalizador-dispatch-e-estados' }
+  const fullParent = { gateState, isChild: false }
+
+  for (const command of [
+    'sha256sum .pi/harness/plans/normalizador-dispatch-e-estados/spec.md',
+    'sha256sum .pi/harness/plans/normalizador-dispatch-e-estados/execution-plan.json',
+    'sha256sum .pi/harness/plans/normalizador-dispatch-e-estados/spec.md .pi/harness/plans/normalizador-dispatch-e-estados/execution-plan.json',
+  ]) {
+    assert.deepEqual(
+      decidePiPolicy({ toolName: 'bash', input: { command } }, fullParent),
+      { block: false },
+      command,
+    )
+    assert.deepEqual(
+      decidePiPolicy(
+        { toolName: 'bash', input: { command } },
+        { gateState: { ...gateState, mode: 'LIGHT' }, isChild: false },
+      ),
+      { block: false },
+      command,
+    )
+  }
+
+  for (const command of [
+    'sha256sum .env',
+    'sha256sum package.json',
+    'sha256sum .pi/harness/plans/outra-feature/spec.md',
+    'sha256sum .pi/harness/plans/../runtime/settings.json',
+    'sha256sum .pi/harness/plans/normalizador-dispatch-e-estados/execution-plan.json .pi/harness/plans/normalizador-dispatch-e-estados/spec.md',
+    'sha256sum .pi/harness/plans/normalizador-dispatch-e-estados/spec.md .pi/harness/plans/normalizador-dispatch-e-estados/spec.md',
+    'sha256sum .pi/harness/plans/normalizador-dispatch-e-estados/spec.md .pi/harness/plans/normalizador-dispatch-e-estados/execution-plan.json package.json',
+    'sha256sum --binary .pi/harness/plans/normalizador-dispatch-e-estados/spec.md',
+    'sha256sum /repo/.pi/harness/plans/normalizador-dispatch-e-estados/spec.md',
+    'sha256sum .pi/harness/plans/normalizador-dispatch-e-estados/*.md',
+    'sha256sum .pi/harness/plans/x/spec.md; touch src/app.ts',
+    'sha256sum .pi/harness/plans/x/spec.md && cat .env',
+    'sha256sum .pi/harness/plans/normalizador-dispatch-e-estados/spec.md | cat',
+    'sha256sum .pi/harness/plans/normalizador-dispatch-e-estados/spec.md > digest.txt',
+    'sha256sum .pi/harness/plans/normalizador-dispatch-e-estados/spec.md\ncat .env',
+    'sha256sum $(printf .pi/harness/plans/x/spec.md)',
+    'sha256sum $PLAN_PATH',
+  ]) {
+    const out = decidePiPolicy({ toolName: 'bash', input: { command } }, fullParent)
+    assert.equal(out.block, true, command)
+    assert.match(out.reason, /parent orchestrator/i, command)
+  }
+
+  assert.equal(
+    decidePiPolicy(
+      { toolName: 'bash', input: { command: 'sha256sum .pi/harness/plans/normalizador-dispatch-e-estados/spec.md' } },
+      { gateState: { feature_id: 'normalizador-dispatch-e-estados' }, isChild: false, isHeadless: true },
+    ).block,
+    true,
+  )
+})
+
 test('plano canônico é delegado ao plan-write-gate, não bloqueado pela policy genérica', () => {
   for (const toolName of ['write', 'edit']) {
     assert.deepEqual(
