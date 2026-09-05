@@ -21,20 +21,24 @@ only when pinned requirements conflict, the test cannot execute through an avail
 boundary, or it requires a dependency change outside the task's approved scope. Do not
 alternate between incompatible fixtures.
 
-Apply all authorized corrections from the consolidated review in one pass. Re-read the
-whole task matrix before returning, including assertions not mentioned in the last finding.
-Do not add implementation-specific constraints unless the approved observable requires
-them. Do not edit production to manufacture RED or GREEN. In the result, include the mapping
-from pinned observables to test locations and the actual command, exit status, collection
-count and relevant failure output. The parent independently checks the target run before
-requesting compliance.
+Apply all authorized corrections from the consolidated review in one pass. The parent gives
+you the previous ledger, its failed rows and every previously passing row affected by the
+approved correction. Preserve every other pinned assertion; do not silently weaken, delete
+or rebaseline it. Do not add implementation-specific constraints unless the approved observable
+requires them. Do not edit production to manufacture RED or GREEN. In the result, include the
+mapping from corrected and affected observables to test locations and the actual command, exit
+status, collection count and relevant failure output. The parent independently checks the target
+run before requesting compliance.
 
 Your required evidence is an executable expected-red run: use the project's targeted test
 command, confirm the runner starts and collects the locked test, and confirm it fails because
 the behavior is not implemented yet. A missing dependency or runner, broken import, timeout,
 zero collected tests, or unrelated infrastructure error is BLOCKED—not a valid red test. Report
 the exact command and classification so the parent can ask compliance to assess fidelity; never
-claim the task is ready for `fidelity-pass` when the test did not execute.
+claim the task is ready for `fidelity-pass` when the test did not execute. When blocked or needing
+context, identify the exact locked assertion and literal evidence, then classify the recovery as
+`TRANSCRIPTION`, `TEST_INFRA`, or `PLAN_CONTRADICTION`. This is recovery evidence for the parent,
+not a terminal autonomous-delivery outcome.
 
 Exception for an explicitly briefed inline reconciliation: when the operator changed
 a frozen test after the behavior was already implemented, do not require healthy

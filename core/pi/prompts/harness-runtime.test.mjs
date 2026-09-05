@@ -126,6 +126,49 @@ test("o prompt descreve os rails que existem e não promete sandbox", () => {
   assert.match(prompt, /HARNESS_FINAL_REVIEW.*compliance.*adversary.*serialmente/is);
 });
 
+test("o plano aprovado alimenta o tracker tanto em LIGHT quanto em FULL", () => {
+  const prompt = readFileSync(promptPath, "utf8");
+  const tracker = readFileSync(new URL("../extensions/harness-plan-tracker.ts", import.meta.url), "utf8");
+
+  assert.match(prompt, /trabalho LIGHT ou FULL.*aprovação do plan-reviewer.*harness_plan/is);
+  assert.match(tracker, /LIGHT or FULL/i);
+  assert.match(tracker, /plan-reviewer approval for the exact current plan/i);
+});
+
+test("o pai recupera uma única vez dependência declarada com npm ci antes de bloquear a validação", () => {
+  const prompt = readFileSync(promptPath, "utf8");
+
+  assert.match(prompt, /Recuperação de dependência declarada/i);
+  assert.match(prompt, /pai — nunca uma mão/i);
+  assert.match(prompt, /`package\.json` e `package-lock\.json`/i);
+  assert.match(prompt, /`git diff --exit-code -- package\.json package-lock\.json`/i);
+  assert.match(prompt, /Execute então `npm ci`.*uma única/i);
+  assert.match(prompt, /repita exatamente uma vez.*comando de validação/i);
+  assert.match(prompt, /Não use `npm install`/i);
+  assert.match(prompt, /não abra um novo `harness-test-author` apenas para instalar/i);
+  assert.match(prompt, /marque `BLOCKED`/i);
+});
+
+test("a fidelidade reaberta revalida o ledger afetado sem transformar cada correção em nova varredura", () => {
+  const prompt = readFileSync(promptPath, "utf8");
+  const compliance = readFileSync(new URL("../runtime/agents/harness-compliance.md", import.meta.url), "utf8");
+  const testAuthor = readFileSync(testAuthorPath, "utf8");
+
+  assert.match(prompt, /primeira.*fidelidade.*matriz completa/is);
+  assert.match(prompt, /ledger da tarefa/i);
+  assert.match(prompt, /pacote consolidado/i);
+  assert.match(prompt, /`harness-test-author` fresco/i);
+  assert.match(prompt, /não repita uma varredura ampla/i);
+  assert.match(prompt, /cada linha antes aprovada.*intersecte o diff/is);
+  assert.match(prompt, /mesma assinatura de falha/i);
+  assert.match(compliance, /first task fidelity review/i);
+  assert.match(compliance, /reopened test-fidelity review/i);
+  assert.match(compliance, /prior FAIL/i);
+  assert.match(compliance, /affected by that diff/i);
+  assert.match(testAuthor, /previous ledger/i);
+  assert.match(testAuthor, /TRANSCRIPTION.*TEST_INFRA.*PLAN_CONTRADICTION/is);
+});
+
 test("o prompt exige vermelho executável antes do fidelity-pass", () => {
   const prompt = readFileSync(promptPath, "utf8");
 
