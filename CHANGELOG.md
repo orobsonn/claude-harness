@@ -5,6 +5,13 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [2.4.0](https://github.com/orobsonn/claude-harness/compare/v2.3.2...v2.4.0) (2026-09-05)
+
+
+### Features
+
+* **pi:** memória por run, harvest verificável e release após squash ([#890](https://github.com/orobsonn/claude-harness/issues/890)) ([5f8738b](https://github.com/orobsonn/claude-harness/commit/5f8738bcc92cdd3f0f744c535345aea4fd38a6c1))
+
 ## [2.3.2](https://github.com/orobsonn/claude-harness/compare/v2.3.1...v2.3.2) (2026-09-05)
 
 
