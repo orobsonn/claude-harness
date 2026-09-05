@@ -20,7 +20,7 @@ function sha(text) {
   return createHash("sha256").update(text).digest("hex");
 }
 
-function fixture({ headerCwd, statePatch = {}, spec = "# Approved\n" } = {}) {
+function fixture({ headerCwd, mode = "FULL", statePatch = {}, spec = "# Approved\n" } = {}) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "pi-parent-resume-")));
   const sessions = path.join(root, ".pi", "harness", "sessions");
   const state = path.join(root, ".pi", "harness", "state", SESSION, "gate-state.json");
@@ -32,13 +32,13 @@ function fixture({ headerCwd, statePatch = {}, spec = "# Approved\n" } = {}) {
   fs.writeFileSync(specPath, spec);
   fs.writeFileSync(path.join(sessions, `2026-01-01T00-00-00-000Z_${SESSION}.jsonl`), `${JSON.stringify({ type: "session", version: 3, id: SESSION, cwd: headerCwd ?? root })}\n`);
   fs.writeFileSync(state, JSON.stringify({
-    session_id: SESSION, feature_id: FEATURE, mode: "FULL", classified: true,
+    session_id: SESSION, feature_id: FEATURE, mode, classified: true,
     brainstormed: true, adversary_fired: true, spec_status: "adversary-reviewed",
     spec_sha256: sha(spec), adversary_spec_sha256: sha(spec), reviewed_spec_sha256: sha(spec),
     ...statePatch,
   }));
   fs.writeFileSync(plan, JSON.stringify({
-    feature_id: FEATURE, kind: "full", mode: "full", model_strategy: MODELS,
+    feature_id: FEATURE, kind: "full", mode: mode.toLowerCase(), model_strategy: MODELS,
     tasks: ["one", "two"].map((id) => ({
       id: `task-${id}`, severity: "low", complexity: "low", scope_paths: ["src/index.ts"],
       criterion_refs: ["#ac-1"], locked_tests: [], no_tests: true, depends_on: [],
@@ -59,6 +59,18 @@ test("retoma somente a sessão pai local cujo plano e selo ainda conferem", () =
     assert.equal(recovered.pendingTaskIds, undefined, "recovery must not choose the next task");
     assert.match(recovered.context, /HARNESS_PARENT_RECOVERY/);
     assert.deepEqual(fs.readFileSync(f.state), stateBefore, "preflight nunca muda state");
+  } finally { f.cleanup(); }
+});
+
+test("retoma uma cerimônia LIGHT preservando a identidade e o plano aprovados", () => {
+  const f = fixture({ mode: "LIGHT" });
+  try {
+    const recovered = recoverPiParentSession(f.root, SESSION);
+    assert.equal(recovered.ok, true);
+    const envelope = JSON.parse(recovered.context.split("\n")[1]);
+    assert.equal(envelope.session_id, SESSION);
+    assert.equal(envelope.feature_id, FEATURE);
+    assert.equal(envelope.canonical_plan_sha256, sha(fs.readFileSync(f.plan, "utf8")));
   } finally { f.cleanup(); }
 });
 

@@ -187,6 +187,22 @@ test("missing exact resume exits without building or spawning a replacement sess
   ]);
 });
 
+test("lock contention exits cleanly without trying to release an unacquired lock", () => {
+  const events = [];
+  const result = runPiHarnessCli(["--harness-resume", "active-session"], {
+    cwd: "/worktree",
+    env: {},
+    packageRoot: "/package",
+    runtimePrompt: "runtime",
+    acquireParentLockFn: () => ({ ok: false, reason: "parent orchestrator already active for worktree" }),
+    errorSink: (message) => events.push(message),
+  });
+  assert.equal(result.exitCode, 2);
+  assert.deepEqual(events, [
+    "Pi harness: cannot resume ceremony: parent orchestrator already active for worktree",
+  ]);
+});
+
 test("fresh launcher releases the worktree lock after setup failure", () => {
   const events = [];
   const result = runPiHarnessCli(["-p", "deliver"], {

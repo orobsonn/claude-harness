@@ -15,7 +15,7 @@ import { compareAndDeleteLock } from "./pi-gate-state.mjs";
 import { piExecutionPlanPath, piGateStatePath, piSpecPath, piStateRoot } from "./pi-paths.mjs";
 
 const MAX_FILE_BYTES = 1024 * 1024;
-const RECOVERABLE_MODE = "FULL";
+const RECOVERABLE_MODES = new Set(["LIGHT", "FULL"]);
 // A retomada não pode aceitar a estratégia declarada pelo próprio plano: ela
 // precisa conferir contra a rota canônica que este runtime Pi materializa.
 // Assim, trocar o modelo no JSON salvo não converte um plano inválido em válido.
@@ -168,7 +168,8 @@ export function recoverPiParentSession(projectRoot, sessionId) {
   const parsedState = parseJson(stateFile.text, "resume gate-state invalid");
   if (!parsedState.ok) return parsedState;
   const state = parsedState.value;
-  if (state.session_id !== sessionId || !isSafeFeatureId(state.feature_id) || state.mode !== RECOVERABLE_MODE) {
+  const stateMode = typeof state.mode === "string" ? state.mode.toUpperCase() : "";
+  if (state.session_id !== sessionId || !isSafeFeatureId(state.feature_id) || !RECOVERABLE_MODES.has(stateMode)) {
     return { ok: false, reason: "resume gate-state identity mismatch" };
   }
   if (state.brainstormed !== true || state.adversary_fired !== true || state.spec_status !== "adversary-reviewed") {
@@ -197,7 +198,7 @@ export function recoverPiParentSession(projectRoot, sessionId) {
     expect: "full",
     expectedModelStrategy: LEGACY_PI_MODEL_STRATEGY,
   });
-  if ((!currentPlan.ok && !legacyPlan?.ok) || parsedPlan.value.feature_id !== state.feature_id || String(parsedPlan.value.mode).toUpperCase() !== RECOVERABLE_MODE) {
+  if ((!currentPlan.ok && !legacyPlan?.ok) || parsedPlan.value.feature_id !== state.feature_id || String(parsedPlan.value.mode).toUpperCase() !== stateMode) {
     return { ok: false, reason: "resume plan invalid" };
   }
   const finished = asStringArray(state.hand_finished, "resume hand state invalid");
