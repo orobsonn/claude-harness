@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
 import harnessPolicy from "./harness-policy.ts";
+import harnessEntryGate from "./harness-entry-gate.ts";
 
 const SESSION = "ses-policy-parent";
 
@@ -52,6 +54,61 @@ test("adaptador consulta o gate-state e bloqueia escrita nativa do pai em FULL, 
     }
     assert.equal(onToolCall({ toolName: "bash", input: { command: "npm test" } }, parentCtx(f.root)), undefined);
     assert.equal(onToolCall({ toolName: "bash", input: { command: "git commit -am delegated-hand" } }, parentCtx(f.root)), undefined);
+  } finally {
+    f.close();
+  }
+});
+
+test("policy e entry-gate permitem ao pai criar a série real de commits seletivos antes da revisão final", async () => {
+  const f = fixture();
+  try {
+    execFileSync("git", ["init", "-q", "-b", "feat/task-commits"], { cwd: f.root });
+    execFileSync("git", ["config", "user.name", "Pi Test"], { cwd: f.root });
+    execFileSync("git", ["config", "user.email", "pi@example.test"], { cwd: f.root });
+
+    const listeners = [];
+    const api = {
+      on: (name, fn) => { if (name === "tool_call") listeners.push(fn); },
+      events: { on: () => {} },
+      registerTool: () => {},
+    };
+    harnessPolicy(api);
+    harnessEntryGate(api);
+    const runHooks = async (command) => {
+      for (const listener of listeners) {
+        const decision = await listener(
+          { toolName: "bash", toolCallId: `call-${listeners.indexOf(listener)}`, input: { command } },
+          parentCtx(f.root),
+        );
+        assert.notEqual(decision?.block, true, `${command}: ${decision?.reason ?? "blocked"}`);
+      }
+    };
+
+    mkdirSync(join(f.root, "tests"), { recursive: true });
+    writeFileSync(join(f.root, "tests", "app.test.mjs"), "// locked test\n");
+    await runHooks("git add -- tests/app.test.mjs");
+    execFileSync("git", ["add", "--", "tests/app.test.mjs"], { cwd: f.root });
+    await runHooks('git commit -m "test(app): freeze locked test for task-1"');
+    execFileSync("git", ["commit", "-q", "-m", "test(app): freeze locked test for task-1"], { cwd: f.root });
+
+    mkdirSync(join(f.root, "src"), { recursive: true });
+    writeFileSync(join(f.root, "src", "app.ts"), "export const ready = true;\n");
+    await runHooks("git add -- src/app.ts");
+    execFileSync("git", ["add", "--", "src/app.ts"], { cwd: f.root });
+    await runHooks('git commit -m "feat(app): implement task-1"');
+    execFileSync("git", ["commit", "-q", "-m", "feat(app): implement task-1"], { cwd: f.root });
+
+    const subjects = execFileSync("git", ["log", "--format=%s", "--reverse"], { cwd: f.root, encoding: "utf8" }).trim().split("\n");
+    assert.deepEqual(subjects, [
+      "test(app): freeze locked test for task-1",
+      "feat(app): implement task-1",
+    ]);
+    const residue = execFileSync("git", ["status", "--porcelain", "--untracked-files=all"], {
+      cwd: f.root,
+      encoding: "utf8",
+    }).trim().split("\n").filter(Boolean);
+    assert.ok(residue.length > 0, "the runtime state fixture remains untracked");
+    assert.ok(residue.every((line) => line.startsWith("?? .pi/harness/")), residue.join("\n"));
   } finally {
     f.close();
   }

@@ -32,7 +32,7 @@ const MUTATION_VERB = /\b(?:rm|mv|cp|install|touch|mkdir|chmod|chown|truncate|te
 
 const ALLOW = { block: false }
 const PARENT_ORCHESTRATOR_REASON =
-  "Parent orchestrator may only observe, verify, and dispatch during an active LIGHT/FULL ceremony; delegate product changes and commits to a designated writing hand."
+  "Parent orchestrator uses the Claude Code Bash allowlist for verification and selective commits during an active LIGHT/FULL ceremony; delegate product file mutations to a designated writing hand."
 
 // Espelho literal de core/claude-code/settings.json → permissions.allow → Bash(...).
 // Não mantemos uma segunda interpretação menor no Pi: se Claude Code aceita uma chamada,
