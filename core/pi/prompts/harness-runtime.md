@@ -118,8 +118,12 @@ Código, scripts, dependências, árvore suja ou prova ambígua mantêm os gates
 identidade do PR continuam obrigatórios. Para finalizar a release, atualize `main` e
 confira o PR mergeado, o HEAD em `origin/main` e CI verde. Só então use `git tag vX.Y.Z`,
 `git push origin vX.Y.Z` e `gh release create vX.Y.Z --target <HEAD-verificado>
---title vX.Y.Z --notes-file <caminho-sem-espaços> --verify-tag --latest`, em chamadas
-separadas. O host confere versão, tag e commit exatos. Não reabra a implementação funcional.
+--title vX.Y.Z --notes-file <tmpdir>/release-notes-X.Y.Z.md --verify-tag --latest`, em chamadas
+separadas. Extraia para esse arquivo regular o bloco exato de `CHANGELOG.md`, incluindo
+o título `## [X.Y.Z]` e todas as quebras de linha até antes da próxima versão.
+Use o diretório temporário do sistema para manter o checkout limpo. O host confere
+conteúdo das notas, avanço de versão, tag e commit exatos e nega a exceção manual em
+projetos release-please. Não reabra a implementação funcional.
 
 Antes de marcar `final-review`, colete compliance e adversary sobre esse diff inteiro já commitado. Reutilize as revisões finais existentes quando seus recibos host-owned ainda forem válidos para a sessão, feature, escopo e HEAD atuais; um pedido posterior de merge/release não reinicia sozinho os olhos finais. HEAD diferente, mudança real de conteúdo ou evidência insuficiente exige reconciliar e revisar o que ficou inválido; não substitua hashes nem aceite a alegação de que é o mesmo conteúdo. Nos dois despachos, a primeira linha é exatamente `[HARNESS_FINAL_REVIEW]`; faça compliance e adversary **serialmente**, nunca em paralelo. O marcador só fecha se os dois olhos tiverem recibos host-owned saudáveis no HEAD atual e se **cada** tarefa do plano canônico tiver hand-finished, capture-verified e um hand-record atual, sem violação de escopo/teste congelado e com SHA ancestral ao HEAD. Falta de evidência é bloqueio, não conclusão parcial.
 
@@ -145,6 +149,10 @@ Ao retomar após um PR draft, explique a finalidade de cada despacho: merge do P
 
 Antes da publicação, confira se existe **freeze-commit órfão** (orphan freeze-commit), sem impl-commit correspondente. Como no Claude Code, exponha o risco explícito no PR e ao operador; nunca apresente a tarefa como concluída nem ignore CI/checks ou use bypass para mergear teste vermelho.
 
+No merge funcional, preserve o checkout revisado até finalizar a memória e use merge
+remoto sem `--delete-branch`. Se o CLI já trocou o HEAD, preserve
+o diário, restaure o checkout do SHA revisado somente com Git limpo e confirme o
+efeito remoto antes de concluir o despacho; não repita revisões ainda válidas.
 Na conclusão entregue, depois da operação autorizada do shipper, chame `harness_memory`
 com `action="finalize"`. A ferramenta exige recibo host-owned do shipper, revisões finais
 no HEAD atual e git limpo. Na continuação estritamente documental da release, a prova

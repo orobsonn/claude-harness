@@ -2,7 +2,7 @@
 
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -41,6 +41,7 @@ function mergeReleaseFixture(f, { number = 42, ci = [{ conclusion: "SUCCESS" }] 
       state: "MERGED",
       mergedAt: "2026-09-05T12:00:00Z",
       mergeCommit: { oid: headSha },
+      headRefOid: f.headSha,
       headRefName: "chore/release-1.2.4",
       baseRefName: "main",
       statusCheckRollup: ci,
@@ -95,7 +96,13 @@ function writeJson(root, name, value) {
   writeFileSync(join(root, name), `${JSON.stringify(value, null, 2)}\n`);
 }
 
-function releaseFixture({ withLock = true, baseChangelog = BASE_CHANGELOG, changelog = null } = {}) {
+function releaseFixture({
+  withLock = true,
+  baseChangelog = BASE_CHANGELOG,
+  changelog = null,
+  managedMarker = null,
+  managedMarkerContent = "{}\n",
+} = {}) {
   const root = mkdtempSync(join(tmpdir(), "pi-release-only-"));
   git(root, ["init", "-q", "-b", "main"]);
   git(root, ["config", "user.name", "Release Test"]);
@@ -103,6 +110,11 @@ function releaseFixture({ withLock = true, baseChangelog = BASE_CHANGELOG, chang
   writeJson(root, "package.json", BASE_PACKAGE);
   if (withLock) writeJson(root, "package-lock.json", BASE_LOCK);
   writeFileSync(join(root, "CHANGELOG.md"), baseChangelog);
+  if (managedMarker) {
+    const markerPath = join(root, managedMarker);
+    mkdirSync(join(markerPath, ".."), { recursive: true });
+    writeFileSync(markerPath, managedMarkerContent);
+  }
   git(root, ["add", "."]);
   git(root, ["commit", "-q", "-m", "feat: prior milestone"]);
   const baseSha = git(root, ["rev-parse", "HEAD"]);
@@ -176,11 +188,19 @@ test("classifica o commit release-only já mergeado em main pelo PR e CI exatos"
       phase: "post-merge",
       branch: "main",
       releaseBranch: "chore/release-1.2.4",
+      releaseHeadSha: f.headSha,
       version: "1.2.4",
       tag: "v1.2.4",
       headSha: merged.headSha,
       baseSha: f.baseSha,
       baseBranch: "main",
+      releaseNotes: `## [1.2.4] - 2026-09-05
+
+### Fixed
+
+- New fix.
+
+`,
       prNumber: 42,
     });
   } finally {
@@ -207,6 +227,57 @@ test("resolver falha localmente sem consultar o host para commit comum em main",
   }
 });
 
+test("nega exceção manual quando o repositório é gerenciado por release-please", async () => {
+  const { classifyPiReleaseOnly, classifyPiPostMergeRelease } = await subject();
+  for (const [marker, content] of [
+    ["release-please-config.json", "{}\n"],
+    [".release-please-manifest.json", "{}\n"],
+    [".github/workflows/release-please.yml", "name: release\n"],
+    [".github/workflows/publish.yml", "steps:\n  - uses: googleapis/release-please-action@v4\n"],
+  ]) {
+    const pre = releaseFixture({ managedMarker: marker, managedMarkerContent: content });
+    try {
+      assert.equal(classifyPiReleaseOnly(pre.root).ok, false, marker);
+    } finally {
+      pre.close();
+    }
+
+    const post = releaseFixture({ managedMarker: marker, managedMarkerContent: content });
+    try {
+      const merged = mergeReleaseFixture(post);
+      assert.equal(classifyPiPostMergeRelease(post.root, merged.evidence).ok, false, marker);
+    } finally {
+      post.close();
+    }
+  }
+});
+
+test("nega downgrade mesmo quando pacote, lock, branch e changelog concordam", async () => {
+  const f = releaseFixture();
+  try {
+    git(f.root, ["branch", "-m", "chore/release-1.2.2"]);
+    writeJson(f.root, "package.json", { ...BASE_PACKAGE, version: "1.2.2" });
+    writeJson(f.root, "package-lock.json", {
+      ...BASE_LOCK,
+      version: "1.2.2",
+      packages: {
+        ...BASE_LOCK.packages,
+        "": { ...BASE_LOCK.packages[""], version: "1.2.2" },
+      },
+    });
+    writeFileSync(
+      join(f.root, "CHANGELOG.md"),
+      BASE_CHANGELOG.replace("## [1.2.3]", "## [1.2.2]\n\n- Downgrade.\n\n## [1.2.3]"),
+    );
+    git(f.root, ["add", "."]);
+    git(f.root, ["commit", "-q", "--amend", "-m", "chore: release v1.2.2"]);
+    const { classifyPiReleaseOnly } = await subject();
+    assert.equal(classifyPiReleaseOnly(f.root).ok, false);
+  } finally {
+    f.close();
+  }
+});
+
 test("pós-merge nega produto misturado, PR divergente e CI ausente ou vermelho", async () => {
   const { classifyPiPostMergeRelease } = await subject();
 
@@ -227,6 +298,11 @@ test("pós-merge nega produto misturado, PR divergente e CI ausente ou vermelho"
   for (const mutate of [
     (evidence) => ({ ...evidence, number: 99 }),
     (evidence) => ({ ...evidence, headRefName: "chore/release-1.2.5" }),
+    (evidence) => ({ ...evidence, headRefOid: "abcdef0" }),
+    (evidence) => {
+      const { headRefOid: _headRefOid, ...withoutHead } = evidence;
+      return withoutHead;
+    },
     (evidence) => ({ ...evidence, mergeCommit: { oid: "f".repeat(40) } }),
     (evidence) => ({ ...evidence, statusCheckRollup: [] }),
     (evidence) => ({ ...evidence, statusCheckRollup: [{ conclusion: "FAILURE" }] }),

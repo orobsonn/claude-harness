@@ -29,8 +29,18 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import {
+  closeSync,
+  constants as fsConstants,
+  existsSync,
+  fstatSync,
+  lstatSync,
+  openSync,
+  readFileSync,
+  readSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { basename, join, resolve } from "node:path";
 
 import { formatFeatureTaskEntry, matchesAbsolution } from "../../shared/lib/absolution.mjs";
 import { checkFrozen, checkScope } from "../../shared/lib/capture-oracle.mjs";
@@ -279,6 +289,54 @@ function exactPostMergeTagPush(command, proof, projectRoot) {
   );
 }
 
+const MAX_RELEASE_NOTES_BYTES = 128 * 1024;
+
+export function piReleaseNotesFileMatches(projectRoot, proof, notesFile, deps = {}) {
+  if (typeof proof?.releaseNotes !== "string" || proof.releaseNotes.length === 0) return false;
+  const expected = Buffer.from(proof.releaseNotes, "utf8");
+  if (expected.length > MAX_RELEASE_NOTES_BYTES) return false;
+  if (typeof notesFile !== "string") return false;
+  const expectedName = `release-notes-${proof.version}.md`;
+  if (basename(notesFile) !== expectedName) return false;
+  const candidate = resolve(projectRoot, notesFile);
+  const allowed = new Set([
+    resolve(projectRoot, expectedName),
+    resolve(tmpdir(), expectedName),
+  ]);
+  if (!allowed.has(candidate)) return false;
+  const lstatFn = typeof deps.lstatFn === "function" ? deps.lstatFn : lstatSync;
+  const openFn = typeof deps.openFn === "function" ? deps.openFn : openSync;
+  const fstatFn = typeof deps.fstatFn === "function" ? deps.fstatFn : fstatSync;
+  const readFn = typeof deps.readFn === "function" ? deps.readFn : readSync;
+  const closeFn = typeof deps.closeFn === "function" ? deps.closeFn : closeSync;
+  let fd = null;
+  try {
+    const stat = lstatFn(candidate);
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.size !== expected.length) return false;
+    fd = openFn(candidate, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+    const opened = fstatFn(fd);
+    if (!opened.isFile() || opened.size !== expected.length) return false;
+    const buffer = Buffer.alloc(expected.length + 1);
+    let offset = 0;
+    while (offset < buffer.length) {
+      const count = readFn(fd, buffer, offset, buffer.length - offset, offset);
+      if (!Number.isSafeInteger(count) || count <= 0) break;
+      offset += count;
+    }
+    return offset === expected.length && buffer.subarray(0, offset).equals(expected);
+  } catch {
+    return false;
+  } finally {
+    if (fd !== null) {
+      try {
+        closeFn(fd);
+      } catch {
+        // A falha ao fechar não transforma conteúdo já rejeitado em prova válida.
+      }
+    }
+  }
+}
+
 function exactPostMergeReleaseCreate(command, proof, projectRoot) {
   if (
     proof?.ok !== true ||
@@ -315,8 +373,7 @@ function exactPostMergeReleaseCreate(command, proof, projectRoot) {
   return (
     values.get("--target") === proof.headSha &&
     values.get("--title") === proof.tag &&
-    typeof values.get("--notes-file") === "string" &&
-    /^[A-Za-z0-9_./-]+$/.test(values.get("--notes-file")) &&
+    piReleaseNotesFileMatches(projectRoot, proof, values.get("--notes-file")) &&
     booleans.has("--latest") &&
     booleans.has("--verify-tag")
   );

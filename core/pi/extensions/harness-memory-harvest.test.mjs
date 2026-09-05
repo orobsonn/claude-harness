@@ -296,6 +296,45 @@ function seedFinalReviewState(root, reviewedHead = head(root)) {
   );
 }
 
+test("tracked vendored tooling is never excluded from the clean-tree requirement", async (t) => {
+  for (const mode of ["unstaged", "staged", "staged-then-restored"]) {
+    await t.test(mode, async (st) => {
+      const root = fixture(st);
+      const file = join(root, ".pi", "harness", "lib", "gate.mjs");
+      mkdirSync(join(root, ".pi", "harness", "lib"), { recursive: true });
+      writeFileSync(file, "export const allow = false;\n");
+      execFileSync("git", ["add", "-f", ".pi/harness/lib/gate.mjs"], { cwd: root });
+      commit(root, "fixture vendored tooling");
+      const api = register();
+      await api.execute({ action: "update", content: "preserve until verified" }, ctx(root));
+      emitHarvest(api, root);
+      seedFinalReviewState(root);
+      emitShipper(api, root);
+      writeFileSync(file, "export const allow = true;\n");
+      if (mode !== "unstaged") execFileSync("git", ["add", "-f", ".pi/harness/lib/gate.mjs"], { cwd: root });
+      if (mode === "staged-then-restored") writeFileSync(file, "export const allow = false;\n");
+      await assertBlocked(await api.handlers.get("tool_call")({ toolName: "subagent", input: harvestArgs() }, ctx(root)));
+      await assertBlocked(await api.handlers.get("tool_call")(finalReviewEvent(), ctx(root)));
+      assert.equal((await api.execute({ action: "finalize" }, ctx(root))).details.ok, false);
+      assert.equal(existsSync(join(root, ".pi", "harness", "state", SESSION, "shared_context.md")), true);
+    });
+  }
+});
+
+test("only generated Pi directories are exempt; new vendored tooling blocks harvest", async (t) => {
+  const root = fixture(t);
+  writeFileSync(join(root, ".gitignore"), ".pi/harness/state/\n.pi/harness/plans/\n.pi/harness/runtime/\n.pi/harness/sessions/\nnode_modules/\n");
+  execFileSync("git", ["add", ".gitignore"], { cwd: root });
+  commit(root, "fixture precise vendor ignores");
+  const api = register();
+  await api.execute({ action: "update", content: "generated context" }, ctx(root));
+  const event = { toolName: "subagent", input: harvestArgs() };
+  assert.equal(await api.handlers.get("tool_call")(event, ctx(root)), undefined);
+  mkdirSync(join(root, ".pi", "harness", "extensions"), { recursive: true });
+  writeFileSync(join(root, ".pi", "harness", "extensions", "new.ts"), "export default () => {};\n");
+  await assertBlocked(await api.handlers.get("tool_call")(event, ctx(root)));
+});
+
 test("harness-memory harvest: read expõe documentos duráveis com hash e o recibo host-owned da sessão", async (t) => {
   const root = fixture(t);
   const api = register();

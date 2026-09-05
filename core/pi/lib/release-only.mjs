@@ -6,6 +6,8 @@
  */
 
 import { execFileSync } from "node:child_process";
+import { lstatSync, readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 
 import { decideMergeChecks } from "../../shared/lib/merge-check-gate.mjs";
@@ -14,6 +16,52 @@ const RELEASE_BRANCH = /^chore\/release-(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)
 const RELEASE_SUBJECT = /^chore: release v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?: \(#([1-9]\d*)\))?$/;
 const TASK = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
 const GIT_SHA = /^[0-9a-f]{7,64}$/;
+const FULL_GIT_SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+const SIMPLE_VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
+
+function pathEntryExists(path) {
+  try {
+    lstatSync(path);
+    return true;
+  } catch (error) {
+    return error?.code !== "ENOENT";
+  }
+}
+
+function isReleasePleaseManaged(projectRoot) {
+  if (
+    pathEntryExists(join(projectRoot, "release-please-config.json")) ||
+    pathEntryExists(join(projectRoot, ".release-please-manifest.json"))
+  ) {
+    return true;
+  }
+  const workflows = join(projectRoot, ".github", "workflows");
+  if (!pathEntryExists(workflows)) return false;
+  try {
+    return readdirSync(workflows, { withFileTypes: true }).some((entry) => {
+      if (/release[-_]?please/i.test(entry.name)) return true;
+      if (!entry.isFile() || !/\.ya?ml$/i.test(entry.name)) return false;
+      return /(?:googleapis\/release-please-action|\brelease-please-action\b)/i.test(
+        readFileSync(join(workflows, entry.name), "utf8"),
+      );
+    });
+  } catch {
+    return true;
+  }
+}
+
+function isSimpleVersionIncrease(before, after) {
+  const left = typeof before === "string" ? SIMPLE_VERSION.exec(before) : null;
+  const right = typeof after === "string" ? SIMPLE_VERSION.exec(after) : null;
+  if (!left || !right) return false;
+  for (let index = 1; index <= 3; index += 1) {
+    const previous = BigInt(left[index]);
+    const next = BigInt(right[index]);
+    if (next > previous) return true;
+    if (next < previous) return false;
+  }
+  return false;
+}
 
 function git(root, args) {
   return execFileSync("git", args, {
@@ -92,23 +140,23 @@ function emptyUnreleasedBody(body) {
     .trim() === "";
 }
 
-function changelogAddsOnlyVersion(beforeText, afterText, version) {
+function changelogReleaseBlock(beforeText, afterText, version) {
   const before = parseChangelog(beforeText);
   const after = parseChangelog(afterText);
-  if (!before || !after || before.preamble !== after.preamble) return false;
-  if (before.sections.some((section) => section.label === version)) return false;
+  if (!before || !after || before.preamble !== after.preamble) return null;
+  if (before.sections.some((section) => section.label === version)) return null;
   const targets = after.sections.filter((section) => section.label === version);
-  if (targets.length !== 1 || targets[0].body.trim() === "") return false;
+  if (targets.length !== 1 || targets[0].body.trim() === "") return null;
   const targetIndex = after.sections.findIndex((section) => section.label === version);
   if (targetIndex !== 0 && !(targetIndex === 1 && after.sections[0]?.label === "Unreleased")) {
-    return false;
+    return null;
   }
 
   const withoutTarget = after.sections
     .filter((section) => section.label !== version)
     .map((section) => section.raw);
   if (isDeepStrictEqual(withoutTarget, before.sections.map((section) => section.raw))) {
-    return true;
+    return targets[0].raw;
   }
 
   if (
@@ -118,12 +166,12 @@ function changelogAddsOnlyVersion(beforeText, afterText, version) {
     !emptyUnreleasedBody(after.sections[0].body) ||
     after.sections[1].body !== before.sections[0].body
   ) {
-    return false;
+    return null;
   }
   return isDeepStrictEqual(
     after.sections.slice(2).map((section) => section.raw),
     before.sections.slice(1).map((section) => section.raw),
-  );
+  ) ? targets[0].raw : null;
 }
 
 function verifyReleaseFiles(projectRoot, baseSha, headSha, version) {
@@ -145,7 +193,7 @@ function verifyReleaseFiles(projectRoot, baseSha, headSha, version) {
   const beforePackage = JSON.parse(gitBlob(projectRoot, baseSha, "package.json"));
   const afterPackage = JSON.parse(gitBlob(projectRoot, headSha, "package.json"));
   if (
-    beforePackage.version === version ||
+    !isSimpleVersionIncrease(beforePackage.version, version) ||
     afterPackage.version !== version ||
     !sameExceptVersion(beforePackage, afterPackage)
   ) {
@@ -171,16 +219,15 @@ function verifyReleaseFiles(projectRoot, baseSha, headSha, version) {
     }
   }
 
-  if (
-    !changelogAddsOnlyVersion(
-      gitBlob(projectRoot, baseSha, "CHANGELOG.md"),
-      gitBlob(projectRoot, headSha, "CHANGELOG.md"),
-      version,
-    )
-  ) {
+  const releaseNotes = changelogReleaseBlock(
+    gitBlob(projectRoot, baseSha, "CHANGELOG.md"),
+    gitBlob(projectRoot, headSha, "CHANGELOG.md"),
+    version,
+  );
+  if (releaseNotes === null) {
     return { ok: false, reason: "CHANGELOG.md is not a preserving insertion for the release version" };
   }
-  return { ok: true };
+  return { ok: true, releaseNotes };
 }
 
 /**
@@ -191,6 +238,9 @@ export function classifyPiReleaseOnly(projectRoot) {
   try {
     if (typeof projectRoot !== "string" || projectRoot.length === 0) {
       return { ok: false, reason: "project root missing" };
+    }
+    if (isReleasePleaseManaged(projectRoot)) {
+      return { ok: false, reason: "manual release exception is disabled for release-please repositories" };
     }
     if (git(projectRoot, ["status", "--porcelain=v1", "--untracked-files=all"]) !== "") {
       return { ok: false, reason: "release worktree is not clean" };
@@ -239,6 +289,9 @@ function classifyPiPostMergeCandidate(projectRoot) {
     if (typeof projectRoot !== "string" || projectRoot.length === 0) {
       return { ok: false, reason: "project root missing" };
     }
+    if (isReleasePleaseManaged(projectRoot)) {
+      return { ok: false, reason: "manual release exception is disabled for release-please repositories" };
+    }
     if (git(projectRoot, ["status", "--porcelain=v1", "--untracked-files=all"]) !== "") {
       return { ok: false, reason: "release worktree is not clean" };
     }
@@ -269,6 +322,7 @@ function classifyPiPostMergeCandidate(projectRoot) {
       headSha,
       baseSha,
       baseBranch: "main",
+      releaseNotes: files.releaseNotes,
       subjectPrNumber: subjectMatch[4] ? Number(subjectMatch[4]) : null,
     };
   } catch (error) {
@@ -288,9 +342,16 @@ export function classifyPiPostMergeRelease(projectRoot, evidence) {
     }
     const pr = /** @type {Record<string, unknown>} */ (evidence);
     const number = pr.number;
+    const releaseHeadSha = pr.headRefOid;
     const releaseBranch = typeof pr.headRefName === "string" ? pr.headRefName : "";
     const branchMatch = RELEASE_BRANCH.exec(releaseBranch);
-    if (!branchMatch || !Number.isSafeInteger(number) || number <= 0) {
+    if (
+      !branchMatch ||
+      !Number.isSafeInteger(number) ||
+      number <= 0 ||
+      typeof releaseHeadSha !== "string" ||
+      !FULL_GIT_SHA.test(releaseHeadSha)
+    ) {
       return { ok: false, reason: "merged release PR identity invalid" };
     }
     const version = `${branchMatch[1]}.${branchMatch[2]}.${branchMatch[3]}`;
@@ -315,6 +376,7 @@ export function classifyPiPostMergeRelease(projectRoot, evidence) {
     return {
       ...proof,
       releaseBranch,
+      releaseHeadSha,
       prNumber: number,
     };
   } catch (error) {
@@ -341,7 +403,7 @@ export function readPiMergedReleaseEvidence(projectRoot, headSha) {
         "--limit",
         "20",
         "--json",
-        "number,title,state,mergedAt,mergeCommit,headRefName,baseRefName,statusCheckRollup",
+        "number,title,state,mergedAt,mergeCommit,headRefOid,headRefName,baseRefName,statusCheckRollup",
       ],
       { cwd: projectRoot, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 15000 },
     );

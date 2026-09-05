@@ -58,7 +58,7 @@ export default function harnessMemory(pi: ExtensionAPI) {
       if (args.subagent_type === "harness-shipper") {
         invalidateMemoryAttempt(ctx.cwd, sessionId, "shipment");
         const ready = checkMemoryShipperReady(ctx.cwd, sessionId);
-        pending.set(key(ctx, event.toolCallId), { kind: "shipment", session_id: sessionId, project_root: ctx.cwd, head: ready.head });
+        pending.set(key(ctx, event.toolCallId), { kind: "shipment", session_id: sessionId, project_root: ctx.cwd, head: ready.head, ...(ready.release ? { release: ready.release } : {}) });
       } else {
         if (!/^\[HARNESS_HARVEST\](?:\r?\n|$)/.test(args.prompt ?? "")) return;
         invalidateMemoryAttempt(ctx.cwd, sessionId, "harvest");

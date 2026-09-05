@@ -87,7 +87,11 @@ export function gitMemory(root, args) {
   return execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 10000 }).trim();
 }
 function cleanTree(root) {
-  if (gitMemory(root, ["status", "--porcelain", "--untracked-files=all", "--", ".", ":(exclude).pi/harness/", ":(exclude)node_modules/"])) throw new Error("Commit and verify all delivery changes before final review or finalize");
+  // A tracked runtime file is still delivery code, including a staged change
+  // whose worktree content has subsequently been restored to the HEAD version.
+  const tracked = gitMemory(root, ["status", "--porcelain", "--untracked-files=no"]);
+  const untracked = tracked ? "" : gitMemory(root, ["status", "--porcelain", "--untracked-files=all", "--", ".", ":(exclude).pi/harness/runtime/", ":(exclude).pi/harness/state/", ":(exclude).pi/harness/plans/", ":(exclude).pi/harness/sessions/", ":(exclude)node_modules/"]);
+  if (tracked || untracked) throw new Error("Commit and verify all delivery changes before final review or finalize");
 }
 
 function snapshotPlan(paths, featureId) {
@@ -243,7 +247,13 @@ export function completeMemoryShipment(snapshot, text, agentId) {
   if (typeof agentId !== "string" || !agentId || !/(?:^|\r?\n)Status: DONE\s*$/.test(text)) throw new Error("Shipper must report terminal Status: DONE");
   const paths = memoryPaths(snapshot.project_root, snapshot.session_id, true);
   const ready = checkMemoryShipperReady(paths.root, snapshot.session_id);
-  if (ready.head !== snapshot.head) throw new Error("Shipper changed HEAD after review");
+  if (ready.head !== snapshot.head) {
+    const before = snapshot.release;
+    const after = ready.release;
+    if (before?.phase !== "pre-merge" || after?.phase !== "post-merge" || before.version !== after.version || before.branch !== after.releaseBranch || after.releaseHeadSha !== snapshot.head) {
+      throw new Error("Shipper changed HEAD after review; restore the verified checkout for a functional merge, then confirm the remote effect before retrying completion");
+    }
+  }
   atomicWrite(paths.shipment, JSON.stringify({ written_by: "host-subagent-completion", session_id: snapshot.session_id, feature_id: ready.featureId, head: ready.head, agent_id: agentId, status: "completed", ...(ready.release ? { release_phase: ready.release.phase } : {}) }));
 }
 export function memoryBrief(projectRoot, sessionId) {

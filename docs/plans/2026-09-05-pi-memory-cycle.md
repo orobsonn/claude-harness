@@ -56,3 +56,30 @@ alterar credenciais nem processos VPS existentes. Rollback por revert e vendor
 da release anterior, preservando memória durável. Não reaproveitar a última tarefa
 para persistência: substitui seu hand-record. Git/PR resolvem concorrência entre
 worktrees; cada run lê o conhecimento disponível na própria base.
+
+## Fechamento dos achados da revisão
+
+- Árvore limpa inclui todos os arquivos rastreados, inclusive o tooling vendorizado.
+  Somente diretórios transitórios podem ficar fora da checagem de arquivos novos.
+- A exceção manual não se aplica em release-please nem admite downgrade. Notas de
+  publicação precisam corresponder ao bloco da versão comprovada no changelog;
+  aceitar apenas caracteres de um path não delimita o conteúdo autorizado.
+- A transição de release premerge para postmerge liga o HEAD de origem ao
+  `headRefOid` do PR mergeado, além da versão, branch, mergeCommit, main e CI.
+  Não basta alegar que dois commits são equivalentes depois do squash.
+- O merge funcional preserva o checkout revisado até finalizar a memória; limpeza
+  da branch fica depois. Retomada pode restaurar esse SHA com Git limpo e conferir
+  o efeito remoto sem repetir revisões válidas.
+- O recibo do shipper atesta conclusão nativa do despacho. A verificação de cada
+  efeito remoto continua parte da tarefa explícita do shipper. O teste unitário que
+  injeta um resultado nativo não demonstra que uma execução real publicou incorretamente;
+  não se amplia esta entrega para um motor paralelo de todas as operações Git/GitHub.
+  Gates de merge e publicação verificam as provas remotas exigidas para suas exceções.
+- Memória consultada explicitamente pode constar do transcript da própria sessão.
+  Cleanup remove os arquivos efêmeros, não reescreve o histórico; novas sessões e
+  revisores não herdam automaticamente esse diário. Memória automática usa contexto
+  temporário, nunca instruções de sistema. Esses limites são parte do contrato.
+- A revisão independente inicial foi virgem. Após as correções, a tentativa de abrir
+  outro adversário foi recusada pelo host com `agent thread limit reached`. A checagem
+  seguinte usa o revisor somente leitura existente e o CI completo; é uma revalidação,
+  não uma nova revisão virgem. Não se contorna o limite de agentes nem se afirma o contrário.

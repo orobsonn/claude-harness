@@ -176,12 +176,13 @@ function shipperEvent() {
   };
 }
 
-function completeShipper(api, root) {
+function completeShipper(api, root, during = () => {}) {
   const args = shipperEvent().input;
   api.handlers.get("tool_execution_start")(
     { toolName: "subagent", toolCallId: "shipper-release", args },
     runtime(root),
   );
+  during();
   api.handlers.get("tool_execution_end")(
     {
       toolName: "subagent",
@@ -237,7 +238,7 @@ function mergeRelease(root, number = 42) {
   return headSha;
 }
 
-function installFakeGh(t, root, headSha, number = 42) {
+function installFakeGh(t, root, headSha, number = 42, releaseHeadSha = git(root, ["rev-parse", "chore/release-1.2.4"])) {
   const bin = mkdtempSync(join(tmpdir(), "pi-memory-gh-"));
   t.after(() => rmSync(bin, { recursive: true, force: true }));
   const evidence = [{
@@ -247,6 +248,7 @@ function installFakeGh(t, root, headSha, number = 42) {
     mergedAt: "2026-09-05T12:00:00Z",
     mergeCommit: { oid: headSha },
     headRefName: "chore/release-1.2.4",
+    headRefOid: releaseHeadSha,
     baseRefName: "main",
     statusCheckRollup: [{ conclusion: "SUCCESS" }],
   }];
@@ -355,4 +357,31 @@ test("harness-memory release: prova pós-merge usa somente o PR exato fornecido 
   const finalized = await api.execute({ action: "finalize" }, runtime(f.root));
   assert.equal(finalized.details.ok, true);
   assert.equal(existsSync(sharedPath(f.root)), false);
+});
+
+test("native shipper can complete only the exact proven release pre-to-post merge transition", async (t) => {
+  for (const outcome of ["exact", "wrong-pr-head", "product-change"]) {
+    await t.test(outcome, async (st) => {
+      const f = releaseFixture(st);
+      const api = register();
+      seedPlan(f.root);
+      await api.execute({ action: "update", content: "release transition context" }, runtime(f.root));
+      completeHarvest(api, f.root);
+      let mergedHead;
+      completeShipper(api, f.root, () => {
+        mergedHead = mergeRelease(f.root);
+        installFakeGh(st, f.root, mergedHead, 42, outcome === "wrong-pr-head" ? "f".repeat(40) : f.headSha);
+        if (outcome === "product-change") {
+          writeFileSync(join(f.root, "src", "app.ts"), "export const changed = true;\n");
+          commit(f.root, "feat: unrelated change after merge");
+          git(f.root, ["update-ref", "refs/remotes/origin/main", git(f.root, ["rev-parse", "HEAD"])]);
+        }
+      });
+      assert.equal(existsSync(shipmentPath(f.root)), outcome === "exact");
+      if (outcome === "exact") assert.equal(JSON.parse(readFileSync(shipmentPath(f.root), "utf8")).head, mergedHead);
+      const finalized = await api.execute({ action: "finalize" }, runtime(f.root));
+      assert.equal(finalized.details.ok, outcome === "exact");
+      assert.equal(existsSync(sharedPath(f.root)), outcome !== "exact");
+    });
+  }
 });
