@@ -105,26 +105,53 @@ function exactWorkerPids(launch) {
     typeof launch?.descriptor_path !== "string"
   )
     return [];
-  const candidates =
-    Number.isInteger(launch.pid) && launch.pid > 0
-      ? [String(launch.pid)]
-      : process.platform === "linux"
-        ? fs.readdirSync("/proc").filter((name) => /^\d+$/.test(name))
-        : execFileSync("ps", ["-axo", "pid="], { encoding: "utf8" })
-            .trim()
-            .split(/\s+/);
+  // The supervisor and its independently grouped child shim both carry this exact
+  // descriptor. Scan the process table even when the original supervisor PID is
+  // known: the shim can survive a supervisor crash during group registration.
+  const candidates = process.platform === "linux"
+    ? fs.readdirSync("/proc").filter((name) => /^\d+$/.test(name))
+    : execFileSync("ps", ["-axo", "pid="], { encoding: "utf8" })
+        .trim()
+        .split(/\s+/);
   return candidates
     .filter((pid) => {
       const command = processCommand(pid);
       return (
-        command.length === 3 &&
+        (command.length === 3 ||
+          (command.length === 4 && command[2] === "--child")) &&
         path.resolve(command[1] ?? "") === path.resolve(launch.worker_path) &&
-        path.resolve(command[2] ?? "") ===
+        path.resolve(command.at(-1) ?? "") ===
           path.resolve(launch.descriptor_path) &&
         /(?:^|[\\/])node(?:\.exe)?$/.test(command[0] ?? "")
       );
     })
     .map(Number);
+}
+
+/** Render only public assistant text and tool progress from Pi's JSON stream. */
+export function renderTaskEventLine(line) {
+  try {
+    const event = JSON.parse(line);
+    if (
+      event?.type === "message_update" &&
+      event.assistantMessageEvent?.type === "text_delta" &&
+      typeof event.assistantMessageEvent.delta === "string"
+    )
+      return event.assistantMessageEvent.delta;
+    if (
+      event?.type === "tool_execution_start" &&
+      typeof event.toolName === "string"
+    )
+      return `\n[tool] ${event.toolName}\n`;
+    if (
+      event?.type === "tool_execution_end" &&
+      typeof event.toolName === "string"
+    )
+      return `[tool] ${event.toolName} ${event.isError ? "failed" : "done"}\n`;
+  } catch {
+    /* Unknown/non-JSON output is retained in the receipt file, never echoed. */
+  }
+  return "";
 }
 
 function validResult(result, record) {
@@ -189,6 +216,10 @@ export function readTaskProcess(launch, dependencies = {}) {
       }
       if (Array.isArray(exactWorkers) && exactWorkers.length > 0)
         return { ok: true, running: true, terminal: false, registering: true };
+      if (launch.terminal_mode)
+        return fail(
+          "orca task terminal has not registered its worker; terminal observation is required",
+        );
       if (
         !Number.isInteger(launch.creator_pid) ||
         launch.creator_pid < 1 ||
@@ -261,29 +292,56 @@ export function readTaskProcess(launch, dependencies = {}) {
         record,
         ...(result ? { result } : {}),
       };
-    if (!reused) {
-      let members;
-      try {
-        members = groupMembers(record.pid);
-      } catch {
-        return fail("task worker group observation is unavailable");
-      }
-      if (members.length > 0)
-        return {
-          ok: true,
-          running: true,
-          terminal: false,
-          record,
-          ...(result ? { result } : {}),
-        };
-    }
     if (
       result &&
       validResult(result, record) &&
       (!launch.runtime?.sha256 ||
         result.run_runtime_sha256 === launch.runtime.sha256)
-    ) {
+    )
       return { ok: true, running: false, terminal: true, record, result };
+    let groupReused = false;
+    if (Number.isInteger(record.process_group)) {
+      if (typeof record.child_process_start_ticks !== "string")
+        return fail("task child process group identity is unavailable");
+      let leader;
+      try {
+        leader = identity(record.process_group);
+      } catch {
+        return fail("task child process group identity is unavailable");
+      }
+      if (leader?.unknown)
+        return fail("task child process group identity is unavailable");
+      groupReused = Boolean(
+        leader &&
+          leader.start !== record.child_process_start_ticks &&
+          leader.group === record.process_group,
+      );
+    }
+    let members;
+    try {
+      members = Number.isInteger(record.process_group) && !groupReused
+        ? groupMembers(record.process_group)
+        : [];
+    } catch {
+      return fail("task worker group observation is unavailable");
+    }
+    if (members.length > 0)
+      return {
+        ok: true,
+        running: true,
+        terminal: false,
+        record,
+        ...(result ? { result } : {}),
+      };
+    if (!Number.isInteger(record.process_group)) {
+      let exactWorkers;
+      try {
+        exactWorkers = workerPids(launch);
+      } catch {
+        return fail("task worker process observation is unavailable");
+      }
+      if (exactWorkers.length > 0)
+        return { ok: true, running: true, terminal: false, record };
     }
     if (result)
       return fail("task completion identity mismatch", true, { record });
@@ -309,6 +367,8 @@ export async function startTaskProcess({
   args,
   runtime,
   timeoutMs = 7_200_000,
+  launchTerminal,
+  title,
 }) {
   let launch;
   let worker;
@@ -330,6 +390,7 @@ export async function startTaskProcess({
       stderr_path: path.join(jobDir, "stderr.log"),
       process_path: path.join(jobDir, "process.json"),
       result_path: path.join(jobDir, "result.json"),
+      ...(launchTerminal ? { terminal_mode: true } : {}),
     };
     writeTaskJson(descriptor, {
       ...launch,
@@ -339,6 +400,23 @@ export async function startTaskProcess({
       runtime,
       timeoutMs,
     });
+    if (launchTerminal) {
+      try {
+        const terminal = await launchTerminal({
+          command: process.execPath,
+          args: [TASK_WORKER_PATH, descriptor],
+          cwd,
+          title,
+        });
+        return { ...launch, orca: terminal };
+      } catch (error) {
+        if (error && typeof error === "object") {
+          error.outcome_unknown = true;
+          error.task_launch = launch;
+        }
+        throw error;
+      }
+    }
     worker = spawn(process.execPath, [TASK_WORKER_PATH, descriptor], {
       cwd,
       detached: true,
@@ -352,7 +430,8 @@ export async function startTaskProcess({
       });
     });
   } catch (error) {
-    if (error && typeof error === "object") error.before_spawn = true;
+    if (error && typeof error === "object" && !error.outcome_unknown)
+      error.before_spawn = true;
     throw error;
   }
   launch.pid = worker.pid;

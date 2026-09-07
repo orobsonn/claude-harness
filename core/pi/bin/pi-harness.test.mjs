@@ -16,6 +16,7 @@ import {
   parseHarnessResume,
   harnessStateDir,
   materializeRuntime,
+  resolveOrcaStatusExtension,
   resolvePiDependencyPaths,
   runPiHarnessCli,
 } from "./pi-harness.mjs";
@@ -75,6 +76,27 @@ test("launcher disables discovered project resources and loads only the harness 
   assert.equal(invocation.env.PI_CODING_AGENT_DIR, resolve(process.cwd(), ".pi/harness/runtime"));
   assert.equal(invocation.env.PI_CODING_AGENT_SESSION_DIR, resolve(process.cwd(), ".pi/harness/sessions"));
   assert.equal(invocation.env[PI_AUTH_PATH_ENV], "/operator/.pi/agent/auth.json");
+});
+
+test("an Orca terminal loads only the marked official Pi status extension", () => {
+  const source = mkdtempSync(join(tmpdir(), "pi-orca-status-"));
+  const extension = join(source, "extensions/orca-agent-status.ts");
+  mkdirSync(dirname(extension), { recursive: true });
+  try {
+    writeFileSync(extension, "// unmarked\n");
+    const env = { ORCA_WORKTREE_ID: "repo::/worktree", ORCA_PI_SOURCE_AGENT_DIR: source };
+    assert.equal(resolveOrcaStatusExtension(env), null);
+    writeFileSync(extension, "// @orca-managed-pi-extension\nexport default () => {}\n");
+    assert.equal(resolveOrcaStatusExtension(env), extension);
+    const loaded = loadedExtensions(buildPiHarnessInvocation({
+      root: "/package", argv: [], env, dependencyPaths: DEPENDENCIES,
+    }).args);
+    assert.equal(loaded.at(-1), extension);
+    assert.equal(loaded.filter((item) => item === extension).length, 1);
+    assert.equal(resolveOrcaStatusExtension({ ...env, ORCA_WORKTREE_ID: "" }), null);
+  } finally {
+    rmSync(source, { recursive: true, force: true });
+  }
 });
 
 test("launcher starts each new ceremony in an explicit fresh Pi session", () => {

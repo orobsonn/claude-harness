@@ -1,10 +1,10 @@
 #!/usr/bin/env node
-import { cpSync, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 
 import { CANONICAL_ROLES, RUNTIME_ROLES } from "../lib/roles.mjs";
 import { PI_AUTH_PATH_ENV, PI_RESUME_ENV, verifyPiAuthPathPatch } from "../lib/pi-auth-path-patch.mjs";
@@ -62,7 +62,9 @@ const EXTENSIONS_AFTER_SUBAGENTS = [
 const REQUIRED_LIBS = [
   "core/pi/lib/classify.mjs",
   "core/pi/lib/task-contract.mjs",
+  "core/pi/lib/task-context.mjs",
   "core/pi/lib/task-coordinator.mjs",
+  "core/pi/lib/task-orca.mjs",
   "core/pi/lib/task-process.mjs",
   "core/pi/lib/task-receipts.mjs",
   "core/pi/lib/task-runtime-assets.mjs",
@@ -216,6 +218,25 @@ export function harnessStateDir(runtimeDir) {
   return join(dirname(runtimeDir), "state");
 }
 
+/** Resolve only Orca's own managed Pi status extension for an Orca terminal. */
+export function resolveOrcaStatusExtension(env) {
+  if (!env?.ORCA_WORKTREE_ID || !env?.ORCA_PI_SOURCE_AGENT_DIR) return null;
+  try {
+    const source = realpathSync(env.ORCA_PI_SOURCE_AGENT_DIR);
+    const candidate = join(source, "extensions", "orca-agent-status.ts");
+    const resolved = realpathSync(candidate);
+    const rel = relative(source, resolved);
+    if (!rel || rel.startsWith("..") || resolve(source, rel) !== resolved)
+      return null;
+    if (lstatSync(candidate).isSymbolicLink()) return null;
+    if (readFileSync(resolved, "utf8").split(/\r?\n/, 1)[0] !== "// @orca-managed-pi-extension")
+      return null;
+    return resolved;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * @param {{root: string, argv: string[], env: NodeJS.ProcessEnv, runtimePrompt?: string, dependencyPaths?: ReturnType<typeof resolvePiDependencyPaths>, userHome?: string, sessionId?: string, resumeSessionFile?: string}} options
  */
@@ -224,11 +245,13 @@ export function buildPiHarnessInvocation({ root, argv, env, runtimePrompt = "", 
   const sessionDir = resolve(process.cwd(), ".pi/harness/sessions");
   const authPath = join(resolve(userHome), ".pi", "agent", "auth.json");
   const { [PI_RESUME_ENV]: ignoredResume, ...cleanEnv } = env;
+  const orcaStatusExtension = resolveOrcaStatusExtension(cleanEnv);
   const extensionArgs = [
     ...EXTENSIONS_BEFORE_SUBAGENTS.flatMap((rel) => ["-e", join(root, rel)]),
     "-e",
     join(root, SUBAGENTS_BRIDGE),
     ...EXTENSIONS_AFTER_SUBAGENTS.flatMap((rel) => ["-e", join(root, rel)]),
+    ...(orcaStatusExtension ? ["-e", orcaStatusExtension] : []),
   ];
   return {
     command: process.execPath,
