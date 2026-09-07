@@ -12,6 +12,7 @@ import {
 import { validatePlan } from "../../shared/lib/validate-plan.mjs";
 import {
   acquireLock,
+  LOCK_STALE_MS,
   releaseLock,
   loadPiGateStateFromDisk,
   withGateStateLock,
@@ -499,7 +500,7 @@ export async function executeTaskAction(params, context = {}, injected = {}) {
       throw new Error("safe task_id required");
     registryPath = taskRegistryPath(owner.root, owner.sessionId);
     fs.mkdirSync(path.dirname(registryPath), { recursive: true });
-    lock = acquireLock(registryPath, { timeoutMs: 5, staleMs: 0 });
+    lock = acquireLock(registryPath, { timeoutMs: 5, staleMs: LOCK_STALE_MS });
     if (!lock.ok)
       throw new Error(
         "task coordinator busy; observe or retry the same action",

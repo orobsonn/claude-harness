@@ -153,6 +153,42 @@ test("scope overlap includes tests and fixtures, with component boundaries", () 
     /scope/,
   );
 });
+
+test("a recent partial registry lock remains owned instead of being reclaimed during its write", async (t) => {
+  const f = fixture(t);
+  const registry = taskRegistryPath(f.dir, "parent");
+  const lock = `${registry}.lock`;
+  fs.mkdirSync(path.dirname(lock), { recursive: true });
+  fs.writeFileSync(lock, `{"token":"writer","pid":${process.pid}`);
+  const recent = new Date(Date.now() - 1_000);
+  fs.utimesSync(lock, recent, recent);
+  const before = fs.readFileSync(lock, "utf8");
+
+  const result = await executeTaskAction({ action: "status" }, f.context, f.deps);
+
+  assert.equal(result.ok, false);
+  assert.match(result.reason, /task coordinator busy/);
+  assert.equal(fs.readFileSync(lock, "utf8"), before);
+});
+
+test("an old valid registry lock whose owner died is still recovered", async (t) => {
+  const f = fixture(t);
+  const registry = taskRegistryPath(f.dir, "parent");
+  const lock = `${registry}.lock`;
+  fs.mkdirSync(path.dirname(lock), { recursive: true });
+  fs.writeFileSync(lock, JSON.stringify({
+    token: "dead-owner",
+    pid: 999_999_999,
+    createdAt: "2000-01-01T00:00:00.000Z",
+  }));
+
+  const result = await executeTaskAction({ action: "status" }, f.context, f.deps);
+
+  assert.equal(result.ok, true, result.reason);
+  assert.deepEqual(result.tasks, []);
+  assert.equal(fs.existsSync(lock), false);
+});
+
 test("batch preflight is atomic; dispatch is durable and idempotent; dependencies wait", async (t) => {
   const f = fixture(t);
   assert.equal(
