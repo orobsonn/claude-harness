@@ -144,6 +144,7 @@ function inspectionFixture({ historicFailure = false } = {}) {
   const dependencies = {
     readTaskRunBindingFn: () => ({ ok: true, grant, task, grantPath }),
     captureReviewInputFn: () => ({ ok: true, snapshot: { head_sha: head, input_digest: DIGEST } }),
+    readTaskContextReturnFn: () => null,
   };
   return { root, base, freeze, head, entry, dependencies, statePath: path.join(root, ".pi", "harness", "state", CHILD, "gate-state.json") };
 }
@@ -232,6 +233,17 @@ test("inspectTaskRun binds every launch and the receipt to the admitted runtime 
   assert.match(changed.reason, /runtime identity/i);
 });
 
+test("inspectTaskRun accepts the registered worker PID for an Orca terminal launch", () => {
+  const fixture = inspectionFixture();
+  const launch = fixture.entry.launches.at(-1);
+  launch.pid = null;
+  launch.terminal_mode = true;
+  const inspected = inspectTaskRun(fixture.entry, fixture.dependencies);
+  assert.equal(inspected.ok, true, inspected.reason);
+  assert.equal(inspected.result.launches.at(-1).pid, null);
+  assert.equal(inspected.result.launches.at(-1).exit_code, 0);
+});
+
 test("inspectTaskRun rejects a review whose input digest is stale on the same HEAD", () => {
   const fixture = inspectionFixture();
   const stale = JSON.parse(fs.readFileSync(fixture.statePath, "utf8"));
@@ -240,6 +252,73 @@ test("inspectTaskRun rejects a review whose input digest is stale on the same HE
   const inspected = inspectTaskRun(fixture.entry, fixture.dependencies);
   assert.equal(inspected.ok, false);
   assert.match(inspected.reason, /accepted compliance task review/i);
+});
+
+test("inspectTaskRun requires the baseline adversary without inventing optional implementation reviews", () => {
+  const fixture = inspectionFixture();
+  const state = JSON.parse(fs.readFileSync(fixture.statePath, "utf8"));
+  delete state.task_review_evidence;
+  write(fixture.statePath, state);
+  const inspected = inspectTaskRun(fixture.entry, fixture.dependencies);
+  assert.equal(inspected.ok, true, inspected.reason);
+  assert.deepEqual(Object.keys(inspected.result.review_receipts), ["adversary"]);
+
+  delete state.task_adversary_evidence;
+  write(fixture.statePath, state);
+  const missing = inspectTaskRun(fixture.entry, fixture.dependencies);
+  assert.equal(missing.ok, false);
+  assert.match(missing.reason, /accepted adversary task review/i);
+});
+
+test("inspectTaskRun cannot ignore a failed optional implementation reviewer from launch history", () => {
+  const fixture = inspectionFixture({ historicFailure: true });
+  const state = JSON.parse(fs.readFileSync(fixture.statePath, "utf8"));
+  delete state.task_review_evidence[`${FEATURE}/${TASK}`].security;
+  write(fixture.statePath, state);
+  const launch = fixture.entry.launches[0];
+  fs.appendFileSync(launch.events_path, [
+    event("tool_execution_start", {
+      toolCallId: "security-review",
+      toolName: "subagent",
+      args: {
+        subagent_type: "harness-security",
+        prompt: `[HARNESS_TASK_REVIEW]\n[HARNESS_TASK_CONTEXT]{"task_id":"${TASK}"}[/HARNESS_TASK_CONTEXT]`,
+      },
+    }),
+    event("tool_execution_end", {
+      toolCallId: "security-review",
+      toolName: "subagent",
+      isError: true,
+      result: { details: { status: "failed" }, content: [{ type: "text", text: "review process failed" }] },
+    }),
+    "",
+  ].join("\n"));
+  const inspected = inspectTaskRun(fixture.entry, fixture.dependencies);
+  assert.equal(inspected.ok, false);
+  assert.match(inspected.reason, /accepted security task review/i);
+});
+
+test("inspectTaskRun binds a validated child context return to task identity and HEAD", () => {
+  const fixture = inspectionFixture();
+  const content = "D1 retries must preserve the first response.";
+  const contextReturn = {
+    version: 1,
+    kind: "task-context-return",
+    session_id: CHILD,
+    task_id: TASK,
+    head_sha: fixture.head,
+    content,
+    sha256: crypto.createHash("sha256").update(content).digest("hex"),
+  };
+  fixture.dependencies.readTaskContextReturnFn = () => contextReturn;
+  const inspected = inspectTaskRun(fixture.entry, fixture.dependencies);
+  assert.equal(inspected.ok, true, inspected.reason);
+  assert.deepEqual(inspected.result.context_return, contextReturn);
+
+  fixture.dependencies.readTaskContextReturnFn = () => ({ ...contextReturn, head_sha: fixture.base });
+  const foreign = inspectTaskRun(fixture.entry, fixture.dependencies);
+  assert.equal(foreign.ok, false);
+  assert.match(foreign.reason, /context return.*identity/i);
 });
 
 test("inspectTaskRun rejects an unstamped current capture and a foreign native producer", () => {
@@ -328,6 +407,7 @@ function integratedFixture() {
       agent_id: `agent-${role}`, dispatch_call_id: `call-${role}`, child_session_id: `child-${role}`,
       input_digest: DIGEST, report_digest: "b".repeat(64),
     }])),
+    context_return: null,
     regate: { pending: [], passed: [] },
     latest_run_id: "run-current",
     launches: [{ run_id: "run-current", pid: 999990, exit_code: 0, signal: null, timed_out: false, ended_at: "2026-09-07T00:01:00.000Z" }],
@@ -355,6 +435,24 @@ test("readIntegratedTaskEvidence preserves the child session and accepts ancestr
   assert.equal(evidence.result.integrated_head, fixture.base);
 });
 
+test("readIntegratedTaskEvidence accepts a receipt containing only the baseline adversary review", () => {
+  const fixture = integratedFixture();
+  fixture.registry.tasks[TASK].result.review_receipts = {
+    adversary: fixture.registry.tasks[TASK].result.review_receipts.adversary,
+  };
+  fixture.registry.tasks[TASK].integration.result_sha256 = hashTaskReceipt(fixture.registry.tasks[TASK].result);
+  write(fixture.registryPath, fixture.registry);
+  const evidence = readIntegratedTaskEvidence({
+    projectRoot: fixture.root,
+    sessionId: PARENT,
+    featureId: FEATURE,
+    taskId: TASK,
+    headSha: fixture.base,
+  });
+  assert.equal(evidence.ok, true, evidence.reason);
+  assert.deepEqual(Object.keys(evidence.entry.result.review_receipts), ["adversary"]);
+});
+
 test("readIntegratedTaskEvidence rejects revoked status and a forged result hash", () => {
   const fixture = integratedFixture();
   fixture.registry.tasks[TASK].status = "running";
@@ -366,6 +464,31 @@ test("readIntegratedTaskEvidence rejects revoked status and a forged result hash
   const forged = readIntegratedTaskEvidence({ projectRoot: fixture.root, sessionId: PARENT, featureId: FEATURE, taskId: TASK, headSha: fixture.base });
   assert.equal(forged.ok, false);
   assert.match(forged.reason, /does not match/i);
+});
+
+test("readIntegratedTaskEvidence rejects a forged context return even with a recomputed result hash", () => {
+  const fixture = integratedFixture();
+  const content = "foreign child context";
+  fixture.registry.tasks[TASK].result.context_return = {
+    version: 1,
+    kind: "task-context-return",
+    session_id: "ses-foreign-child",
+    task_id: TASK,
+    head_sha: fixture.base,
+    content,
+    sha256: crypto.createHash("sha256").update(content).digest("hex"),
+  };
+  fixture.registry.tasks[TASK].integration.result_sha256 = hashTaskReceipt(fixture.registry.tasks[TASK].result);
+  write(fixture.registryPath, fixture.registry);
+  const forged = readIntegratedTaskEvidence({
+    projectRoot: fixture.root,
+    sessionId: PARENT,
+    featureId: FEATURE,
+    taskId: TASK,
+    headSha: fixture.base,
+  });
+  assert.equal(forged.ok, false);
+  assert.match(forged.reason, /incomplete|registry entry/i);
 });
 
 test("readIntegratedTaskEvidence rejects all historical integrations while a correction barrier is active", () => {

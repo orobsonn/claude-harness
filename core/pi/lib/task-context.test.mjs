@@ -126,4 +126,3 @@ test("task context return rejects foreign state, symlinked diary and oversized s
   };
   assert.equal(validateTaskContextReturn(oversized, { sessionId: SESSION, taskId: TASK, headSha: head }).ok, false);
 });
-

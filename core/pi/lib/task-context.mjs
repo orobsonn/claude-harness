@@ -120,4 +120,3 @@ export function readTaskContextReturn({ projectRoot, sessionId, taskId, headSha 
   if (!checked.ok) throw new Error(checked.reason);
   return snapshot;
 }
-

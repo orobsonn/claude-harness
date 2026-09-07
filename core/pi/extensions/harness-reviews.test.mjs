@@ -34,8 +34,22 @@ function fixture(t) {
   const statePath = join(root, ".pi/harness/state", SESSION, "gate-state.json");
   mkdirSync(join(root, ".pi/harness/state", SESSION), { recursive: true });
   writeFileSync(statePath, JSON.stringify({ session_id: SESSION, feature_id: FEATURE }));
-  const ctx = { cwd: root, sessionManager: { getSessionId: () => SESSION, getHeader: () => ({}) } };
-  return { root, statePath, ctx };
+  const entries = [];
+  const ctx = { cwd: root, sessionManager: { getSessionId: () => SESSION, getHeader: () => ({}), getEntries: () => entries } };
+  return { root, statePath, ctx, entries };
+}
+
+function reviewDispatch(role, taskId = TASK, { id = `call-${role}`, stopReason = "toolUse", taskReview = true } = {}) {
+  const prompt = `${taskReview ? "[HARNESS_TASK_REVIEW]\n" : ""}[HARNESS_TASK_CONTEXT]{"task_id":"${taskId}"}[/HARNESS_TASK_CONTEXT]\nReview implementation.`;
+  return {
+    type: "message",
+    id: `entry-${id}`,
+    message: {
+      role: "assistant",
+      stopReason,
+      content: [{ type: "toolCall", id, name: "subagent", arguments: { subagent_type: role, prompt } }],
+    },
+  };
 }
 
 function record(root, role, phase) {
@@ -54,21 +68,89 @@ function record(root, role, phase) {
   assert.equal(written.ok, true, written.reason);
 }
 
-for (const phase of ["task", "final"]) test(`status resumes only missing ${phase} reviewers and invalidates stale inputs without writing state`, async (t) => {
+test("task status separates its required adversary from available opt-in reviewers", async (t) => {
   const f = fixture(t);
-  const args = { phase, ...(phase === "task" ? { task_id: TASK } : {}) };
-  for (const role of PARALLEL_REVIEW_ROLES.slice(0, 2)) record(f.root, role, phase);
+  const args = { phase: "task", task_id: TASK };
+  const pristine = await (await tool()).execute("status-pristine", args, undefined, undefined, f.ctx);
+  assert.deepEqual(pristine.details, {
+    required: ["harness-adversary"],
+    available: [...PARALLEL_REVIEW_ROLES],
+    accepted: [],
+    missing: ["harness-adversary"],
+  });
+  for (const role of PARALLEL_REVIEW_ROLES.slice(0, 2)) record(f.root, role, "task");
   const before = readFileSync(f.statePath, "utf8");
-  // A new extension instance represents a fresh parent process reading durable receipts.
   const first = await (await tool()).execute("status-one", args, undefined, undefined, f.ctx);
-  assert.deepEqual(first.details, { accepted: PARALLEL_REVIEW_ROLES.slice(0, 2), missing: ["harness-security"] });
+  assert.deepEqual(first.details, {
+    required: PARALLEL_REVIEW_ROLES.slice(0, 2),
+    available: [...PARALLEL_REVIEW_ROLES],
+    accepted: PARALLEL_REVIEW_ROLES.slice(0, 2),
+    missing: [],
+  });
   assert.deepEqual(JSON.parse(first.content[0].text), first.details);
   const resumed = await (await tool()).execute("status-two", args, undefined, undefined, f.ctx);
   assert.deepEqual(resumed.details, first.details);
   writeFileSync(join(f.root, "feature.txt"), "behavior B");
   const stale = await (await tool()).execute("status-three", args, undefined, undefined, f.ctx);
-  assert.deepEqual(stale.details, { accepted: [], missing: [...PARALLEL_REVIEW_ROLES] });
+  assert.deepEqual(stale.details, {
+    required: PARALLEL_REVIEW_ROLES.slice(0, 2),
+    available: [...PARALLEL_REVIEW_ROLES],
+    accepted: [],
+    missing: PARALLEL_REVIEW_ROLES.slice(0, 2),
+  });
   assert.equal(readFileSync(f.statePath, "utf8"), before, "status cannot mutate or fabricate receipts");
+});
+
+test("task status keeps a dispatched optional reviewer required after REVISE or missing completion receipt", async (t) => {
+  const f = fixture(t);
+  f.entries.push(
+    reviewDispatch("harness-compliance", TASK, { id: "call-compliance" }),
+    { type: "message", id: "result-compliance", message: {
+      role: "toolResult", toolCallId: "call-compliance", toolName: "subagent",
+      isError: false, content: [{ type: "text", text: '{"verdict":"REVISE"}' }],
+      details: { status: "completed" },
+    } },
+    reviewDispatch("harness-security", TASK, { id: "call-security" }),
+  );
+  const result = await (await tool()).execute("status", { phase: "task", task_id: TASK }, undefined, undefined, f.ctx);
+  assert.deepEqual(result.details, {
+    required: [...PARALLEL_REVIEW_ROLES],
+    available: [...PARALLEL_REVIEW_ROLES],
+    accepted: [],
+    missing: [...PARALLEL_REVIEW_ROLES],
+  });
+});
+
+test("task status ignores prose, test-fidelity, foreign-task and non-dispatched assistant calls", async (t) => {
+  const f = fixture(t);
+  f.entries.push(
+    { type: "message", id: "prose", message: { role: "assistant", stopReason: "stop", content: [{ type: "text", text: "subagent harness-security for task-one" }] } },
+    reviewDispatch("harness-compliance", TASK, { id: "fidelity", taskReview: false }),
+    reviewDispatch("harness-security", "task-two", { id: "foreign" }),
+    reviewDispatch("harness-security", TASK, { id: "aborted-generation", stopReason: "aborted" }),
+  );
+  const result = await (await tool()).execute("status", { phase: "task", task_id: TASK }, undefined, undefined, f.ctx);
+  assert.deepEqual(result.details, {
+    required: ["harness-adversary"],
+    available: [...PARALLEL_REVIEW_ROLES],
+    accepted: [],
+    missing: ["harness-adversary"],
+  });
+});
+
+test("task status fails closed when durable session entries are unavailable", async (t) => {
+  const f = fixture(t);
+  const ctx = { ...f.ctx, sessionManager: { getSessionId: () => SESSION, getHeader: () => ({}) } };
+  const result = await (await tool()).execute("status", { phase: "task", task_id: TASK }, undefined, undefined, ctx);
+  assert.equal(result.isError, true);
+  assert.match(result.details.reason, /durable parent session entries/i);
+});
+
+test("final status resumes all reviewers required by the canonical plan", async (t) => {
+  const f = fixture(t);
+  for (const role of PARALLEL_REVIEW_ROLES.slice(0, 2)) record(f.root, role, "final");
+  const result = await (await tool()).execute("status-final", { phase: "final" }, undefined, undefined, f.ctx);
+  assert.deepEqual(result.details, { accepted: PARALLEL_REVIEW_ROLES.slice(0, 2), missing: ["harness-security"] });
 });
 
 test("status derives identity from the parent and rejects child calls or malformed review scope", async (t) => {
