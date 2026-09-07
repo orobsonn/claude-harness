@@ -161,8 +161,8 @@ function pathIsInside(root, candidate) {
 export function isPiReviewSecretPath(path) {
   if (typeof path !== 'string' || path.length === 0) return false
   const segments = resolve(path).split(sep).filter(Boolean).map((segment) => segment.toLowerCase())
-  // Keep reviewer reads aligned with the exact basenames omitted from review snapshots.
-  if (['auth.json', 'credentials', 'credentials.json'].includes(segments.at(-1))) return true
+  // Keep reviewer reads aligned with generic sensitive files and directory ancestry omitted from review snapshots.
+  if (segments.some((segment) => ['auth.json', 'credentials', 'credentials.json'].includes(segment))) return true
   if (segments.some((segment) =>
     segment === '.env' || segment.startsWith('.env.') ||
     segment === '.dev.vars' || segment.startsWith('.dev.vars.') ||

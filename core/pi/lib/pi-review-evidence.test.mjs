@@ -258,6 +258,31 @@ test("capturePiReviewInput excludes volatile harness state, ignored dependencies
   assert.doesNotMatch(JSON.stringify(after), /synthetic-token|\.env|auth\.json|node_modules|gate-state\.json/);
 });
 
+test("capturePiReviewInput excludes descendants of generic credential directories but includes an ordinary peer", (t) => {
+  const root = fixture(t);
+  const secretPaths = [
+    "AUTH.JSON/service-account.json",
+    "nested/Credentials/service-account.json",
+    "nested/CREDENTIALS.JSON/service-account.json",
+  ];
+  const safePath = "config/service-account.json";
+  for (const rel of [...secretPaths, safePath]) {
+    mkdirSync(join(root, rel, ".."), { recursive: true });
+    writeFileSync(join(root, rel), "synthetic-placeholder-before\n");
+  }
+  git(root, ["add", ...secretPaths, safePath]);
+  execFileSync("git", ["-c", "user.name=Pi Review", "-c", "user.email=pi-review@example.test", "commit", "-q", "-m", "synthetic nested credentials"], { cwd: root });
+
+  const before = capture(root);
+  for (const rel of secretPaths) writeFileSync(join(root, rel), "SYNTHETIC_NESTED_SECRET_CANARY\n");
+  const afterSecrets = capture(root);
+  assert.equal(afterSecrets.input_digest, before.input_digest, "nested credential directory contents are not review inputs");
+  assert.doesNotMatch(JSON.stringify(afterSecrets), /AUTH\.JSON|Credentials|CREDENTIALS\.JSON|SYNTHETIC_NESTED_SECRET_CANARY/);
+
+  writeFileSync(join(root, safePath), "ordinary-safe-change\n");
+  assert.notEqual(capture(root).input_digest, before.input_digest, "an ordinary peer remains a review input");
+});
+
 test("parsePiReviewCompletion accepts only a completed canonical no-findings report on an unchanged snapshot", (t) => {
   const snapshot = capture(fixture(t));
   for (const role of ROLES) {
