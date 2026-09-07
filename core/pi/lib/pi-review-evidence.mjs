@@ -117,6 +117,9 @@ function worktreeEntry(root, relativePath, tracked) {
       const bytes = fs.readlinkSync(absolute, { encoding: "buffer" });
       return { path: relativePath, tracked, kind: "symlink", mode: "120000", size: bytes.length, sha256: digest(bytes) };
     }
+    if (info.isDirectory()) {
+      throw new Error(`nested repository/directory ${JSON.stringify(relativePath)} cannot be captured; ignore it in Git or move it outside the reviewed repository`);
+    }
     if (!info.isFile()) throw new Error("review input must be a regular file or symlink");
     return { path: relativePath, tracked, kind: "file", ...regularFile(absolute) };
   } catch (error) {

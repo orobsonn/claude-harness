@@ -1,6 +1,5 @@
 import * as nodeModule from "node:module";
-import { existsSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { basename, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
@@ -17,8 +16,9 @@ type BridgeDeps = {
 };
 
 function resolveHarnessRoot(piRoot: string) {
-  const monorepoRoot = resolve(piRoot, "../..");
-  return existsSync(resolve(monorepoRoot, "core/pi/extensions")) ? monorepoRoot : piRoot;
+  return basename(piRoot) === "pi" && basename(dirname(piRoot)) === "core"
+    ? resolve(piRoot, "../..")
+    : piRoot;
 }
 
 function harnessRoot() {

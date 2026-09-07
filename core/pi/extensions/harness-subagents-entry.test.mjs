@@ -37,6 +37,7 @@ test("production entrypoint keeps a vendored harness root as its resource root",
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const vendored = join(root, ".pi", "harness");
   mkdirSync(join(vendored, "extensions"), { recursive: true });
+  mkdirSync(join(root, "core", "pi", "extensions"), { recursive: true });
   assert.equal(module.testApi.resolveHarnessRoot(vendored), vendored);
 });
 

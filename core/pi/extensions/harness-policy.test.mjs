@@ -418,6 +418,46 @@ test("reviewer direct reads and native broad grep deny standard credential files
   });
 });
 
+test("reviewer direct reads and native broad grep exclude snapshot credential filenames", async (t) => {
+  const f = reviewerFixture(t);
+  const canary = "SYNTHETIC_SNAPSHOT_CREDENTIAL_CANARY";
+  const credentialPaths = [
+    "auth.json",
+    "nested/auth.json",
+    "credentials",
+    "nested/credentials",
+    "credentials.json",
+    "nested/credentials.json",
+  ];
+  for (const rel of [...credentialPaths, "ordinary.json"]) {
+    mkdirSync(join(f.root, rel, ".."), { recursive: true });
+    writeFileSync(join(f.root, rel), `${canary}\n`);
+  }
+  const onToolCall = handler();
+  const exposedDirectPaths = [];
+  for (const toolName of ["read", "grep", "find", "ls"]) {
+    for (const path of credentialPaths) {
+      if (onToolCall({ toolName, input: { path } }, reviewerCtx(f.alias))?.block !== true) {
+        exposedDirectPaths.push(`${toolName}:${path}`);
+      }
+    }
+  }
+  const event = { toolName: "grep", input: { pattern: canary, literal: true } };
+  const decision = onToolCall(event, reviewerCtx(f.alias));
+  const output = await executeNativeGrep(f.root, event.input);
+  const safeDirectBlocked = onToolCall(
+    { toolName: "read", input: { path: "ordinary.json" } },
+    reviewerCtx(f.alias),
+  )?.block === true;
+
+  assert.deepEqual({ exposedDirectPaths, safeDirectBlocked, decision, output }, {
+    exposedDirectPaths: [],
+    safeDirectBlocked: false,
+    decision: undefined,
+    output: `ordinary.json:1: ${canary}`,
+  });
+});
+
 test("child read tools fail closed when the exact dispatch identity is absent or corrupt", (t) => {
   const f = fixture();
   t.after(f.close);

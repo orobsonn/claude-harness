@@ -477,6 +477,7 @@ test("runtime já materializado migra somente o antigo default do harness para o
         httpIdleTimeoutMs: 900_000,
         retained: true,
         ...piChildResourceSettings(process.cwd()),
+        harnessChildResources: { version: 1, ...piChildResourceSettings(process.cwd()) },
       });
     }
   } finally { rmSync(directory, { recursive: true, force: true }); }
@@ -500,6 +501,7 @@ test("runtime já materializado preserva um default explícito compatível do op
     httpIdleTimeoutMs: 900_000,
     retained: true,
     ...piChildResourceSettings(process.cwd()),
+    harnessChildResources: { version: 1, ...piChildResourceSettings(process.cwd()) },
   });
 });
 

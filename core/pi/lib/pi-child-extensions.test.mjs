@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
@@ -26,7 +26,7 @@ test("child resources are the deterministic policy, fidelity, scope and package-
   });
 });
 
-test("launcher refreshes child resource allowlists in its private settings", (t) => {
+test("launcher preserves operator extensions and skills while adding its child resources", (t) => {
   const root = mkdtempSync(join(tmpdir(), "pi-child-settings-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const runtimeDir = join(root, "runtime");
@@ -34,8 +34,8 @@ test("launcher refreshes child resource allowlists in its private settings", (t)
   writeFileSync(join(runtimeDir, "settings.json"), JSON.stringify({
     defaultProvider: "openai-codex",
     defaultModel: "gpt-5.6-sol",
-    extensions: ["/stale/unsafe-extension.ts"],
-    skills: ["/stale/skill"],
+    extensions: ["/operator/permission.ts"],
+    skills: ["/operator/skills"],
     retained: true,
   }));
 
@@ -44,8 +44,53 @@ test("launcher refreshes child resource allowlists in its private settings", (t)
   const settings = JSON.parse(readFileSync(join(runtimeDir, "settings.json"), "utf8"));
   assert.deepEqual(
     { extensions: settings.extensions, skills: settings.skills, retained: settings.retained },
-    { ...piChildResourceSettings(PACKAGE_ROOT), retained: true },
+    {
+      extensions: ["/operator/permission.ts", ...piChildResourceSettings(PACKAGE_ROOT).extensions],
+      skills: ["/operator/skills", ...piChildResourceSettings(PACKAGE_ROOT).skills],
+      retained: true,
+    },
   );
+  const first = readFileSync(join(runtimeDir, "settings.json"), "utf8");
+  materializeRuntime(PACKAGE_ROOT, runtimeDir);
+  assert.equal(readFileSync(join(runtimeDir, "settings.json"), "utf8"), first);
+});
+
+test("package upgrades replace only the exact previously managed child resource paths", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "pi-child-resources-upgrade-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const runtimeDir = join(root, "runtime");
+  mkdirSync(runtimeDir, { recursive: true });
+  const settingsPath = join(runtimeDir, "settings.json");
+  const custom = "/operator/harness-policy.ts";
+  writeFileSync(settingsPath, JSON.stringify({ extensions: [custom], skills: ["/operator/skills"] }));
+  materializeRuntime(PACKAGE_ROOT, runtimeDir);
+  const nextPackage = join(root, "next-package");
+  mkdirSync(join(nextPackage, "core/pi/extensions"), { recursive: true });
+  cpSync(join(PACKAGE_ROOT, "core/pi/runtime"), join(nextPackage, "core/pi/runtime"), { recursive: true });
+  materializeRuntime(nextPackage, runtimeDir);
+  const settings = JSON.parse(readFileSync(settingsPath, "utf8"));
+  const required = piChildResourceSettings(nextPackage);
+  assert.deepEqual(settings.extensions, [custom, ...required.extensions]);
+  assert.deepEqual(settings.skills, ["/operator/skills", ...required.skills]);
+  assert.deepEqual(settings.harnessChildResources, { version: 1, ...required });
+});
+
+test("invalid operator resource arrays fail before settings are rewritten", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "pi-child-resources-invalid-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  for (const [index, invalid] of [
+    { extensions: "/operator/permission.ts" },
+    { skills: [null] },
+    { extensions: [], harnessChildResources: { version: 9, extensions: [], skills: [] } },
+  ].entries()) {
+    const runtimeDir = join(root, String(index));
+    mkdirSync(runtimeDir, { recursive: true });
+    const settingsPath = join(runtimeDir, "settings.json");
+    const bytes = JSON.stringify(invalid);
+    writeFileSync(settingsPath, bytes);
+    assert.throws(() => materializeRuntime(PACKAGE_ROOT, runtimeDir), /harness-child-resources/);
+    assert.equal(readFileSync(settingsPath, "utf8"), bytes);
+  }
 });
 
 test("bound verification uses real module identity and fails closed on missing or failed rails", (t) => {

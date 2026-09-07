@@ -49,6 +49,28 @@ export function piChildResourceSettings(root) {
   };
 }
 
+/** Replace only our previously recorded paths; operator resources retain their order. */
+export function mergePiChildResourceSettings(current, required) {
+  const validPaths = (value) => Array.isArray(value) && value.every((path) =>
+    typeof path === "string" && path.trim().length > 0);
+  if (!current || typeof current !== "object" || Array.isArray(current)) {
+    throw new Error("harness-child-resources: settings must be an object");
+  }
+  const previous = current.harnessChildResources;
+  if (previous !== undefined && (!previous || previous.version !== 1 ||
+    !validPaths(previous.extensions) || !validPaths(previous.skills))) {
+    throw new Error("harness-child-resources: invalid managed resource inventory");
+  }
+  const merged = {};
+  for (const key of ["extensions", "skills"]) {
+    const paths = current[key] === undefined ? [] : current[key];
+    if (!validPaths(paths)) throw new Error(`harness-child-resources: ${key} must be a list of paths`);
+    const owned = new Set(previous?.[key] ?? []);
+    merged[key] = [...new Set([...paths.filter((path) => !owned.has(path)), ...required[key]])];
+  }
+  return { ...merged, harnessChildResources: { version: 1, ...required } };
+}
+
 /**
  * Strict synchronous admission check for the loader snapshot emitted by the
  * sealed pi-subagents lifecycle seam. Extra native/package resources are

@@ -37,7 +37,7 @@ const ALLOW = { block: false }
 const PARENT_ORCHESTRATOR_REASON =
   "Parent orchestrator uses the Claude Code Bash allowlist for verification and selective commits during an active LIGHT/FULL ceremony; delegate product file mutations to a designated writing hand."
 const REVIEWER_READ_REASON = 'Read-only reviewers are confined to the canonical project root.'
-export const REVIEWER_GREP_GUARD = '!{.[eE][nN][vV],.[eE][nN][vV].*,**/.[eE][nN][vV],**/.[eE][nN][vV].*,.[dD][eE][vV].[vV][aA][rR][sS],.[dD][eE][vV].[vV][aA][rR][sS].*,**/.[dD][eE][vV].[vV][aA][rR][sS],**/.[dD][eE][vV].[vV][aA][rR][sS].*,.[pP][iI]/[aA][gG][eE][nN][tT]/[aA][uU][tT][hH].[jJ][sS][oO][nN],**/.[pP][iI]/[aA][gG][eE][nN][tT]/[aA][uU][tT][hH].[jJ][sS][oO][nN],.[sS][sS][hH]/**,**/.[sS][sS][hH]/**,.[aA][wW][sS]/**,**/.[aA][wW][sS]/**,.[nN][pP][mM][rR][cC],**/.[nN][pP][mM][rR][cC],.[nN][eE][tT][rR][cC],**/.[nN][eE][tT][rR][cC],.[pP][yY][pP][iI][rR][cC],**/.[pP][yY][pP][iI][rR][cC],.[gG][iI][tT]-[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][sS],**/.[gG][iI][tT]-[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][sS],.[cC][oO][dD][eE][xX]/[aA][uU][tT][hH].[jJ][sS][oO][nN],**/.[cC][oO][dD][eE][xX]/[aA][uU][tT][hH].[jJ][sS][oO][nN],.[gG][iI][tT]/[cC][oO][nN][fF][iI][gG],**/.[gG][iI][tT]/[cC][oO][nN][fF][iI][gG]}'
+export const REVIEWER_GREP_GUARD = '!{.[eE][nN][vV],.[eE][nN][vV].*,**/.[eE][nN][vV],**/.[eE][nN][vV].*,.[dD][eE][vV].[vV][aA][rR][sS],.[dD][eE][vV].[vV][aA][rR][sS].*,**/.[dD][eE][vV].[vV][aA][rR][sS],**/.[dD][eE][vV].[vV][aA][rR][sS].*,.[pP][iI]/[aA][gG][eE][nN][tT]/[aA][uU][tT][hH].[jJ][sS][oO][nN],**/.[pP][iI]/[aA][gG][eE][nN][tT]/[aA][uU][tT][hH].[jJ][sS][oO][nN],.[sS][sS][hH]/**,**/.[sS][sS][hH]/**,.[aA][wW][sS]/**,**/.[aA][wW][sS]/**,.[nN][pP][mM][rR][cC],**/.[nN][pP][mM][rR][cC],.[nN][eE][tT][rR][cC],**/.[nN][eE][tT][rR][cC],.[pP][yY][pP][iI][rR][cC],**/.[pP][yY][pP][iI][rR][cC],.[gG][iI][tT]-[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][sS],**/.[gG][iI][tT]-[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][sS],.[cC][oO][dD][eE][xX]/[aA][uU][tT][hH].[jJ][sS][oO][nN],**/.[cC][oO][dD][eE][xX]/[aA][uU][tT][hH].[jJ][sS][oO][nN],[aA][uU][tT][hH].[jJ][sS][oO][nN],**/[aA][uU][tT][hH].[jJ][sS][oO][nN],[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][sS],**/[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][sS],[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][sS].[jJ][sS][oO][nN],**/[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][sS].[jJ][sS][oO][nN],.[gG][iI][tT]/[cC][oO][nN][fF][iI][gG],**/.[gG][iI][tT]/[cC][oO][nN][fF][iI][gG]}'
 
 // Espelho literal de core/claude-code/settings.json → permissions.allow → Bash(...).
 // Não mantemos uma segunda interpretação menor no Pi: se Claude Code aceita uma chamada,
@@ -161,6 +161,8 @@ function pathIsInside(root, candidate) {
 export function isPiReviewSecretPath(path) {
   if (typeof path !== 'string' || path.length === 0) return false
   const segments = resolve(path).split(sep).filter(Boolean).map((segment) => segment.toLowerCase())
+  // Keep reviewer reads aligned with the exact basenames omitted from review snapshots.
+  if (['auth.json', 'credentials', 'credentials.json'].includes(segments.at(-1))) return true
   if (segments.some((segment) =>
     segment === '.env' || segment.startsWith('.env.') ||
     segment === '.dev.vars' || segment.startsWith('.dev.vars.') ||

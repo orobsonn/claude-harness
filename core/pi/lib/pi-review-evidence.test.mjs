@@ -181,6 +181,16 @@ test("review inputs include executable mode even when file contents stay identic
   assert.notEqual(capture(root).input_digest, before.input_digest);
 });
 
+test("review capture names an unignored nested repository and explains recovery", (t) => {
+  const root = fixture(t);
+  const nested = join(root, "scratch");
+  mkdirSync(nested);
+  git(nested, ["init", "-q"]);
+  const result = api("capturePiReviewInput", { projectRoot: root, sessionId: SESSION, featureId: FEATURE, phase: "final" });
+  assert.equal(result.ok, false);
+  assert.match(result.reason, /nested.*scratch.*ignore.*outside/i);
+});
+
 test("review capture rejects gitlinks rather than approving uncaptured submodule contents", (t) => {
   const root = fixture(t);
   const oid = git(root, ["rev-parse", "HEAD"]);

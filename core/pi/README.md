@@ -89,6 +89,9 @@ continuam seriais. As dependências e evidências da própria tarefa continuam o
 Antes do primeiro prompt de cada filho, a ponte confere o carregamento dos bloqueios
 de ferramentas, de entrada e de escrita, além das skills do harness. Falha de carga
 interrompe aquele filho. Os revisores só podem usar `read`, `grep`, `find` e `ls`.
+Extensões e skills adicionais configuradas pelo operador são preservadas. A atualização
+substitui somente caminhos registrados como gerenciados pelo harness; esses extras
+continuam sendo código confiado pelo operador no mesmo processo.
 
 Cada revisão é vinculada a HEAD, index, arquivos da worktree e plano/spec canônicos.
 Uma resposta interrompida, malformada, com pergunta pendente ou com achados não aprova um
@@ -101,7 +104,9 @@ A fila é simples e vive na sessão; os recibos existentes são a autoridade de 
 Cancelar o pai fecha a fila, aborta os filhos e aguarda sua execução efetiva terminar.
 Uma morte forçada continua sujeita ao lock e à recuperação do launcher descritos acima.
 A captura inicial não suporta submódulos: ela bloqueia explicitamente para não aprovar
-conteúdo interno que não foi capturado. Mudança externa que é restaurada entre capturas
+conteúdo interno que não foi capturado. Repositórios Git aninhados não rastreados também
+precisam ser ignorados no Git ou movidos para fora da árvore revisada; o erro identifica
+o caminho. Mudança externa que é restaurada entre capturas
 não é detectável por esse mecanismo; ele não é isolamento de sistema operacional.
 
 Concorrência pode reduzir espera do provider, mas aumenta RAM ativa e disputa CPU/quota.

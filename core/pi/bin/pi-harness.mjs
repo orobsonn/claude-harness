@@ -9,7 +9,7 @@ import { dirname, join, resolve } from "node:path";
 import { CANONICAL_ROLES, RUNTIME_ROLES } from "../lib/roles.mjs";
 import { PI_AUTH_PATH_ENV, PI_RESUME_ENV, verifyPiAuthPathPatch } from "../lib/pi-auth-path-patch.mjs";
 import { resolveVerifiedPiRuntime } from "../lib/pi-runtime-cache.mjs";
-import { piChildResourceSettings } from "../lib/pi-child-extensions.mjs";
+import { mergePiChildResourceSettings, piChildResourceSettings } from "../lib/pi-child-extensions.mjs";
 import { materializePiReviewConfig } from "../lib/pi-review-config.mjs";
 import { acquirePiParentWorktreeLock, recoverPiParentSession } from "../lib/parent-session-recovery.mjs";
 
@@ -282,7 +282,7 @@ export function materializeRuntime(root, runtimeDir, stateDir = harnessStateDir(
   try {
     const expected = JSON.parse(readFileSync(settingsSource, "utf8"));
     const current = JSON.parse(readFileSync(settingsTarget, "utf8"));
-    const childResources = piChildResourceSettings(root);
+    const childResources = mergePiChildResourceSettings(current, piChildResourceSettings(root));
     const legacyHarnessDefault =
       current && typeof current === "object" && !Array.isArray(current) &&
       current.defaultProvider === undefined &&
@@ -290,7 +290,8 @@ export function materializeRuntime(root, runtimeDir, stateDir = harnessStateDir(
     const needsIdleTimeout = current?.httpIdleTimeoutMs !== expected?.httpIdleTimeoutMs;
     const needsChildResources =
       JSON.stringify(current?.extensions) !== JSON.stringify(childResources.extensions) ||
-      JSON.stringify(current?.skills) !== JSON.stringify(childResources.skills);
+      JSON.stringify(current?.skills) !== JSON.stringify(childResources.skills) ||
+      JSON.stringify(current?.harnessChildResources) !== JSON.stringify(childResources.harnessChildResources);
     if (legacyHarnessDefault || needsIdleTimeout || needsChildResources) {
       writeFileSync(
         settingsTarget,
@@ -306,8 +307,9 @@ export function materializeRuntime(root, runtimeDir, stateDir = harnessStateDir(
         "utf8",
       );
     }
-  } catch {
-    // O próximo launcher ainda pode usar o arquivo existente; não arriscamos apagar runtime do operador.
+  } catch (error) {
+    // Invalid resource configuration must not silently erase an operator's permission extension.
+    throw new Error(`harness-child-resources: ${error instanceof Error ? error.message : String(error)}`);
   }
   // defaultMaxTurns é um rail de entrega. Atualizamos só esse teto nos runtimes já
   // materializados: os demais campos continuam pertencendo ao operador/local.
