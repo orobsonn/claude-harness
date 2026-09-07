@@ -32,9 +32,13 @@ sessão pai local, usando a pipeline nativa de mãos, fidelidade, freeze, captur
   ligado à worktree pai. Cada task nasce no `base_sha` global com parent visual explícito e roda a
   sessão Pi oficial em terminal próprio. Divergência ou falha não autoriza fallback silencioso.
   O registry fixa o pai Orca; `status` segue disponível para recuperação e `integrate` usa Git e
-  recibos já validados. `dispatch` e `resume`, que criam execução, exigem a mesma identidade. Em summaries, somente
-  `launches[].orca.surface="visible"` comprova terminal visível; `background` deve ser relatado
-  como limite. Orca cuida do placement; DAG, TDD, reviews, recibos e integração pertencem ao harness.
+  recibos já validados. `dispatch` e `resume`, que criam execução, exigem a mesma identidade. Em summaries,
+  `launches[].orca.surface="visible"` comprova adoção pelo notifier/renderer do host, não ACK de
+  navegação de cliente remoto; em `background`, a sessão ainda é listável e reanexável pelo mesmo
+  handle. Para revelar uma task escolhida num cliente conectado, use `worktree.activate` e
+  `session.tabs.activate` com `navigation="clients"` nas identidades existentes, sem criar outro
+  terminal. Não dispute foco a cada dispatch paralelo. Orca cuida do placement; DAG, TDD, reviews,
+  recibos e integração pertencem ao harness.
 - Fora do Orca, o backend local de worktrees e processos continua suportado.
 
 `harness_plan` apenas mostra progresso. Não o trate como scheduler, recibo de aprovação ou prova

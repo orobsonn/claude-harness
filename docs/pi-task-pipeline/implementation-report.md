@@ -23,10 +23,11 @@ o host; a abertura no cliente exige os RPCs nativos `worktree.activate` e
 inclui confirmação de renderização pelo cliente. Essa confirmação continua pendente
 depois de o operador informar que não via a run.
 
-Na verificação das 22:52 UTC, o servidor não tinha conexão remota estabelecida para
-receber a navegação. Os eventos de abertura não são reaplicados automaticamente a um
-cliente que se reconecta depois. A worktree global pertence ao setup original do
-Victor e aparece diretamente na lista do projeto, sem `parentWorktreeId`.
+Na tentativa anterior com o Victor, a verificação das 22:52 UTC não encontrou uma
+conexão remota estabelecida para receber a navegação. Antes da remoção, o
+`worktree.show` oficial registrava a worktree global como filha explícita da main
+original. Um snapshot persistido que mostrava `parentWorktreeId: null` não refletia
+essa relação e não é usado como autoridade para a linhagem.
 
 O PR [#902](https://github.com/orobsonn/claude-harness/pull/902), que paraleliza olhos,
 está incorporado. Adversary permanece obrigatório por task; compliance e security de
@@ -64,63 +65,54 @@ descobertas revalidar e incorporar. Diários completos não são herdados pelos 
 
 ## Validação real escolhida
 
-Projeto: **Syntifai-AI/victor-frontend**. Issue:
-[#5 — fundação APP, registro de ações e trava de clique duplo](https://github.com/Syntifai-AI/victor-frontend/issues/5).
-A issue estava aberta e a implementação não existia na base selecionada
-`b91265e54d7446fd026f523848ffec06922e7b56`.
+Projeto: **orobsonn/proj-lainny**. Issue:
+[#47 — escritor-publico-lead](https://github.com/orobsonn/proj-lainny/issues/47),
+já implementada no PR #56. O replay parte do pai exato dessa implementação,
+`84b946d5e12b516952c9cdb8696fbab6382ef813`, e permanece local: a operação de
+painel Cloudflare e qualquer publicação continuam fora da prova.
 
-O protótipo anterior reutilizou um plano histórico. Esta validação usa a issue aberta
-e exige trabalho real: migrações APP reaplicáveis, auditoria com redação, idempotência
-concorrente, reconciliação da allowlist no Worker e retenção de 18 meses.
-Não há publicação ou deploy do Victor neste teste.
+A FULL nova usa a worktree Orca
+`/home/orca/orca/workspaces/proj-lainny/pi-harness-full-lainny-47`, criada no
+mesmo projeto, setup e host da main registrada. O código do harness estava em
+`a9f33865ffa4eeb77631613823a52f8dd17baab6`; o bootstrap instalado foi fixado em
+`8397a9e9c80ee766693a58ac3cfce1364018b394`. O provider foi lançado em
+2026-09-07 às 23:46:31 UTC na sessão global
+`b2681197-8aa4-4ebb-856e-a35898d5c4bb`. O terminal
+`term_4c012bf1-9bec-44be-ae61-e2b47e40edb4` tem o título
+`RUN REAL · Pi Harness FULL · Lainny #47`, e o estado oficial do agente é
+`working`. O gate registra a feature `escritor-publico-lead-orca` e
+`task_pipeline_version: 1` desde a classificação. Os registros desta execução ficam
+em `/tmp/pi-full-lainny-47-orca-run`.
 
-A tentativa da sessão `e4a00af2-21cd-44f0-a6cb-b3a668a48a3d` foi interrompida e não
-serve como prova da pipeline. A nova FULL usa a worktree Orca
-`victor-frontend/pi-harness-full-victor-5`. A sessão global
-`68877ea4-a3da-4bc5-b39a-cfe8b000f6c1` começou em 2026-09-07 às 22:09 UTC,
-com `task_pipeline_version: 1` desde a classificação. O terminal Orca é
-`term_16c3c4e5-7eec-426d-934f-ab38593dec3d`.
+Na base real, a baseline passou **699 testes em 80 arquivos**, além do typecheck,
+audit com zero achados e docs-check em **3 arquivos PRD**. Os dois smokes Orca
+executados localmente também passaram. A navegação do cliente foi despachada e o RPC
+ativo foi confirmado, mas a renderização na tela do operador ainda aguarda
+confirmação. Isso comprova o processo e o caminho de navegação, não a exibição visual.
 
-Na base real, o instalador copiou **151 arquivos** do harness, a suíte baseline passou
-**79/79** e o typecheck está verde. O smoke do Orca confirmou processo, lineage e os
-layouts visuais. Em runtime headless, `surface: background` descreve a superfície do
-terminal e não significa ausência da worktree no ADE. A sessão global real confirmou
-o handle, tab e pane exatos no layout do servidor. O processo recebeu a identidade
-Orca correta, e `terminal.agentStatus` confirmou `isRunningAgent: true` e
-`status: working`. Isso comprova processo/status, mas não a tela do operador.
+A primeira draft foi escrita e enviada ao adversary. Uma checagem independente
+identificou que ela atribuía scaffolds de produção ao test-author. A correção de
+decomposição preserva duas raízes paralelas e reúne rota e componentes novos numa
+task testada pela entrada HTTP já existente. A mesma sessão será retomada com esse
+feedback, sem alterar gates. Ainda não há task filha despachada nem aprovação FULL.
+A execução precisa percorrer planejamento, tasks, integração e olhos finais antes
+de servir como prova completa.
 
-Às 22:55 UTC, somente o worker dessa FULL foi interrompido, após conferência do PID,
-início do processo e descriptor. A spec ainda estava em draft e nenhuma task de
-implementação havia sido despachada. O motivo é uma contradição de requisitos: AC1.7
-exige registrar a mudança na primeira requisição, enquanto as recusas de autenticação
-devem acessar zero bindings. A spec atribuiu ao operador uma interpretação que ele
-não forneceu. O APPROVE produzido sobre essa premissa não é aceito como prova. A
-decisão foi solicitada ao operador; a mesma sessão e seus registros estão preservados
-para retomar com a especificação corrigida e uma nova revisão.
-
-A correção de recuperação foi exercitada contra essa mesma sessão: o preflight
-retornou `stage: draft`, sem mudar um byte do gate-state, e o gate nativo continuou
-negando o planner. **160/160 testes focais** de retomada, markers, launcher, dispatch
-e task mode passaram. A revisão independente da correção foi aprovada sem findings
-restantes. O instalador oficial regenerou o vendor local e o da worktree real; o
-preflight instalado também preservou os registros e manteve o planner bloqueado.
-Nenhum provider foi reiniciado para essa verificação.
-
-Alternativa identificada, ainda sem despacho: `orobsonn/proj-lainny` #47,
-`escritor-publico-lead`, já implementada no PR #56. Seu plano histórico FULL tem
-cinco tasks, duas raízes independentes, base anterior
-`84b946d5e12b516952c9cdb8696fbab6382ef813` e evidência histórica de 766 testes.
-A operação de painel Cloudflare permanece fora do replay local, como na entrega
-original. Essa alternativa atende ao pedido inicial de usar uma issue já implementada.
+A tentativa anterior no Victor foi encerrada e removida pela operação oficial do
+Orca. Sua branch foi preservada em `2eb4033`, com evidência arquivada em
+`/tmp/pi-full-victor-5-archived-proof`; ela não conta como prova da pipeline. O
+preflight de recuperação exercitado naquela sessão preservou os gates em draft e
+motivou a cobertura que agora permite retomar specs e checkpoints anteriores ao
+plano sem inventar aprovação.
 
 ## Evidências e fechamento pendente
 
-- [PR funcional #903](https://github.com/orobsonn/claude-harness/pull/903), ainda draft
-  com [CI aprovado em `36fb7e7`](https://github.com/orobsonn/claude-harness/actions/runs/34165975643),
-  incluindo a correção que fixa a identidade do host.
+- [PR funcional #903](https://github.com/orobsonn/claude-harness/pull/903), ainda draft.
+  O [CI em `a9f3386`](https://github.com/orobsonn/claude-harness/actions/runs/34169860467)
+  registrou **3488 testes: 3486 passaram, nenhum falhou e 2 foram ignorados**. Os dois
+  smokes Orca executados localmente passaram (**2/2**).
 - Testes focais de contexto, coordenação, revisão e adapter Orca: **73/73**.
-- Suíte completa após a recuperação: **3478/3478**, sem falhas; a correção posterior
-  de identidade do host passou em **6/6** testes focais e está no CI atual.
+- A correção de identidade do host passou em **6/6** testes focais e está no CI atual.
 - O CLI host agora usa o payload AppImage extraído e o launcher estável oficial. A
   correção preserva os dois wrappers anteriores e tem rollback registrado em
   `/tmp/pi-orca-cli-repair-evidence.json`; não reiniciou o app nem o servidor.

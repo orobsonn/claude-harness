@@ -45,8 +45,12 @@ disponível sem inicializar runtime para permitir recuperação, e `integrate` d
 Git e recibos já verificados, não da disponibilidade do Orca. O backend cria a worktree task no `base_sha` global com
 `parent_worktree_id` explícito, confirma repo/path/instance e inicia o worker em terminal
 próprio. O summary expõe `orca.worktree_id` e
-`launches[].orca.{terminal_handle,surface}`; somente `surface:"visible"` prova que o
-terminal apareceu na UI, e `background` permanece um limite explícito. Orca é responsável
+`launches[].orca.{terminal_handle,surface}`. `surface:"visible"` prova adoção pelo
+notifier/renderer do host, não ACK de navegação de cliente remoto; em `background`, a sessão
+continua listável e reanexável pelo mesmo handle. A revelação explícita de uma task escolhida
+num cliente conectado usa `worktree.activate` e `session.tabs.activate` com
+`navigation:"clients"` nas identidades existentes, sem criar outro terminal nem disputar foco
+em cada task paralela. Orca é responsável
 por placement e superfície. O harness continua responsável por DAG, TDD, reviews,
 process lifecycle, recibos e integração. Sem `ORCA_WORKTREE_ID`, usa-se o backend local
 de Git/worktree/processo.

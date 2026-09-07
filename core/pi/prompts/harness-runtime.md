@@ -90,8 +90,11 @@ não cai silenciosamente no processo local. O registry prende a identidade do pa
 `status` continua legível para recuperação, e `integrate` usa apenas Git e recibos já
 verificados; `dispatch` e `resume`, que criam execução, exigem o mesmo pai Orca. O
 resumo expõe `orca.worktree_id` e, por lançamento,
-`orca.terminal_handle`/`surface`; somente `surface="visible"` comprova uma superfície
-visível, enquanto `background` é um limite explícito. Fora do Orca, o backend local de
+`orca.terminal_handle`/`surface`; `surface="visible"` comprova adoção pelo notifier/renderer
+do host, não um ACK de navegação de cliente remoto. Em `background`, a sessão preserva o
+mesmo handle e continua listável e reanexável. A revelação explícita num cliente conectado
+usa `worktree.activate` e `session.tabs.activate` com `navigation="clients"` sobre as
+identidades existentes, sem criar outro terminal; não dispute foco em cada task paralela. Fora do Orca, o backend local de
 Git/processo permanece disponível. Orca fornece placement e terminais; o harness segue
 dono do DAG, TDD, reviews, recibos e integração.
 
