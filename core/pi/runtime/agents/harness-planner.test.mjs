@@ -30,7 +30,9 @@ test("planner Pi usa a spec selada e o routing vendored sem exigir artefatos ext
   assert.match(prompt, /"medium": "openai-codex\/gpt-5\.6-terra"/);
   assert.match(prompt, /"planner": "openai-codex\/gpt-5\.6-sol"/);
   assert.match(prompt, /"plan-reviewer": "openai-codex\/gpt-6-astra"/);
+  assert.match(prompt, /"compliance": "openai-codex\/gpt-5\.6-luna"/);
   assert.doesNotMatch(prompt, /"plan-reviewer": "openai-codex\/gpt-5\.6-sol"/);
+  assert.doesNotMatch(prompt, /"compliance": "openai-codex\/gpt-5\.6-terra"/);
 });
 
 test("planner Pi recebe contexto de revisão sem depender de resposta posterior do pai", () => {

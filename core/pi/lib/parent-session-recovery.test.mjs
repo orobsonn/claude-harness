@@ -11,10 +11,10 @@ const SESSION = "ses-parent-resume";
 const FEATURE = "parent-resume";
 const MODELS = {
   hand_tiers: { low: "openai-codex/gpt-5.6-luna", medium: "openai-codex/gpt-5.6-terra", high: "openai-codex/gpt-5.6-terra" },
-  planner: "openai-codex/gpt-5.6-sol", "plan-reviewer": "openai-codex/gpt-6-astra", compliance: "openai-codex/gpt-5.6-terra",
+  planner: "openai-codex/gpt-5.6-sol", "plan-reviewer": "openai-codex/gpt-6-astra", compliance: "openai-codex/gpt-5.6-luna",
   adversary: "openai-codex/gpt-5.6-sol", security: "openai-codex/gpt-5.6-sol", shipper: "openai-codex/gpt-5.6-luna", harvester: "openai-codex/gpt-5.6-luna",
 };
-const LEGACY_MODELS = { ...MODELS, "plan-reviewer": "openai-codex/gpt-5.6-sol" };
+const LEGACY_MODELS = { ...MODELS, compliance: "openai-codex/gpt-5.6-terra" };
 
 function sha(text) {
   return createHash("sha256").update(text).digest("hex");
@@ -98,7 +98,7 @@ test("recovery exposes evidence without inventing plan approval or task closure"
   } finally { f.cleanup(); }
 });
 
-test("recovery accepts only the exact legacy reviewer route and requires its reconciliation", () => {
+test("recovery accepts only the exact legacy compliance route and requires its reconciliation", () => {
   const f = fixture();
   try {
     const plan = JSON.parse(fs.readFileSync(f.plan, "utf8"));
@@ -108,8 +108,8 @@ test("recovery accepts only the exact legacy reviewer route and requires its rec
     assert.equal(recovered.ok, true);
     const envelope = JSON.parse(recovered.context.split("\n")[1]);
     assert.equal(envelope.plan_approval, "not_verified_by_recovery");
-    assert.equal(envelope.model_route_status, "legacy-plan-reviewer-sol");
-    assert.match(envelope.model_route_reconciliation, /planner.*model_strategy\.plan-reviewer.*Astra.*new hash/is);
+    assert.equal(envelope.model_route_status, "legacy-compliance-terra");
+    assert.match(envelope.model_route_reconciliation, /planner.*model_strategy\.compliance.*Luna.*new hash/is);
   } finally { f.cleanup(); }
 });
 

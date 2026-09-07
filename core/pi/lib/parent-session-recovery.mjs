@@ -27,7 +27,7 @@ const CURRENT_PI_MODEL_STRATEGY = Object.freeze({
   }),
   planner: "openai-codex/gpt-5.6-sol",
   "plan-reviewer": "openai-codex/gpt-6-astra",
-  compliance: "openai-codex/gpt-5.6-terra",
+  compliance: "openai-codex/gpt-5.6-luna",
   adversary: "openai-codex/gpt-5.6-sol",
   security: "openai-codex/gpt-5.6-sol",
   shipper: "openai-codex/gpt-5.6-luna",
@@ -42,7 +42,7 @@ const LEGACY_PI_MODEL_STRATEGY = Object.freeze({
     high: "openai-codex/gpt-5.6-terra",
   }),
   planner: "openai-codex/gpt-5.6-sol",
-  "plan-reviewer": "openai-codex/gpt-5.6-sol",
+  "plan-reviewer": "openai-codex/gpt-6-astra",
   compliance: "openai-codex/gpt-5.6-terra",
   adversary: "openai-codex/gpt-5.6-sol",
   security: "openai-codex/gpt-5.6-sol",
@@ -217,8 +217,8 @@ export function recoverPiParentSession(projectRoot, sessionId) {
     gate_state_path: path.relative(root, statePath.path),
     session_file: path.relative(root, transcript.sessionFile),
     ...(legacyPlan?.ok ? {
-      model_route_status: "legacy-plan-reviewer-sol",
-      model_route_reconciliation: "Dispatch the planner to change only model_strategy.plan-reviewer to Astra while preserving the sealed spec and tasks, revalidate the JSON, then have Astra review the new hash. Do not reuse plan approval or infer progress from the rewritten plan.",
+      model_route_status: "legacy-compliance-terra",
+      model_route_reconciliation: "Dispatch the planner to change only model_strategy.compliance to Luna while preserving the sealed spec and tasks, revalidate the JSON, then have Astra review the new hash. Do not reuse plan approval or infer progress from the rewritten plan.",
     } : {}),
   };
   return {

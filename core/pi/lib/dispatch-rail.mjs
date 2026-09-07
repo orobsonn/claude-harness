@@ -21,7 +21,7 @@ const FIXED_PI_ROUTES = Object.freeze({
   "harness-plan-reviewer": Object.freeze({ model: "openai-codex/gpt-6-astra", thinking: "high" }),
   "harness-adversary": Object.freeze({ model: "openai-codex/gpt-5.6-sol", thinking: "medium" }),
   "harness-security": Object.freeze({ model: "openai-codex/gpt-5.6-sol" }),
-  "harness-compliance": Object.freeze({ model: "openai-codex/gpt-5.6-terra", thinking: "high" }),
+  "harness-compliance": Object.freeze({ model: "openai-codex/gpt-5.6-luna", thinking: "xhigh" }),
   "harness-test-author": Object.freeze({ model: "openai-codex/gpt-5.6-terra", thinking: "high" }),
   "harness-harvester": Object.freeze({ model: "openai-codex/gpt-5.6-luna", thinking: "high" }),
   "harness-shipper": Object.freeze({ model: "openai-codex/gpt-5.6-luna", thinking: "high" }),

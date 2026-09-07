@@ -7,7 +7,7 @@ const INDEPENDENT_REVIEW_ROUTES = Object.freeze({
   "harness-adversary": { model: "openai-codex/gpt-5.6-sol", thinking: "medium" },
   "harness-discussion-adversary": { model: "openai-codex/gpt-5.6-sol", thinking: "medium" },
   "harness-plan-reviewer": { model: "openai-codex/gpt-6-astra", thinking: "high" },
-  "harness-compliance": { model: "openai-codex/gpt-5.6-terra", thinking: "high" },
+  "harness-compliance": { model: "openai-codex/gpt-5.6-luna", thinking: "xhigh" },
   "harness-security": { model: "openai-codex/gpt-5.6-sol" },
 });
 
@@ -47,6 +47,9 @@ test("rotas de modelo do Pi são fixas por papel e por complexidade da mão", ()
   assert.deepEqual(piDispatchRoute("harness-test-author"), {
     ok: true, model: "openai-codex/gpt-5.6-terra", thinking: "high",
   });
+  assert.deepEqual(piDispatchRoute("harness-compliance"), {
+    ok: true, model: "openai-codex/gpt-5.6-luna", thinking: "xhigh",
+  });
   assert.deepEqual(piDispatchRoute("harness-executor", "low"), {
     ok: true, model: "openai-codex/gpt-5.6-luna", thinking: "high",
   });
@@ -61,8 +64,12 @@ test("rotas de modelo do Pi são fixas por papel e por complexidade da mão", ()
   });
 
   assert.deepEqual(
-    validateSubagentDispatch({ subagent_type: "harness-compliance", model: "openai-codex/gpt-5.6-terra", thinking: "high" }),
+    validateSubagentDispatch({ subagent_type: "harness-compliance", model: "openai-codex/gpt-5.6-luna", thinking: "xhigh" }),
     { ok: true },
+  );
+  assert.deepEqual(
+    validateSubagentDispatch({ subagent_type: "harness-compliance", model: "openai-codex/gpt-5.6-terra", thinking: "high" }),
+    { ok: false, reason: "model-route" },
   );
   assert.deepEqual(
     validateSubagentDispatch({ subagent_type: "harness-plan-reviewer", model: "openai-codex/gpt-6-astra", thinking: "high" }),

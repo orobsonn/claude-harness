@@ -93,7 +93,7 @@ read locally, reply `BLOCKED` with the missing fact and do not write a plan.
   },
   "planner": "openai-codex/gpt-5.6-sol",
   "plan-reviewer": "openai-codex/gpt-6-astra",
-  "compliance": "openai-codex/gpt-5.6-terra",
+  "compliance": "openai-codex/gpt-5.6-luna",
   "adversary": "openai-codex/gpt-5.6-sol",
   "security": "openai-codex/gpt-5.6-sol",
   "harvester": "openai-codex/gpt-5.6-luna",
