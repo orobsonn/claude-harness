@@ -44,6 +44,7 @@ import { basename, join, resolve } from "node:path";
 
 import { formatFeatureTaskEntry, matchesAbsolution } from "../vendor/shared/lib/absolution.mjs";
 import { checkFrozen, checkScope } from "../vendor/shared/lib/capture-oracle.mjs";
+import { recordViolations } from "../vendor/shared/lib/real-file-capture-rail.mjs";
 import { mergeGateStatePatch } from "../vendor/shared/lib/gate-state-shape.mjs";
 import { computeGitState } from "../vendor/shared/lib/git-state.mjs";
 import {
@@ -66,6 +67,7 @@ import { parseTaskDispatchIdentity } from "../vendor/opencode/lib/task-dispatch-
 import {
   isCapacityExhaustedOutput,
   parseHandStatusFromOutput,
+  validateOcCaptureEligibleHandRecord,
 } from "../vendor/opencode/lib/hand-records.mjs";
 import { pathsChangedSinceBaseline } from "../vendor/opencode/lib/worktree-baseline.mjs";
 import { withGateStateLock } from "../vendor/opencode/lib/gate-state.mjs";
@@ -77,13 +79,15 @@ import {
   toOcRole,
 } from "./pi-adapter-map.mjs";
 import { loadPiGateStateFromDisk } from "./pi-gate-state.mjs";
-import { piGateStatePath } from "./pi-paths.mjs";
+import { piGateStatePath, piHandRecordPath } from "./pi-paths.mjs";
 import {
   piReleaseMergeMatchesProof,
   resolvePiReleaseProof,
   scopePiReleaseOnlyTaskState,
 } from "./release-only.mjs";
 import { readPiSpecApproval, readPiSpecDraft } from "./spec-approval.mjs";
+import { readPiReviewPlan } from "./pi-review-evidence.mjs";
+import { readAllIntegratedTaskEvidence, readIntegratedTaskEvidence } from "./task-receipts.mjs";
 import {
   claimPiDispatchForRuntime,
   listPiHandRecordsForFeature,
@@ -478,6 +482,8 @@ export function piIsLifecycleOnlyMerge(projectRoot) {
  *   classifyReleaseOnlyFn?: (root: string) => object,
  *   resolveReleaseProofFn?: (root: string) => object,
  *   readMergedReleaseEvidenceFn?: (headSha: string) => unknown,
+ *   readReviewPlanFn?: typeof readPiReviewPlan,
+ *   readAllIntegratedTaskEvidenceFn?: typeof readAllIntegratedTaskEvidence,
  *   importDenylistFn?: () => Promise<object>,
  * }} input
  * @returns {Promise<{ok: boolean, decision: "allow"|"deny", reason: string, advisory?: string, details?: unknown}>}
@@ -594,6 +600,35 @@ export async function decidePiBashGate(input = {}) {
       })
     : { active: false, gateState, proof: null };
 
+  // A sessão global nova não possui hand-records locais: cada task mantém sua identidade na
+  // worktree filha. Quando todo o plano está integrado no HEAD atual, retire somente feature_id
+  // da cópia efêmera entregue ao real-file rail legado. Nenhum record sintético é criado.
+  let deliveryGateState = releaseScope.gateState;
+  if (isDeliveryCommand(command) && gateState.task_pipeline_version === 1 && !gateState.task_run &&
+      sessionId && typeof gateState.feature_id === "string") {
+    const readPlan = typeof input.readReviewPlanFn === "function" ? input.readReviewPlanFn : readPiReviewPlan;
+    const readAll = typeof input.readAllIntegratedTaskEvidenceFn === "function"
+      ? input.readAllIntegratedTaskEvidenceFn
+      : readAllIntegratedTaskEvidence;
+    const loadedPlan = readPlan({ projectRoot, featureId: gateState.feature_id });
+    const headSha = resolvePiHeadSha(projectRoot);
+    const integrated = loadedPlan?.ok && headSha
+      ? readAll({ projectRoot, sessionId, featureId: gateState.feature_id, headSha, tasks: loadedPlan.plan.tasks })
+      : { ok: false };
+    if (!integrated?.ok) {
+      return {
+        ok: false,
+        decision: "deny",
+        reason: `${PREFIX} Blocked: task-pipeline delivery requires every canonical task integration on the current HEAD.`,
+        ...advisory,
+      };
+    }
+    if (integrated.ok) {
+      const { feature_id: _delegatedFeature, ...withoutLocalCaptureLookup } = deliveryGateState;
+      deliveryGateState = withoutLocalCaptureLookup;
+    }
+  }
+
   if (isGitTagMutation(command)) {
     return exactPostMergeTagCommand(commandText, releaseProof)
       ? { ...ALLOW, ...advisory }
@@ -676,7 +711,7 @@ export async function decidePiBashGate(input = {}) {
   // 7. Rails de delivery puros.
   const delivery = decideBashDelivery({
     command,
-    gateState: releaseScope.gateState,
+    gateState: deliveryGateState,
     sessionId: sessionId ?? null,
     isAncestorFn,
     listHandRecordsForFeatureFn,
@@ -703,6 +738,7 @@ export async function decidePiBashGate(input = {}) {
  *   isAncestorFn?: (sha: string) => boolean|null,
  *   claimDispatchFn?: (root: string, args: object, deps: object) => object,
  *   readCanonicalTaskPolicyFn?: (root: string, featureId: string, taskId: string) => object,
+ *   readIntegratedTaskEvidenceFn?: typeof readIntegratedTaskEvidence,
  *   readSpecDraftFn?: (context: object) => object,
  *   readSpecApprovalFn?: (context: object) => object,
  *   classifyReleaseOnlyFn?: (root: string) => object,
@@ -750,6 +786,14 @@ export function decidePiDispatchGate(input = {}) {
   }
   const gateState = loaded && loaded.ok ? loaded.state : {};
 
+  if (gateState.task_pipeline_version === 1 && !gateState.task_run && isWritingHandRole(input.subagentType)) {
+    return {
+      ok: false,
+      decision: "deny",
+      reason: `${PREFIX} Global task-pipeline sessions dispatch implementation through harness_tasks; direct ${role} dispatch is not allowed.`,
+    };
+  }
+
   const promptMarker = parseTaskDispatchIdentity(toolArgs.prompt);
   const identity = resolveHookIdentity({
     // O Pi não tem envelope de runtime com feature/task: o único campo confiável é o sessionId
@@ -782,7 +826,8 @@ export function decidePiDispatchGate(input = {}) {
   // cuja política mudou entre esta leitura e a reivindicação atômica do escopo.
   let canonicalNoTests = false;
   let noTestsPlanHash = "";
-  if (isExecutorRole(bareRole) && featureId && taskId) {
+  let dependencies = [];
+  if ((isWritingHandRole(input.subagentType) || ["adversary", "compliance", "security"].includes(bareRole)) && featureId && taskId) {
     const readPolicy =
       typeof input.readCanonicalTaskPolicyFn === "function"
         ? input.readCanonicalTaskPolicyFn
@@ -795,7 +840,8 @@ export function decidePiDispatchGate(input = {}) {
         reason: `${PREFIX} Blocked: canonical task policy unavailable: ${String(policy?.reason ?? "unknown")}`,
       };
     }
-    canonicalNoTests = policy.noTests === true;
+    dependencies = policy.dependsOn ?? [];
+    canonicalNoTests = isExecutorRole(bareRole) && policy.noTests === true;
     if (canonicalNoTests) {
       if (typeof policy.planHash !== "string" || policy.planHash.length === 0) {
         return { ok: false, decision: "deny", reason: `${PREFIX} Blocked: canonical no_tests policy lacks plan hash.` };
@@ -808,6 +854,40 @@ export function decidePiDispatchGate(input = {}) {
     typeof input.isAncestorFn === "function"
       ? input.isAncestorFn
       : (sha) => piIsAncestor(sha, projectRoot);
+
+  for (const dependency of gateState.task_run ? [] : dependencies) {
+    const bare = formatFeatureTaskEntry(featureId, dependency);
+    const integratedReader = typeof input.readIntegratedTaskEvidenceFn === "function"
+      ? input.readIntegratedTaskEvidenceFn
+      : readIntegratedTaskEvidence;
+    const integrated = integratedReader({
+      projectRoot,
+      sessionId,
+      featureId,
+      taskId: dependency,
+      headSha: resolvePiHeadSha(projectRoot),
+    });
+    if (integrated?.ok) continue;
+    if (gateState.task_pipeline_version === 1 && !gateState.task_run) {
+      return { ok: false, decision: "deny", reason: `${PREFIX} Blocked: dependency ${bare} requires a current integrated task receipt.` };
+    }
+    const recordPath = piHandRecordPath({ projectRoot, sessionId, featureId }, dependency);
+    let record;
+    try { record = recordPath.ok ? JSON.parse(readFileSync(recordPath.path, "utf8")) : null; } catch { record = null; }
+    const identity = validateOcCaptureEligibleHandRecord(record, { featureId, taskId: dependency, sessionId });
+    const violations = recordViolations(record);
+    const captured = formatFeatureTaskEntry(featureId, dependency, record?.freezeCommitSha);
+    const pending = gateState.regate_pending;
+    const regateReady = pending === undefined || (Array.isArray(pending) && !pending.some((entry) =>
+      typeof entry === "string" && (entry === bare || entry.startsWith(`${bare}@`)) &&
+      !matchesAbsolution(entry, gateState.regate_passed, isAncestorFn)));
+    if (!identity.ok || typeof record?.capturedVerifiedAt !== "string" || !record.capturedVerifiedAt ||
+      violations.scope.length || violations.frozen.length || isAncestorFn(record.freezeCommitSha) !== true ||
+      !Array.isArray(gateState.hand_finished) || !gateState.hand_finished.includes(bare) ||
+      !Array.isArray(gateState.capture_verified) || !gateState.capture_verified.includes(captured) || !regateReady) {
+      return { ok: false, decision: "deny", reason: `${PREFIX} Blocked: dependency ${bare} requires current completed capture and re-gate evidence.` };
+    }
+  }
 
   const releaseProof = bareRole === "shipper"
     ? releaseProofForGate(input, projectRoot)

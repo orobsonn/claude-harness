@@ -31,6 +31,7 @@ import {
   obsAppend as defaultObsAppend,
 } from "../vendor/opencode/lib/obs-emit.mjs";
 import { piExecutionPlanPath, piGateStatePath } from "./pi-paths.mjs";
+import { TASK_PIPELINE_VERSION } from "./task-contract.mjs";
 
 /** Marcador de sessão filha usado como parentSessionId sintético (o Pi não expõe o id do pai
  * no header do filho de forma canônica; para a autoridade basta "existe pai"). */
@@ -42,6 +43,7 @@ const PRISTINE_CLASSIFY_KEYS = new Set([
   "peak_mode",
   "classified",
   "triaged",
+  "task_pipeline_version",
 ]);
 
 /**
@@ -217,6 +219,7 @@ export function executePiClassify(args = {}, context = {}, deps = {}) {
     peak_mode: peakMode,
     classified: true,
     triaged: true,
+    ...(["LIGHT", "FULL"].includes(finalMode) ? { task_pipeline_version: TASK_PIPELINE_VERSION } : {}),
   };
 
   const persisted = persist({

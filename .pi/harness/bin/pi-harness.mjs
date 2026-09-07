@@ -9,10 +9,14 @@ import { dirname, join, resolve } from "node:path";
 import { CANONICAL_ROLES, RUNTIME_ROLES } from "../lib/roles.mjs";
 import { PI_AUTH_PATH_ENV, PI_RESUME_ENV, verifyPiAuthPathPatch } from "../lib/pi-auth-path-patch.mjs";
 import { resolveVerifiedPiRuntime } from "../lib/pi-runtime-cache.mjs";
+import { mergePiChildResourceSettings, piChildResourceSettings } from "../lib/pi-child-extensions.mjs";
+import { materializePiReviewConfig } from "../lib/pi-review-config.mjs";
 import { acquirePiParentWorktreeLock, recoverPiParentSession } from "../lib/parent-session-recovery.mjs";
+import { admitTaskRun, inspectTaskAdmission, rollbackTaskAdmission, taskRunPrompt, TASK_RUN_ENV } from "../lib/task-run.mjs";
 
 const PACKAGE_ROOT = resolve(fileURLToPath(new URL("../", import.meta.url)));
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
+const SUBAGENTS_BRIDGE = "extensions/harness-subagents.ts";
 
 /**
  * Extensões carregadas ANTES do pi-subagents. `harness-policy` vem primeiro de propósito: hooks
@@ -22,6 +26,7 @@ const SCRIPT_PATH = fileURLToPath(import.meta.url);
  */
 const EXTENSIONS_BEFORE_SUBAGENTS = [
   "extensions/harness-policy.ts",
+  "extensions/harness-task-run.ts",
   "extensions/harness-bootstrap.ts",
 ];
 
@@ -36,7 +41,9 @@ const EXTENSIONS_BEFORE_SUBAGENTS = [
 const EXTENSIONS_AFTER_SUBAGENTS = [
   "extensions/harness-dispatch.ts",
   "extensions/harness-memory.ts",
+  "extensions/harness-tasks.ts",
   "extensions/harness-entry-gate.ts",
+  "extensions/harness-reviews.ts",
   "extensions/harness-plan-gate.ts",
   "extensions/harness-plan-write-gate.ts",
   "extensions/harness-marker.ts",
@@ -54,6 +61,12 @@ const EXTENSIONS_AFTER_SUBAGENTS = [
 /** Libs host-agnósticas que as extensões acima importam; ausência de qualquer uma deixa um gate mudo. */
 const REQUIRED_LIBS = [
   "lib/classify.mjs",
+  "lib/task-contract.mjs",
+  "lib/task-coordinator.mjs",
+  "lib/task-process.mjs",
+  "lib/task-receipts.mjs",
+  "lib/task-runtime-assets.mjs",
+  "lib/task-run.mjs",
   "lib/ceremony-mode.mjs",
   "lib/context-files.mjs",
   "lib/dispatch-rail.mjs",
@@ -66,8 +79,12 @@ const REQUIRED_LIBS = [
   "lib/pi-adapter-map.mjs",
   "lib/pi-auth-path-patch.mjs",
   "lib/pi-child-identity.mjs",
+  "lib/pi-child-extensions.mjs",
   "lib/pi-gate-state.mjs",
   "lib/pi-paths.mjs",
+  "lib/pi-review-config.mjs",
+  "lib/pi-review-concurrency.mjs",
+  "lib/pi-review-evidence.mjs",
   "lib/pi-result-text.mjs",
   "lib/pi-runtime-cache.mjs",
   "lib/pi-state-records.mjs",
@@ -210,7 +227,7 @@ export function buildPiHarnessInvocation({ root, argv, env, runtimePrompt = "", 
   const extensionArgs = [
     ...EXTENSIONS_BEFORE_SUBAGENTS.flatMap((rel) => ["-e", join(root, rel)]),
     "-e",
-    dependencyPaths.subagentsExtension,
+    join(root, SUBAGENTS_BRIDGE),
     ...EXTENSIONS_AFTER_SUBAGENTS.flatMap((rel) => ["-e", join(root, rel)]),
   ];
   return {
@@ -254,6 +271,7 @@ export function buildPiHarnessInvocation({ root, argv, env, runtimePrompt = "", 
  * @param {string} [stateDir]
  */
 export function materializeRuntime(root, runtimeDir, stateDir = harnessStateDir(runtimeDir)) {
+  materializePiReviewConfig(runtimeDir, join(root, "runtime-defaults/harness.json"));
   mkdirSync(runtimeDir, { recursive: true });
   mkdirSync(stateDir, { recursive: true });
   for (const name of RUNTIME_DEFAULTS) {
@@ -273,12 +291,17 @@ export function materializeRuntime(root, runtimeDir, stateDir = harnessStateDir(
   try {
     const expected = JSON.parse(readFileSync(settingsSource, "utf8"));
     const current = JSON.parse(readFileSync(settingsTarget, "utf8"));
+    const childResources = mergePiChildResourceSettings(current, piChildResourceSettings(root));
     const legacyHarnessDefault =
       current && typeof current === "object" && !Array.isArray(current) &&
       current.defaultProvider === undefined &&
       LEGACY_HARNESS_DEFAULT_MODELS.has(current.defaultModel);
     const needsIdleTimeout = current?.httpIdleTimeoutMs !== expected?.httpIdleTimeoutMs;
-    if (legacyHarnessDefault || needsIdleTimeout) {
+    const needsChildResources =
+      JSON.stringify(current?.extensions) !== JSON.stringify(childResources.extensions) ||
+      JSON.stringify(current?.skills) !== JSON.stringify(childResources.skills) ||
+      JSON.stringify(current?.harnessChildResources) !== JSON.stringify(childResources.harnessChildResources);
+    if (legacyHarnessDefault || needsIdleTimeout || needsChildResources) {
       writeFileSync(
         settingsTarget,
         `${JSON.stringify({
@@ -288,12 +311,14 @@ export function materializeRuntime(root, runtimeDir, stateDir = harnessStateDir(
             defaultModel: expected.defaultModel,
           } : {}),
           ...(needsIdleTimeout ? { httpIdleTimeoutMs: expected.httpIdleTimeoutMs } : {}),
+          ...(needsChildResources ? childResources : {}),
         }, null, 2)}\n`,
         "utf8",
       );
     }
-  } catch {
-    // O próximo launcher ainda pode usar o arquivo existente; não arriscamos apagar runtime do operador.
+  } catch (error) {
+    // Invalid resource configuration must not silently erase an operator's permission extension.
+    throw new Error(`harness-child-resources: ${error instanceof Error ? error.message : String(error)}`);
   }
   // defaultMaxTurns é um rail de entrega. Atualizamos só esse teto nos runtimes já
   // materializados: os demais campos continuam pertencendo ao operador/local.
@@ -328,13 +353,17 @@ export function verifyPiHarness(root, cacheOptions = {}) {
     dependencies.subagentsPackage,
     dependencies.subagentsExtension,
     ...EXTENSIONS_BEFORE_SUBAGENTS.map((rel) => join(root, rel)),
+    join(root, SUBAGENTS_BRIDGE),
     ...EXTENSIONS_AFTER_SUBAGENTS.map((rel) => join(root, rel)),
     ...REQUIRED_LIBS.map((rel) => join(root, rel)),
+    join(root, "bin/pi-task-worker.mjs"),
     join(root, "skills"),
     join(root, "skills/harness-grill/SKILL.md"),
     join(root, "skills/harness-grill/references/lavish-usage.md"),
     join(root, "prompts/harness-runtime.md"),
+    join(root, "prompts/harness-task-runtime.md"),
     join(root, "runtime-defaults/subagents.json"),
+    join(root, "runtime-defaults/harness.json"),
     join(root, "runtime-defaults/models-store.json"),
     join(root, "runtime-defaults/settings.json"),
     ...RUNTIME_ROLES.map((role) => join(root, "runtime-defaults/agents", `${role}.md`)),
@@ -364,7 +393,10 @@ function dispatchedChild(env) {
  */
 export function runPiHarnessCli(argv, options = {}) {
   const cwd = options.cwd ?? process.cwd();
-  const env = options.env ?? process.env;
+  const env = { ...(options.env ?? process.env) };
+  // A task environment is inherited by native children. A new launcher invocation may only
+  // establish it again after an exact grant admission or exact task-session recovery.
+  delete env[TASK_RUN_ENV];
   const packageRoot = options.packageRoot ?? PACKAGE_ROOT;
   const errorSink = options.errorSink ?? ((message) => console.error(message));
   const acquireParentLockFn = options.acquireParentLockFn ?? acquirePiParentWorktreeLock;
@@ -374,6 +406,28 @@ export function runPiHarnessCli(argv, options = {}) {
   const spawnSyncFn = options.spawnSyncFn ?? spawnSync;
   const randomSessionIdFn = options.randomSessionIdFn ?? randomUUID;
 
+  const marker = argv.indexOf("--");
+  const operationalEnd = marker < 0 ? argv.length : marker;
+  const taskIndexes = [];
+  for (let index = 0; index < operationalEnd; index += 1) {
+    if (argv[index] === "--harness-task") taskIndexes.push(index);
+  }
+  let taskGrant = null;
+  if (taskIndexes.length > 0) {
+    const at = taskIndexes[0];
+    if (taskIndexes.length !== 1 || at + 1 >= operationalEnd || !argv[at + 1] || String(argv[at + 1]).startsWith("-") ||
+        argv.slice(0, operationalEnd).includes("--harness-resume")) {
+      errorSink("Pi harness: one task grant required; resume an existing task with --harness-resume alone");
+      return { exitCode: 2 };
+    }
+    taskGrant = String(argv[at + 1]);
+    argv = [...argv.slice(0, at), ...argv.slice(at + 2)];
+    if (!shouldCreateFreshPiSession(argv)) {
+      errorSink("Pi harness: task mode requires a fresh operational session");
+      return { exitCode: 2 };
+    }
+  }
+
   const parsed = parseHarnessResume(argv);
   if (!parsed.ok) {
     errorSink(`Pi harness: ${parsed.reason}`);
@@ -381,7 +435,7 @@ export function runPiHarnessCli(argv, options = {}) {
   }
 
   const sessionId = parsed.resumeSessionId ?? randomSessionIdFn();
-  const parentOperation = Boolean(parsed.resumeSessionId) ||
+  const parentOperation = Boolean(taskGrant) || Boolean(parsed.resumeSessionId) ||
     (shouldCreateFreshPiSession(parsed.argv) && !dispatchedChild(env));
   let parentLock;
   try {
@@ -395,6 +449,20 @@ export function runPiHarnessCli(argv, options = {}) {
 
     let runtimePrompt = options.runtimePrompt ??
       readFileSync(join(packageRoot, "prompts/harness-runtime.md"), "utf8").trim();
+    const readTaskRuntimePrompt = () => options.taskRuntimePrompt ??
+      readFileSync(join(packageRoot, "prompts/harness-task-runtime.md"), "utf8").trim();
+    let taskAdmissionPreview;
+    let taskRuntimePrompt;
+    if (taskGrant) {
+      taskRuntimePrompt = readTaskRuntimePrompt();
+      taskAdmissionPreview = inspectTaskAdmission(taskGrant, { cwd, sessionId });
+      if (!taskAdmissionPreview.ok) {
+        errorSink(`Pi harness: ${taskAdmissionPreview.reason}`);
+        return { exitCode: 2 };
+      }
+      runtimePrompt = taskRunPrompt(taskRuntimePrompt, taskAdmissionPreview);
+      env[TASK_RUN_ENV] = JSON.stringify({ cwd: taskAdmissionPreview.root, sessionId });
+    }
     let resumeSessionFile;
     if (parsed.resumeSessionId) {
       const recovery = recoverParentSessionFn(cwd, parsed.resumeSessionId);
@@ -402,7 +470,13 @@ export function runPiHarnessCli(argv, options = {}) {
         errorSink(`Pi harness: cannot resume ceremony: ${recovery.reason}`);
         return { exitCode: 2 };
       }
-      runtimePrompt = `${runtimePrompt}\n\n${recovery.context}`;
+      if (recovery.taskAdmission) {
+        taskRuntimePrompt = readTaskRuntimePrompt();
+        runtimePrompt = `${taskRunPrompt(taskRuntimePrompt, recovery.taskAdmission)}\n\n${recovery.context}`;
+        env[TASK_RUN_ENV] = JSON.stringify({ cwd: recovery.root, sessionId });
+      } else {
+        runtimePrompt = `${runtimePrompt}\n\n${recovery.context}`;
+      }
       resumeSessionFile = recovery.sessionFile;
     }
 
@@ -415,11 +489,35 @@ export function runPiHarnessCli(argv, options = {}) {
       sessionId,
     });
     materializeRuntimeFn(packageRoot, invocation.env.PI_CODING_AGENT_DIR);
-    const result = spawnSyncFn(invocation.command, invocation.args, {
-      env: invocation.env,
-      stdio: "inherit",
-    });
-    if (result.error) throw result.error;
+    let taskAdmission;
+    if (taskGrant) {
+      // Claim only after dependency resolution, prompt/resource reads and runtime materialization
+      // have succeeded. From this point the next operation is the actual Pi process spawn.
+      taskAdmission = admitTaskRun(taskGrant, { cwd, sessionId });
+      if (!taskAdmission.ok) {
+        errorSink(`Pi harness: ${taskAdmission.reason}`);
+        return { exitCode: 2 };
+      }
+      if (taskRunPrompt(taskRuntimePrompt, taskAdmission) !== runtimePrompt) {
+        rollbackTaskAdmission(taskAdmission);
+        taskAdmission = null;
+        throw new Error("task grant changed between preflight and admission");
+      }
+    }
+    let result;
+    try {
+      result = spawnSyncFn(invocation.command, invocation.args, {
+        env: invocation.env,
+        stdio: "inherit",
+      });
+    } catch (error) {
+      if (taskAdmission) rollbackTaskAdmission(taskAdmission);
+      throw error;
+    }
+    if (result.error) {
+      if (taskAdmission) rollbackTaskAdmission(taskAdmission);
+      throw result.error;
+    }
     return { exitCode: result.status ?? 1 };
   } catch (error) {
     errorSink(`Pi harness: ${error instanceof Error ? error.message : String(error)}`);

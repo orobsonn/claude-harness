@@ -393,6 +393,7 @@ export function readPiCanonicalTaskPolicy(projectRoot, featureId, taskId) {
   return {
     ok: true,
     noTests: bound.task.no_tests === true,
+    dependsOn: [...(bound.task.depends_on ?? [])],
     planHash: bound.planHash,
   };
 }

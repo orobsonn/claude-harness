@@ -12,6 +12,14 @@ Write a task-by-task TDD plan after the design is approved.
 - Mark sensitive paths, rollback, blast radius, and required model route.
 - Avoid placeholders, giant refactors, and tests that merely repeat prose.
 
+For a Pi session that uses `task_pipeline_version: 1`, decompose plan tasks so each
+implementation can run in an isolated worktree. Declare complete `depends_on`,
+`scope_paths`, `locked_tests[].path`, and `fixture_paths`; shared or ancestor paths
+make tasks conflict, so use dependencies when they cannot run safely together.
+Keep aggregate verification, harvest, final review, and shipping with the global
+parent rather than inventing a parent-only implementation task. This Pi-specific
+decomposition does not change planning or dispatch for other hosts.
+
 `.pi/harness/vendor/codex/lib/plan-contract.mjs` validates a frozen, explicit TDD plan without
 retaining state. `.pi/harness/vendor/codex/lib/review-contracts.mjs` exposes advisory complexity
 scoring only; unknown or sensitive work stays at the conservative route regardless of score.
