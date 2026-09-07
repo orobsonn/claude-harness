@@ -57,25 +57,30 @@ e exige trabalho real: migrações APP reaplicáveis, auditoria com redação, i
 concorrente, reconciliação da allowlist no Worker e retenção por scheduled handler.
 Não há publicação ou deploy do Victor neste teste.
 
-Sessão global: `e4a00af2-21cd-44f0-a6cb-b3a668a48a3d`.
-Workspace Orca: **Victor #5 · validação FULL do Pi Harness**.
-O planejamento começou antes da integração Orca; sua continuidade deve usar a mesma
-sessão num terminal Orca. O registro da workspace, sozinho, não comprova essa execução.
+A tentativa da sessão `e4a00af2-21cd-44f0-a6cb-b3a668a48a3d` foi interrompida e não
+serve como prova da pipeline. A nova FULL usa a worktree Orca
+`victor-frontend/pi-harness-full-victor-5`. A sessão global
+`68877ea4-a3da-4bc5-b39a-cfe8b000f6c1` começou em 2026-09-07 às 22:09 UTC,
+com `task_pipeline_version: 1` desde a classificação. O terminal Orca é
+`term_16c3c4e5-7eec-426d-934f-ab38593dec3d`.
 
-A revisão real já encontrou conflitos entre o plano e testes diagnósticos existentes,
-comandos que não coletariam a suíte pretendida e REDs baseados em imports ausentes.
-O plano/spec estão sendo corrigidos pelos agentes nativos, preservando os critérios
-de produto. Isso ainda não constitui aprovação da implementação.
+Na base real, o instalador copiou **151 arquivos** do harness, a suíte baseline passou
+**79/79** e o typecheck está verde. O smoke do Orca confirmou processo, lineage e os
+layouts visuais. Em runtime headless, `surface: background` descreve a superfície do
+terminal e não significa ausência da worktree no ADE. O status oficial do Pi nessa
+nova sessão ainda não foi confirmado.
 
 ## Evidências e fechamento pendente
 
-- [PR funcional #903](https://github.com/orobsonn/claude-harness/pull/903), ainda draft.
-- Suíte completa anterior à integração Orca/contexto: **3445/3445**, sem falhas.
-- [CI do commit b1705f6](https://github.com/orobsonn/claude-harness/actions/runs/34160975290)
-  aprovada; a integração acrescentada depois ainda exige validação e CI atuais.
-- Testes focais de contexto, coordenação, revisão e adapter Orca: **61/61**.
-- Ainda pendentes: smoke do processo no terminal Orca, conclusão da issue FULL real,
-  testes e revisão do conjunto atual, merge do PR funcional e release pelo
+- [PR funcional #903](https://github.com/orobsonn/claude-harness/pull/903), ainda draft
+  com [CI aprovado em `38ac8e0`](https://github.com/orobsonn/claude-harness/actions/runs/34165435156).
+  A correção posterior que fixa a identidade do host exige seu próprio CI.
+- Testes focais de contexto, coordenação, revisão e adapter Orca: **73/73**.
+- O CLI host agora usa o payload AppImage extraído e o launcher estável oficial. A
+  correção preserva os dois wrappers anteriores e tem rollback registrado em
+  `/tmp/pi-orca-cli-repair-evidence.json`; não reiniciou o app nem o servidor.
+- Ainda pendentes: confirmação do status Pi da nova sessão, conclusão e aprovação da issue
+  FULL real, CI do PR funcional, merge e release esperada **2.6.0** pelo
   release-please. Nenhuma versão, changelog ou tag foi alterada manualmente.
 
 Contrato oficial consultado: [worktrees](https://www.onorca.dev/docs/model/worktrees),

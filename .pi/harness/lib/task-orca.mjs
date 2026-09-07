@@ -38,9 +38,20 @@ export async function resolveOrcaTaskBackend({ projectRoot, worktreeId, cli = pr
   if (!parent || parent.id !== worktreeId || !parent.repoId ||
       fs.realpathSync(parent.path) !== root)
     throw new Error("Orca pane does not belong to this global worktree; resume it in the matching Orca workspace");
+  const parentPlacement = {
+    host_id: parent.hostId ?? null,
+    project_id: parent.projectId ?? null,
+    project_host_setup_id: parent.projectHostSetupId ?? null,
+  };
 
   const backend = {
-    parent: { worktree_id: parent.id, instance_id: parent.instanceId, repo_id: parent.repoId, path: root },
+    parent: {
+      worktree_id: parent.id,
+      instance_id: parent.instanceId,
+      repo_id: parent.repoId,
+      path: root,
+      ...parentPlacement,
+    },
     async prepareWorktree(entry, persist) {
       entry.orca ??= {
         name: `harness-task-${entry.task_id}-${entry.attempt_id}`,
@@ -81,6 +92,9 @@ export async function resolveOrcaTaskBackend({ projectRoot, worktreeId, cli = pr
       }
       if (!worktree || !worktree.id || !worktree.instanceId ||
           worktree.repoId !== parent.repoId || worktree.parentWorktreeId !== parent.id ||
+          (worktree.hostId ?? null) !== parentPlacement.host_id ||
+          (worktree.projectId ?? null) !== parentPlacement.project_id ||
+          (worktree.projectHostSetupId ?? null) !== parentPlacement.project_host_setup_id ||
           (!reservation.worktree_id && worktree.comment !== reservation.comment) || !path.isAbsolute(worktree.path) ||
           fs.realpathSync(worktree.path) === root)
         throw new Error("Orca task worktree identity mismatch");
@@ -111,6 +125,9 @@ export async function resolveOrcaTaskBackend({ projectRoot, worktreeId, cli = pr
       const target = (await run(["worktree", "show", "--worktree", `path:${cwd}`])).worktree;
       if (!target || target.id !== worktreeId || target.instanceId !== instanceId ||
           target.repoId !== parent.repoId || target.parentWorktreeId !== parent.id ||
+          (target.hostId ?? null) !== parentPlacement.host_id ||
+          (target.projectId ?? null) !== parentPlacement.project_id ||
+          (target.projectHostSetupId ?? null) !== parentPlacement.project_host_setup_id ||
           fs.realpathSync(target.path) !== fs.realpathSync(cwd))
         throw new Error("Orca terminal target does not belong to this task parent");
       const { terminal } = await run([
