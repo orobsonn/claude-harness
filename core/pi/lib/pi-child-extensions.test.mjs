@@ -16,6 +16,7 @@ test("child resources are the deterministic policy, fidelity, scope and package-
   assert.deepEqual(piChildResourceSettings(PACKAGE_ROOT), {
     extensions: [
       join(PACKAGE_ROOT, "core/pi/extensions/harness-policy.ts"),
+      join(PACKAGE_ROOT, "core/pi/extensions/harness-task-run.ts"),
       join(PACKAGE_ROOT, "core/pi/extensions/harness-entry-gate.ts"),
       join(PACKAGE_ROOT, "core/pi/extensions/harness-plan-write-gate.ts"),
     ],
@@ -96,7 +97,7 @@ test("invalid operator resource arrays fail before settings are rewritten", (t) 
 test("bound verification uses real module identity and fails closed on missing or failed rails", (t) => {
   const root = mkdtempSync(join(tmpdir(), "pi-child-bound-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
-  const extensions = ["harness-policy.ts", "harness-entry-gate.ts", "harness-plan-write-gate.ts"]
+  const extensions = ["harness-policy.ts", "harness-task-run.ts", "harness-entry-gate.ts", "harness-plan-write-gate.ts"]
     .map((name) => join(root, "core/pi/extensions", name));
   const skillRoots = [join(root, "core/codex/skills"), join(root, "core/pi/skills")];
   for (const path of extensions) {
@@ -124,6 +125,13 @@ test("bound verification uses real module identity and fails closed on missing o
     ...payload,
     extensions: { ...payload.extensions, resolvedPaths: payload.extensions.resolvedPaths.slice(1) },
   }).reason, /missing.*harness-policy/i);
+  assert.match(verifyPiChildBoundResources(root, {
+    ...payload,
+    extensions: {
+      ...payload.extensions,
+      resolvedPaths: payload.extensions.resolvedPaths.filter((path) => !path.endsWith("harness-task-run.ts")),
+    },
+  }).reason, /missing.*harness-task-run/i);
   assert.match(verifyPiChildBoundResources(root, {
     ...payload,
     extensions: { ...payload.extensions, errors: [{ path: extensions[0], error: "fixture failure" }] },

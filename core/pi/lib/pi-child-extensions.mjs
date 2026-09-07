@@ -3,6 +3,7 @@ import { join, relative, resolve, sep } from "node:path";
 
 const CHILD_EXTENSION_NAMES = Object.freeze([
   "harness-policy.ts",
+  "harness-task-run.ts",
   "harness-entry-gate.ts",
   "harness-plan-write-gate.ts",
 ]);
