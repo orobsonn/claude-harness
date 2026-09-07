@@ -67,8 +67,10 @@ com `task_pipeline_version: 1` desde a classificação. O terminal Orca é
 Na base real, o instalador copiou **151 arquivos** do harness, a suíte baseline passou
 **79/79** e o typecheck está verde. O smoke do Orca confirmou processo, lineage e os
 layouts visuais. Em runtime headless, `surface: background` descreve a superfície do
-terminal e não significa ausência da worktree no ADE. O status oficial do Pi nessa
-nova sessão ainda não foi confirmado.
+terminal e não significa ausência da worktree no ADE. A sessão global real confirmou
+o handle, tab e pane exatos no layout, conectados e ativos. O processo recebeu a
+identidade Orca correta e o diretório da extensão oficial; a publicação do status
+pelo hook ainda não foi observada diretamente.
 
 ## Evidências e fechamento pendente
 
@@ -76,6 +78,8 @@ nova sessão ainda não foi confirmado.
   com [CI aprovado em `38ac8e0`](https://github.com/orobsonn/claude-harness/actions/runs/34165435156).
   A correção posterior que fixa a identidade do host exige seu próprio CI.
 - Testes focais de contexto, coordenação, revisão e adapter Orca: **73/73**.
+- Suíte completa após a recuperação: **3478/3478**, sem falhas; a correção posterior
+  de identidade do host passou em **6/6** testes focais e está no CI atual.
 - O CLI host agora usa o payload AppImage extraído e o launcher estável oficial. A
   correção preserva os dois wrappers anteriores e tem rollback registrado em
   `/tmp/pi-orca-cli-repair-evidence.json`; não reiniciou o app nem o servidor.
