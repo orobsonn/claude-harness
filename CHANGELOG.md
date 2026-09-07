@@ -5,6 +5,18 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [2.5.0](https://github.com/orobsonn/claude-harness/compare/v2.4.2...v2.5.0) (2026-09-07)
+
+
+### Features
+
+* **pi:** execute até três revisores em paralelo ([#902](https://github.com/orobsonn/claude-harness/issues/902)) ([0cecaac](https://github.com/orobsonn/claude-harness/commit/0cecaac3fc7b02d3818ff14836aedde961f18677))
+
+
+### Bug Fixes
+
+* **pi:** keep finalization independent from planning ([#896](https://github.com/orobsonn/claude-harness/issues/896)) ([40281c2](https://github.com/orobsonn/claude-harness/commit/40281c23ec07e65ac43e93b4d95c9bf550d38be7))
+
 ## [2.4.2](https://github.com/orobsonn/claude-harness/compare/v2.4.1...v2.4.2) (2026-09-05)
 
 
