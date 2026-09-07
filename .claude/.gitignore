@@ -1,0 +1,6 @@
+# Claude Harness — ephemeral, never committed
+plans/
+state/
+settings.local.json
+*.local.md
+.harness-version-check-cache

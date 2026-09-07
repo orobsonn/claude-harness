@@ -1,0 +1,4 @@
+# OpenCode Harness — ephemeral, never committed
+plans/
+*.local.md
+.harness-version-check-cache
