@@ -154,6 +154,85 @@ test("scope overlap includes tests and fixtures, with component boundaries", () 
   );
 });
 
+test("dispatch snapshots only each selected task's curated context and preserves it across retries", async (t) => {
+  const f = fixture(t);
+  const context = "Verified APP migration constraint; revalidate against the plan.";
+  const result = await executeTaskAction({ action: "dispatch", task_ids: ["a", "b"], task_contexts: [{ task_id: "a", content: context }] }, f.context, f.deps);
+  assert.equal(result.ok, true, result.reason);
+  const registry = f.registry();
+  assert.equal(registry.tasks.a.grant.context_handoff.content, context);
+  assert.equal(registry.tasks.a.grant.context_handoff.parent_session_id, "parent");
+  assert.equal(registry.tasks.b.grant.context_handoff, undefined);
+  const changed = await executeTaskAction({ action: "dispatch", task_ids: ["a"], task_contexts: [{ task_id: "a", content: "replacement" }] }, f.context, f.deps);
+  assert.equal(changed.ok, false);
+  assert.match(changed.reason, /immutable/);
+  assert.equal(f.launches(), 2);
+});
+
+test("context validation precedes every admission side effect", async (t) => {
+  const f = fixture(t);
+  for (const task_contexts of [
+    [{ task_id: "b", content: "wrong target" }],
+    [{ task_id: "a", content: "á".repeat(1025) }],
+    [{ task_id: "a", content: "one" }, { task_id: "a", content: "two" }],
+  ]) {
+    const result = await executeTaskAction({ action: "dispatch", task_ids: ["a"], task_contexts }, f.context, f.deps);
+    assert.equal(result.ok, false);
+    assert.equal(f.launches(), 0);
+    assert.equal(fs.existsSync(taskRegistryPath(f.dir, "parent")), false);
+  }
+});
+
+test("copied dependency executables keep relative symlinks inside their own task", async (t) => {
+  const f = fixture(t);
+  fs.mkdirSync(path.join(f.dir, "node_modules/.bin"), { recursive: true });
+  fs.mkdirSync(path.join(f.dir, "node_modules/fixture-runner"));
+  fs.writeFileSync(path.join(f.dir, "node_modules/fixture-runner/run.mjs"), "export default true;");
+  fs.symlinkSync("../fixture-runner/run.mjs", path.join(f.dir, "node_modules/.bin/runner"));
+  const result = await executeTaskAction({ action: "dispatch", task_ids: ["a"] }, f.context, f.deps);
+  assert.equal(result.ok, true, result.reason);
+  const worktree = result.tasks[0].worktree;
+  const executable = path.join(worktree, "node_modules/.bin/runner");
+  assert.equal(fs.readlinkSync(executable), "../fixture-runner/run.mjs");
+  assert.equal(fs.realpathSync(executable), path.join(worktree, "node_modules/fixture-runner/run.mjs"));
+});
+
+test("Orca parent pins placement and every launch receives the terminal adapter", async (t) => {
+  const f = fixture(t);
+  const context = { ...f.context, orca: { worktreeId: "parent-orca" } };
+  let placements = 0;
+  let terminals = 0;
+  const originalStart = f.deps.startProcess;
+  const deps = { ...f.deps,
+    resolveOrca: async (input) => {
+      assert.equal(input.worktreeId, "parent-orca");
+      return {
+        parent: { worktree_id: "parent-orca", instance_id: "parent-generation", repo_id: "repo", path: f.dir },
+        prepareWorktree: async (entry, persist) => {
+          placements++;
+          git(f.dir, "worktree", "add", "-b", entry.branch, entry.worktree, entry.base_sha);
+          entry.orca = { worktree_id: `task-${entry.task_id}`, instance_id: "task-generation" };
+          persist();
+        },
+        launchTerminal: async () => { terminals++; return { terminal_handle: "term-a", surface: "visible" }; },
+      };
+    },
+    startProcess: async (input) => ({ ...await originalStart(input), orca: await input.launchTerminal({ command: "node", args: [], cwd: input.cwd }) }),
+  };
+  const result = await executeTaskAction({ action: "dispatch", task_ids: ["a"] }, context, deps);
+  assert.equal(result.ok, true, result.reason);
+  assert.equal(placements, 1);
+  assert.equal(terminals, 1);
+  assert.equal(result.tasks[0].launches[0].orca.surface, "visible");
+  assert.equal(f.registry().orca_parent.worktree_id, "parent-orca");
+  const status = await executeTaskAction({ action: "status" }, f.context, f.deps);
+  assert.equal(status.ok, true, status.reason);
+  const fallback = await executeTaskAction({ action: "dispatch", task_ids: ["b"] }, f.context, f.deps);
+  assert.equal(fallback.ok, false);
+  assert.match(fallback.reason, /Orca workspace/);
+  assert.equal(f.launches(), 1);
+});
+
 test("a recent partial registry lock remains owned instead of being reclaimed during its write", async (t) => {
   const f = fixture(t);
   const registry = taskRegistryPath(f.dir, "parent");

@@ -19,6 +19,8 @@ import {
 } from "./pi-gate-state.mjs";
 import { readPiSpecApproval } from "./spec-approval.mjs";
 import { capturePlanReviewInput } from "./task-run.mjs";
+import { captureTaskContext } from "./task-context.mjs";
+import { resolveOrcaTaskBackend } from "./task-orca.mjs";
 import {
   TASK_PIPELINE_VERSION,
   hashTaskReceipt,
@@ -201,11 +203,14 @@ function summary(entry) {
     worktree: entry.worktree,
     session_id: entry.result?.session_id,
     child_head: entry.result?.child_head,
+    ...(entry.orca ? { orca: entry.orca } : {}),
+    ...(entry.result?.context_return ? { context_return: entry.result.context_return } : {}),
     ...(entry.reason ? { reason: entry.reason } : {}),
     launches: entry.launches.map((launch) => ({
       run_id: launch.run_id,
       pid: launch.pid,
       events_path: launch.events_path,
+      ...(launch.orca ? { orca: launch.orca } : {}),
     })),
     ...(entry.integration ? { integration: entry.integration } : {}),
   };
@@ -325,9 +330,11 @@ function invalidateAggregate(owner, registry, persist) {
     persist();
   }
 }
-function prepareWorktree(entry, artifacts, deps) {
+async function prepareWorktree(entry, artifacts, deps, persist) {
+  if (deps.orcaBackend) await deps.orcaBackend.prepareWorktree(entry, persist);
   if (!fs.existsSync(entry.worktree))
-    git(
+    if (deps.orcaBackend) throw new Error("reserved Orca worktree is missing");
+    else git(
       entry.parent_root,
       "worktree",
       "add",
@@ -360,6 +367,7 @@ function prepareWorktree(entry, artifacts, deps) {
   )
     fs.cpSync(modules, path.join(entry.worktree, "node_modules"), {
       recursive: true,
+      verbatimSymlinks: true,
     });
   const runtime = path.join(entry.parent_root, ".pi/harness/runtime");
   for (const name of ["settings.json", "subagents.json", "harness.json"]) {
@@ -399,6 +407,7 @@ async function launchTask(entry, context, persist, deps, instruction) {
   const launch = {
     run_id: runId,
     pid: null,
+    ...(deps.orcaBackend ? { terminal_mode: true } : {}),
     runtime: entry.runtime,
     creator_pid: process.pid,
     creator_start_ticks: taskProcessIdentity(process.pid)?.start,
@@ -446,10 +455,14 @@ async function launchTask(entry, context, persist, deps, instruction) {
       command: process.execPath,
       args,
       runtime: entry.runtime,
+      ...(deps.orcaBackend ? {
+        launchTerminal: (input) => deps.orcaBackend.launchTerminal({ ...input, worktreeId: entry.orca.worktree_id, instanceId: entry.orca.instance_id, title: `${entry.task_id} · ${localSession ? "resume" : "implementação"}` }),
+      } : {}),
     });
     Object.assign(launch, handle);
     persist();
   } catch (error) {
+    if (error.task_launch) Object.assign(launch, error.task_launch);
     if (error.before_spawn === true)
       launch.start_failure = {
         written_by: "host-task-launch",
@@ -489,7 +502,7 @@ export async function executeTaskAction(params, context = {}, injected = {}) {
     )
       throw new Error("unknown task action");
     const allowed = {
-      dispatch: ["action", "task_ids"],
+      dispatch: ["action", "task_ids", "task_contexts"],
       status: ["action", "task_id"],
       integrate: ["action", "task_id", "attempt_id", "expected_head"],
       resume: ["action", "task_id", "attempt_id", "instruction"],
@@ -524,6 +537,7 @@ export async function executeTaskAction(params, context = {}, injected = {}) {
       captureRuntime: captureTaskRuntime,
       resolveRuntime: resolveTaskRuntimeLauncher,
       verifyRuntime: verifyTaskRuntime,
+      resolveOrca: resolveOrcaTaskBackend,
       ...injected,
     };
     deps.inspectRun ??= (entry) =>
@@ -592,6 +606,15 @@ export async function executeTaskAction(params, context = {}, injected = {}) {
       throw new Error(
         "canonical plan/spec changed after task admission; reconcile the plan before dispatch",
       );
+    if (["dispatch", "resume"].includes(params.action) && (context.orca || registry.orca_parent)) {
+      if (!context.orca?.worktreeId)
+        throw new Error("resume this global parent in its Orca workspace before launching task work");
+      deps.orcaBackend = await deps.resolveOrca({ projectRoot: owner.root, ...context.orca });
+      if (registry.orca_parent &&
+          hashTaskReceipt(registry.orca_parent) !== hashTaskReceipt(deps.orcaBackend.parent))
+        throw new Error("Orca global workspace identity changed");
+      registry.orca_parent ??= deps.orcaBackend.parent;
+    }
     if (
       registry.correction_barrier &&
       (params.action === "dispatch" ||
@@ -615,6 +638,21 @@ export async function executeTaskAction(params, context = {}, injected = {}) {
         artifacts.plan.tasks.find((task) => task.id === id),
       );
       if (requested.some((task) => !task)) throw new Error("unknown task");
+      const contexts = new Map();
+      if (params.task_contexts !== undefined) {
+        if (!Array.isArray(params.task_contexts) || params.task_contexts.length > requested.length)
+          throw new Error("task_contexts must contain at most one curated brief per requested task");
+        for (const item of params.task_contexts) {
+          if (!item || Object.keys(item).some((key) => !["task_id", "content"].includes(key)) ||
+              !params.task_ids.includes(item.task_id) || contexts.has(item.task_id))
+            throw new Error("each task context must identify one requested task exactly once");
+          const snapshot = captureTaskContext({ projectRoot: owner.root, sessionId: owner.sessionId, taskId: item.task_id, content: item.content });
+          const existing = registry.tasks[item.task_id];
+          if (existing && existing.grant.context_handoff?.content_sha256 !== snapshot.content_sha256)
+            throw new Error("admitted task context is immutable; use bounded resume feedback for corrections");
+          contexts.set(item.task_id, snapshot);
+        }
+      }
       const fresh = requested.filter((task) => !registry.tasks[task.id]);
       if (!fresh.length)
         return {
@@ -688,6 +726,7 @@ export async function executeTaskAction(params, context = {}, injected = {}) {
           base_sha: base,
           plan_sha256: artifacts.plan_sha256,
           spec_sha256: artifacts.spec_sha256,
+          ...(contexts.has(task.id) ? { context_handoff: contexts.get(task.id) } : {}),
           origin: {
             kind: "parent-approved-plan",
             plan_review_call_id: artifacts.receipt.dispatch_call_id,
@@ -728,7 +767,7 @@ export async function executeTaskAction(params, context = {}, injected = {}) {
       for (const task of fresh) {
         const entry = registry.tasks[task.id];
         try {
-          prepareWorktree(entry, artifacts, deps);
+          await prepareWorktree(entry, artifacts, deps, persist);
           await launchTask(entry, context, persist, deps);
         } catch (error) {
           entry.status = "blocked";
@@ -782,7 +821,7 @@ export async function executeTaskAction(params, context = {}, injected = {}) {
         persist();
         invalidateAggregate(owner, registry, persist);
       }
-      prepareWorktree(entry, artifacts, deps);
+      await prepareWorktree(entry, artifacts, deps, persist);
       await launchTask(entry, context, persist, deps, params.instruction);
       return { ok: true, tasks: [summary(entry)] };
     }

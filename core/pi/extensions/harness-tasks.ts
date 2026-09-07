@@ -33,6 +33,10 @@ export default function harnessTasks(pi: ExtensionAPI) {
           Type.Array(Type.String(), { minItems: 1, maxItems: 3 }),
         ),
         task_id: Type.Optional(Type.String()),
+        task_contexts: Type.Optional(Type.Array(Type.Object({
+          task_id: Type.String(),
+          content: Type.String({ description: "Optional curated reference brief for this task only, up to 2 KiB UTF-8. No approvals, credentials or full shared_context diary." }),
+        }, { additionalProperties: false }), { maxItems: 3 })),
         wait_seconds: Type.Optional(
           Type.Integer({
             minimum: 0,
@@ -74,6 +78,7 @@ export default function harnessTasks(pi: ExtensionAPI) {
         isChild: isChildSession(ctx),
         model: ctx.model,
         thinkingLevel: pi.getThinkingLevel?.(),
+        ...(process.env.ORCA_WORKTREE_ID ? { orca: { worktreeId: process.env.ORCA_WORKTREE_ID } } : {}),
       };
       let result = await executeTaskAction(action, context);
       const wait = requestedWait ?? 20;

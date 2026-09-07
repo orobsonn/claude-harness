@@ -1,6 +1,6 @@
 # Pi Harness
 
-Este pacote porta o harness para o Pi. Ele roda diretamente em uma worktree Git do produto; Orca pode abrir essa worktree, mas não é dependência da pipeline.
+Este pacote porta o harness para o Pi. No Orca, cada implementação usa uma worktree filha e um terminal próprio no ADE. O harness continua responsável pelo plano, TDD, revisões e integração. Também é possível executar a pipeline localmente fora do Orca.
 
 ## Pré-flight
 
@@ -54,6 +54,12 @@ Sessões novas LIGHT/FULL usam a pipeline por tarefa. Depois de a spec estar sel
 - `harness_tasks resume` reabre a mesma tentativa e sessão pai local após comprovar que o processo anterior terminou. Feedback volta para a task que produziu a mudança; resultado e validação antigos deixam de liberar integração enquanto a correção está ativa. Para corrigir uma dependência compartilhada, os descendentes já admitidos precisam estar integrados; uma barreira pausa novos dispatches e outras integrações até o novo recibo da dependência.
 
 Cada pai local executa a pipeline nativa completa da sua task: autoria de testes, fidelidade, freeze, executor, captura, revisões aplicáveis, sniper e re-gate. Ele não repete triagem, brainstorming, spec ou plano globais. Compliance, adversary e security de implementação podem rodar em paralelo, até o limite de três olhos incorporado pelo PR #902; mãos, fidelidade e revisão da spec mantêm exclusividade. O pai global integra os recibos e só então executa testes do conjunto, harvest, olhos finais no HEAD agregado e shipping. Uma correção integrada depois de seus consumers exige repetir esses gates agregados no novo HEAD.
+
+Ao iniciar o pai num terminal Orca, `ORCA_WORKTREE_ID` vincula o despacho àquela workspace. O harness usa `orca worktree create` com o SHA exato da base e `--parent-worktree`, seguido de `orca terminal create` para executar o worker do harness. A relação visual entre worktrees e a base Git são explícitas e independentes. O registry conserva as identidades de workspace, tentativa e terminal; retomadas não criam outra tentativa. Uma falha do Orca é reportada, sem migrar silenciosamente para execução invisível. O resultado `launches[].orca.surface: "visible"` comprova que o Orca adotou o terminal na interface; `background` conserva o handle e informa a limitação de visibilidade. Esses comportamentos usam as [primitivas oficiais de worktrees](https://www.onorca.dev/docs/model/worktrees) e [terminais](https://www.onorca.dev/docs/cli/reference).
+
+O launcher carrega explicitamente a extensão oficial `orca-agent-status.ts` instalada pelo Orca para publicar o estado do pai Pi no terminal correspondente. Os filhos nativos continuam usando os recursos do harness. O terminal apresenta texto público e progresso de ferramentas; os eventos estruturados completos continuam nos arquivos de evidência do job. O comando CLI segue `ORCA_CLI_COMMAND` ou `orca`; `PI_HARNESS_ORCA_CLI` permite selecionar um executável alternativo do host. Esse valor é um caminho/comando executável, sem argumentos de shell e sem credenciais.
+
+O despacho aceita `task_contexts: [{task_id, content}]` opcional: até 2 KiB UTF-8 de contexto curado por task. O snapshot pertence àquela tarefa e permanece imutável após a admissão; não herda o diário completo nem concede aprovação. Ao terminar, `context_return` devolve o diário da sessão local vinculado ao HEAD e ao resultado verificado. O pai global lê, revalida o que importa e incorpora explicitamente ao próprio `shared_context` usando `harness_memory update`. Não há concatenação automática de diários entre tasks.
 
 ## Rails
 
@@ -110,8 +116,12 @@ continuam sendo código confiado pelo operador no mesmo processo.
 Cada revisão é vinculada a HEAD, index, arquivos da worktree e plano/spec canônicos.
 Uma resposta interrompida, malformada, com pergunta pendente ou com achados não aprova um
 gate. O host preserva recibos saudáveis de irmãos. `harness_reviews` consulta a sessão
-atual e lista `accepted` e `missing`; após retomada, despache apenas os olhos aplicáveis
-pendentes. Mudar o conteúdo invalida a evidência anterior. O plano torna security final
+atual. Na fase task, lista `required`, `available`, `accepted` e `missing`: adversary é
+obrigatório; compliance e security de implementação são opcionais até serem despachados.
+Depois de qualquer despacho desses olhos, inclusive interrompido ou REVISE, a task exige
+um recibo atual e saudável daquele papel antes de integrar. `available` não torna todos
+os papéis obrigatórios. Na fase final, a consulta lista `accepted` e `missing`.
+Após retomada, despache os olhos aplicáveis pendentes. Mudar o conteúdo invalida a evidência anterior. O plano torna security final
 obrigatória com `final_review.security: true`; adversary e compliance são sempre exigidos.
 
 A fila é simples e vive na sessão; os recibos existentes são a autoridade de retomada.
