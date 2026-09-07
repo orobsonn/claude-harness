@@ -76,9 +76,10 @@ de testes recebe também orientações relevantes de runner e fixtures.
 
 Depois que as tarefas funcionais estão verificadas e commitadas, o harvester somente
 leitura propõe até três deltas para os documentos duráveis. Sem delta, o fluxo segue
-direto. Com delta, planner e plan-reviewer acrescentam uma tarefa real de documentação,
-o executor aplica e verifica o conteúdo, e o commit ocorre antes dos olhos finais.
-Assim, as revisões finais sempre observam o HEAD que será entregue.
+direto. Com delta, `harness_memory apply` aplica apenas os paths e hashes validados; o
+pai confere o diff e faz o commit seletivo antes dos olhos finais. Harvest e shipping
+não alteram o plano nem chamam planner. Assim, as revisões finais sempre observam o HEAD
+que será entregue.
 
 Na conclusão entregue, `harness_memory finalize` exige recibos finais e do shipper no
 HEAD atual e git limpo antes de apagar o buffer e os payloads transitórios da própria
