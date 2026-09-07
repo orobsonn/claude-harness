@@ -117,19 +117,6 @@ function writePlan(root, plan) {
   writeFileSync(planPath(root), JSON.stringify(plan, null, 2), "utf8");
 }
 
-function appendDocumentationTask(root, scopePaths, overrides = {}) {
-  const plan = readPlan(root);
-  plan.tasks.push({
-    id: "harvest-memory-docs",
-    scope_paths: scopePaths,
-    no_tests: true,
-    locked_tests: [],
-    depends_on: plan.tasks.map(({ id }) => id),
-    ...overrides,
-  });
-  writePlan(root, plan);
-}
-
 function ctx(root, { sessionId = SESSION, child = false } = {}) {
   return {
     cwd: root,
@@ -232,6 +219,18 @@ function finalReviewEvent() {
       subagent_type: "harness-adversary",
       description: "final review",
       prompt: "[HARNESS_FINAL_REVIEW]\nReview the aggregate diff.",
+    },
+  };
+}
+
+function plannerEvent(role = "harness-planner") {
+  return {
+    toolName: "subagent",
+    toolCallId: `late-${role}`,
+    input: {
+      subagent_type: role,
+      description: "replan during finalization",
+      prompt: "Change the canonical plan after harvest.",
     },
   };
 }
@@ -421,12 +420,46 @@ test("harness-memory harvest: append pequeno atualiza arquivo durável grande se
   const receipt = (await readMemory(api, root)).details.harvestReceipt;
   assert.equal(receipt.changes[0].append, append);
   assert.equal(Object.hasOwn(receipt.changes[0], "content"), false);
+  assert.equal(receipt.apply_status, "proposed");
+  assert.equal(readFileSync(join(root, "MEMORY.md"), "utf8"), before);
 
-  writeFileSync(join(root, "MEMORY.md"), before + append, "utf8");
+  const applied = await api.execute({ action: "apply" }, ctx(root));
+  assert.equal(applied.details.apply_status, "applied");
+  assert.equal(readFileSync(join(root, "MEMORY.md"), "utf8"), before + append);
   execFileSync("git", ["add", "MEMORY.md"], { cwd: root });
   commit(root, "docs: append harvested learning");
-  appendDocumentationTask(root, ["MEMORY.md"]);
+  assert.equal(readPlan(root).tasks.length, 1);
   assert.equal(await api.handlers.get("tool_call")(finalReviewEvent(), ctx(root)), undefined);
+});
+
+test("harness-memory harvest: finalização bloqueia planner e plan-reviewer sem alterar o plano", async (t) => {
+  const root = fixture(t);
+  const api = register();
+  const original = readFileSync(planPath(root), "utf8");
+
+  assert.equal(await api.handlers.get("tool_call")(plannerEvent(), ctx(root)), undefined);
+  emitHarvest(api, root);
+  await assertBlocked(await api.handlers.get("tool_call")(plannerEvent(), ctx(root)));
+  await assertBlocked(await api.handlers.get("tool_call")(plannerEvent("harness-plan-reviewer"), ctx(root)));
+  assert.equal(readFileSync(planPath(root), "utf8"), original);
+});
+
+test("harness-memory harvest: planner continua bloqueado depois de shipper e finalize apagarem recibos", async (t) => {
+  const root = fixture(t);
+  const api = register();
+  const original = readFileSync(planPath(root), "utf8");
+
+  emitHarvest(api, root);
+  seedFinalReviewState(root);
+  emitShipper(api, root);
+  assert.equal((await api.execute({ action: "finalize" }, ctx(root))).details.ok, true);
+  assert.equal(existsSync(harvestPath(root)), false);
+  assert.equal(existsSync(shipmentPath(root)), false);
+  assert.equal(existsSync(finalizedPath(root)), true);
+
+  await assertBlocked(await api.handlers.get("tool_call")(plannerEvent(), ctx(root)));
+  await assertBlocked(await api.handlers.get("tool_call")(plannerEvent("harness-plan-reviewer"), ctx(root)));
+  assert.equal(readFileSync(planPath(root), "utf8"), original);
 });
 
 test("harness-memory harvest: só aceita subagent harvester pai com marcador na primeira linha", async (t) => {
@@ -535,10 +568,11 @@ test("harness-memory harvest: delta de documento existente só libera após cont
   });
 
   await assertBlocked(await api.handlers.get("tool_call")(finalReviewEvent(), ctx(root)));
-  writeFileSync(join(root, "MEMORY.md"), proposed, "utf8");
+  assert.equal(readFileSync(join(root, "MEMORY.md"), "utf8"), before);
+  assert.equal((await api.execute({ action: "apply" }, ctx(root))).details.ok, true);
+  await assertBlocked(await api.handlers.get("tool_call")(finalReviewEvent(), ctx(root)));
   execFileSync("git", ["add", "MEMORY.md"], { cwd: root });
   commit(root, "docs: persist harvested memory");
-  appendDocumentationTask(root, ["MEMORY.md"]);
   assert.equal(await api.handlers.get("tool_call")(finalReviewEvent(), ctx(root)), undefined);
 });
 
@@ -555,10 +589,10 @@ test("harness-memory harvest: arquivo antes ausente aceita preimage null e conte
       invalidation: "revisar se o domínio renomear o termo",
     }],
   });
-  writeFileSync(join(root, "CONTEXT.md"), proposed, "utf8");
+  assert.equal(existsSync(join(root, "CONTEXT.md")), false);
+  assert.equal((await api.execute({ action: "apply" }, ctx(root))).details.ok, true);
   execFileSync("git", ["add", "CONTEXT.md"], { cwd: root });
   commit(root, "docs: add harvested context");
-  appendDocumentationTask(root, ["CONTEXT.md"]);
 
   assert.equal(await api.handlers.get("tool_call")(finalMarkEvent(), ctx(root)), undefined);
 });
@@ -576,6 +610,7 @@ test("harness-memory harvest: conteúdo persistido diferente da proposta continu
       invalidation: "revisar após mudança de processo",
     }],
   });
+  assert.equal((await api.execute({ action: "apply" }, ctx(root))).details.ok, true);
   writeFileSync(join(root, "kaizen.md"), "texto parecido, mas não proposto\n", "utf8");
   execFileSync("git", ["add", "kaizen.md"], { cwd: root });
   commit(root, "docs: persist wrong content");
@@ -583,13 +618,12 @@ test("harness-memory harvest: conteúdo persistido diferente da proposta continu
   await assertBlocked(await api.handlers.get("tool_call")(finalReviewEvent(), ctx(root)));
 });
 
-test("harness-memory harvest: tarefa documental não pode reescrever o plano nem ampliar o delta", async (t) => {
+test("harness-memory harvest: qualquer mutação do plano durante a finalização é rejeitada", async (t) => {
   const mutations = [
     ["remove tarefa anterior", (plan) => { plan.tasks = plan.tasks.slice(1); }],
     ["edita tarefa anterior", (plan) => { plan.tasks[0].scope_paths = ["src/other.ts"]; }],
-    ["adiciona scope estranho", (plan) => { plan.tasks[1].scope_paths.push("CONTEXT.md"); }],
-    ["inventa dependência", (plan) => { plan.tasks[1].depends_on.push("task-inexistente"); }],
-    ["adiciona duas tarefas", (plan) => { plan.tasks.push({ ...plan.tasks[1], id: "harvest-memory-docs-2" }); }],
+    ["adiciona tarefa documental", (plan) => { plan.tasks.push({ id: "harvest-memory-docs", scope_paths: ["MEMORY.md"], depends_on: ["task-1"], no_tests: true, locked_tests: [] }); }],
+    ["altera metadado", (plan) => { plan.mode = "LIGHT"; }],
   ];
   for (const [label, mutate] of mutations) {
     await t.test(label, async (st) => {
@@ -606,10 +640,9 @@ test("harness-memory harvest: tarefa documental não pode reescrever o plano nem
           invalidation: "revalidar se a tarefa mudar",
         }],
       });
-      writeFileSync(join(root, "MEMORY.md"), proposed, "utf8");
+      assert.equal((await api.execute({ action: "apply" }, ctx(root))).details.ok, true);
       execFileSync("git", ["add", "MEMORY.md"], { cwd: root });
       commit(root, "docs: persist proposed memory");
-      appendDocumentationTask(root, ["MEMORY.md"]);
       const plan = readPlan(root);
       mutate(plan);
       writePlan(root, plan);
@@ -617,6 +650,30 @@ test("harness-memory harvest: tarefa documental não pode reescrever o plano nem
       await assertBlocked(await api.handlers.get("tool_call")(finalReviewEvent(), ctx(root)));
     });
   }
+});
+
+test("harness-memory apply: retoma aplicação parcial somente nos hashes antes/depois da proposta", async (t) => {
+  const root = fixture(t);
+  const api = register();
+  const memoryBefore = readFileSync(join(root, "MEMORY.md"), "utf8");
+  const contextBefore = readFileSync(join(root, "CONTEXT.md"), "utf8");
+  const memoryAfter = `${memoryBefore}aprendizado A\n`;
+  const contextAfter = `${contextBefore}termo B\n`;
+  emitHarvest(api, root, { changes: [
+    { path: "MEMORY.md", before_sha256: sha256(memoryBefore), content: memoryAfter, evidence: "teste A", invalidation: "contrato A mudar" },
+    { path: "CONTEXT.md", before_sha256: sha256(contextBefore), content: contextAfter, evidence: "teste B", invalidation: "domínio B mudar" },
+  ] });
+
+  writeFileSync(join(root, "MEMORY.md"), memoryAfter, "utf8");
+  const receipt = JSON.parse(readFileSync(harvestPath(root), "utf8"));
+  receipt.apply_status = "applying";
+  writeFileSync(harvestPath(root), JSON.stringify(receipt, null, 2), "utf8");
+
+  const applied = await api.execute({ action: "apply" }, ctx(root));
+  assert.equal(applied.details.apply_status, "applied");
+  assert.equal(readFileSync(join(root, "MEMORY.md"), "utf8"), memoryAfter);
+  assert.equal(readFileSync(join(root, "CONTEXT.md"), "utf8"), contextAfter);
+  assert.equal((await api.execute({ action: "apply" }, ctx(root))).details.apply_status, "applied");
 });
 
 test("harness-memory harvest: worktree suja ou commit de código posterior invalida a revisão", async (t) => {
@@ -797,10 +854,9 @@ test("harness-memory harvest: finalize aceita delta exato revisado e remove reci
       invalidation: "invalidar se o teste deixar de cobrir",
     }],
   });
-  writeFileSync(join(root, "MEMORY.md"), proposed, "utf8");
+  assert.equal((await api.execute({ action: "apply" }, ctx(root))).details.ok, true);
   execFileSync("git", ["add", "MEMORY.md"], { cwd: root });
   commit(root, "docs: persist final harvest");
-  appendDocumentationTask(root, ["MEMORY.md"]);
   await api.execute({ action: "update", content: "diário a descartar" }, ctx(root));
   seedFinalReviewState(root);
   emitShipper(api, root);

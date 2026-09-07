@@ -77,6 +77,18 @@ export function readMemory(projectRoot, sessionId) {
   if (harvestReceipt && (harvestReceipt.session_id !== sessionId || harvestReceipt.project_root !== paths.root)) throw new Error("Harvest identity mismatch");
   return { ok: true, path: paths.shared, sharedContext, durableFiles: readDurableMemory(paths.root), harvestReceipt };
 }
+
+/** Finalization is a one-way phase for planning, even after receipts are cleaned up. */
+export function finalizationStarted(projectRoot, sessionId) {
+  const paths = memoryPaths(projectRoot, sessionId);
+  const harvest = JSON.parse(readSmall(paths.harvest, 262144) ?? "null");
+  const shipment = JSON.parse(readSmall(paths.shipment, 8192) ?? "null");
+  const finalized = JSON.parse(readSmall(paths.finalized, 8192) ?? "null");
+  const state = JSON.parse(readSmall(join(paths.directory, "gate-state.json"), 1024 * 1024) ?? "null");
+  return harvest?.session_id === sessionId || shipment?.session_id === sessionId ||
+    finalized?.session_id === sessionId ||
+    (state?.session_id === sessionId && state.final_review_done === true);
+}
 export function updateSharedContext(projectRoot, sessionId, content) {
   if (typeof content !== "string" || Buffer.byteLength(content) > SHARED_CONTEXT_MAX_BYTES) throw new Error("shared_context must be at most 8192 UTF-8 bytes");
   const paths = memoryPaths(projectRoot, sessionId, true);
@@ -155,11 +167,55 @@ export function completeHarvest(snapshot, text, agentId) {
   const paths = memoryPaths(snapshot.project_root, snapshot.session_id, true);
   if (gitMemory(paths.root, ["rev-parse", "HEAD"]) !== snapshot.base_head) throw new Error("HEAD changed during harvest; rerun it");
   cleanTree(paths.root);
+  if (snapshotPlan(paths, snapshot.feature_id).hash !== snapshot.planSnapshot.hash) throw new Error("Canonical plan changed during harvest; rerun it");
   const receipt = { written_by: "host-subagent-completion", session_id: snapshot.session_id, parent_session_id: snapshot.session_id,
     project_root: paths.root, feature_id: snapshot.feature_id, base_head: snapshot.base_head,
-    agent_id: agentId, status: "completed", plan_snapshot: snapshot.planSnapshot, changes, proposal_sha256: sha(JSON.stringify(changes)) };
+    agent_id: agentId, status: "completed", apply_status: changes.length === 0 ? "applied" : "proposed",
+    plan_snapshot: snapshot.planSnapshot, changes, proposal_sha256: sha(JSON.stringify(changes)) };
   atomicWrite(paths.harvest, JSON.stringify(receipt, null, 2));
   return receipt;
+}
+
+function changedWorktreePaths(root) {
+  const tracked = gitMemory(root, ["diff", "--name-only", "HEAD"]).split("\n").filter(Boolean);
+  const untracked = gitMemory(root, ["ls-files", "--others", "--exclude-standard"]).split("\n").filter(Boolean);
+  return [...new Set([...tracked, ...untracked])];
+}
+
+/** Apply a validated harvest proposal without turning durable memory into a delivery task. */
+export function applyHarvest(projectRoot, sessionId) {
+  const paths = memoryPaths(projectRoot, sessionId, true);
+  const raw = readSmall(paths.harvest, 262144);
+  const harvest = raw === null ? null : JSON.parse(raw);
+  if (!harvest || harvest.written_by !== "host-subagent-completion" || harvest.status !== "completed" || harvest.session_id !== sessionId || harvest.project_root !== paths.root) throw new Error("Apply requires this session's completed harvest proposal");
+  if (!Array.isArray(harvest.changes) || harvest.proposal_sha256 !== sha(JSON.stringify(harvest.changes))) throw new Error("Invalid harvest receipt");
+  if (gitMemory(paths.root, ["rev-parse", "HEAD"]) !== harvest.base_head) throw new Error("HEAD changed before harvest apply; rerun harvest");
+  if (snapshotPlan(paths, harvest.feature_id).hash !== harvest.plan_snapshot?.hash) throw new Error("Canonical plan changed before harvest apply");
+  const expected = harvest.changes.map((change) => change.path);
+  const unexpected = changedWorktreePaths(paths.root).filter((path) => !expected.includes(path));
+  if (unexpected.length > 0) throw new Error(`Harvest apply found unrelated worktree changes: ${unexpected.join(", ")}`);
+  if (harvest.apply_status === "applied") {
+    for (const change of harvest.changes) {
+      const current = readSmall(join(paths.root, change.path), 1024 * 1024);
+      if ((current === null ? null : sha(current)) !== change.after_sha256) throw new Error("Applied harvest no longer matches its receipt");
+    }
+    return { ok: true, apply_status: "applied", changes: harvest.changes };
+  }
+  if (!["proposed", "applying"].includes(harvest.apply_status)) throw new Error("Harvest proposal has invalid apply status");
+  atomicWrite(paths.harvest, JSON.stringify({ ...harvest, apply_status: "applying" }, null, 2));
+  for (const change of harvest.changes) {
+    if (!DURABLE_MEMORY_FILES.includes(change.path)) throw new Error("Invalid durable memory path in receipt");
+    const current = readSmall(join(paths.root, change.path), 1024 * 1024);
+    const currentSha = current === null ? null : sha(current);
+    if (currentSha === change.after_sha256) continue;
+    if (currentSha !== change.before_sha256) throw new Error(`Harvest apply found an unexpected version of ${change.path}`);
+    const resulting = Object.hasOwn(change, "append") ? (current ?? "") + change.append : change.content;
+    if (typeof resulting !== "string" || sha(resulting) !== change.after_sha256) throw new Error("Harvest receipt content does not match its hash");
+    atomicWrite(join(paths.root, change.path), resulting);
+  }
+  const applied = { ...harvest, apply_status: "applied" };
+  atomicWrite(paths.harvest, JSON.stringify(applied, null, 2));
+  return { ok: true, apply_status: "applied", changes: applied.changes };
 }
 
 /** Current files and git history prove only the exact durable delta followed the harvest. */
@@ -170,14 +226,8 @@ export function checkHarvestReady(projectRoot, sessionId) {
   if (!Array.isArray(harvest.changes) || harvest.proposal_sha256 !== sha(JSON.stringify(harvest.changes))) throw new Error("Invalid harvest receipt");
   const current = snapshotPlan(paths, harvest.feature_id);
   const old = harvest.plan_snapshot;
-  if (!old || current.metadata_hash !== old.metadata_hash || old.tasks.some((task, index) => current.tasks[index]?.id !== task.id || current.tasks[index]?.hash !== task.hash)) throw new Error("Harvest plan changed existing obligations");
-  if (harvest.changes.length === 0) {
-    if (current.tasks.length !== old.tasks.length) throw new Error("Zero delta must preserve the canonical plan");
-  } else {
-    const addition = current.plan.tasks[old.tasks.length];
-    const sameSet = (a, b) => Array.isArray(a) && a.length === b.length && stable([...a].sort()) === stable([...b].sort());
-    if (current.tasks.length !== old.tasks.length + 1 || !addition || old.tasks.some((task) => task.id === addition.id) || addition.no_tests !== true || !Array.isArray(addition.locked_tests) || addition.locked_tests.length !== 0 || !sameSet(addition.scope_paths, harvest.changes.map((change) => change.path)) || !sameSet(addition.depends_on, old.tasks.map((task) => task.id))) throw new Error("Harvest requires exactly one genuine documentation task with exact paths and dependencies");
-  }
+  if (!old || current.hash !== old.hash) throw new Error("Finalization must preserve the canonical plan exactly");
+  if (harvest.apply_status !== "applied") throw new Error("Apply the harvest proposal before final review");
   cleanTree(paths.root);
   gitMemory(paths.root, ["merge-base", "--is-ancestor", harvest.base_head, "HEAD"]);
   const changed = gitMemory(paths.root, ["diff", "--name-only", harvest.base_head, "HEAD"]).split("\n").filter(Boolean);

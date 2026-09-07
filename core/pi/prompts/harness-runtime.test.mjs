@@ -72,10 +72,11 @@ test("harvest runs once after functional commits and before final reviews", () =
   assert.match(harvester, /never replace content received in truncated form/i);
   assert.match(harvester, /`append`.*host computes.*full\s+preimage/is);
   assert.match(prompt, /zero deltas.*não cria.*tarefa/is);
-  assert.match(prompt, /delta não vazio.*HARNESS_HARVEST_CONTEXT.*planner/is);
-  assert.match(prompt, /nova hash do plano.*plan-reviewer/is);
-  assert.match(prompt, /no_tests: true.*locked_tests: \[\].*depends_on.*tarefas existentes/is);
-  assert.match(prompt, /executor.*captura.*re-gate.*commit.*olhos finais.*novo HEAD/is);
+  assert.match(prompt, /delta não vazio.*action="apply".*host.*idempotente/is);
+  assert.match(prompt, /commit seletivo.*paths.*recibo/is);
+  assert.match(prompt, /harvest.*shipping.*não.*planner.*plan-reviewer/is);
+  assert.match(prompt, /conflito.*reutiliz.*IDs.*tarefas\s+existentes/is);
+  assert.doesNotMatch(prompt, /HARNESS_HARVEST_CONTEXT/);
   assert.match(prompt, /recibo host-owned.*persistid.*git.*limpo.*HEAD atual.*mudança não-memória/is);
   assert.match(prompt, /escrita posterior.*invalida.*revisões finais/is);
   assert.doesNotMatch(prompt, /harvest-ready/);

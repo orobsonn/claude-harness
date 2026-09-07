@@ -42,14 +42,9 @@ test("planner Pi recebe contexto de revisão sem depender de resposta posterior 
   assert.match(prompt, /do\s+not\s+request or use `resume`/i);
 });
 
-test("planner adds only the evidence-backed durable documentation task in harvest mode", () => {
+test("planner has no harvest mode because finalization preserves the approved plan", () => {
   const prompt = readFileSync(plannerPath, "utf8");
 
-  assert.match(prompt, /HARNESS_HARVEST_CONTEXT/);
-  assert.match(prompt, /preserve.*existing.*task's fields and values unchanged/is);
-  assert.match(prompt, /one genuine documentation task/i);
-  assert.match(prompt, /exact durable.*paths.*deltas/is);
-  assert.match(prompt, /depends_on.*every existing task/is);
-  assert.match(prompt, /`no_tests: true`.*`locked_tests: \[\]`/is);
-  assert.match(prompt, /zero deltas.*do not write/i);
+  assert.doesNotMatch(prompt, /HARNESS_HARVEST_CONTEXT/);
+  assert.doesNotMatch(prompt, /harvest documentation task/i);
 });
