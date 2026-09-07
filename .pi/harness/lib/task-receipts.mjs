@@ -10,14 +10,17 @@ import { isCaptureEligibleHandRecord, recordViolations } from "../vendor/shared/
 import { isSafeFeatureId, isSafeSessionId, isSafeTaskId } from "../vendor/shared/lib/feature-id.mjs";
 import { validateOcCaptureEligibleHandRecord } from "../vendor/opencode/lib/hand-records.mjs";
 import { hashTaskReceipt } from "./task-contract.mjs";
-import { capturePiReviewInput, hasAcceptedPiReviewEvidence } from "./pi-review-evidence.mjs";
+import { readTaskContextReturn, validateTaskContextReturn } from "./task-context.mjs";
+import { capturePiReviewInput, findPiReviewReceipt, hasAcceptedPiReviewEvidence } from "./pi-review-evidence.mjs";
 import { piGateStatePath, piHandRecordPath } from "./pi-paths.mjs";
 import { readTaskProcess } from "./task-process.mjs";
 import { readTaskRunBinding } from "./task-run.mjs";
 
 const COMMIT_SHA = /^[0-9a-f]{40}$/;
 const SHA256 = /^[0-9a-f]{64}$/;
-const TASK_REVIEW_ROLES = Object.freeze(["harness-adversary", "harness-compliance", "harness-security"]);
+const REQUIRED_TASK_REVIEW_ROLES = Object.freeze(["harness-adversary"]);
+const OPTIONAL_TASK_REVIEW_ROLES = Object.freeze(["harness-compliance", "harness-security"]);
+const TASK_REVIEW_ROLES = Object.freeze([...REQUIRED_TASK_REVIEW_ROLES, ...OPTIONAL_TASK_REVIEW_ROLES]);
 const MAX_JSON_BYTES = 4 * 1024 * 1024;
 const MAX_EVENTS_BYTES = 128 * 1024 * 1024;
 
@@ -164,20 +167,22 @@ function commitFromEvent(event, worktree) {
   } catch { return null; }
 }
 
-function reviewReceipt(state, featureId, taskId, role) {
-  const bare = formatFeatureTaskEntry(featureId, taskId);
-  const key = role.replace("harness-", "");
-  return role === "harness-adversary"
-    ? state?.task_adversary_evidence?.[bare]
-    : state?.task_review_evidence?.[bare]?.[key];
+function observedImplementationReviewRoles(events, taskId) {
+  return new Set(events.filter((event) => event.tool === "subagent" &&
+    OPTIONAL_TASK_REVIEW_ROLES.includes(event.args?.subagent_type) &&
+    typeof event.args?.prompt === "string" && event.args.prompt.startsWith("[HARNESS_TASK_REVIEW]") &&
+    taskFromPrompt(event.args.prompt) === taskId).map((event) => event.args.subagent_type));
 }
 
-function validateCurrentReviews({ state, projectRoot, sessionId, featureId, taskId, head, captureReviewInputFn }) {
+function validateCurrentReviews({ state, events, projectRoot, sessionId, featureId, taskId, head, captureReviewInputFn }) {
   const captured = captureReviewInputFn({ projectRoot, sessionId, featureId, phase: "task", taskId });
   if (!captured?.ok || captured.snapshot?.head_sha !== head) return failure("current canonical task review snapshot required");
   const receipts = {};
-  for (const role of TASK_REVIEW_ROLES) {
-    const receipt = reviewReceipt(state, featureId, taskId, role);
+  const observed = observedImplementationReviewRoles(events, taskId);
+  const roles = TASK_REVIEW_ROLES.filter((role) => REQUIRED_TASK_REVIEW_ROLES.includes(role) || observed.has(role) ||
+    findPiReviewReceipt(state, { featureId, taskId, role, phase: "task" }) !== null);
+  for (const role of roles) {
+    const receipt = findPiReviewReceipt(state, { featureId, taskId, role, phase: "task" });
     if (!hasAcceptedPiReviewEvidence(receipt, captured.snapshot) || receipt.written_by !== "host-subagent-completion" ||
         receipt.parent_session_id !== sessionId || receipt.feature_id !== featureId || receipt.task_id !== taskId ||
         receipt.role !== role || receipt.status !== "completed" || receipt.reviewed_head_sha !== head ||
@@ -224,7 +229,7 @@ function validateLaunches(entry, jobRoot, readTaskProcessFn = readTaskProcess) {
   for (const [index, launch] of entry.launches.entries()) {
     const historical = index < entry.launches.length - 1;
     if (!object(launch) || typeof launch.run_id !== "string" || !launch.run_id ||
-        !(Number.isInteger(launch.pid) && launch.pid > 1 || historical && launch.pid === null)) {
+        !(Number.isInteger(launch.pid) && launch.pid > 1 || launch.pid === null && (historical || launch.terminal_mode === true))) {
       return failure(`launch ${index} identity is invalid`);
     }
     if (entry.runtime !== undefined) {
@@ -354,8 +359,14 @@ export function inspectTaskRun(entry, dependencies = {}) {
     if (regatePending.some((pending) => !matchesAbsolution(pending, state.regate_passed, (sha) => ancestor(worktree, sha, head)))) return failure("task re-gate is still pending");
     const regatePassed = (Array.isArray(state.regate_passed) ? state.regate_passed : []).filter((passed) =>
       typeof passed === "string" && passed.startsWith(`${bare}@`) && ancestor(worktree, passed.slice(`${bare}@`.length), head));
-    const reviews = validateCurrentReviews({ state, projectRoot: worktree, sessionId: claim.session_id, featureId: entry.feature_id, taskId: entry.task_id, head, captureReviewInputFn: dependencies.captureReviewInputFn ?? capturePiReviewInput });
+    const reviews = validateCurrentReviews({ state, events: native.events, projectRoot: worktree, sessionId: claim.session_id, featureId: entry.feature_id, taskId: entry.task_id, head, captureReviewInputFn: dependencies.captureReviewInputFn ?? capturePiReviewInput });
     if (!reviews.ok) return reviews;
+    const contextReturnFn = dependencies.readTaskContextReturnFn ?? readTaskContextReturn;
+    const contextReturn = contextReturnFn({ projectRoot: worktree, sessionId: claim.session_id, taskId: entry.task_id, headSha: head });
+    if (contextReturn !== null) {
+      const checkedContext = validateTaskContextReturn(contextReturn, { sessionId: claim.session_id, taskId: entry.task_id, headSha: head });
+      if (!checkedContext.ok) return failure(`task context return is invalid: ${checkedContext.reason}`);
+    }
     return {
       ok: true,
       result: {
@@ -384,6 +395,7 @@ export function inspectTaskRun(entry, dependencies = {}) {
         },
         review_input_digest: reviews.inputDigest,
         review_receipts: reviews.receipts,
+        context_return: contextReturn,
         regate: { pending: regatePending, passed: regatePassed },
         latest_run_id: entry.launches.at(-1).run_id,
         ...(entry.runtime !== undefined ? { runtime: entry.runtime } : {}),
@@ -418,7 +430,11 @@ function validateIntegration(entry, integration, { projectRoot, sessionId, featu
     typeof result.hand_capture.producer_call_id === "string" && result.hand_capture.producer_call_id &&
     COMMIT_SHA.test(result.hand_capture.freeze_sha ?? "") && typeof result.hand_capture.captured_verified_at === "string" &&
     result.hand_capture.captured_verified_at && result.hand_capture.capture_marker === `${featureId}/${taskId}@${result.hand_capture.freeze_sha}`;
-  const reviewReceiptsValid = object(result.review_receipts) && TASK_REVIEW_ROLES.every((role) => {
+  const reviewReceiptKeys = Object.keys(object(result.review_receipts) ?? {});
+  const reviewReceiptsValid = object(result.review_receipts) && reviewReceiptKeys.includes("adversary") &&
+    reviewReceiptKeys.every((key) => TASK_REVIEW_ROLES.some((role) => role === `harness-${key}`)) &&
+    reviewReceiptKeys.every((key) => {
+    const role = `harness-${key}`;
     const receipt = result.review_receipts[role.replace("harness-", "")];
     return object(receipt) && typeof receipt.agent_id === "string" && receipt.agent_id &&
       typeof receipt.dispatch_call_id === "string" && receipt.dispatch_call_id &&
@@ -426,6 +442,12 @@ function validateIntegration(entry, integration, { projectRoot, sessionId, featu
       receipt.input_digest === result.review_input_digest && SHA256.test(receipt.report_digest ?? "");
   });
   const regateValid = object(result.regate) && Array.isArray(result.regate.pending) && Array.isArray(result.regate.passed);
+  const contextReturnValid = result.context_return === null ||
+    validateTaskContextReturn(result.context_return, {
+      sessionId: result.session_id,
+      taskId,
+      headSha: result.child_head,
+    }).ok;
   const launchesValid = Array.isArray(result.launches) && result.launches.length === entry.launches?.length &&
     result.launches.every((launch, index) => launch?.run_id === entry.launches[index]?.run_id && launch.pid === entry.launches[index]?.pid &&
       (!entry.runtime || launch.run_runtime_sha256 === entry.runtime.sha256) &&
@@ -440,7 +462,7 @@ function validateIntegration(entry, integration, { projectRoot, sessionId, featu
     isSafeSessionId(result.session_id) && result.plan_sha256 === entry.plan_sha256 && result.spec_sha256 === entry.spec_sha256 &&
     result.base_sha === entry.base_sha && COMMIT_SHA.test(result.child_head ?? "") && typeof result.latest_run_id === "string" &&
     result.latest_run_id.length > 0 && entry.launches?.at?.(-1)?.run_id === result.latest_run_id && changedPathsValid && frozenBlobsValid &&
-    handCaptureValid && SHA256.test(result.review_input_digest ?? "") && reviewReceiptsValid && regateValid && launchesValid &&
+    handCaptureValid && SHA256.test(result.review_input_digest ?? "") && reviewReceiptsValid && regateValid && contextReturnValid && launchesValid &&
     (entry.runtime === undefined || validRuntime(entry.runtime) && validRuntime(result.runtime) && result.runtime.sha256 === entry.runtime.sha256 &&
       result.runtime.launcher_path === entry.runtime.launcher_path);
   if (!resultValid) return failure("task inspection receipt is incomplete or does not match the registry entry");

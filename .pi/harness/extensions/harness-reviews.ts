@@ -3,8 +3,29 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { isSafeFeatureId, isSafeTaskId } from "../vendor/shared/lib/feature-id.mjs";
 import { isChildSession, piSessionId } from "../lib/pi-adapter-map.mjs";
 import { loadPiGateStateFromDisk } from "../lib/pi-gate-state.mjs";
-import { capturePiReviewInput, missingPiReviewRoles, readPiReviewPlan } from "../lib/pi-review-evidence.mjs";
+import { capturePiReviewInput, findPiReviewReceipt, missingPiReviewRoles, readPiReviewPlan } from "../lib/pi-review-evidence.mjs";
+import { classifyPiReviewDispatch } from "../lib/pi-review-concurrency.mjs";
 import { PARALLEL_REVIEW_ROLES, requiredPiFinalReviewRoles } from "../lib/roles.mjs";
+
+/** Project only structured native dispatches from the append-only session; never scan prose or thinking. */
+function observedTaskReviewRoles(sessionManager: any, taskId: string) {
+  let entries;
+  try { entries = sessionManager?.getEntries?.(); } catch { return null; }
+  if (!Array.isArray(entries)) return null;
+  const observed = new Set<string>();
+  for (const entry of entries) {
+    const message = entry?.type === "message" ? entry.message : null;
+    if (message?.role !== "assistant" || !Array.isArray(message.content) ||
+        message.stopReason === "aborted" || message.stopReason === "error") continue;
+    for (const block of message.content) {
+      if (block?.type !== "toolCall" || block.name !== "subagent" ||
+          !block.arguments || typeof block.arguments !== "object" || Array.isArray(block.arguments)) continue;
+      const review = classifyPiReviewDispatch(block.arguments.subagent_type, block.arguments.prompt);
+      if (review?.phase === "task" && review.taskId === taskId) observed.add(block.arguments.subagent_type);
+    }
+  }
+  return observed;
+}
 
 /** Read durable, current receipts; the parent decides which applicable reviewers to dispatch. */
 export default function harnessReviews(pi: ExtensionAPI) {
@@ -35,8 +56,23 @@ export default function harnessReviews(pi: ExtensionAPI) {
       const plan = readPiReviewPlan({ ...input, expectedSha256: captured.snapshot.canonical_plan.sha256 });
       if (!plan.ok) return denied(plan.reason);
       const roles = params.phase === "final" ? requiredPiFinalReviewRoles(plan.plan) : [...PARALLEL_REVIEW_ROLES];
-      const missing = missingPiReviewRoles({ ...input, roles });
-      const result = { accepted: roles.filter((role) => !missing.includes(role)), missing };
+      const unavailable = missingPiReviewRoles({ ...input, roles });
+      const accepted = roles.filter((role) => !unavailable.includes(role));
+      const observed = params.phase === "task" ? observedTaskReviewRoles(ctx.sessionManager, params.task_id) : new Set<string>();
+      if (observed === null) return denied("Task review status requires durable parent session entries.");
+      const taskRequired = params.phase === "task"
+        ? roles.filter((role) => role === "harness-adversary" ||
+            observed.has(role) ||
+            findPiReviewReceipt(loaded.state, { featureId: loaded.state.feature_id, taskId: params.task_id, role, phase: "task" }) !== null)
+        : [];
+      const result = params.phase === "final"
+        ? { accepted, missing: unavailable }
+        : {
+            required: taskRequired,
+            available: roles,
+            accepted,
+            missing: taskRequired.filter((role) => unavailable.includes(role)),
+          };
       return { content: [{ type: "text" as const, text: JSON.stringify(result) }], details: result };
     },
   });

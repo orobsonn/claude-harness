@@ -290,6 +290,17 @@ function receiptKey(role) {
   return role.replace("harness-", "");
 }
 
+/** Read one persisted review receipt without deciding whether the role was required. */
+export function findPiReviewReceipt(state, { featureId, taskId, role, phase } = {}) {
+  const key = receiptKey(role);
+  if (phase === "final") return state?.final_review_evidence?.[key] ?? null;
+  if (phase !== "task") return null;
+  const featureTask = `${featureId}/${taskId}`;
+  return role === "harness-adversary"
+    ? state?.task_adversary_evidence?.[featureTask] ?? null
+    : state?.task_review_evidence?.[featureTask]?.[key] ?? null;
+}
+
 function findDispatchReceipt(value, dispatchCallId) {
   if (!value || typeof value !== "object") return null;
   if (!Array.isArray(value) && value.dispatch_call_id === dispatchCallId) return value;
@@ -370,14 +381,9 @@ export function missingPiReviewRoles({ projectRoot, sessionId, featureId, phase,
   let state = {};
   try { state = JSON.parse(fs.readFileSync(piGateStatePath({ projectRoot, sessionId }).path, "utf8")); } catch { return [...roles]; }
   return roles.filter((role) => {
-    const key = receiptKey(role);
-    const receipt = phase === "final"
-      ? state.final_review_evidence?.[key]
-      : role === "harness-adversary"
-        ? state.task_adversary_evidence?.[`${featureId}/${taskId}`]
-        : state.task_review_evidence?.[`${featureId}/${taskId}`]?.[key];
+    const receipt = findPiReviewReceipt(state, { featureId, taskId, role, phase });
     return !isCurrentPiReviewReceipt(receipt, { sessionId, featureId, role, phase, taskId, snapshot: captured.snapshot });
   });
 }
 
-export default { capturePiReviewInput, parsePiReviewCompletion, recordPiReviewReceipt, missingPiReviewRoles, isCurrentPiReviewReceipt, hasAcceptedPiReviewEvidence };
+export default { capturePiReviewInput, parsePiReviewCompletion, recordPiReviewReceipt, missingPiReviewRoles, isCurrentPiReviewReceipt, hasAcceptedPiReviewEvidence, findPiReviewReceipt };
