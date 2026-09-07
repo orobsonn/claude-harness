@@ -1,0 +1,154 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Harness Routing Config",
+  "type": "object",
+  "required": ["version", "roles", "modelCapabilities"],
+  "properties": {
+    "version": { "type": "integer", "const": 2 },
+    "roles": {
+      "type": "object",
+      "required": ["build", "planner", "plan-reviewer", "adversary", "compliance", "security", "executor", "sniper", "test-author", "harvester", "shipper"],
+      "additionalProperties": false,
+      "properties": {
+        "build": { "$ref": "#/definitions/roleSimple" },
+        "planner": { "$ref": "#/definitions/rolePlanner" },
+        "plan-reviewer": {
+          "oneOf": [
+            { "$ref": "#/definitions/roleReview" },
+            { "$ref": "#/definitions/roleFamilies" }
+          ]
+        },
+        "adversary": {
+          "oneOf": [
+            { "$ref": "#/definitions/roleReview" },
+            { "$ref": "#/definitions/roleFamilies" }
+          ]
+        },
+        "compliance": { "$ref": "#/definitions/roleSimple" },
+        "security": { "$ref": "#/definitions/roleSimple" },
+        "executor": { "$ref": "#/definitions/roleTiers" },
+        "sniper": { "$ref": "#/definitions/roleTiers" },
+        "test-author": { "$ref": "#/definitions/roleSimple" },
+        "harvester": { "$ref": "#/definitions/roleSimple" },
+        "shipper": { "$ref": "#/definitions/roleSimple" }
+      }
+    },
+    "constraints": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "crossFamilyRoles": { "$ref": "#/definitions/reviewRoleList" },
+        "requireDualOn": { "$ref": "#/definitions/reviewRoleList" }
+      }
+    },
+    "modelCapabilities": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["supportsReasoningEffort"],
+        "properties": {
+          "supportsReasoningEffort": { "type": "boolean" }
+        }
+      }
+    }
+  },
+  "definitions": {
+    "roleSimple": {
+      "type": "object",
+      "required": ["model"],
+      "properties": {
+        "model": { "type": "string", "pattern": "^[^/\\s]+/\\S+$" },
+        "reasoningEffort": {}
+      }
+    },
+    "roleReview": {
+      "type": "object",
+      "required": ["model"],
+      "properties": {
+        "model": { "type": "string", "pattern": "^[^/\\s]+/\\S+$" },
+        "secondEyeModel": { "type": "string", "pattern": "^[^/\\s]+/\\S+$" },
+        "reasoningEffort": {}
+      }
+    },
+    "rolePlanner": {
+      "allOf": [
+        { "$ref": "#/definitions/roleSimple" },
+        {
+          "type": "object",
+          "not": { "required": ["fallback"] }
+        }
+      ]
+    },
+    "roleFamilies": {
+      "type": "object",
+      "required": ["families"],
+      "properties": {
+        "families": {
+          "type": "object",
+          "required": ["family-1", "family-2"],
+          "additionalProperties": false,
+          "properties": {
+            "family-1": { "$ref": "#/definitions/requiredPrimaryFamily" },
+            "family-2": { "$ref": "#/definitions/optionalSecondaryFamily" }
+          }
+        }
+      }
+    },
+    "requiredPrimaryFamily": {
+      "allOf": [
+        { "$ref": "#/definitions/roleSimple" },
+        {
+          "type": "object",
+          "required": ["primary", "optional", "countsLoop"],
+          "properties": {
+            "primary": { "const": true },
+            "optional": { "const": false },
+            "countsLoop": { "const": true }
+          }
+        }
+      ]
+    },
+    "optionalSecondaryFamily": {
+      "allOf": [
+        { "$ref": "#/definitions/roleSimple" },
+        {
+          "type": "object",
+          "required": ["primary", "optional", "countsLoop"],
+          "properties": {
+            "primary": { "const": false },
+            "optional": { "const": true },
+            "countsLoop": { "const": false },
+            "alternates": {
+              "type": "array",
+              "minItems": 1,
+              "items": { "$ref": "#/definitions/roleSimple" }
+            }
+          }
+        }
+      ]
+    },
+    "roleTiers": {
+      "type": "object",
+      "required": ["tiers"],
+      "properties": {
+        "tiers": {
+          "type": "object",
+          "required": ["low", "medium", "high"],
+          "additionalProperties": false,
+          "properties": {
+            "low": { "$ref": "#/definitions/roleSimple" },
+            "medium": { "$ref": "#/definitions/roleSimple" },
+            "high": { "$ref": "#/definitions/roleSimple" }
+          }
+        }
+      }
+    },
+    "reviewRoleList": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "uniqueItems": true,
+      "items": { "enum": ["plan-reviewer", "adversary"] }
+    }
+  }
+}

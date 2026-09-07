@@ -1,0 +1,934 @@
+#!/usr/bin/env node
+/**
+ * @description Thin CLI dispatcher for `npx claude-harness`. Three commands:
+ *   - `setup-local` (alias: `init`) — installs a new harness locally or updates an existing
+ *     harness through the isolated lifecycle operation.
+ *   - `setup-orca` (alias: `setup-vps`) — interactive wizard (setup-vps.mjs) run ON the machine that
+ *     owns the Orca runtime: writes the per-project config JSON + the selector's fenced crontab line.
+ *     It installs the CURRENT design (Orca dispatches, the repo's vendored `.claude/` executes) — the
+ *     `setup-vps` spelling is kept because it is what every existing doc and muscle-memory types, and
+ *     it is NOT the retired VPS cron engine (see docs/vps-retirement.md).
+ *   - `orca-doctor` — read-only diagnosis of whether THIS session can operate the VPS, naming the
+ *     barrier + fix for each blocked path. Available without vendoring precisely because the moment
+ *     you need it is the moment nothing else is reachable.
+ * Node builtins only.
+ */
+
+import { execFileSync } from "node:child_process";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+import { realpathSync, existsSync, readFileSync, writeFileSync, renameSync, mkdirSync, chmodSync, mkdtempSync, rmSync, lstatSync } from "node:fs";
+import { createInterface } from "node:readline";
+import { tmpdir } from "node:os";
+import { createHash, randomUUID } from "node:crypto";
+
+import { runSetupVps } from "./setup-vps.mjs";
+import { runOrcaDoctor } from "../../connecting-orca/references/orca-doctor.mjs";
+
+export const SOURCE_URL = "https://github.com/orobsonn/claude-harness.git";
+
+/** @description Env key that turns the cross-family (Codex/GPT) eyes on. */
+export const CROSS_FAMILY_ENV = "HARNESS_CODEX_ADVERSARY";
+
+/**
+ * Creates an independent clone at the current remote default tip for a lifecycle operation.
+ * The caller may be on an old branch or have product work staged; neither becomes lifecycle input.
+ * @param {string} cwd
+ * @returns {{ directory: string, defaultBranch: "main"|"master", cleanup: () => void }}
+ */
+export function createLifecycleClone(cwd) {
+  const git = (args, options = {}) => execFileSync("git", ["-C", cwd, ...args], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+    ...options,
+  });
+  git(["fetch", "origin"]);
+  const originHead = git(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]).trim();
+  const match = originHead.match(/^origin\/(main|master)$/);
+  if (!match) throw new Error(`origin/HEAD must name main or master, got ${originHead || "none"}`);
+  const defaultBranch = /** @type {"main"|"master"} */ (match[1]);
+  const remote = git(["remote", "get-url", "origin"]).trim();
+  if (!remote) throw new Error("origin has no URL for lifecycle clone");
+
+  const directory = mkdtempSync(join(tmpdir(), "claude-harness-lifecycle-"));
+  try {
+    execFileSync("git", ["clone", "--no-checkout", remote, directory], { stdio: ["ignore", "pipe", "pipe"] });
+    execFileSync("git", ["-C", directory, "checkout", "-B", defaultBranch, `origin/${defaultBranch}`], {
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  } catch (error) {
+    rmSync(directory, { recursive: true, force: true });
+    throw error;
+  }
+
+  return {
+    directory,
+    defaultBranch,
+    cleanup: () => rmSync(directory, { recursive: true, force: true }),
+  };
+}
+
+/** @param {string} cwd @param {string[]} args */
+function gitAt(cwd, args) {
+  return execFileSync("git", ["-C", cwd, ...args], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+}
+
+/** @param {string} file */
+function regularFileHash(file) {
+  const stat = lstatSync(file);
+  if (!stat.isFile()) throw new Error(`lifecycle runtime path is not a regular file: ${file}`);
+  return createHash("sha256").update(readFileSync(file)).digest("hex");
+}
+
+/**
+ * The lifecycle clone is the authority for its exact manifest. Before replacing a path in the
+ * invoking checkout, reject links or malformed filesystem shapes so a local `.opencode` symlink
+ * cannot redirect an update into product files or outside the worktree.
+ * @param {string} cwd
+ * @param {string} path
+ */
+function assertSafeRuntimeDestination(cwd, path) {
+  const parts = normalizedLifecyclePath(path).split("/");
+  let current = cwd;
+  for (let index = 0; index < parts.length; index++) {
+    current = join(current, parts[index]);
+    let stat;
+    try {
+      stat = lstatSync(current);
+    } catch (error) {
+      if (error?.code === "ENOENT") return;
+      throw error;
+    }
+    if (stat.isSymbolicLink()) {
+      throw new Error(`lifecycle runtime path crosses a symbolic link: ${path}`);
+    }
+    if (index < parts.length - 1 && !stat.isDirectory()) {
+      throw new Error(`lifecycle runtime parent is not a directory: ${path}`);
+    }
+    if (index === parts.length - 1 && !stat.isFile()) {
+      throw new Error(`lifecycle runtime destination is not a regular file: ${path}`);
+    }
+  }
+}
+
+/** @param {string} destination @param {Buffer} body @param {number} mode */
+function writeRuntimeFileAtomically(destination, body, mode) {
+  mkdirSync(dirname(destination), { recursive: true });
+  if (existsSync(destination)) regularFileHash(destination);
+  const temporary = `${destination}.harness-runtime-${process.pid}-${randomUUID().slice(0, 8)}.tmp`;
+  try {
+    writeFileSync(temporary, body, { mode });
+    chmodSync(temporary, mode);
+    renameSync(temporary, destination);
+  } catch (error) {
+    try { rmSync(temporary, { force: true }); } catch { /* best effort */ }
+    throw error;
+  }
+}
+
+/**
+ * Refreshes the exact harness files in an active feature checkout after an isolated lifecycle PR
+ * has merged. This intentionally leaves a visible local diff: it is the only way for the next
+ * process in that worktree to load the new vendored runtime without merging or rebasing product work.
+ * @param {{ cwd: string, sourceDirectory: string, runtimeTarget: "claude"|"opencode"|"codex"|"pi"|"both"|"all" }} input
+ */
+export function syncCallerRuntimeOverlay({ cwd, sourceDirectory, runtimeTarget }) {
+  const ownership = vendoredOwnership(sourceDirectory, runtimeTarget);
+  const paths = [...new Set([...ownership.paths, ...ownership.retired])].sort();
+  const sourceFiles = new Map();
+  for (const path of ownership.paths) {
+    const source = join(sourceDirectory, path);
+    regularFileHash(source);
+    sourceFiles.set(path, { body: readFileSync(source), mode: lstatSync(source).mode });
+  }
+  for (const path of ownership.retired) {
+    if (existsSync(join(sourceDirectory, path))) {
+      throw new Error(`retired lifecycle path is still present in source: ${path}`);
+    }
+  }
+
+  // The operator asked for an update: divergences in harness-owned regular files are therefore
+  // expected and are replaced. Validate every destination before the first write so malformed
+  // paths never produce a partial runtime update.
+  for (const path of paths) assertSafeRuntimeDestination(cwd, path);
+
+  const markerPaths = new Set([".opencode/.harness-version", ".claude/.harness-version", ".codex/.harness-version", ".pi/.harness-version"]);
+  const write = (path) => {
+    const source = sourceFiles.get(path);
+    if (!source) return;
+    writeRuntimeFileAtomically(join(cwd, path), source.body, source.mode);
+  };
+  for (const path of [...sourceFiles.keys()].filter((path) => !markerPaths.has(path)).sort()) {
+    write(path);
+  }
+  for (const path of ownership.retired) {
+    const destination = join(cwd, path);
+    if (existsSync(destination)) {
+      rmSync(destination, { force: true });
+    }
+  }
+  // A partially interrupted update keeps the old marker, so the next session never claims to run
+  // a release whose plugin/skills were not all copied. Re-running this command is idempotent.
+  for (const path of [...sourceFiles.keys()].filter((path) => markerPaths.has(path)).sort()) {
+    write(path);
+  }
+  return { action: "synced", paths: [...ownership.paths].sort() };
+}
+
+/**
+ * Fast-forwards the checkout that invoked a completed lifecycle update when it is already on the
+ * repository default branch. A feature checkout is never switched, and Git is left to refuse any
+ * fast-forward that would overwrite local work.
+ * @param {{ cwd: string, defaultBranch: string }} input
+ * @returns {{ action: "synced" } | { action: "skipped", reason: string }}
+ */
+export function syncCallerCheckout({ cwd, defaultBranch }) {
+  const activeBranch = gitAt(cwd, ["branch", "--show-current"]).trim();
+  if (activeBranch !== defaultBranch) {
+    return { action: "skipped", reason: "active branch is not the default branch" };
+  }
+  try {
+    gitAt(cwd, ["fetch", "origin"]);
+    gitAt(cwd, ["merge", "--ff-only", `origin/${defaultBranch}`]);
+    return { action: "synced" };
+  } catch {
+    return { action: "skipped", reason: "could not fast-forward the active default branch" };
+  }
+}
+
+/** @param {{ callerSync?: { action: string, reason?: string } } | undefined} result */
+function callerSyncSummary(result) {
+  if (!result?.callerSync) return "";
+  if (result.callerSync.action === "synced") return " Local default branch synchronized.";
+  if (result?.callerRuntimeSync?.action === "synced") {
+    return " Harness runtime synchronized in the active checkout; restart OpenCode to load it.";
+  }
+  if (result?.callerRuntimeSync?.action === "skipped") {
+    return ` Local runtime unchanged: ${result.callerRuntimeSync.reason} (${result.callerRuntimeSync.paths.join(", ")}).`;
+  }
+  return ` Local checkout unchanged: ${result.callerSync.reason}.`;
+}
+
+/** @param {string} cwd @param {string[]} args */
+function ghAt(cwd, args) {
+  return execFileSync("gh", args, {
+    cwd,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  }).trim();
+}
+
+/** @param {string} source @param {string} target */
+function copyGitIdentity(source, target) {
+  for (const key of ["user.name", "user.email"]) {
+    try {
+      const value = gitAt(source, ["config", "--get", key]).trim();
+      if (value) gitAt(target, ["config", key, value]);
+    } catch {
+      // A global identity is already inherited by the clone; a missing project override is fine.
+    }
+  }
+}
+
+/** @param {unknown} value */
+function normalizedLifecyclePath(value) {
+  if (typeof value !== "string") throw new Error("invalid lifecycle ownership manifest path");
+  const path = value.replace(/\\/g, "/").replace(/^\.\//, "");
+  if (
+    !path || path.startsWith("/") || path === "." || path === ".." || path.startsWith("../") ||
+    path.endsWith("/.") || path.endsWith("/..") || path.includes("/../")
+  ) {
+    throw new Error(`unsafe lifecycle ownership manifest path: ${String(value)}`);
+  }
+  return path;
+}
+
+/** @param {string} path @param {string} root @param {string} manifest */
+function assertRetiredLifecyclePathScope(path, root, manifest) {
+  // `retired` is a deletion ledger, not another generic write allowlist.  It may only
+  // name a file in the runtime that published this manifest; shared root files must be
+  // retired through an explicit future mechanism rather than silently gaining delete
+  // authority here.
+  if (!path.startsWith(`${root}/`)) {
+    throw new Error(`retired lifecycle path is outside the expected runtime root (${manifest}): ${path}`);
+  }
+}
+
+/** @param {string} directory @param {"claude"|"opencode"|"codex"|"pi"|"both"|"all"} runtimeTarget */
+function vendoredOwnership(directory, runtimeTarget) {
+  const manifests = runtimeTarget === "all"
+    ? [
+      { path: ".opencode/.harness-owned-files.json", root: ".opencode" },
+      { path: ".claude/.harness-owned-files.json", root: ".claude" },
+      { path: ".codex/.harness-owned-files.json", root: ".codex" },
+      { path: ".pi/.harness-owned-files.json", root: ".pi" },
+    ]
+    : runtimeTarget === "both"
+      ? [
+        { path: ".opencode/.harness-owned-files.json", root: ".opencode" },
+        { path: ".claude/.harness-owned-files.json", root: ".claude" },
+      ]
+      : [runtimeTarget === "opencode"
+        ? { path: ".opencode/.harness-owned-files.json", root: ".opencode" }
+        : runtimeTarget === "codex"
+          ? { path: ".codex/.harness-owned-files.json", root: ".codex" }
+          : runtimeTarget === "pi"
+            ? { path: ".pi/.harness-owned-files.json", root: ".pi" }
+            : { path: ".claude/.harness-owned-files.json", root: ".claude" }];
+  const paths = new Set();
+  const retired = new Set();
+  for (const manifest of manifests) {
+    let parsed;
+    try {
+      parsed = JSON.parse(readFileSync(join(directory, manifest.path), "utf8"));
+    } catch {
+      throw new Error(`missing or invalid lifecycle ownership manifest: ${manifest.path}`);
+    }
+    if (parsed?.version !== 1 || !Array.isArray(parsed.files)) {
+      throw new Error(`missing or invalid lifecycle ownership manifest: ${manifest.path}`);
+    }
+    for (const path of parsed.files) paths.add(normalizedLifecyclePath(path));
+    if (parsed.retired !== undefined && !Array.isArray(parsed.retired)) {
+      throw new Error(`invalid lifecycle retired-path manifest: ${manifest.path}`);
+    }
+    for (const rawPath of parsed.retired ?? []) {
+      const path = normalizedLifecyclePath(rawPath);
+      assertRetiredLifecyclePathScope(path, manifest.root, manifest.path);
+      if (paths.has(path)) {
+        throw new Error(`lifecycle ownership manifest declares path as both active and retired: ${path}`);
+      }
+      retired.add(path);
+    }
+  }
+  for (const path of retired) {
+    if (paths.has(path)) {
+      throw new Error(`lifecycle ownership manifest declares path as both active and retired: ${path}`);
+    }
+  }
+  if (paths.size === 0) throw new Error("lifecycle ownership manifest declares no files");
+  return { paths, retired };
+}
+
+/** @param {string} directory */
+function lifecycleChangedPaths(directory) {
+  const tracked = gitAt(directory, ["diff", "--name-only", "-z", "HEAD"]).split("\0").filter(Boolean);
+  const untracked = gitAt(directory, ["ls-files", "--others", "--exclude-standard", "-z"]).split("\0").filter(Boolean);
+  return new Set([...tracked, ...untracked].map(normalizedLifecyclePath));
+}
+
+/** @param {string} directory @param {Set<string>} retired */
+function assertRetiredLifecycleDeletions(directory, retired) {
+  for (const path of retired) {
+    if (existsSync(join(directory, path))) {
+      throw new Error(`retired lifecycle path is still present after vendoring: ${path}`);
+    }
+    const status = gitAt(directory, ["diff", "--name-status", "-z", "HEAD", "--", path])
+      .split("\0").filter(Boolean);
+    if (status.length !== 2 || status[0] !== "D" || normalizedLifecyclePath(status[1]) !== path) {
+      throw new Error(`retired lifecycle path is not an exact tracked deletion: ${path}`);
+    }
+  }
+}
+
+/**
+ * The clone is known-clean before vendoring, so the current vendor manifests are the only authority
+ * needed to make the lifecycle commit. This stays independent of either runtime's local helper.
+ * @param {string} directory
+ * @param {"claude"|"opencode"|"codex"|"both"|"all"} runtimeTarget
+ */
+function prepareVendoredLifecycle(directory, runtimeTarget) {
+  const ownership = vendoredOwnership(directory, runtimeTarget);
+  assertRetiredLifecycleDeletions(directory, ownership.retired);
+  const owned = new Set([...ownership.paths, ...ownership.retired]);
+  const changed = lifecycleChangedPaths(directory);
+  if (changed.has("opencode.harness.json")) {
+    throw new Error("opencode.harness.json requires manual config repair and is never lifecycle cargo");
+  }
+  const paths = [...owned].filter((path) => changed.has(path)).sort();
+  const defaultBranch = gitAt(directory, ["branch", "--show-current"]).trim();
+  if (paths.length === 0) return { action: "noop", branch: defaultBranch, paths };
+
+  const lifecycleBranch = `chore/harness-lifecycle-updating-harness-${Date.now()}`;
+  gitAt(directory, ["switch", "-c", lifecycleBranch]);
+  const present = paths.filter((path) => existsSync(join(directory, path)));
+  const removed = paths.filter((path) => !existsSync(join(directory, path)));
+  if (present.length > 0) gitAt(directory, ["add", "--", ...present]);
+  if (removed.length > 0) gitAt(directory, ["add", "-u", "--", ...removed]);
+  gitAt(directory, ["commit", "--only", "-m", "chore: sincroniza harness vendored", "--", ...paths]);
+
+  const committed = gitAt(directory, ["diff-tree", "--no-commit-id", "--name-only", "-r", "-z", "HEAD"])
+    .split("\0").filter(Boolean).map(normalizedLifecyclePath);
+  const foreign = committed.filter((path) => !owned.has(path));
+  if (foreign.length > 0) throw new Error(`lifecycle commit contains paths outside the vendor ownership manifest: ${foreign.join(", ")}`);
+  return { action: "committed", branch: lifecycleBranch, paths: committed };
+}
+
+/**
+ * Ships a lifecycle-only commit that was prepared in the isolated clone. GitHub's branch rules are
+ * the authority for any required checks; this operation must not race Actions creation by polling
+ * a transient check list in the client.
+ * @param {{ directory: string, defaultBranch: string, prepared: { action: string, branch?: string, paths?: string[], url?: string } }} input
+ */
+function shipPreparedLifecycle({ directory, defaultBranch, prepared }) {
+  if (prepared.action === "noop" || prepared.action === "merged") return prepared;
+  if (prepared.action !== "committed" && prepared.action !== "resume") {
+    throw new Error(`unsupported lifecycle preparation result: ${prepared.action}`);
+  }
+  const branch = gitAt(directory, ["branch", "--show-current"]).trim();
+  if (!branch || branch !== prepared.branch || !branch.startsWith("chore/harness-lifecycle-updating-harness-")) {
+    throw new Error("lifecycle branch identity differs from the verified prepared commit");
+  }
+  gitAt(directory, ["push", "-u", "origin", "HEAD"]);
+  const url = ghAt(directory, [
+    "pr", "create",
+    "--base", defaultBranch,
+    "--head", branch,
+    "--title", "chore: sincroniza harness vendored",
+    "--body", "Lifecycle do harness. Commit verificado pelo manifesto do vendor.",
+  ]);
+  const pr = JSON.parse(ghAt(directory, ["pr", "view", url, "--json", "number,url,baseRefName,headRefName,headRefOid"]));
+  const head = gitAt(directory, ["rev-parse", "HEAD"]).trim();
+  if (!Number.isInteger(pr.number) || pr.baseRefName !== defaultBranch || pr.headRefName !== branch || pr.headRefOid !== head) {
+    throw new Error("lifecycle PR identity differs from the verified prepared commit");
+  }
+  const repo = ghAt(directory, ["repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"]);
+  const result = JSON.parse(ghAt(directory, [
+    "api", "--method", "PUT", `repos/${repo}/pulls/${pr.number}/merge`,
+    "-f", `sha=${head}`,
+    "-f", "merge_method=squash",
+  ]));
+  if (result?.merged !== true) throw new Error("lifecycle merge was not accepted by GitHub");
+  gitAt(directory, ["switch", defaultBranch]);
+  gitAt(directory, ["pull", "--ff-only"]);
+  return { action: "merged", url: pr.url, paths: prepared.paths ?? [] };
+}
+
+/**
+ * Runs the full harness update outside the caller checkout. This makes a lifecycle sync atomic
+ * from the operator's point of view: a feature branch, staged product work, or a stale local main
+ * cannot contaminate the PR that refreshes the harness on origin's default branch. Once the PR is
+ * merged, an active default-branch caller is fast-forwarded to that same remote tip.
+ * @param {{
+ *   cwd: string,
+ *   ref: string,
+ *   runtimeTarget: "claude"|"opencode"|"codex"|"pi"|"both"|"all",
+ *   runVendor?: typeof runVendorDefault,
+ *   prepare?: (directory: string, runtimeTarget: "claude"|"opencode"|"codex"|"pi"|"both"|"all") => { action: string, branch?: string, paths?: string[], url?: string },
+ *   ship?: typeof shipPreparedLifecycle,
+ *   syncCaller?: typeof syncCallerCheckout,
+ *   syncRuntime?: typeof syncCallerRuntimeOverlay,
+ * }} input
+ */
+export function runIsolatedLifecycleUpdate({
+  cwd,
+  ref,
+  runtimeTarget,
+  runVendor = runVendorDefault,
+  prepare = prepareVendoredLifecycle,
+  ship = shipPreparedLifecycle,
+  syncCaller = syncCallerCheckout,
+  syncRuntime = syncCallerRuntimeOverlay,
+}) {
+  const lifecycle = createLifecycleClone(cwd);
+  try {
+    copyGitIdentity(cwd, lifecycle.directory);
+    runVendor({
+      source: SOURCE_URL,
+      ref,
+      target: lifecycle.directory,
+      withCodex: false,
+      runtimeTarget,
+    });
+    const prepared = prepare(lifecycle.directory, runtimeTarget);
+    const result = ship({ directory: lifecycle.directory, defaultBranch: lifecycle.defaultBranch, prepared });
+    if (result.action !== "merged" && result.action !== "noop") return result;
+    const callerSync = syncCaller({ cwd, defaultBranch: lifecycle.defaultBranch });
+    const callerRuntimeSync = callerSync.action === "synced"
+      ? { action: "not-needed", paths: [] }
+      : syncRuntime({ cwd, sourceDirectory: lifecycle.directory, runtimeTarget });
+    return { ...result, callerSync, callerRuntimeSync };
+  } finally {
+    lifecycle.cleanup();
+  }
+}
+
+/**
+ * @description Checks if the script is being run directly, resolving symlinks.
+ * @param {string} scriptPath - The path to check.
+ * @returns {boolean} True if the script is being run directly.
+ */
+export function isDirectCli(scriptPath) {
+  if (!scriptPath) return false;
+  const modulePath = fileURLToPath(import.meta.url);
+  try {
+    return realpathSync(scriptPath) === modulePath;
+  } catch {
+    return scriptPath === modulePath;
+  }
+}
+
+/**
+ * @description Parses the command and flags from argv (raw — no aliasing; the `init`→`setup-local`
+ * alias is resolved by the dispatcher in main()).
+ * Public `--target opencode|claude|codex|pi|both|all` selects the runtime shell (default all).
+ * @param {string[]} argv - The process.argv-shaped array.
+ * @returns {{ command: string | undefined, withCodex: boolean, runtimeTarget: "claude"|"opencode"|"codex"|"pi"|"both"|"all", releaseRef: string | undefined }}
+ */
+export function parseCliArgs(argv) {
+  let runtimeTarget = "all";
+  let releaseRef;
+  for (let i = 2; i < argv.length; i++) {
+    if (argv[i] === "--target" && argv[i + 1]) {
+      const v = String(argv[++i]).toLowerCase();
+      if (v === "claude") runtimeTarget = "claude";
+      else if (v === "opencode" || v === "oc") runtimeTarget = "opencode";
+      else if (v === "codex") runtimeTarget = "codex";
+      else if (v === "pi") runtimeTarget = "pi";
+      else if (v === "both") runtimeTarget = "both";
+      else if (v === "all") runtimeTarget = "all";
+      else throw new Error(`invalid --target "${v}" — expected: opencode | claude | codex | pi | both | all`);
+    }
+    if (argv[i] === "--ref") {
+      const value = String(argv[++i] ?? "").trim();
+      if (!value) throw new Error("--ref requires a release tag");
+      releaseRef = value;
+    }
+  }
+  return {
+    command: argv[2],
+    withCodex: argv.includes("--with-codex"),
+    runtimeTarget,
+    releaseRef,
+  };
+}
+
+/**
+ * @description Decides whether to vendor the cross-family Codex module. PURE — `ask` is injectable.
+ * An explicit `--with-codex` flag always wins (the non-interactive / CI path). Otherwise, ONLY when
+ * attached to a TTY do we prompt; a non-TTY with no flag defaults OFF (safe default = no Codex).
+ * @param {{ withCodexFlag: boolean, isTTY: boolean, ask: (q: string) => Promise<string> }} opts
+ * @returns {Promise<boolean>}
+ */
+export async function decideCodex({ withCodexFlag, isTTY, ask }) {
+  if (withCodexFlag) return true;
+  if (!isTTY) return false;
+  const answer = await ask(
+    "Run a cross-check with a second model family (Codex/GPT)? It only vendors the module + sets the toggle — you log in to OpenAI yourself. [y/N] "
+  );
+  return /^y(es)?$/i.test(String(answer ?? "").trim());
+}
+
+/**
+ * @description PURE merge: returns a new settings object with the cross-family toggle enabled under
+ * `env`. Never mutates the input; preserves every other key.
+ * @param {object} settings
+ * @returns {object}
+ */
+export function withCodexToggle(settings) {
+  const next = { ...(settings ?? {}) };
+  next.env = { ...(next.env ?? {}), [CROSS_FAMILY_ENV]: "1" };
+  return next;
+}
+
+/**
+ * @description Enables the cross-family toggle in `.claude/settings.local.json` (NOT the committed
+ * settings.json — a per-machine opt-in that never lands in git and never corrupts the file that loads
+ * Claude Code). Atomic (tmp + rename) and FAIL-SOFT: any error returns { ok:false, reason } so the
+ * caller can print the manual line instead of crashing a half-done init.
+ * @param {string} claudeDir
+ * @returns {{ ok: boolean, reason?: string }}
+ */
+function enableCrossFamilyToggle(claudeDir) {
+  const file = join(claudeDir, "settings.local.json");
+  try {
+    let current = {};
+    if (existsSync(file)) {
+      try {
+        current = JSON.parse(readFileSync(file, "utf8"));
+      } catch {
+        return { ok: false, reason: "settings.local.json exists but is not valid JSON — left untouched" };
+      }
+    }
+    const tmp = `${file}.tmp`;
+    writeFileSync(tmp, `${JSON.stringify(withCodexToggle(current), null, 2)}\n`);
+    renameSync(tmp, file);
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, reason: err?.message ?? String(err) };
+  }
+}
+
+/**
+ * @description Operator-facing next-steps for the Codex second eye. This command vendors the module
+ * and sets the toggle; it deliberately does NOT run any auth — the operator logs in to OpenAI.
+ * @returns {string}
+ */
+export function codexSetupNotes() {
+  return [
+    "",
+    "Cross-family (Codex) second eye — vendored + toggle set in .claude/settings.local.json.",
+    "It is OFF anywhere the codex CLI is unauthenticated/absent (fail-open). To finish setup YOU run:",
+    "  1. npm install -g @openai/codex        # Node 22+ (use the scoped @openai/codex, not 'codex')",
+    "  2. codex login                          # ChatGPT OAuth — OR, for CI:",
+    "     printenv OPENAI_API_KEY | codex login --with-api-key",
+    "  3. Optional ~/.codex/config.toml + project .codex/ — see",
+    "     .claude/modules/codex-adversary/README.md for the full read-only setup.",
+    "This command never logs you in; the OpenAI auth is yours to run.",
+    "",
+  ].join("\n");
+}
+
+/**
+ * @description Runs the init command by resolving the latest tag and running the vendor.
+ * @param {object} options - The options.
+ * @param {string} options.cwd - The current working directory.
+ * @param {() => string | null} options.resolveTag - Function to resolve the latest tag.
+ * @param {(opts: { source: string, ref: string, target: string, withCodex: boolean, runtimeTarget: string }) => void} options.runVendor
+ * @param {boolean} [options.withCodex] - Vendor the cross-family Codex module.
+ * @param {"claude"|"opencode"|"codex"|"pi"|"both"|"all"} [options.runtimeTarget] - Shells to vendor (default all).
+ * @returns {string} The resolved tag.
+ */
+export function runInit({ cwd, resolveTag, runVendor, withCodex = false, runtimeTarget = "all" }) {
+  const tag = resolveTag();
+  if (!tag) {
+    throw new Error(
+      "claude-harness: could not resolve the latest release tag from " +
+        SOURCE_URL +
+        " (need network + gh or curl). Aborting — refusing to vendor an unpinned ref."
+    );
+  }
+  runVendor({ source: SOURCE_URL, ref: tag, target: cwd, withCodex, runtimeTarget });
+  return tag;
+}
+
+/**
+ * Older OpenCode skills call `init` for both installation and updates. A first install still
+ * vendors in place; an existing shell must use the isolated updater so a failed write cannot leave
+ * a partially vendored checkout for the old skill to ship.
+ * @param {string} cwd
+ * @param {"claude"|"opencode"|"codex"|"pi"|"both"|"all"} runtimeTarget
+ */
+export function hasInstalledHarness(cwd, runtimeTarget) {
+  const markers = runtimeTarget === "all"
+    ? [".opencode/.harness-version", ".claude/.harness-version", ".codex/.harness-version", ".pi/.harness-version"]
+    : runtimeTarget === "both"
+      ? [".opencode/.harness-version", ".claude/.harness-version"]
+      : [runtimeTarget === "opencode" ? ".opencode/.harness-version" : runtimeTarget === "codex" ? ".codex/.harness-version" : runtimeTarget === "pi" ? ".pi/.harness-version" : ".claude/.harness-version"];
+  return markers.some((marker) => existsSync(join(cwd, marker)));
+}
+
+/**
+ * @description Resolves the latest release tag from GitHub.
+ * @returns {string | null} The latest tag or null on failure.
+ */
+function resolveLatestTag() {
+  try {
+    return execFileSync(
+      "gh",
+      [
+        "release",
+        "view",
+        "--repo",
+        "orobsonn/claude-harness",
+        "--json",
+        "tagName",
+        "-q",
+        ".tagName",
+      ],
+      {
+        stdio: ["pipe", "pipe", "ignore"],
+        timeout: 5000,
+        encoding: "utf8",
+      }
+    ).trim();
+  } catch {
+    try {
+      const json = execFileSync(
+        "curl",
+        ["-fs", "--max-time", "5", "https://api.github.com/repos/orobsonn/claude-harness/releases/latest"],
+        {
+          stdio: ["pipe", "pipe", "ignore"],
+          timeout: 5000,
+          encoding: "utf8",
+        }
+      );
+      return JSON.parse(json).tag_name.trim();
+    } catch {
+      return null;
+    }
+  }
+}
+
+/**
+ * @description Default vendor runner that delegates to vendor-core.mjs.
+ * Public CLI `--target` is the runtime shell; vendor-core uses `--target` for project dir
+ * and `--runtime` for claude|opencode|codex|pi|both|all.
+ * @param {object} options - The vendor options.
+ * @param {string} options.source - The source URL.
+ * @param {string} options.ref - The git ref.
+ * @param {string} options.target - The project directory.
+ * @param {boolean} [options.withCodex]
+ * @param {string} [options.runtimeTarget]
+ */
+function runVendorDefault({ source, ref, target, withCodex = false, runtimeTarget = "all" }) {
+  const here = dirname(fileURLToPath(import.meta.url));
+  const vendorCorePath = join(here, "vendor-core.mjs");
+  const flags = [
+    "--source",
+    source,
+    "--ref",
+    ref,
+    "--target",
+    target,
+    "--runtime",
+    runtimeTarget,
+  ];
+  if (withCodex) flags.push("--with-codex");
+  execFileSync(process.execPath, [vendorCorePath, ...flags], { stdio: "inherit" });
+}
+
+/** @description Prompts on the TTY for a single line. Resolves with the typed answer. */
+function askTTY(question) {
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  return new Promise((resolve) => rl.question(question, (answer) => {
+    rl.close();
+    resolve(answer);
+  }));
+}
+
+// ---------- main (runs only when invoked directly as a script) ----------
+
+/**
+ * @description Real seams for the setup-vps wizard. Infers everything it can so the operator barely
+ * types: the harness dir (this script's own clone if it ships core/orca, else a stable ~/.claude/
+ * harness-core auto-cloned once — NEVER the ephemeral npx cache), the project (cwd), and owner/repo
+ * (the dir's git remote). Installs a per-project config JSON + one fenced crontab line running the
+ * Orca selector; the retired VPS cron engine (see docs/vps-retirement.md) is no longer touched.
+ * @returns {object}
+ */
+function setupVpsSeams() {
+  const here = dirname(fileURLToPath(import.meta.url));
+  // Dual-runtime layout: this file lives at
+  // <harness>/core/claude-code/skills/initializing-projects/references/cli.mjs — 5 up is the harness
+  // root. Legacy flat layout (core/skills/…/references) is 4 up. Prefer the candidate that actually
+  // ships core/orca (a real clone, not npx).
+  const candidates = [
+    join(here, "..", "..", "..", "..", ".."),
+    join(here, "..", "..", "..", ".."),
+  ];
+  const localCandidate =
+    candidates.find((dir) => existsSync(join(dir, "core", "orca", "select-and-dispatch.mjs"))) ?? null;
+  const localEngineDir = localCandidate;
+  const home = process.env.HOME || process.env.USERPROFILE || ".";
+  const stableEngineDir = join(home, ".claude", "harness-core");
+  return {
+    ask: askTTY,
+    out: (t) => process.stdout.write(`${t}\n`),
+    env: process.env,
+    cwd: process.cwd(),
+    nodeBin: process.execPath,
+    gitRemote: (dir) => {
+      try {
+        return execFileSync("git", ["-C", dir, "remote", "get-url", "origin"], {
+          encoding: "utf8",
+          stdio: ["ignore", "pipe", "ignore"],
+        }).trim();
+      } catch {
+        return "";
+      }
+    },
+    localEngineDir,
+    stableEngineDir,
+    cloneEngine: (dir) => {
+      const tag = resolveLatestTag();
+      const args = ["clone", "--depth", "1"];
+      if (tag) args.push("--branch", tag);
+      args.push(SOURCE_URL, dir);
+      execFileSync("git", args, { stdio: "inherit" });
+    },
+    exists: (p) => existsSync(p),
+    ensureDir: (d) => mkdirSync(d, { recursive: true, mode: 0o700 }),
+    writeJson: (p, json) => writeFileSync(p, `${JSON.stringify(json, null, 2)}\n`, { mode: 0o600 }),
+    // `crontab -l` exits non-zero when the user simply has no crontab yet — that is an empty
+    // crontab, not an error, and must never abort the install.
+    readCrontab: () => {
+      try {
+        return execFileSync("crontab", ["-l"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+      } catch {
+        return "";
+      }
+    },
+    writeCrontab: (text) => execFileSync("crontab", ["-"], { input: text, stdio: ["pipe", "inherit", "inherit"] }),
+    whoami: () => {
+      try {
+        return execFileSync("id", ["-un"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+      } catch {
+        return "";
+      }
+    },
+  };
+}
+
+/**
+ * @description Maps a typed command onto its canonical name. Both aliases are permanent: `init` is
+ * what years of docs say, and `setup-vps` is what every playbook and every operator's muscle memory
+ * types — while the thing it installs is the Orca design, not the retired VPS cron engine. Renaming
+ * without keeping the alias would strand exactly the operators the command exists for. PURE.
+ * @param {string} raw
+ * @returns {string}
+ */
+export function resolveCommand(raw) {
+  const command = String(raw ?? "");
+  if (command === "init") return "setup-local";
+  if (command === "setup-vps") return "setup-orca";
+  return command;
+}
+
+async function main() {
+  let parsed;
+  try {
+    parsed = parseCliArgs(process.argv);
+  } catch (err) {
+    process.stderr.write(`[claude-harness] ${err instanceof Error ? err.message : String(err)}\n`);
+    process.exit(1);
+  }
+  const {
+    command: rawCommand,
+    withCodex: withCodexFlag,
+    runtimeTarget,
+    releaseRef,
+  } = parsed;
+  const command = resolveCommand(rawCommand);
+
+  if (command === "setup-orca") {
+    try {
+      await runSetupVps(setupVpsSeams());
+    } catch (err) {
+      process.stderr.write(`[claude-harness] ${err.message}\n`);
+      process.exit(1);
+    }
+    return;
+  }
+
+  if (command === "orca-doctor") {
+    // Always exits 0: a blocked path is a diagnosis to read, not a command that failed. An exit code
+    // here would be read as "the tool broke", which is the same wrong conclusion it exists to prevent.
+    await runOrcaDoctor(process.argv.slice(3), (t) => process.stdout.write(`${t}\n`));
+    return;
+  }
+
+  if (command === "lifecycle-snapshot") {
+    // Compatibility no-op for skills vendored before isolated lifecycle updates existed. The
+    // following pinned `init` command detects the existing shell and performs the whole update.
+    process.stdout.write("[claude-harness] compatibility preflight complete — run the pinned init command now.\n");
+    return;
+  }
+
+  if (command === "lifecycle-update") {
+    if (!releaseRef) {
+      process.stderr.write("[claude-harness] lifecycle-update requires --ref <release-tag>\n");
+      process.exit(1);
+    }
+    try {
+      const result = runIsolatedLifecycleUpdate({
+        cwd: process.cwd(),
+        ref: releaseRef,
+        runtimeTarget,
+      });
+      const url = typeof result?.url === "string" ? ` ${result.url}` : "";
+      const local = callerSyncSummary(result);
+      process.stdout.write(`[claude-harness] lifecycle update ${releaseRef}: ${result.action}.${url}${local}\n`);
+    } catch (err) {
+      process.stderr.write(`[claude-harness] ${err.message}\n`);
+      process.exit(1);
+    }
+    return;
+  }
+
+  if (command !== "setup-local") {
+    process.stderr.write(
+      "Usage:\n" +
+        "  npx claude-harness init --target opencode|claude|codex|pi|both|all [--with-codex]\n" +
+        "  npx claude-harness setup-local [--target opencode|claude|codex|pi|both|all] [--with-codex]\n" +
+      "  npx claude-harness lifecycle-snapshot updating-harness\n" +
+      "  npx claude-harness lifecycle-update --target opencode|claude|codex|pi|both|all --ref <release-tag>\n" +
+      "  npx claude-harness setup-orca            (alias: setup-vps)\n" +
+      "  npx claude-harness orca-doctor [--environment <nome>] [--ssh-host <alias>] [--json]\n"
+    );
+    process.exit(1);
+  }
+
+  const withCodex =
+    runtimeTarget === "opencode" || runtimeTarget === "codex" || runtimeTarget === "pi" || runtimeTarget === "all"
+      ? false
+      : await decideCodex({
+          withCodexFlag,
+          isTTY: Boolean(process.stdin.isTTY && process.stdout.isTTY),
+          ask: askTTY,
+        });
+
+  try {
+    const cwd = process.cwd();
+    const isTTY = Boolean(process.stdout.isTTY) && !process.env.NO_COLOR;
+    const dim = (text) => (isTTY ? `\x1b[2m${text}\x1b[0m` : text);
+    process.stdout.write(`${dim("→")} Resolving latest harness release...\n`);
+    if (hasInstalledHarness(cwd, runtimeTarget)) {
+      const tag = resolveLatestTag();
+      if (!tag) throw new Error(`claude-harness: could not resolve the latest release tag from ${SOURCE_URL}`);
+      process.stdout.write(`${isTTY ? "\x1b[32m✓\x1b[0m" : "✓"} latest release: ${tag}\n`);
+      const result = runIsolatedLifecycleUpdate({ cwd, ref: tag, runtimeTarget });
+      const url = typeof result?.url === "string" ? ` ${result.url}` : "";
+      const local = callerSyncSummary(result);
+      process.stdout.write(`[claude-harness] lifecycle update ${tag}: ${result.action}.${url}${local} Update finished; do not run lifecycle recovery or shipping commands.\n`);
+      return;
+    }
+    const tag = runInit({
+      cwd,
+      resolveTag: () => {
+        const resolved = resolveLatestTag();
+        if (resolved) process.stdout.write(`${isTTY ? "\x1b[32m✓\x1b[0m" : "✓"} latest release: ${resolved}\n`);
+        return resolved;
+      },
+      runVendor: runVendorDefault,
+      withCodex,
+      runtimeTarget,
+    });
+    const destHint =
+      runtimeTarget === "opencode"
+        ? "./.opencode"
+        : runtimeTarget === "codex"
+          ? "./.codex + ./.agents/skills"
+        : runtimeTarget === "pi"
+          ? "./.pi/harness"
+          : runtimeTarget === "both"
+          ? "./.claude + ./.opencode"
+          : runtimeTarget === "all"
+            ? "./.claude + ./.opencode + ./.codex + ./.agents/skills + ./.pi/harness"
+          : "./.claude";
+    process.stdout.write(
+      `[claude-harness] vendored harness ${tag} into ${destHint} — review and commit.\n`
+    );
+    if (withCodex) {
+      const toggle = enableCrossFamilyToggle(join(cwd, ".claude"));
+      if (toggle.ok) {
+        process.stdout.write(`[claude-harness] cross-family toggle set: ${CROSS_FAMILY_ENV}=1 in .claude/settings.local.json\n`);
+      } else {
+        process.stdout.write(
+          `[claude-harness] could not write the toggle (${toggle.reason}). Add it manually to .claude/settings.local.json:\n` +
+          `  { "env": { "${CROSS_FAMILY_ENV}": "1" } }\n`
+        );
+      }
+      process.stdout.write(codexSetupNotes());
+    }
+  } catch (err) {
+    process.stderr.write(`[claude-harness] ${err.message}\n`);
+    process.exit(1);
+  }
+}
+
+if (isDirectCli(process.argv[1])) {
+  main();
+}
