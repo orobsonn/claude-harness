@@ -14,6 +14,7 @@ import { validatePlan } from "../../shared/lib/validate-plan.mjs";
 import { compareAndDeleteLock } from "./pi-gate-state.mjs";
 import { piExecutionPlanPath, piGateStatePath, piSpecPath, piStateRoot } from "./pi-paths.mjs";
 import { readTaskRunBinding } from "./task-run.mjs";
+import { hasSuccessfulAdversaryCompletion } from "./marker-authority.mjs";
 
 const MAX_FILE_BYTES = 1024 * 1024;
 const RECOVERABLE_MODES = new Set(["LIGHT", "FULL"]);
@@ -76,8 +77,10 @@ function readOwnedFile(root, file) {
       return { ok: false, reason: "resume file invalid" };
     }
     return { ok: true, path: resolved, text: fs.readFileSync(resolved, "utf8") };
-  } catch {
-    return { ok: false, reason: "resume file missing" };
+  } catch (error) {
+    return { ok: false, reason: "resume file missing",
+      ...(error?.code === "ENOENT" && error.path === path.resolve(file) ? { absent: true } : {}),
+    };
   }
 }
 
@@ -150,6 +153,35 @@ function asStringArray(value, reason) {
     : { ok: false, reason };
 }
 
+function inspectOwnedPath(root, file) {
+  if (!isInside(root, file)) return { invalid: true };
+  let cursor = root;
+  let stat;
+  for (const segment of path.relative(root, file).split(path.sep)) {
+    cursor = path.join(cursor, segment);
+    try {
+      stat = fs.lstatSync(cursor);
+      if (stat.isSymbolicLink()) return { invalid: true };
+    } catch (error) { return error?.code === "ENOENT" ? { absent: true } : { invalid: true }; }
+  }
+  return { stat };
+}
+
+function hasPostPlanEvidence(root, statePath, state) {
+  const fields = [
+    "plan_review_evidence", "plan_verdict", "fidelity_pass", "hand_finished",
+    "capture_verified", "regate_pending", "regate_passed", "task_review_evidence", "task_adversary_evidence",
+    "final_review_evidence", "final_review_done", "demo_done",
+  ];
+  if (fields.some((key) => Object.hasOwn(state, key)) ||
+      !inspectOwnedPath(root, path.join(path.dirname(statePath), "task-runs/index.json")).absent) return true;
+  const handsPath = path.join(root, ".pi/harness/state/hand-records", state.feature_id, state.session_id);
+  const hands = inspectOwnedPath(root, handsPath);
+  if (hands.absent) return false;
+  if (hands.invalid || !hands.stat?.isDirectory()) return true;
+  try { return fs.readdirSync(handsPath).length > 0; } catch { return true; }
+}
+
 /**
  * @param {string} projectRoot
  * @param {string} sessionId
@@ -188,11 +220,27 @@ export function recoverPiParentSession(projectRoot, sessionId) {
       context: "Resume only this exact delegated task parent and attempt. Preserve valid task evidence and resolve the incomplete item without restarting global ceremony or inventing approvals.",
     };
   }
-  if (state.brainstormed !== true || state.adversary_fired !== true || state.spec_status !== "adversary-reviewed") {
+  if (state.classified !== true || state.classification_source === "delegated-task") {
+    return { ok: false, reason: "resume global classification invalid" };
+  }
+  const draft = state.spec_status === "draft";
+  if (draft) {
+    // A completed native review (or its consumed marker) is not the spec seal.
+    // Reopening this conversation must leave the pending approval gates untouched.
+    if ((state.brainstormed !== undefined && state.brainstormed !== false) || Object.hasOwn(state, "reviewed_spec_sha256") ||
+        Object.hasOwn(state, "reviewed_at") ||
+        (state.adversary_fired !== undefined && typeof state.adversary_fired !== "boolean") ||
+        (state.adversary_fired === true && (state.adversary_spec_sha256 !== state.spec_sha256 ||
+          state.adversary_completion_evidence?.spec_sha256 !== state.spec_sha256 ||
+          !hasSuccessfulAdversaryCompletion(state, { sessionId, featureId: state.feature_id }))) ||
+        (Object.hasOwn(state, "adversary_spec_sha256") && state.adversary_fired !== true)) {
+      return { ok: false, reason: "resume draft state inconsistent" };
+    }
+  } else if (state.brainstormed !== true || state.adversary_fired !== true || state.spec_status !== "adversary-reviewed") {
     return { ok: false, reason: "resume spec review missing" };
   }
   if (typeof state.spec_sha256 !== "string" || !/^[a-f0-9]{64}$/.test(state.spec_sha256) ||
-      state.adversary_spec_sha256 !== state.spec_sha256 || state.reviewed_spec_sha256 !== state.spec_sha256) {
+      (!draft && (state.adversary_spec_sha256 !== state.spec_sha256 || state.reviewed_spec_sha256 !== state.spec_sha256))) {
     return { ok: false, reason: "resume spec seal invalid" };
   }
 
@@ -203,19 +251,24 @@ export function recoverPiParentSession(projectRoot, sessionId) {
   if (!spec.ok) return { ok: false, reason: "resume spec missing" };
   if (sha256(spec.text) !== state.spec_sha256) return { ok: false, reason: "resume spec hash mismatch" };
   const planFile = readOwnedFile(root, planPath.path);
-  if (!planFile.ok) return { ok: false, reason: "resume plan missing" };
-  const parsedPlan = parseJson(planFile.text, "resume plan invalid");
-  if (!parsedPlan.ok) return parsedPlan;
-  const currentPlan = validatePlan(parsedPlan.value, {
-    expect: "full",
-    expectedModelStrategy: CURRENT_PI_MODEL_STRATEGY,
-  });
-  const legacyPlan = currentPlan.ok ? null : validatePlan(parsedPlan.value, {
-    expect: "full",
-    expectedModelStrategy: LEGACY_PI_MODEL_STRATEGY,
-  });
-  if ((!currentPlan.ok && !legacyPlan?.ok) || parsedPlan.value.feature_id !== state.feature_id || String(parsedPlan.value.mode).toUpperCase() !== stateMode) {
-    return { ok: false, reason: "resume plan invalid" };
+  if (!planFile.ok && (!planFile.absent || hasPostPlanEvidence(root, statePath.path, state))) {
+    return { ok: false, reason: "resume plan missing" };
+  }
+  let legacyPlan;
+  if (planFile.ok) {
+    const parsedPlan = parseJson(planFile.text, "resume plan invalid");
+    if (!parsedPlan.ok) return parsedPlan;
+    const currentPlan = validatePlan(parsedPlan.value, {
+      expect: "full",
+      expectedModelStrategy: CURRENT_PI_MODEL_STRATEGY,
+    });
+    legacyPlan = currentPlan.ok ? null : validatePlan(parsedPlan.value, {
+      expect: "full",
+      expectedModelStrategy: LEGACY_PI_MODEL_STRATEGY,
+    });
+    if ((!currentPlan.ok && !legacyPlan?.ok) || parsedPlan.value.feature_id !== state.feature_id || String(parsedPlan.value.mode).toUpperCase() !== stateMode) {
+      return { ok: false, reason: "resume plan invalid" };
+    }
   }
   const finished = asStringArray(state.hand_finished, "resume hand state invalid");
   const pendingRegates = asStringArray(state.regate_pending, "resume hand state invalid");
@@ -226,20 +279,29 @@ export function recoverPiParentSession(projectRoot, sessionId) {
   // o pai reconcilia os artefatos com a conversa e os gates reais continuam ativos.
   const envelope = {
     schema: "harness.parent-recovery.v1", session_id: sessionId, feature_id: state.feature_id,
-    canonical_plan_path: path.relative(root, planPath.path),
-    canonical_plan_sha256: sha256(planFile.text),
+    stage: draft ? "draft" : planFile.ok ? "plan" : "pre-plan",
+    spec_approval: "not_verified_by_recovery",
+    ...(planFile.ok ? {
+      canonical_plan_path: path.relative(root, planPath.path),
+      canonical_plan_sha256: sha256(planFile.text),
+    } : {}),
     plan_approval: "not_verified_by_recovery",
     spec_path: path.relative(root, specPath.path),
     gate_state_path: path.relative(root, statePath.path),
     session_file: path.relative(root, transcript.sessionFile),
-    ...(legacyPlan?.ok ? {
+    ...(draft ? {
+      resume_guidance: "Continue the incomplete specification in this same conversation. Resolve requirements from their actual sources; recovery does not grant approval. Reconcile native review evidence and obtain the current spec seal before dispatching the planner or any implementation. Then have the planner reconcile any existing plan with the current specification and model route, and obtain its current review.",
+    } : !planFile.ok ? {
+      resume_guidance: "The current spec seal is intact and no canonical plan exists yet. Continue with the native planner and plan review. Recovery does not create a plan or approve implementation.",
+    } : {}),
+    ...(legacyPlan?.ok && !draft ? {
       model_route_status: "legacy-plan-reviewer-sol",
       model_route_reconciliation: "Dispatch the planner to change only model_strategy.plan-reviewer to Astra while preserving the sealed spec and tasks, revalidate the JSON, then have Astra review the new hash. Do not reuse plan approval or infer progress from the rewritten plan.",
     } : {}),
   };
   return {
     ok: true, root, sessionId, sessionFile: transcript.sessionFile, statePath: statePath.path,
-    planPath: planPath.path, specPath: specPath.path,
+    ...(planFile.ok ? { planPath: planPath.path } : {}), specPath: specPath.path,
     context: `<HARNESS_PARENT_RECOVERY>\n${JSON.stringify(envelope)}\n</HARNESS_PARENT_RECOVERY>`,
   };
 }

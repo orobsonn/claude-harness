@@ -130,7 +130,7 @@ function checkFinalReviewEvidence(previous, authorization, isAncestorSha, snapsh
  * registrou a conclusão da filha exatamente despachada. O texto da resposta nunca é prova: no
  * Pi uma falha de WebSocket pode voltar como resultado de tool com `isError=false`.
  */
-function hasSuccessfulAdversaryCompletion(previous, authorization) {
+export function hasSuccessfulAdversaryCompletion(previous, authorization) {
   const evidence = previous?.adversary_completion_evidence;
   if (!evidence || typeof evidence !== "object" || Array.isArray(evidence)) return false;
   return evidence.written_by === "host-subagent-completion" &&

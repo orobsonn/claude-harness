@@ -26,6 +26,8 @@ O comando acima abre o TUI; para headless, acrescente `--mode json -p` antes do 
 
 Cada execução operacional iniciada pelo launcher recebe uma sessão nova e mantém um lock único da worktree até o Pi terminar. Assim, outro pai fresh ou retomado não sobrepõe a mesma implementação. Para reabrir exatamente uma sessão existente, use `node .pi/harness/pi-harness.mjs --harness-resume <session-id> "Continue o plano."`; se o arquivo exato ou o preflight não conferir, nenhuma sessão substituta é criada. Depois de uma interrupção, a retomada reconcilia o owner e os processos registrados antes de liberar o lock; não apague o lock nem inicie um segundo pai manualmente.
 
+A mesma sessão também pode retomar uma spec em rascunho ou uma spec revisada antes da criação do plano. O preflight verifica os artefatos existentes e preserva os gates pendentes: reabrir a conversa não aprova a spec, o plano ou a implementação. Um plano ausente depois de haver evidência de progresso continua sendo erro, assim como arquivos inválidos ou divergentes.
+
 Os seletores nativos de sessão (`--continue`, `-c`, `--resume`, `-r`, `--session`, `--session-id`, `--session-dir`, `--fork` e `--no-session`) são recusados pelo launcher. Texto após `--` continua sendo prompt. Help, versão, export e comandos administrativos não abrem sessão nem disputam o lock. Essas garantias pertencem ao launcher vendorizado; executar o binário `pi` diretamente não passa por esse controle.
 
 O login segue a mesma regra do OpenCode: é **um por ambiente**, nunca por worktree. O launcher preserva roles, settings, extensões e sessões do harness na worktree, mas usa somente a credencial Pi do perfil do usuário do host (`~/.pi/agent/auth.json`).

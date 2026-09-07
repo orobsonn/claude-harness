@@ -55,6 +55,12 @@ descobertas revalidar e incorporar. Diários completos não são herdados pelos 
   ser carregado explicitamente nesse caminho, com a identidade do terminal da task.
 - A instalação local do harness também precisa ser regenerada pelo instalador; mudar
   somente o código fonte deixaria o projeto usando a pipeline anterior.
+- A interrupção da FULL revelou que a retomada exigia uma spec selada e um plano já
+  escrito. O preflight agora permite reabrir o rascunho ou o checkpoint anterior ao
+  plano, preservando identidade, hashes e gates pendentes. Recibos e arquivos de
+  progresso impedem tratar um plano perdido como planejamento ainda não iniciado.
+  A correção reutiliza a validação nativa do recibo adversarial; observar o status e
+  criar diretórios vazios não passa a bloquear a retomada.
 
 ## Validação real escolhida
 
@@ -91,6 +97,21 @@ devem acessar zero bindings. A spec atribuiu ao operador uma interpretação que
 não forneceu. O APPROVE produzido sobre essa premissa não é aceito como prova. A
 decisão foi solicitada ao operador; a mesma sessão e seus registros estão preservados
 para retomar com a especificação corrigida e uma nova revisão.
+
+A correção de recuperação foi exercitada contra essa mesma sessão: o preflight
+retornou `stage: draft`, sem mudar um byte do gate-state, e o gate nativo continuou
+negando o planner. **160/160 testes focais** de retomada, markers, launcher, dispatch
+e task mode passaram. A revisão independente da correção foi aprovada sem findings
+restantes. O instalador oficial regenerou o vendor local e o da worktree real; o
+preflight instalado também preservou os registros e manteve o planner bloqueado.
+Nenhum provider foi reiniciado para essa verificação.
+
+Alternativa identificada, ainda sem despacho: `orobsonn/proj-lainny` #47,
+`escritor-publico-lead`, já implementada no PR #56. Seu plano histórico FULL tem
+cinco tasks, duas raízes independentes, base anterior
+`84b946d5e12b516952c9cdb8696fbab6382ef813` e evidência histórica de 766 testes.
+A operação de painel Cloudflare permanece fora do replay local, como na entrega
+original. Essa alternativa atende ao pedido inicial de usar uma issue já implementada.
 
 ## Evidências e fechamento pendente
 
