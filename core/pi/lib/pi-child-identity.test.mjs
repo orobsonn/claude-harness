@@ -71,6 +71,19 @@ test("identidade rejeita papel não canônico, sessão insegura e pai igual à f
   assert.equal(readPiChildIdentity(root, CHILD).absent, true);
 });
 
+test("identidade aceita o discussion adversary que o runtime pode despachar", () => {
+  const root = makeRoot();
+  const written = writePiChildIdentity(root, {
+    parentSessionId: PARENT,
+    childSessionId: CHILD,
+    role: "harness-discussion-adversary",
+    callId: "call-discussion",
+  });
+
+  assert.equal(written.ok, true);
+  assert.equal(readPiChildIdentity(root, CHILD).record.role, "harness-discussion-adversary");
+});
+
 test("filha sem registro é ausente, e ausência nunca vira conflito", () => {
   const root = makeRoot();
   const read = readPiChildIdentity(root, CHILD);
@@ -149,6 +162,63 @@ test("JSON corrompido é conflito, nunca ausência silenciosa", () => {
   const read = readPiChildIdentity(root, CHILD);
   assert.equal(read.ok, false);
   assert.equal(read.conflict, true);
+});
+
+test("leitura pelo pai exato ignora estado não relacionado que envenena a varredura legada", () => {
+  const root = makeRoot();
+  assert.equal(writePiChildIdentity(root, {
+    parentSessionId: PARENT,
+    childSessionId: CHILD,
+    role: "harness-adversary",
+    callId: "call-exact",
+  }).ok, true);
+  const poison = piChildIdentityPath(root, "ses_unrelated_poison", CHILD);
+  assert.equal(poison.ok, true);
+  fs.mkdirSync(path.dirname(poison.path), { recursive: true });
+  fs.writeFileSync(poison.path, "{broken unrelated identity");
+
+  const legacy = readPiChildIdentity(root, CHILD);
+  assert.equal(legacy.ok, false);
+  assert.equal(legacy.conflict, true);
+
+  const exact = readPiChildIdentity(root, CHILD, { parentSessionId: PARENT });
+  assert.equal(exact.ok, true);
+  assert.equal(exact.record.parent_session_id, PARENT);
+  assert.equal(exact.record.child_session_id, CHILD);
+});
+
+test("leitura pelo pai exato rejeita registro que declara outro pai", () => {
+  const root = makeRoot();
+  const requestedParent = "ses_parent02";
+  const resolved = piChildIdentityPath(root, requestedParent, CHILD);
+  assert.equal(resolved.ok, true);
+  fs.mkdirSync(path.dirname(resolved.path), { recursive: true });
+  fs.writeFileSync(resolved.path, JSON.stringify({
+    parent_session_id: PARENT,
+    child_session_id: CHILD,
+    dispatch_call_id: "call-forged",
+    role: "harness-adversary",
+    created_at: new Date(0).toISOString(),
+  }));
+
+  const exact = readPiChildIdentity(root, CHILD, { parentSessionId: requestedParent });
+  assert.equal(exact.ok, false);
+  assert.equal(exact.conflict, true);
+});
+
+test("leitura por pai exato ausente não recorre à identidade válida de outro pai", () => {
+  const root = makeRoot();
+  assert.equal(writePiChildIdentity(root, {
+    parentSessionId: PARENT,
+    childSessionId: CHILD,
+    role: "harness-security",
+    callId: "call-original-parent",
+  }).ok, true);
+
+  const exact = readPiChildIdentity(root, CHILD, { parentSessionId: "ses_parent02" });
+  assert.equal(exact.ok, false);
+  assert.equal(exact.absent, true);
+  assert.notEqual(exact.conflict, true);
 });
 
 test("remoção apaga só o registro exato e é idempotente", () => {

@@ -9,10 +9,13 @@ import { dirname, join, resolve } from "node:path";
 import { CANONICAL_ROLES, RUNTIME_ROLES } from "../lib/roles.mjs";
 import { PI_AUTH_PATH_ENV, PI_RESUME_ENV, verifyPiAuthPathPatch } from "../lib/pi-auth-path-patch.mjs";
 import { resolveVerifiedPiRuntime } from "../lib/pi-runtime-cache.mjs";
+import { piChildResourceSettings } from "../lib/pi-child-extensions.mjs";
+import { materializePiReviewConfig } from "../lib/pi-review-config.mjs";
 import { acquirePiParentWorktreeLock, recoverPiParentSession } from "../lib/parent-session-recovery.mjs";
 
 const PACKAGE_ROOT = resolve(fileURLToPath(new URL("../../../", import.meta.url)));
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
+const SUBAGENTS_BRIDGE = "core/pi/extensions/harness-subagents.ts";
 
 /**
  * Extensões carregadas ANTES do pi-subagents. `harness-policy` vem primeiro de propósito: hooks
@@ -37,6 +40,7 @@ const EXTENSIONS_AFTER_SUBAGENTS = [
   "core/pi/extensions/harness-dispatch.ts",
   "core/pi/extensions/harness-memory.ts",
   "core/pi/extensions/harness-entry-gate.ts",
+  "core/pi/extensions/harness-reviews.ts",
   "core/pi/extensions/harness-plan-gate.ts",
   "core/pi/extensions/harness-plan-write-gate.ts",
   "core/pi/extensions/harness-marker.ts",
@@ -66,8 +70,12 @@ const REQUIRED_LIBS = [
   "core/pi/lib/pi-adapter-map.mjs",
   "core/pi/lib/pi-auth-path-patch.mjs",
   "core/pi/lib/pi-child-identity.mjs",
+  "core/pi/lib/pi-child-extensions.mjs",
   "core/pi/lib/pi-gate-state.mjs",
   "core/pi/lib/pi-paths.mjs",
+  "core/pi/lib/pi-review-config.mjs",
+  "core/pi/lib/pi-review-concurrency.mjs",
+  "core/pi/lib/pi-review-evidence.mjs",
   "core/pi/lib/pi-result-text.mjs",
   "core/pi/lib/pi-runtime-cache.mjs",
   "core/pi/lib/pi-state-records.mjs",
@@ -210,7 +218,7 @@ export function buildPiHarnessInvocation({ root, argv, env, runtimePrompt = "", 
   const extensionArgs = [
     ...EXTENSIONS_BEFORE_SUBAGENTS.flatMap((rel) => ["-e", join(root, rel)]),
     "-e",
-    dependencyPaths.subagentsExtension,
+    join(root, SUBAGENTS_BRIDGE),
     ...EXTENSIONS_AFTER_SUBAGENTS.flatMap((rel) => ["-e", join(root, rel)]),
   ];
   return {
@@ -254,6 +262,7 @@ export function buildPiHarnessInvocation({ root, argv, env, runtimePrompt = "", 
  * @param {string} [stateDir]
  */
 export function materializeRuntime(root, runtimeDir, stateDir = harnessStateDir(runtimeDir)) {
+  materializePiReviewConfig(runtimeDir, join(root, "core/pi/runtime/harness.json"));
   mkdirSync(runtimeDir, { recursive: true });
   mkdirSync(stateDir, { recursive: true });
   for (const name of RUNTIME_DEFAULTS) {
@@ -273,12 +282,16 @@ export function materializeRuntime(root, runtimeDir, stateDir = harnessStateDir(
   try {
     const expected = JSON.parse(readFileSync(settingsSource, "utf8"));
     const current = JSON.parse(readFileSync(settingsTarget, "utf8"));
+    const childResources = piChildResourceSettings(root);
     const legacyHarnessDefault =
       current && typeof current === "object" && !Array.isArray(current) &&
       current.defaultProvider === undefined &&
       LEGACY_HARNESS_DEFAULT_MODELS.has(current.defaultModel);
     const needsIdleTimeout = current?.httpIdleTimeoutMs !== expected?.httpIdleTimeoutMs;
-    if (legacyHarnessDefault || needsIdleTimeout) {
+    const needsChildResources =
+      JSON.stringify(current?.extensions) !== JSON.stringify(childResources.extensions) ||
+      JSON.stringify(current?.skills) !== JSON.stringify(childResources.skills);
+    if (legacyHarnessDefault || needsIdleTimeout || needsChildResources) {
       writeFileSync(
         settingsTarget,
         `${JSON.stringify({
@@ -288,6 +301,7 @@ export function materializeRuntime(root, runtimeDir, stateDir = harnessStateDir(
             defaultModel: expected.defaultModel,
           } : {}),
           ...(needsIdleTimeout ? { httpIdleTimeoutMs: expected.httpIdleTimeoutMs } : {}),
+          ...(needsChildResources ? childResources : {}),
         }, null, 2)}\n`,
         "utf8",
       );
@@ -328,6 +342,7 @@ export function verifyPiHarness(root, cacheOptions = {}) {
     dependencies.subagentsPackage,
     dependencies.subagentsExtension,
     ...EXTENSIONS_BEFORE_SUBAGENTS.map((rel) => join(root, rel)),
+    join(root, SUBAGENTS_BRIDGE),
     ...EXTENSIONS_AFTER_SUBAGENTS.map((rel) => join(root, rel)),
     ...REQUIRED_LIBS.map((rel) => join(root, rel)),
     join(root, "core/codex/skills"),
@@ -335,6 +350,7 @@ export function verifyPiHarness(root, cacheOptions = {}) {
     join(root, "core/pi/skills/harness-grill/references/lavish-usage.md"),
     join(root, "core/pi/prompts/harness-runtime.md"),
     join(root, "core/pi/runtime/subagents.json"),
+    join(root, "core/pi/runtime/harness.json"),
     join(root, "core/pi/runtime/models-store.json"),
     join(root, "core/pi/runtime/settings.json"),
     ...RUNTIME_ROLES.map((role) => join(root, "core/pi/runtime/agents", `${role}.md`)),

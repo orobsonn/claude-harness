@@ -20,6 +20,7 @@ import {
   runPiHarnessCli,
 } from "./pi-harness.mjs";
 import { applyPiAuthPathPatch, PI_AUTH_PATH_ENV, PI_AUTH_PATH_PATCH_MARKER, PI_RESUME_ENV, verifyPiAuthPathPatch } from "../lib/pi-auth-path-patch.mjs";
+import { piChildResourceSettings } from "../lib/pi-child-extensions.mjs";
 
 const DEPENDENCIES = {
   piCli: "/npx/node_modules/@earendil-works/pi-coding-agent/dist/cli.js",
@@ -247,14 +248,16 @@ test("every ported gate is loaded, policy first and the UI tracker last", () => 
   const loaded = loadedExtensions(
     buildPiHarnessInvocation({ root, argv: [], env: {}, dependencyPaths: DEPENDENCIES }).args,
   );
+  const bridge = join(root, "core/pi/extensions/harness-subagents.ts");
 
   assert.deepEqual(loaded, [
     join(root, "core/pi/extensions/harness-policy.ts"),
     join(root, "core/pi/extensions/harness-bootstrap.ts"),
-    DEPENDENCIES.subagentsExtension,
+    bridge,
     join(root, "core/pi/extensions/harness-dispatch.ts"),
     join(root, "core/pi/extensions/harness-memory.ts"),
     join(root, "core/pi/extensions/harness-entry-gate.ts"),
+    join(root, "core/pi/extensions/harness-reviews.ts"),
     join(root, "core/pi/extensions/harness-plan-gate.ts"),
     join(root, "core/pi/extensions/harness-plan-write-gate.ts"),
     join(root, "core/pi/extensions/harness-marker.ts"),
@@ -268,15 +271,22 @@ test("every ported gate is loaded, policy first and the UI tracker last", () => 
     join(root, "core/pi/extensions/harness-context-files.ts"),
     join(root, "core/pi/extensions/harness-plan-tracker.ts"),
   ]);
+  assert.equal(loaded.filter((extension) => extension === bridge).length, 1, "the harness bridge loads exactly once");
+  assert.equal(
+    loaded.includes(DEPENDENCIES.subagentsExtension),
+    false,
+    "the launcher must not bypass the bridge by loading the native factory separately",
+  );
 });
 
-test("the dispatch rails load after pi-subagents registers the subagent tool", () => {
+test("the dispatch rails load after the harness bridge registers the native subagent tool", () => {
+  const root = "/package";
   const loaded = loadedExtensions(
-    buildPiHarnessInvocation({ root: "/package", argv: [], env: {}, dependencyPaths: DEPENDENCIES }).args,
+    buildPiHarnessInvocation({ root, argv: [], env: {}, dependencyPaths: DEPENDENCIES }).args,
   );
-  const subagents = loaded.indexOf(DEPENDENCIES.subagentsExtension);
+  const subagents = loaded.indexOf(join(root, "core/pi/extensions/harness-subagents.ts"));
 
-  assert.ok(subagents > 0, "pi-subagents is not the first extension");
+  assert.ok(subagents > 0, "the bridge is not the first extension");
   for (const rel of ["harness-dispatch.ts", "harness-entry-gate.ts", "harness-plan-gate.ts"]) {
     assert.ok(
       loaded.findIndex((path) => path.endsWith(rel)) > subagents,
@@ -326,6 +336,7 @@ test("pinned Pi overlay keeps one global auth path for parent and subagents", ()
     "package.json",
     "dist/config.js",
     "dist/core/auth-storage.js",
+    "dist/core/agent-session.js",
     "dist/core/session-manager.js",
     "dist/core/agent-session-services.js",
     "dist/core/sdk.js",
@@ -336,7 +347,12 @@ test("pinned Pi overlay keeps one global auth path for parent and subagents", ()
     mkdirSync(resolve(destination, ".."), { recursive: true });
     cpSync(join(source, rel), destination);
   }
-  for (const rel of ["package.json", "src/index.ts"]) {
+  for (const rel of [
+    "package.json",
+    "src/index.ts",
+    "src/lifecycle/create-subagent-session.ts",
+    "src/lifecycle/subagent-session.ts",
+  ]) {
     const destination = join(subagentsRuntime, rel);
     mkdirSync(resolve(destination, ".."), { recursive: true });
     cpSync(join(subagentsSource, rel), destination);
@@ -460,6 +476,7 @@ test("runtime já materializado migra somente o antigo default do harness para o
         defaultModel: "gpt-5.6-sol",
         httpIdleTimeoutMs: 900_000,
         retained: true,
+        ...piChildResourceSettings(process.cwd()),
       });
     }
   } finally { rmSync(directory, { recursive: true, force: true }); }
@@ -482,6 +499,7 @@ test("runtime já materializado preserva um default explícito compatível do op
     defaultModel: "gpt-5.6-terra",
     httpIdleTimeoutMs: 900_000,
     retained: true,
+    ...piChildResourceSettings(process.cwd()),
   });
 });
 

@@ -48,3 +48,10 @@ test("planner has no harvest mode because finalization preserves the approved pl
   assert.doesNotMatch(prompt, /HARNESS_HARVEST_CONTEXT/);
   assert.doesNotMatch(prompt, /harvest documentation task/i);
 });
+
+test("planner declara security final para as superfícies de segurança aplicáveis", () => {
+  const prompt = readFileSync(plannerPath, "utf8");
+  assert.match(prompt, /final_review.security.*true/is);
+  assert.match(prompt, /auth.*secrets.*external.*dependenc/is);
+  assert.match(prompt, /optional.*false/is);
+});

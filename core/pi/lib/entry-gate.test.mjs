@@ -24,6 +24,7 @@ import {
   recordPiTaskCompletion,
 } from "./entry-gate.mjs";
 import { claimPiDispatchForRuntime, readPiDispatchRecord } from "./pi-state-records.mjs";
+import { piHandRecordPath } from "./pi-paths.mjs";
 
 const ROOT = "/tmp/pi-entry-gate-fake-root";
 const SESSION = "018f6b0c-8f2a-7c1d-9e3b-5a1c2d3e4f50";
@@ -1051,6 +1052,70 @@ test("artefatos internos do runtime Pi não são atribuídos à mão como mudan�
     ".pi/harness/plans/feat-pi-completion/execution-plan.json",
     "src/a.ts",
   ]);
+});
+
+test("dependent task cannot dispatch an executor or reviewer before the dependency has completed capture evidence", () => {
+  const f = completionFixture({ noTests: true });
+  try {
+    const planPath = join(f.root, ".pi", "harness", "plans", f.featureId, "execution-plan.json");
+    const plan = JSON.parse(readFileSync(planPath, "utf8"));
+    plan.tasks.push({ ...plan.tasks[0], id: "task-2", scope_paths: ["src/b.ts"], depends_on: ["task-1"] });
+    writeFileSync(planPath, JSON.stringify(plan));
+    for (const role of ["harness-executor", "harness-adversary", "harness-compliance", "harness-security"]) {
+      const dispatched = decidePiDispatchGate({
+        projectRoot: f.root,
+        sessionId: f.sessionId,
+        subagentType: role,
+        toolCallId: `dependency-${role}`,
+        toolArgs: { prompt: '[HARNESS_TASK_CONTEXT]{"task_id":"task-2"}[/HARNESS_TASK_CONTEXT]' },
+        env: {},
+      });
+      assert.equal(dispatched.decision, "deny", `${role} must wait for task-1`);
+      assert.match(dispatched.reason, /dependenc|depends_on/i);
+      assert.equal(readPiDispatchRecord(f.root, { parentSessionId: f.sessionId, callId: `dependency-${role}` }).ok, false);
+    }
+  } finally { f.close(); }
+});
+
+test("dependency readiness checks the current hand record and unresolved re-gate, not just persisted completion flags", () => {
+  const f = completionFixture({ noTests: true });
+  try {
+    const planPath = join(f.root, ".pi", "harness", "plans", f.featureId, "execution-plan.json");
+    const statePath = join(f.root, ".pi", "harness", "state", f.sessionId, "gate-state.json");
+    const plan = JSON.parse(readFileSync(planPath, "utf8"));
+    plan.tasks.push({ ...plan.tasks[0], id: "task-2", scope_paths: ["src/b.ts"], depends_on: ["task-1"] });
+    writeFileSync(planPath, JSON.stringify(plan));
+    const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: f.root, encoding: "utf8" }).trim();
+    const recordPath = piHandRecordPath({ projectRoot: f.root, sessionId: f.sessionId, featureId: f.featureId }, "task-1");
+    assert.equal(recordPath.ok, true);
+    mkdirSync(join(recordPath.path, ".."), { recursive: true });
+    const record = {
+      writtenBy: "host-hand-finished", featureId: f.featureId, taskId: "task-1", sessionId: f.sessionId,
+      agent: "executor", producerCallId: "dependency-producer", freezeCommitSha: head, outcome: "DONE",
+      capturedVerifiedAt: "2026-09-07T00:00:00.000Z",
+    };
+    const state = {
+      ...JSON.parse(readFileSync(statePath, "utf8")),
+      hand_finished: [`${f.featureId}/task-1`], capture_verified: [`${f.featureId}/task-1@${head}`],
+    };
+    const run = (id) => decidePiDispatchGate({
+      projectRoot: f.root, sessionId: f.sessionId, subagentType: "harness-adversary", toolCallId: id,
+      toolArgs: { prompt: '[HARNESS_TASK_CONTEXT]{"task_id":"task-2"}[/HARNESS_TASK_CONTEXT]' }, env: {},
+    }).decision;
+    writeFileSync(recordPath.path, JSON.stringify(record));
+    writeFileSync(statePath, JSON.stringify(state));
+    const healthy = run("dependency-healthy");
+    writeFileSync(recordPath.path, JSON.stringify({ ...record, capturedVerifiedAt: null }));
+    const unstamped = run("dependency-unstamped");
+    writeFileSync(recordPath.path, JSON.stringify({ ...record, sessionId: "other-parent" }));
+    const foreign = run("dependency-foreign");
+    writeFileSync(recordPath.path, JSON.stringify(record));
+    writeFileSync(statePath, JSON.stringify({ ...state, regate_pending: [`${f.featureId}/task-1`] }));
+    const unresolved = run("dependency-regate");
+    assert.deepEqual({ healthy, unstamped, foreign, unresolved }, {
+      healthy: "allow", unstamped: "deny", foreign: "deny", unresolved: "deny",
+    });
+  } finally { f.close(); }
 });
 
 test("plano canônico no_tests despacha executor e ainda exige hand/captura", async () => {

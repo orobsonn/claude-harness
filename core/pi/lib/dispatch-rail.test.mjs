@@ -34,6 +34,13 @@ test("dispatch admits only canonical foreground roles within the finite 144-turn
   );
 });
 
+test("all three reviewers require a fresh dispatch and cannot resume or run in the background", () => {
+  for (const subagent_type of ["harness-adversary", "harness-compliance", "harness-security"]) {
+    assert.deepEqual(validateSubagentDispatch({ subagent_type, resume: "old-child" }), { ok: false, reason: "resume-disabled" });
+    assert.deepEqual(validateSubagentDispatch({ subagent_type, run_in_background: true }), { ok: false, reason: "background-disabled" });
+  }
+});
+
 test("rotas de modelo do Pi são fixas por papel e por complexidade da mão", () => {
   assert.deepEqual(piDispatchRoute("harness-discussion-adversary"), {
     ok: true, model: "openai-codex/gpt-5.6-sol", thinking: "medium",

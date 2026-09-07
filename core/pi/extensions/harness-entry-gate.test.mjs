@@ -48,6 +48,33 @@ function handlers(events = fakeEvents()) {
   return registered;
 }
 
+const SUBAGENTS_SERVICE_KEY = Symbol.for("@gotgenes/pi-subagents:service");
+
+function publishNativeRecord({ agentId, role, body, status = "completed", pendingQuestion }) {
+  const previous = globalThis[SUBAGENTS_SERVICE_KEY];
+  globalThis[SUBAGENTS_SERVICE_KEY] = {
+    getRecord(id) {
+      if (id !== agentId) return undefined;
+      return {
+        id: agentId, type: role, description: "review", status, isBackground: false,
+        result: body, ...(pendingQuestion ? { pendingQuestion } : {}), toolUses: 1, turnCount: 1,
+        startedAt: 1, completedAt: 2, lifetimeUsage: { input: 1, output: 1, cacheWrite: 0 }, compactionCount: 0,
+      };
+    },
+  };
+  return () => {
+    if (previous === undefined) delete globalThis[SUBAGENTS_SERVICE_KEY];
+    else globalThis[SUBAGENTS_SERVICE_KEY] = previous;
+  };
+}
+
+function wrappedReviewResult(agentId, body, status = "completed") {
+  return {
+    content: [{ type: "text", text: `Agent completed in 1s (1 tool uses).\nAgent ID: ${agentId}\n\n${body}` }],
+    details: { status, agentId },
+  };
+}
+
 const SESSION = "ses-pi-adapter";
 const FEATURE = "feat-pi-adapter";
 
@@ -354,6 +381,146 @@ test("com dois dispatches em voo a ligação seria ambígua: nada é gravado", (
   }
 });
 
+test("regression: o binder interno liga três olhos concorrentes ao call exato e preserva os três recibos", async () => {
+  const f = fixture();
+  try {
+    execFileSync("git", ["init", "-q"], { cwd: f.root });
+    execFileSync("git", ["add", "."], { cwd: f.root });
+    execFileSync("git", ["-c", "user.name=Pi", "-c", "user.email=pi@example.test", "commit", "-q", "-m", "fixture"], { cwd: f.root });
+    const statePath = join(f.root, ".pi", "harness", "state", SESSION, "gate-state.json");
+    const state = JSON.parse(readFileSync(statePath, "utf8"));
+    writeFileSync(statePath, JSON.stringify({ ...state, spec_status: "adversary-reviewed", adversary_fired: true }));
+
+    const events = fakeEvents();
+    const h = handlers(events);
+    h.get("session_start")({}, ctxOf(f.root));
+    const dispatched = [
+      ["harness-adversary", "call-parallel-adversary", "child-parallel-adversary", "agent-parallel-adversary"],
+      ["harness-compliance", "call-parallel-compliance", "child-parallel-compliance", "agent-parallel-compliance"],
+      ["harness-security", "call-parallel-security", "child-parallel-security", "agent-parallel-security"],
+    ];
+    for (const [role, callId] of dispatched) {
+      const args = { subagent_type: role, prompt: "[HARNESS_FINAL_REVIEW] review the same aggregate input", description: role };
+      h.get("tool_execution_start")({ toolName: "subagent", toolCallId: callId, args });
+      assert.equal(await h.get("tool_call")({ toolName: "subagent", toolCallId: callId, input: args }, ctxOf(f.root)), undefined);
+    }
+
+    for (const [role, callId, childSessionId] of dispatched.toReversed()) {
+      const request = { toolCallId: callId, subagentType: role, parentSessionId: SESSION, childSessionId };
+      events.emit("harness:child-bind", request);
+      assert.deepEqual(request.result, { ok: true }, `the adapter must synchronously acknowledge ${callId}`);
+      const identity = readPiChildIdentity(f.root, childSessionId);
+      assert.equal(identity.ok, true, identity.reason);
+      assert.equal(identity.record.dispatch_call_id, callId);
+      assert.equal(identity.record.role, role);
+    }
+
+    for (const [role, callId, _childSessionId, agentId] of dispatched.toReversed()) {
+      const body = '{"issues":[]}';
+      const unpublish = publishNativeRecord({ agentId, role, body });
+      h.get("tool_execution_end")({
+        toolName: "subagent",
+        toolCallId: callId,
+        result: wrappedReviewResult(agentId, body),
+        isError: false,
+      }, ctxOf(f.root));
+      unpublish();
+    }
+
+    const saved = JSON.parse(readFileSync(statePath, "utf8"));
+    const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: f.root, encoding: "utf8" }).trim();
+    assert.deepEqual(Object.keys(saved.final_review_evidence).sort(), ["adversary", "compliance", "security"]);
+    const inputDigests = new Set();
+    for (const [role, callId, childSessionId, agentId] of dispatched) {
+      const receipt = saved.final_review_evidence[role.replace("harness-", "")];
+      assert.equal(receipt.dispatch_call_id, callId);
+      assert.equal(receipt.child_session_id, childSessionId);
+      assert.equal(receipt.agent_id, agentId);
+      assert.equal(receipt.role, role);
+      assert.equal(receipt.accepted, true);
+      assert.equal(receipt.reviewed_head_sha, head);
+      assert.match(receipt.input_digest, /^[0-9a-f]{64}$/);
+      inputDigests.add(receipt.input_digest);
+    }
+    assert.equal(inputDigests.size, 1, "all concurrent eyes must attest the same immutable snapshot");
+  } finally {
+    f.close();
+  }
+});
+
+test("regression: binder interno nega call, papel ou parent divergente sem gravar identidade", () => {
+  const f = fixture();
+  try {
+    const events = fakeEvents();
+    const h = handlers(events);
+    h.get("session_start")({}, ctxOf(f.root));
+    h.get("tool_execution_start")({
+      toolName: "subagent",
+      toolCallId: "call-known",
+      args: { subagent_type: "harness-adversary", prompt: "[HARNESS_FINAL_REVIEW] exact binding" },
+    });
+
+    const invalid = [
+      { toolCallId: "call-unknown", subagentType: "harness-adversary", parentSessionId: SESSION, childSessionId: "child-unknown" },
+      { toolCallId: "call-known", subagentType: "harness-compliance", parentSessionId: SESSION, childSessionId: "child-wrong-role" },
+      { toolCallId: "call-known", subagentType: "harness-adversary", parentSessionId: "ses-wrong-parent", childSessionId: "child-wrong-parent" },
+    ];
+    for (const request of invalid) {
+      events.emit("harness:child-bind", request);
+      assert.equal(request.result?.ok, false, "an identity mismatch must receive an explicit negative acknowledgement");
+      assert.equal(readPiChildIdentity(f.root, request.childSessionId).absent, true, "a rejected binding must leave no durable child identity");
+    }
+  } finally {
+    f.close();
+  }
+});
+
+test("regression: binder interno recusa review cujo snapshot mudou depois de tool_call", async () => {
+  const f = fixture();
+  try {
+    mkdirSync(join(f.root, "src"), { recursive: true });
+    const productPath = join(f.root, "src", "product.ts");
+    writeFileSync(productPath, "export const product = 'reviewed';\n");
+    execFileSync("git", ["init", "-q"], { cwd: f.root });
+    execFileSync("git", ["add", "."], { cwd: f.root });
+    execFileSync("git", ["-c", "user.name=Pi", "-c", "user.email=pi@example.test", "commit", "-q", "-m", "fixture"], { cwd: f.root });
+    const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: f.root, encoding: "utf8" }).trim();
+    const statePath = join(f.root, ".pi", "harness", "state", SESSION, "gate-state.json");
+    const state = JSON.parse(readFileSync(statePath, "utf8"));
+    writeFileSync(statePath, JSON.stringify({ ...state, spec_status: "adversary-reviewed", adversary_fired: true }));
+
+    const events = fakeEvents();
+    const h = handlers(events);
+    const args = {
+      subagent_type: "harness-security",
+      prompt: "[HARNESS_FINAL_REVIEW] review immutable input before admission",
+      description: "security review",
+    };
+    h.get("session_start")({}, ctxOf(f.root));
+    h.get("tool_execution_start")({ toolName: "subagent", toolCallId: "call-review-drift-before-bind", args });
+    assert.equal(await h.get("tool_call")({
+      toolName: "subagent",
+      toolCallId: "call-review-drift-before-bind",
+      input: args,
+    }, ctxOf(f.root)), undefined);
+
+    writeFileSync(productPath, "export const product = 'changed-before-child-start';\n");
+    assert.equal(execFileSync("git", ["rev-parse", "HEAD"], { cwd: f.root, encoding: "utf8" }).trim(), head);
+    const request = {
+      toolCallId: "call-review-drift-before-bind",
+      subagentType: "harness-security",
+      parentSessionId: SESSION,
+      childSessionId: "child-review-drift-before-bind",
+    };
+    events.emit("harness:child-bind", request);
+
+    assert.equal(request.result?.ok, false, "the child must not start against bytes that differ from its prepared review input");
+    assert.equal(readPiChildIdentity(f.root, request.childSessionId).absent, true);
+  } finally {
+    f.close();
+  }
+});
+
 test("a instância que roda NA filha nunca liga ninguém, mesmo ouvindo o mesmo barramento", () => {
   const f = fixture();
   try {
@@ -394,7 +561,7 @@ test("o fim do dispatch retira a identidade da filha", () => {
   }
 });
 
-test("só a conclusão host-confirmada do adversary cria a evidência que libera a próxima fase", () => {
+test("só a conclusão host-confirmada do adversary de spec cria a evidência que libera a próxima fase", () => {
   const f = fixture();
   try {
     const events = fakeEvents();
@@ -427,10 +594,51 @@ test("só a conclusão host-confirmada do adversary cria a evidência que libera
       child_session_id: CHILD_SESSION,
       agent_id: "agent-adversary",
       status: "completed",
-      spec_sha256: JSON.parse(readFileSync(join(f.root, ".pi", "harness", "state", SESSION, "gate-state.json"), "utf8")).spec_sha256,
+      spec_sha256: state.spec_sha256,
     });
   } finally {
     f.close();
+  }
+});
+
+test("task review completed com prosa ambígua ou achado canônico não grava recibo de adversary", async (t) => {
+  const finding = {
+    description: "A revisão encontrou perda de recibo concorrente.", category: "race", severity: "high",
+    scope: "core/pi/extensions/harness-entry-gate.ts", evidence: "o mapa é lido antes do lock",
+    fix_hint: "mover a redução inteira para withGateStateLock",
+  };
+  for (const [label, slug, text, pendingQuestion] of [
+    ["prosa positiva sem schema", "ambiguous-prose", "Tudo certo, aprovado.", undefined],
+    ["relatório negativo", "negative-report", JSON.stringify({ issues: [finding] }), undefined],
+    ["relatório positivo com pergunta pendente", "pending-question", '{"issues":[]}', "Devo revisar o arquivo restante?"],
+  ]) {
+    await t.test(label, async (st) => {
+      const f = fixture();
+      st.after(f.close);
+      const events = fakeEvents();
+      const h = handlers(events);
+      const callId = `call-${slug}`;
+      const args = {
+        subagent_type: "harness-adversary",
+        prompt: '[HARNESS_TASK_CONTEXT]{"task_id":"task-1"}[/HARNESS_TASK_CONTEXT] attack task',
+        description: "task adversary",
+      };
+      h.get("session_start")({}, ctxOf(f.root));
+      h.get("tool_execution_start")({ toolName: "subagent", toolCallId: callId, args });
+      assert.equal(await h.get("tool_call")({ toolName: "subagent", toolCallId: callId, input: args }, ctxOf(f.root)), undefined);
+      events.emit("subagents:child:session-created", { sessionId: `${CHILD_SESSION}-${callId}`, parentSessionId: SESSION });
+      const agentId = `agent-${callId}`;
+      const unpublish = publishNativeRecord({ agentId, role: "harness-adversary", body: text, pendingQuestion });
+      h.get("tool_execution_end")({
+        toolName: "subagent", toolCallId: callId,
+        result: wrappedReviewResult(agentId, text),
+        isError: false,
+      }, ctxOf(f.root));
+      unpublish();
+      const state = JSON.parse(readFileSync(join(f.root, ".pi", "harness", "state", SESSION, "gate-state.json"), "utf8"));
+      assert.equal(state.task_adversary_evidence, undefined, `${label} cannot approve a task gate`);
+      assert.equal(state.adversary_completion_evidence, undefined, `${label} cannot be misclassified as an accepted spec review`);
+    });
   }
 });
 
@@ -463,6 +671,29 @@ test("erro da filha adversária nunca vira evidência de conclusão", () => {
   }
 });
 
+test("compliance de fidelity fora de task-review/final não entra no ledger de recibos", () => {
+  const f = fixture();
+  try {
+    const events = fakeEvents();
+    const h = handlers(events);
+    const args = { subagent_type: "harness-compliance", prompt: "verifique fidelity-before-freeze", description: "fidelity" };
+    h.get("session_start")({}, ctxOf(f.root));
+    h.get("tool_execution_start")({ toolName: "subagent", toolCallId: "call-fidelity-compliance", args });
+    events.emit("subagents:child:session-created", { sessionId: `${CHILD_SESSION}-fidelity`, parentSessionId: SESSION });
+    const body = '{"issues":[]}';
+    const unpublish = publishNativeRecord({ agentId: "agent-fidelity-compliance", role: "harness-compliance", body });
+    h.get("tool_execution_end")({
+      toolName: "subagent", toolCallId: "call-fidelity-compliance",
+      result: wrappedReviewResult("agent-fidelity-compliance", body), isError: false,
+    }, ctxOf(f.root));
+    unpublish();
+    const state = JSON.parse(readFileSync(join(f.root, ".pi", "harness", "state", SESSION, "gate-state.json"), "utf8"));
+    assert.equal(state.final_review_evidence, undefined);
+    assert.equal(state.task_adversary_evidence, undefined);
+    assert.equal(state.task_review_evidence, undefined);
+  } finally { f.close(); }
+});
+
 test("adversary de tarefa grava recibo host-owned preso ao marcador e ao HEAD", async () => {
   const f = fixture();
   try {
@@ -483,17 +714,28 @@ test("adversary de tarefa grava recibo host-owned preso ao marcador e ao HEAD", 
     h.get("tool_execution_start")({ toolName: "subagent", toolCallId: "call-task-adversary", args });
     assert.equal(await h.get("tool_call")({ toolName: "subagent", toolCallId: "call-task-adversary", input: args }, ctxOf(f.root)), undefined);
     events.emit("subagents:child:session-created", { sessionId: CHILD_SESSION, parentSessionId: SESSION });
+    const taskBody = '{"issues":[]}';
+    const unpublish = publishNativeRecord({ agentId: "agent-task-adversary", role: "harness-adversary", body: taskBody });
     h.get("tool_execution_end")({
       toolName: "subagent", toolCallId: "call-task-adversary",
-      result: { details: { status: "completed", agentId: "agent-task-adversary" } }, isError: false,
+      result: wrappedReviewResult("agent-task-adversary", taskBody), isError: false,
     }, ctxOf(f.root));
+    unpublish();
     const saved = JSON.parse(readFileSync(statePath, "utf8"));
-    assert.deepEqual(saved.task_adversary_evidence[`${FEATURE}/task-1`], {
-      written_by: "host-subagent-completion", parent_session_id: SESSION, feature_id: FEATURE,
-      task_id: "task-1", role: "harness-adversary", dispatch_call_id: "call-task-adversary",
-      child_session_id: CHILD_SESSION, agent_id: "agent-task-adversary", status: "completed",
-      reviewed_head_sha: execFileSync("git", ["rev-parse", "HEAD"], { cwd: f.root, encoding: "utf8" }).trim(),
-    });
+    const receipt = saved.task_adversary_evidence[`${FEATURE}/task-1`];
+    assert.equal(receipt.written_by, "host-subagent-completion");
+    assert.equal(receipt.parent_session_id, SESSION);
+    assert.equal(receipt.feature_id, FEATURE);
+    assert.equal(receipt.role, "harness-adversary");
+    assert.equal(receipt.task_id, "task-1");
+    assert.equal(receipt.dispatch_call_id, "call-task-adversary");
+    assert.equal(receipt.child_session_id, CHILD_SESSION);
+    assert.equal(receipt.agent_id, "agent-task-adversary");
+    assert.equal(receipt.status, "completed");
+    assert.equal(receipt.accepted, true);
+    assert.deepEqual(receipt.report, { issues: [] });
+    assert.match(receipt.input_digest, /^[0-9a-f]{64}$/);
+    assert.equal(receipt.reviewed_head_sha, execFileSync("git", ["rev-parse", "HEAD"], { cwd: f.root, encoding: "utf8" }).trim());
   } finally { f.close(); }
 });
 
@@ -517,25 +759,69 @@ test("olhos finais gravam recibos host-owned no HEAD agregado", async () => {
       h.get("tool_execution_start")({ toolName: "subagent", toolCallId: callId, args });
       assert.equal(await h.get("tool_call")({ toolName: "subagent", toolCallId: callId, input: args }, ctxOf(f.root)), undefined);
       events.emit("subagents:child:session-created", { sessionId: `${CHILD_SESSION}-${callId}`, parentSessionId: SESSION });
+      const body = '{"issues":[]}';
+      const unpublish = publishNativeRecord({ agentId, role, body });
       h.get("tool_execution_end")({
         toolName: "subagent", toolCallId: callId,
-        result: { details: { status: "completed", agentId } }, isError: false,
+        result: wrappedReviewResult(agentId, body), isError: false,
       }, ctxOf(f.root));
+      unpublish();
     }
     const saved = JSON.parse(readFileSync(statePath, "utf8"));
     const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: f.root, encoding: "utf8" }).trim();
-    assert.deepEqual(saved.final_review_evidence.adversary, {
-      written_by: "host-subagent-completion", parent_session_id: SESSION, feature_id: FEATURE,
-      role: "harness-adversary", dispatch_call_id: "call-final-adversary",
-      child_session_id: `${CHILD_SESSION}-call-final-adversary`, agent_id: "agent-final-adversary",
-      status: "completed", reviewed_head_sha: head,
-    });
-    assert.deepEqual(saved.final_review_evidence.compliance, {
-      written_by: "host-subagent-completion", parent_session_id: SESSION, feature_id: FEATURE,
-      role: "harness-compliance", dispatch_call_id: "call-final-compliance",
-      child_session_id: `${CHILD_SESSION}-call-final-compliance`, agent_id: "agent-final-compliance",
-      status: "completed", reviewed_head_sha: head,
-    });
+    for (const [key, role, callId, agentId] of [
+      ["adversary", "harness-adversary", "call-final-adversary", "agent-final-adversary"],
+      ["compliance", "harness-compliance", "call-final-compliance", "agent-final-compliance"],
+    ]) {
+      const receipt = saved.final_review_evidence[key];
+      assert.equal(receipt.written_by, "host-subagent-completion");
+      assert.equal(receipt.parent_session_id, SESSION);
+      assert.equal(receipt.feature_id, FEATURE);
+      assert.equal(receipt.role, role);
+      assert.equal(receipt.dispatch_call_id, callId);
+      assert.equal(receipt.child_session_id, `${CHILD_SESSION}-${callId}`);
+      assert.equal(receipt.agent_id, agentId);
+      assert.equal(receipt.status, "completed");
+      assert.equal(receipt.accepted, true);
+      assert.deepEqual(receipt.report, { issues: [] });
+      assert.match(receipt.input_digest, /^[0-9a-f]{64}$/);
+      assert.match(receipt.report_digest, /^[0-9a-f]{64}$/);
+      assert.equal(receipt.reviewed_head_sha, head);
+    }
+  } finally { f.close(); }
+});
+
+test("mudança unstaged durante o olho final invalida o recibo mesmo quando o HEAD não mudou", async () => {
+  const f = fixture();
+  try {
+    execFileSync("git", ["init", "-q"], { cwd: f.root });
+    mkdirSync(join(f.root, "src"), { recursive: true });
+    writeFileSync(join(f.root, "src", "product.ts"), "export const value = 'before';\n");
+    execFileSync("git", ["add", "."], { cwd: f.root });
+    execFileSync("git", ["-c", "user.name=Pi", "-c", "user.email=pi@example.test", "commit", "-q", "-m", "fixture"], { cwd: f.root });
+    const statePath = join(f.root, ".pi", "harness", "state", SESSION, "gate-state.json");
+    const state = JSON.parse(readFileSync(statePath, "utf8"));
+    writeFileSync(statePath, JSON.stringify({ ...state, spec_status: "adversary-reviewed", adversary_fired: true }));
+    const events = fakeEvents();
+    const h = handlers(events);
+    const args = { subagent_type: "harness-adversary", prompt: "[HARNESS_FINAL_REVIEW] review aggregate diff", description: "final review" };
+    h.get("session_start")({}, ctxOf(f.root));
+    h.get("tool_execution_start")({ toolName: "subagent", toolCallId: "call-final-drift", args });
+    assert.equal(await h.get("tool_call")({ toolName: "subagent", toolCallId: "call-final-drift", input: args }, ctxOf(f.root)), undefined);
+    events.emit("subagents:child:session-created", { sessionId: `${CHILD_SESSION}-drift`, parentSessionId: SESSION });
+    const reviewedHead = execFileSync("git", ["rev-parse", "HEAD"], { cwd: f.root, encoding: "utf8" }).trim();
+    writeFileSync(join(f.root, "src", "product.ts"), "export const value = 'changed while reviewing';\n");
+    assert.equal(execFileSync("git", ["rev-parse", "HEAD"], { cwd: f.root, encoding: "utf8" }).trim(), reviewedHead);
+    const driftBody = '{"issues":[]}';
+    const unpublish = publishNativeRecord({ agentId: "agent-final-drift", role: "harness-adversary", body: driftBody });
+    h.get("tool_execution_end")({
+      toolName: "subagent", toolCallId: "call-final-drift",
+      result: wrappedReviewResult("agent-final-drift", driftBody),
+      isError: false,
+    }, ctxOf(f.root));
+    unpublish();
+    const saved = JSON.parse(readFileSync(statePath, "utf8"));
+    assert.equal(saved.final_review_evidence, undefined, "the adapter must compare the full review input, not HEAD alone");
   } finally { f.close(); }
 });
 

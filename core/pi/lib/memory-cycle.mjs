@@ -5,6 +5,8 @@ import { createHash, randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { isSafeSessionId, isSafeFeatureId } from "../../shared/lib/feature-id.mjs";
 import { resolvePiReleaseProof } from "./release-only.mjs";
+import { capturePiReviewInput, hasAcceptedPiReviewEvidence, readPiReviewPlan } from "./pi-review-evidence.mjs";
+import { requiredPiFinalReviewRoles } from "./roles.mjs";
 
 export const DURABLE_MEMORY_FILES = Object.freeze(["MEMORY.md", "CONTEXT.md", "kaizen.md"]);
 export const SHARED_CONTEXT_MAX_BYTES = 8192;
@@ -245,9 +247,14 @@ export function checkCurrentMemoryReviews(projectRoot, sessionId) {
   const raw = readSmall(join(paths.directory, "gate-state.json"), 1024 * 1024);
   const state = raw === null ? {} : JSON.parse(raw);
   if (state.session_id !== sessionId || !state.feature_id || state.final_review_done !== true) throw new Error("Finalize requires this session's completed final review");
-  for (const name of ["adversary", "compliance"]) {
+  const captured = capturePiReviewInput({ projectRoot: paths.root, sessionId, featureId: state.feature_id, phase: "final" });
+  if (!captured.ok) throw new Error("Finalize requires both host-owned final reviews with accepted report evidence on the current input");
+  const loadedPlan = readPiReviewPlan({ projectRoot: paths.root, featureId: state.feature_id, expectedSha256: captured.snapshot.canonical_plan.sha256 });
+  if (!loadedPlan.ok) throw new Error(loadedPlan.reason);
+  for (const role of requiredPiFinalReviewRoles(loadedPlan.plan)) {
+    const name = role.replace("harness-", "");
     const receipt = state.final_review_evidence?.[name];
-    if (!receipt || receipt.written_by !== "host-subagent-completion" || receipt.role !== `harness-${name}` || receipt.parent_session_id !== sessionId || receipt.feature_id !== state.feature_id || receipt.status !== "completed" || receipt.reviewed_head_sha !== head || !receipt.dispatch_call_id || !receipt.child_session_id || !receipt.agent_id) throw new Error("Finalize requires both host-owned final reviews on the current HEAD");
+    if (!receipt || !hasAcceptedPiReviewEvidence(receipt, captured.snapshot) || receipt.written_by !== "host-subagent-completion" || receipt.role !== role || receipt.parent_session_id !== sessionId || receipt.feature_id !== state.feature_id || receipt.status !== "completed" || receipt.reviewed_head_sha !== head || !receipt.dispatch_call_id || !receipt.child_session_id || !receipt.agent_id) throw new Error(`Finalize requires host-owned final ${name} review with accepted report evidence on the current input`);
   }
   return { head, featureId: state.feature_id };
 }

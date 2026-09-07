@@ -5,6 +5,7 @@
  */
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
@@ -20,6 +21,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 import harnessMemory from "./harness-memory.ts";
+import { capturePiReviewInput } from "../lib/pi-review-evidence.mjs";
 
 const SESSION = "ses-memory-parent";
 const FEATURE = "pi-memory-cycle";
@@ -192,13 +194,18 @@ function finalReceipt(role, head, { sessionId = SESSION, featureId = FEATURE } =
 }
 
 function seedFinalState(root, head, transform = (state) => state) {
+  const captured = capturePiReviewInput({ projectRoot: root, sessionId: SESSION, featureId: FEATURE, phase: "final" });
+  assert.equal(captured.ok, true, captured.reason);
+  const report = { issues: [] };
+  const evidence = { accepted: true, input_digest: captured.snapshot.input_digest,
+    report, report_digest: createHash("sha256").update(JSON.stringify(report)).digest("hex") };
   const state = transform({
     session_id: SESSION,
     feature_id: FEATURE,
     final_review_done: true,
     final_review_evidence: {
-      adversary: finalReceipt("harness-adversary", head),
-      compliance: finalReceipt("harness-compliance", head),
+      adversary: { ...finalReceipt("harness-adversary", head), ...evidence },
+      compliance: { ...finalReceipt("harness-compliance", head), ...evidence },
     },
   });
   const file = gateStatePath(root);

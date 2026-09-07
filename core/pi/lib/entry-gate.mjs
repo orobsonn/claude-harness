@@ -44,6 +44,7 @@ import { basename, join, resolve } from "node:path";
 
 import { formatFeatureTaskEntry, matchesAbsolution } from "../../shared/lib/absolution.mjs";
 import { checkFrozen, checkScope } from "../../shared/lib/capture-oracle.mjs";
+import { recordViolations } from "../../shared/lib/real-file-capture-rail.mjs";
 import { mergeGateStatePatch } from "../../shared/lib/gate-state-shape.mjs";
 import { computeGitState } from "../../shared/lib/git-state.mjs";
 import {
@@ -66,6 +67,7 @@ import { parseTaskDispatchIdentity } from "../../opencode/lib/task-dispatch-iden
 import {
   isCapacityExhaustedOutput,
   parseHandStatusFromOutput,
+  validateOcCaptureEligibleHandRecord,
 } from "../../opencode/lib/hand-records.mjs";
 import { pathsChangedSinceBaseline } from "../../opencode/lib/worktree-baseline.mjs";
 import { withGateStateLock } from "../../opencode/lib/gate-state.mjs";
@@ -77,7 +79,7 @@ import {
   toOcRole,
 } from "./pi-adapter-map.mjs";
 import { loadPiGateStateFromDisk } from "./pi-gate-state.mjs";
-import { piGateStatePath } from "./pi-paths.mjs";
+import { piGateStatePath, piHandRecordPath } from "./pi-paths.mjs";
 import {
   piReleaseMergeMatchesProof,
   resolvePiReleaseProof,
@@ -782,7 +784,8 @@ export function decidePiDispatchGate(input = {}) {
   // cuja política mudou entre esta leitura e a reivindicação atômica do escopo.
   let canonicalNoTests = false;
   let noTestsPlanHash = "";
-  if (isExecutorRole(bareRole) && featureId && taskId) {
+  let dependencies = [];
+  if ((isWritingHandRole(input.subagentType) || ["adversary", "compliance", "security"].includes(bareRole)) && featureId && taskId) {
     const readPolicy =
       typeof input.readCanonicalTaskPolicyFn === "function"
         ? input.readCanonicalTaskPolicyFn
@@ -795,7 +798,8 @@ export function decidePiDispatchGate(input = {}) {
         reason: `${PREFIX} Blocked: canonical task policy unavailable: ${String(policy?.reason ?? "unknown")}`,
       };
     }
-    canonicalNoTests = policy.noTests === true;
+    dependencies = policy.dependsOn ?? [];
+    canonicalNoTests = isExecutorRole(bareRole) && policy.noTests === true;
     if (canonicalNoTests) {
       if (typeof policy.planHash !== "string" || policy.planHash.length === 0) {
         return { ok: false, decision: "deny", reason: `${PREFIX} Blocked: canonical no_tests policy lacks plan hash.` };
@@ -808,6 +812,26 @@ export function decidePiDispatchGate(input = {}) {
     typeof input.isAncestorFn === "function"
       ? input.isAncestorFn
       : (sha) => piIsAncestor(sha, projectRoot);
+
+  for (const dependency of dependencies) {
+    const bare = formatFeatureTaskEntry(featureId, dependency);
+    const recordPath = piHandRecordPath({ projectRoot, sessionId, featureId }, dependency);
+    let record;
+    try { record = recordPath.ok ? JSON.parse(readFileSync(recordPath.path, "utf8")) : null; } catch { record = null; }
+    const identity = validateOcCaptureEligibleHandRecord(record, { featureId, taskId: dependency, sessionId });
+    const violations = recordViolations(record);
+    const captured = formatFeatureTaskEntry(featureId, dependency, record?.freezeCommitSha);
+    const pending = gateState.regate_pending;
+    const regateReady = pending === undefined || (Array.isArray(pending) && !pending.some((entry) =>
+      typeof entry === "string" && (entry === bare || entry.startsWith(`${bare}@`)) &&
+      !matchesAbsolution(entry, gateState.regate_passed, isAncestorFn)));
+    if (!identity.ok || typeof record?.capturedVerifiedAt !== "string" || !record.capturedVerifiedAt ||
+      violations.scope.length || violations.frozen.length || isAncestorFn(record.freezeCommitSha) !== true ||
+      !Array.isArray(gateState.hand_finished) || !gateState.hand_finished.includes(bare) ||
+      !Array.isArray(gateState.capture_verified) || !gateState.capture_verified.includes(captured) || !regateReady) {
+      return { ok: false, decision: "deny", reason: `${PREFIX} Blocked: dependency ${bare} requires current completed capture and re-gate evidence.` };
+    }
+  }
 
   const releaseProof = bareRole === "shipper"
     ? releaseProofForGate(input, projectRoot)

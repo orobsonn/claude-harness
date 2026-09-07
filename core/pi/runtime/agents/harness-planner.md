@@ -83,6 +83,10 @@ read locally, reply `BLOCKED` with the missing fact and do not write a plan.
    routing contract for this runtime, not a missing product requirement; never
    ask the operator for it or invent routes. Keep `final_review.compliance` and
    `final_review.adversary` true.
+   Set `final_review.security` to true when the aggregate feature touches auth,
+   secrets, external input, dependencies, service entrypoints, webhooks, or sensitive
+   paths. This flag is optional and defaults to false; when true, the final security
+   review is required evidence before delivery, including LIGHT work.
 
 ```json
 {
