@@ -11,11 +11,22 @@ SHAs verificados e as validações finais. Cada task executa TDD, fidelidade,
 congelamento dos testes, implementação, captura e revisão/correção nativos. Tasks
 independentes usam worktrees e processos separados; dependentes aguardam integração.
 
-Dentro do Orca, a worktree filha parte do SHA exato da worktree global e aparece sob
-ela no ADE. Um terminal próprio executa o worker do harness e a extensão oficial do
-Orca publica o estado do Pi. O registry conserva os handles. O harness não cria um
-segundo DAG usando os objetos Run/Task/Dispatch do Orca. A visibilidade é verificada
-pelo campo `surface` retornado pelo terminal, não inferida da presença de um PID.
+Dentro do Orca, a worktree filha parte do SHA exato da worktree global e registra
+essa relação de parentesco. Um terminal próprio executa o worker do harness e a
+extensão oficial do Orca publica o estado do Pi. O registry conserva os handles.
+O harness mantém seu próprio fluxo, usando worktrees e terminais do Orca.
+
+A presença no inventário do servidor e em `visualLayouts` não comprova que o cliente
+remoto exibiu a execução. No runtime headless, o CLI `terminal focus` navega somente
+o host; a abertura no cliente exige os RPCs nativos `worktree.activate` e
+`session.tabs.activate` com `navigation: clients`. A entrega desses eventos não
+inclui confirmação de renderização pelo cliente. Essa confirmação continua pendente
+depois de o operador informar que não via a run.
+
+Na verificação das 22:52 UTC, o servidor não tinha conexão remota estabelecida para
+receber a navegação. Os eventos de abertura não são reaplicados automaticamente a um
+cliente que se reconecta depois. A worktree global pertence ao setup original do
+Victor e aparece diretamente na lista do projeto, sem `parentWorktreeId`.
 
 O PR [#902](https://github.com/orobsonn/claude-harness/pull/902), que paraleliza olhos,
 está incorporado. Adversary permanece obrigatório por task; compliance e security de
@@ -54,7 +65,7 @@ A issue estava aberta e a implementação não existia na base selecionada
 
 O protótipo anterior reutilizou um plano histórico. Esta validação usa a issue aberta
 e exige trabalho real: migrações APP reaplicáveis, auditoria com redação, idempotência
-concorrente, reconciliação da allowlist no Worker e retenção por scheduled handler.
+concorrente, reconciliação da allowlist no Worker e retenção de 18 meses.
 Não há publicação ou deploy do Victor neste teste.
 
 A tentativa da sessão `e4a00af2-21cd-44f0-a6cb-b3a668a48a3d` foi interrompida e não
@@ -68,23 +79,39 @@ Na base real, o instalador copiou **151 arquivos** do harness, a suíte baseline
 **79/79** e o typecheck está verde. O smoke do Orca confirmou processo, lineage e os
 layouts visuais. Em runtime headless, `surface: background` descreve a superfície do
 terminal e não significa ausência da worktree no ADE. A sessão global real confirmou
-o handle, tab e pane exatos no layout, conectados e ativos. O processo recebeu a
-identidade Orca correta e o diretório da extensão oficial; a publicação do status
-pelo hook ainda não foi observada diretamente.
+o handle, tab e pane exatos no layout do servidor. O processo recebeu a identidade
+Orca correta, e `terminal.agentStatus` confirmou `isRunningAgent: true` e
+`status: working`. Isso comprova processo/status, mas não a tela do operador.
+
+Às 22:55 UTC, somente o worker dessa FULL foi interrompido, após conferência do PID,
+início do processo e descriptor. A spec ainda estava em draft e nenhuma task de
+implementação havia sido despachada. O motivo é uma contradição de requisitos: AC1.7
+exige registrar a mudança na primeira requisição, enquanto as recusas de autenticação
+devem acessar zero bindings. A spec atribuiu ao operador uma interpretação que ele
+não forneceu. O APPROVE produzido sobre essa premissa não é aceito como prova. A
+decisão foi solicitada ao operador; a mesma sessão e seus registros estão preservados
+para retomar com a especificação corrigida e uma nova revisão.
 
 ## Evidências e fechamento pendente
 
 - [PR funcional #903](https://github.com/orobsonn/claude-harness/pull/903), ainda draft
-  com [CI aprovado em `38ac8e0`](https://github.com/orobsonn/claude-harness/actions/runs/34165435156).
-  A correção posterior que fixa a identidade do host exige seu próprio CI.
+  com [CI aprovado em `36fb7e7`](https://github.com/orobsonn/claude-harness/actions/runs/34165975643),
+  incluindo a correção que fixa a identidade do host.
 - Testes focais de contexto, coordenação, revisão e adapter Orca: **73/73**.
 - Suíte completa após a recuperação: **3478/3478**, sem falhas; a correção posterior
   de identidade do host passou em **6/6** testes focais e está no CI atual.
 - O CLI host agora usa o payload AppImage extraído e o launcher estável oficial. A
   correção preserva os dois wrappers anteriores e tem rollback registrado em
   `/tmp/pi-orca-cli-repair-evidence.json`; não reiniciou o app nem o servidor.
-- Ainda pendentes: confirmação do status Pi da nova sessão, conclusão e aprovação da issue
-  FULL real, CI do PR funcional, merge e release esperada **2.6.0** pelo
+- A versão Orca 1.4.177 também apresentou `tab_not_found` ao tentar fechar a aba
+  vazia, por divergência no owner da sessão. A correção oficial
+  [#18073](https://github.com/stablyai/orca/pull/18073) está na
+  [v1.4.197](https://github.com/stablyai/orca/releases/tag/v1.4.197).
+  O artefato oficial e o rollback foram preparados, sem instalar: reiniciar o serviço
+  atual encerra todas as runs no seu cgroup. Essa falha é distinta da falta de cliente
+  remoto conectado e não foi tratada como prova da causa da invisibilidade.
+- Ainda pendentes: confirmação visual no cliente Orca, conclusão e aprovação da issue
+  FULL real, CI do fechamento do PR funcional, merge e release esperada **2.6.0** pelo
   release-please. Nenhuma versão, changelog ou tag foi alterada manualmente.
 
 Contrato oficial consultado: [worktrees](https://www.onorca.dev/docs/model/worktrees),
