@@ -2,12 +2,13 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { join, resolve } from "node:path";
-import { mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync, realpathSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import test, { before, after } from "node:test";
 
 import { buildPiHarnessInvocation, resolvePiDependencyPaths, verifyPiHarness } from "./bin/pi-harness.mjs";
 import { ensurePiRuntime } from "./lib/pi-runtime-cache.mjs";
+import { vendorPi } from "../claude-code/skills/initializing-projects/references/vendor-core.mjs";
 
 const ROOT = resolve(fileURLToPath(new URL("../../", import.meta.url)));
 const TEST_CACHE = mkdtempSync(join(tmpdir(), "pi-integration-cache-"));
@@ -179,6 +180,57 @@ test("published bin entry executes through its npm symlink", () => {
 test("Pi runtime's Node requirement is reflected by the published package", () => {
   const manifest = JSON.parse(readFileSync(resolve(ROOT, "package.json"), "utf8"));
   assert.equal(manifest.engines.node, ">=22.19.0");
+});
+
+test("regression: package metadata and source launcher select the harness bridge exactly once", () => {
+  const manifest = JSON.parse(readFileSync(resolve(ROOT, "package.json"), "utf8"));
+  const declared = manifest.pi.extensions.map((extension) => resolve(ROOT, extension));
+  const bridge = resolve(ROOT, "core/pi/extensions/harness-subagents.ts");
+  const dependencies = resolvePiDependencyPaths(ROOT);
+  const loaded = buildPiHarnessInvocation({ root: ROOT, argv: [], env: {}, dependencyPaths: dependencies }).args
+    .filter((argument, index, args) => args[index - 1] === "-e");
+
+  assert.equal(declared.filter((extension) => extension === bridge).length, 1, "package.pi.extensions must expose one bridge");
+  assert.equal(declared.includes(resolve(ROOT, "node_modules/@gotgenes/pi-subagents/src/index.ts")), false);
+  assert.equal(loaded.filter((extension) => extension === bridge).length, 1, "source launcher must load one bridge");
+  assert.equal(loaded.includes(dependencies.subagentsExtension), false, "source launcher must not load the native factory beside it");
+});
+
+test("regression: fresh official Pi vendor ships the bridge closure and its verified launcher uses it", async (t) => {
+  const target = realpathSync(mkdtempSync(join(tmpdir(), "pi-review-vendor-")));
+  t.after(() => rmSync(target, { recursive: true, force: true }));
+
+  vendorPi({
+    coreDir: resolve(ROOT, "core"),
+    targetDir: target,
+    version: "test-review-bridge",
+    stampDate: "2026-09-07T00:00:00.000Z",
+  });
+
+  const harnessRoot = join(target, ".pi/harness");
+  for (const relativePath of [
+    "extensions/harness-subagents.ts",
+    "lib/pi-review-concurrency.mjs",
+    "runtime-defaults/harness.json",
+    "vendor/shared/lib/review-report-schema.mjs",
+  ]) {
+    assert.equal(existsSync(join(harnessRoot, relativePath)), true, `fresh vendor omitted ${relativePath}`);
+  }
+
+  const vendoredLauncher = await import(`${pathToFileURL(join(harnessRoot, "bin/pi-harness.mjs")).href}?test=${Date.now()}`);
+  assert.deepEqual(vendoredLauncher.verifyPiHarness(harnessRoot), {
+    ok: true,
+    runtimeVersion: "0.84.4",
+    subagentsVersion: "21.2.0",
+    roles: 10,
+  });
+
+  const dependencies = vendoredLauncher.resolvePiDependencyPaths(harnessRoot);
+  const invocation = vendoredLauncher.buildPiHarnessInvocation({ root: harnessRoot, argv: [], env: {}, dependencyPaths: dependencies });
+  const loaded = invocation.args.filter((argument, index, args) => args[index - 1] === "-e");
+  const bridge = join(harnessRoot, "extensions/harness-subagents.ts");
+  assert.equal(loaded.filter((extension) => extension === bridge).length, 1);
+  assert.equal(loaded.includes(dependencies.subagentsExtension), false);
 });
 
 

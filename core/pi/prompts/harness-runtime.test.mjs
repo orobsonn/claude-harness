@@ -178,7 +178,7 @@ test("o prompt descreve os rails que existem e não promete sandbox", () => {
   assert.match(prompt, /um comando permitido por chamada/i);
   assert.match(prompt, /sem `&&`.*pipes.*redirecionamentos/is);
   assert.match(prompt, /`npm test`.*não use `npx`/i);
-  assert.match(prompt, /HARNESS_FINAL_REVIEW.*compliance.*adversary.*serialmente/is);
+  assert.match(prompt, /HARNESS_FINAL_REVIEW.*compliance.*adversary.*paralelo/is);
 });
 
 test("o plano aprovado alimenta o tracker tanto em LIGHT quanto em FULL", () => {
@@ -270,11 +270,32 @@ test("o pedido explícito de autonomia nunca fica esperando uma escolha humana",
   assert.doesNotMatch(prompt, /quando exigir decisão, pare e peça direção/i);
 });
 
-test("revisão adversarial por tarefa é serial e identifica a tarefa canônica", () => {
+test("revisores de implementação podem compartilhar um lote identificado pela tarefa canônica", () => {
   const prompt = readFileSync(promptPath, "utf8");
   assert.match(prompt, /adversary.*pós-implementação.*HARNESS_TASK_CONTEXT/is);
-  assert.match(prompt, /serialmente.*nunca no mesmo lote.*compliance.*security/is);
+  assert.match(prompt, /HARNESS_TASK_REVIEW/);
+  assert.match(prompt, /mesmo lote.*compliance.*security/is);
   assert.match(prompt, /re-gate.*adversary.*mesmo HEAD/is);
+});
+
+test("concorrência limitada preserva barreira, fallback serial e retomada por recibos atuais", () => {
+  const prompt = readFileSync(promptPath, "utf8");
+  assert.match(prompt, /maxParallelEyes.*1.*3/is);
+  assert.match(prompt, /harness_reviews/);
+  assert.match(prompt, /aguarde todos.*antes.*corrigir.*commit/is);
+  assert.match(prompt, /test-fidelity.*continuam seriais/is);
+  assert.match(prompt, /somente.*missing/is);
+});
+
+test("os três revisores retornam relatório estruturado somente em task ou final", () => {
+  for (const role of ["adversary", "compliance", "security"]) {
+    const instructions = readFileSync(new URL(`../runtime/agents/harness-${role}.md`, import.meta.url), "utf8");
+    assert.match(instructions, /HARNESS_FINAL_REVIEW/);
+    assert.match(instructions, /HARNESS_TASK_REVIEW/);
+    assert.match(instructions, /\{"issues":\[\]\}/);
+    assert.match(instructions, /missing evidence/i);
+    assert.match(instructions, /fix_hint/);
+  }
 });
 
 test("achado tardio que pede nova cobertura volta ao autor de testes, não ao sniper", () => {

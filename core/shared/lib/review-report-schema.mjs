@@ -143,7 +143,7 @@ export function validateReviewReport(logicalRole, value) {
     if (body.verdict === "REVISE" && body.findings.length === 0) return { ok: false, reason: "REVISE requires findings" };
     return { ok: true, report: body, findings: body.findings };
   }
-  if (logicalRole === "adversary") {
+  if (["adversary", "compliance", "security"].includes(logicalRole)) {
     if (!exactKeys(body, ["issues"])) return { ok: false, reason: "adversary report keys are not canonical" };
     const issues = Array.isArray(body.issues) ? body.issues.map(normalizeAdversaryFinding) : null;
     if (!issues || issues.some((issue) => !issue)) {

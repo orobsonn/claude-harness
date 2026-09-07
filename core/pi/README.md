@@ -62,11 +62,60 @@ O launcher carrega as extensões numa ordem fixa (`core/pi/bin/pi-harness.mjs`).
 
 Nunca bloqueiam, só observam ou injetam contexto: `harness-obs`, `harness-idle-nudge`, `harness-reinject-state`, `harness-version-check`, `harness-context-files` (reintroduz `AGENTS.md`/`CLAUDE.md` do projeto, já que o launcher desliga a descoberta nativa) e `harness-plan-tracker` (UI).
 
-Autoridade do plano canônico: no OpenCode ela vem do SDK (`session.agent === 'planner'`). O `SessionHeader` do Pi não carrega o nome do agente, então a lane grava a identidade da filha em `.pi/harness/state/<pai>/child-identity/` no evento `subagents:child:session-created` do pi-subagents, e o gate lê dali. Com mais de um despacho em voo a ligação seria ambígua e nada é gravado — o rail fica desarmado em vez de chutar.
+Autoridade do plano canônico: no OpenCode ela vem do SDK (`session.agent === 'planner'`). O `SessionHeader` do Pi não carrega o nome do agente, então a lane grava a identidade da filha em `.pi/harness/state/<pai>/child-identity/` no evento `subagents:child:session-created` do pi-subagents, e o gate lê dali. O wrapper vincula cada chamada à filha exata antes de ligar suas extensões. Um binding ausente ou divergente interrompe a criação; três filhos podem terminar fora de ordem sem trocar papéis ou recibos.
+
+## Revisores em paralelo
+
+O harness inicia com até três revisores em paralelo. Para consultar ou alterar o
+limite, use `.pi/harness/runtime/harness.json` antes de iniciar a run:
+
+```json
+{ "maxParallelEyes": 3 }
+```
+
+O padrão é `3` revisores em paralelo; os valores válidos são `1`, `2` e `3`. Use `1` para ativar o fallback serial.
+Configuração inválida bloqueia a inicialização. O limite é do harness e não substitui
+`maxConcurrent` do plugin, que governa trabalhos em background.
+Na instalação nativa com `pi install`, o mesmo arquivo fica no diretório de dados
+selecionado pelo Pi (`getAgentDir()`), junto de `agents/`. A ponte prepara o cache
+fixado na primeira carga quando necessário; não usa dependências do projeto como fallback.
+
+Somente `harness-adversary`, `harness-compliance` e `harness-security`, em revisão de
+implementação por tarefa ou final, podem rodar juntos. Os filhos têm sessões e contextos
+separados, mas compartilham a worktree, o processo, RAM e quota do provider. O pai aguarda
+todos os despachados antes de corrigir, testar, fazer staging/commit ou atualizar gates.
+Escrita, autoria de testes, test-fidelity, planejamento, revisão de spec e entrega
+continuam seriais. As dependências e evidências da própria tarefa continuam obrigatórias.
+Antes do primeiro prompt de cada filho, a ponte confere o carregamento dos bloqueios
+de ferramentas, de entrada e de escrita, além das skills do harness. Falha de carga
+interrompe aquele filho. Os revisores só podem usar `read`, `grep`, `find` e `ls`.
+Extensões e skills adicionais configuradas pelo operador são preservadas. A atualização
+substitui somente caminhos registrados como gerenciados pelo harness; esses extras
+continuam sendo código confiado pelo operador no mesmo processo.
+
+Cada revisão é vinculada a HEAD, index, arquivos da worktree e plano/spec canônicos.
+Uma resposta interrompida, malformada, com pergunta pendente ou com achados não aprova um
+gate. O host preserva recibos saudáveis de irmãos. `harness_reviews` consulta a sessão
+atual e lista `accepted` e `missing`; após retomada, despache apenas os olhos aplicáveis
+pendentes. Mudar o conteúdo invalida a evidência anterior. O plano torna security final
+obrigatória com `final_review.security: true`; adversary e compliance são sempre exigidos.
+
+A fila é simples e vive na sessão; os recibos existentes são a autoridade de retomada.
+Cancelar o pai fecha a fila, aborta os filhos e aguarda sua execução efetiva terminar.
+Uma morte forçada continua sujeita ao lock e à recuperação do launcher descritos acima.
+A captura inicial não suporta submódulos: ela bloqueia explicitamente para não aprovar
+conteúdo interno que não foi capturado. Repositórios Git aninhados não rastreados também
+precisam ser ignorados no Git ou movidos para fora da árvore revisada; o erro identifica
+o caminho. Mudança externa que é restaurada entre capturas
+não é detectável por esse mecanismo; ele não é isolamento de sistema operacional.
+
+Concorrência pode reduzir espera do provider, mas aumenta RAM ativa e disputa CPU/quota.
+Se houver contenção, reduza para `2` ou ative o fallback `1`. Escritores em
+worktrees separadas são um trabalho futuro, acompanhado na issue #899.
 
 ## Limites
 
-`harness-*` preserva os papéis do harness. O gate permite somente uma delegação foreground por vez e não aceita role do projeto com o mesmo nome. Isso é controle de workflow; a worktree Orca é a separação de trabalho. Pi roda com as permissões do usuário que o iniciou: **não é sandbox de sistema**, não isola processo, rede nem credenciais, e não substitui a política de acesso do Orca. Os rails são determinísticos e best-effort sobre nome de ferramenta e caminho: comando ofuscado e caminho construído em runtime estão fora do alcance deles.
+`harness-*` preserva os papéis do harness. Mãos e fases globais continuam exclusivas; somente os três revisores de implementação e revisão final podem compartilhar o limite configurado. O gate não aceita role do projeto com o mesmo nome. Isso é controle de workflow; a worktree Orca é a separação de trabalho. Pi roda com as permissões do usuário que o iniciou: **não é sandbox de sistema**, não isola processo, rede nem credenciais, e não substitui a política de acesso do Orca. Os rails são determinísticos e best-effort sobre nome de ferramenta e caminho: comando ofuscado e caminho construído em runtime estão fora do alcance deles.
 
 ## Modelo
 

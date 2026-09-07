@@ -389,9 +389,13 @@ const OC_IMPORT_INDEX_FILES = ["index.ts", "index.tsx", "index.js", "index.jsx",
 const PARITY_MANIFEST_LOADER = "pathToFileURL(join(pluginDir, name)).href";
 const VENDOR_CORE_LOADER_PATH = "core/claude-code/skills/initializing-projects/references/vendor-core.mjs";
 const VENDOR_CORE_PI_RUNTIME_LOADER = "pathToFileURL(join(coreDir, \"pi/lib/pi-runtime-cache.mjs\")).href";
+const PI_SUBAGENTS_LOADER_PATH = "core/pi/extensions/harness-subagents.ts";
+const PI_SUBAGENTS_CREATE_REQUIRE = "createRequire(runtime.paths.piPackage)";
+const PI_SUBAGENTS_JITI_IMPORT = "runtime.paths.subagentsExtension";
 const OC_OPAQUE_LOADER_ALLOWLIST = new Map([
   ["scripts/parity-manifest.mjs", new Set([PARITY_MANIFEST_LOADER])],
   [VENDOR_CORE_LOADER_PATH, new Set([VENDOR_CORE_PI_RUNTIME_LOADER])],
+  [PI_SUBAGENTS_LOADER_PATH, new Set([PI_SUBAGENTS_CREATE_REQUIRE, PI_SUBAGENTS_JITI_IMPORT])],
 ]);
 function slashPath(path) {
   return path.split(sep).join("/");
@@ -633,14 +637,12 @@ function assertOpaqueLoadersAudited(syntax, importerPath, observedAllowlist) {
   }
   for (const { name, firstArgument, literalSpecifier } of syntax.calls) {
     const normalized = normalizeOpaqueLoaderArgument(firstArgument);
-    if (name !== "import") {
-      throw new Error(`opaque module loader is not allowlisted: ${importerPath}: ${name}(${normalized})`);
-    }
-    if (literalSpecifier !== null) continue;
-    if (!OC_OPAQUE_LOADER_ALLOWLIST.get(importerPath)?.has(normalized)) {
+    if (name === "import" && literalSpecifier !== null) continue;
+    const auditedExpression = name === "import" ? normalized : `${name}(${normalized})`;
+    if (!OC_OPAQUE_LOADER_ALLOWLIST.get(importerPath)?.has(auditedExpression)) {
       throw new Error(`opaque module loader is not allowlisted: ${importerPath}: import(${normalized})`);
     }
-    observedAllowlist.add(`${importerPath}\0${normalized}`);
+    observedAllowlist.add(`${importerPath}\0${auditedExpression}`);
   }
 }
 
@@ -1737,6 +1739,24 @@ describe("parity-manifest", () => {
       assert.throws(() => liveImportersOf("plugin/lib/doomed.mjs", tmp), /opaque module loader is not allowlisted/);
     } finally {
       rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("t12-module-manifest: allows only the verified Pi manifest createRequire expression", () => {
+    const exact = scanModuleLoaderSyntax(
+      'import * as nodeModule from "node:module";\nconst runtimeRequire = nodeModule.createRequire(runtime.paths.piPackage);\nawait jiti.import(runtime.paths.subagentsExtension);\n',
+    );
+    assert.doesNotThrow(() => assertOpaqueLoadersAudited(exact, "core/pi/extensions/harness-subagents.ts", new Set()));
+    for (const changed of [
+      'nodeModule.createRequire(runtime.paths.piCli);\n',
+      'nodeModule.createRequire(process.cwd());\n',
+      'jiti.import(runtime.paths.piCli);\n',
+      'const loader = nodeModule.createRequire;\n',
+    ]) {
+      assert.throws(
+        () => assertOpaqueLoadersAudited(scanModuleLoaderSyntax(changed), "core/pi/extensions/harness-subagents.ts", new Set()),
+        /opaque module loader is not allowlisted/,
+      );
     }
   });
 

@@ -97,6 +97,17 @@ test("dispatch de executor sem plano estável é negado", () => {
   } finally { f.close(); }
 });
 
+test("a obrigação opcional de security deve ser boolean e preserva planos anteriores", () => {
+  for (const security of [undefined, false, true, "true", null, 1]) {
+    const f = fixture(validPlan({ final_review: { compliance: true, adversary: true, ...(security === undefined ? {} : { security }) } }));
+    try {
+      const decision = dispatch(f.root).decision;
+      assert.equal(decision.block, security !== undefined && typeof security !== "boolean", String(security));
+      if (decision.block) assert.match(decision.reason, /final_review.security.*boolean/i);
+    } finally { f.close(); }
+  }
+});
+
 test("plano stub e plano com tasks vazio são negados", () => {
   for (const [plan, pattern] of [
     [validPlan({ kind: "stub" }), /stub kind/],

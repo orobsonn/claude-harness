@@ -28,7 +28,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { isSafeSessionId } from "../../shared/lib/feature-id.mjs";
-import { isCanonicalRole } from "./roles.mjs";
+import { isRuntimeRole } from "./roles.mjs";
 import { piStateRoot } from "./pi-paths.mjs";
 
 /** @description True quando candidate está dentro de root (sem traversal). @param {string} root @param {string} candidate */
@@ -94,7 +94,7 @@ function validIdentityRecord(record) {
   const { parent_session_id: parent, child_session_id: child, dispatch_call_id: callId, role, created_at: createdAt } = record;
   if (![parent, child, callId, role, createdAt].every((value) => typeof value === "string" && value.length > 0)) return false;
   if (!isSafeSessionId(parent) || !isSafeSessionId(child) || parent === child) return false;
-  if (!isCanonicalRole(role)) return false;
+  if (!isRuntimeRole(role)) return false;
   const created = Date.parse(createdAt);
   return Number.isFinite(created) && new Date(created).toISOString() === createdAt;
 }
@@ -154,17 +154,36 @@ function readIdentityFile(file) {
 }
 
 /**
- * @description Recupera a identidade DESTA sessão filha varrendo os diretórios de sessão-pai sob
- * a raiz de estado. Zero é ausente; mais de um registro válido para a mesma filha é conflito
+ * @description Recupera a identidade DESTA sessão filha. Quando o pai é fornecido, resolve
+ * diretamente o único registro possível; a assinatura legada de dois argumentos ainda varre os
+ * diretórios de sessão-pai. Zero é ausente; mais de um registro válido para a mesma filha é conflito
  * (fail-closed). Nome de arquivo que não é o sha256 do childSessionId, ou registro cujo
  * `parent_session_id` discorda do diretório, é conflito — as mesmas defesas da varredura de
  * irmãos de core/pi/lib/pi-state-records.mjs.
  * @param {string} projectRoot
  * @param {unknown} childSessionId
+ * @param {{ parentSessionId?: unknown } | undefined} options
  * @returns {{ ok: true, record: object, path: string } | { ok: false, reason: string, absent?: boolean, conflict?: boolean }}
  */
-export function readPiChildIdentity(projectRoot, childSessionId) {
+export function readPiChildIdentity(projectRoot, childSessionId, options) {
   if (!isSafeSessionId(childSessionId)) return { ok: false, reason: "exact child session required" };
+
+  if (options !== undefined) {
+    const parentSessionId = options?.parentSessionId;
+    const resolved = piChildIdentityPath(projectRoot, parentSessionId, childSessionId);
+    if (!resolved.ok) return resolved;
+    const found = readIdentityFile(resolved.path);
+    if (!found.ok) {
+      return found.absent
+        ? found
+        : { ok: false, conflict: true, reason: found.reason };
+    }
+    if (found.record.parent_session_id !== parentSessionId || found.record.child_session_id !== childSessionId) {
+      return { ok: false, conflict: true, reason: "child identity does not match exact parent and child" };
+    }
+    return { ok: true, record: found.record, path: resolved.path };
+  }
+
   let realRoot;
   try { realRoot = fs.realpathSync(projectRoot); } catch { return { ok: false, reason: "project root unreadable" }; }
   const stateRoot = piStateRoot(realRoot);

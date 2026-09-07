@@ -1,8 +1,17 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import { decidePiPolicy, piAuditDir, recordPiPolicyAudit, shouldAuditPiTool } from "../lib/policy.mjs";
-import { isChildSession, isPiHeadlessContext, piSessionId } from "../lib/pi-adapter-map.mjs";
+import { isPiHeadlessContext, isPiReadTool, piSessionId } from "../lib/pi-adapter-map.mjs";
+import { readPiChildIdentity } from "../lib/pi-child-identity.mjs";
 import { loadPiGateStateFromDisk } from "../lib/pi-gate-state.mjs";
+import { isParallelReviewRole } from "../lib/roles.mjs";
+
+const CHILD_READ_IDENTITY_REASON = "Child read tools require an exact valid dispatch identity.";
+
+function parentSessionId(ctx: any) {
+  try { return ctx?.sessionManager?.getHeader?.()?.parentSession ?? null; }
+  catch { return null; }
+}
 
 /** @description Adaptador fino da peça policy: traduz eventos do Pi para a lógica pura de
  * core/pi/lib/policy.mjs. `tool_call` nega antes da execução (nunca `terminate`);
@@ -17,11 +26,26 @@ export default function harnessPolicy(pi: ExtensionAPI) {
     if (!loaded.ok && !["read", "grep", "find", "ls", "get_subagent_result"].includes(event?.toolName)) {
       return { block: true, reason: "Ceremony state cannot be read safely; inspect and repair it before further actions." };
     }
+    const sessionId = piSessionId(ctx);
+    const parentId = parentSessionId(ctx);
+    const child = Boolean(parentId);
+    const identity: any = child
+      ? readPiChildIdentity(cwd, sessionId, { parentSessionId: parentId })
+      : null;
+    if (child && isPiReadTool(event?.toolName) && !identity?.ok) {
+      return { block: true, reason: CHILD_READ_IDENTITY_REASON };
+    }
+    const reviewerRole = identity?.ok && isParallelReviewRole(identity.record?.role)
+      ? identity.record.role
+      : null;
     const decision = decidePiPolicy(
       { toolName: event?.toolName, input: event?.input },
-      { cwd, isChild: isChildSession(ctx), isHeadless: isPiHeadlessContext(ctx), gateState: loaded.ok ? loaded.state : {} },
+      { cwd, projectRoot: cwd, reviewerRole, isChild: child, isHeadless: isPiHeadlessContext(ctx), gateState: loaded.ok ? loaded.state : {} },
     );
     if (decision.block) return { block: true, reason: decision.reason };
+    if (decision.inputPatch && event?.input && typeof event.input === "object") {
+      Object.assign(event.input, decision.inputPatch);
+    }
   });
 
   pi.on("tool_execution_end", (event: any, ctx: any) => {

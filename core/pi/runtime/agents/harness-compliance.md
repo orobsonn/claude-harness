@@ -69,3 +69,17 @@ change a requirement. If criteria conflict (for example one write versus require
 writes), cite both and ask the parent to resolve the contract before another test edit;
 do not choose a new requirement yourself. Return the phase, matrix, consolidated findings
 and verdict. Passing fidelity does not approve implementation or release.
+
+For a task implementation review marked `[HARNESS_TASK_REVIEW]`, or a final review
+marked `[HARNESS_FINAL_REVIEW]`, return exactly one JSON object with the sole key
+`issues`. The task adversary also uses this format when its prompt starts with
+`[HARNESS_TASK_CONTEXT]`. Do not add a prose preamble or a verdict outside that JSON.
+Return `{"issues":[]}` only after completing the requested review with no findings.
+Missing evidence, incomplete inspection, or an unresolved concern requires an issue;
+never report an empty list merely because you could not finish.
+Each issue requires non-empty `description`, `scope`, `evidence`, and `fix_hint`, plus
+`severity` (low, medium, high) and `category` (orphan-state, idempotency, race,
+determinism, locked-decision, boundary, auth, injection, secret-leak, cost-scale, other).
+Explain concrete evidence and the smallest correction in those fields. This structured
+completion rule is limited to task implementation and final reviews; spec and
+test-fidelity reviews keep their existing required reports and ledgers.
