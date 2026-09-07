@@ -10,6 +10,7 @@ import { validatePlan } from "../../shared/lib/validate-plan.mjs";
 import { parseTaskDispatchIdentity } from "../../opencode/lib/task-dispatch-identity.mjs";
 import { piSubagentArgs } from "./pi-adapter-map.mjs";
 import { readPiSpecApproval } from "./spec-approval.mjs";
+import { validateTaskContextHandoff } from "./task-context.mjs";
 import {
   TASK_PIPELINE_VERSION,
   TASK_RUN_ENV,
@@ -168,6 +169,13 @@ function inspectGrant(grantPath, cwd, { allowHistoricalDeps = false } = {}) {
   if (grant.parent_root !== parentRoot) throw new Error("canonical parent_root required");
   if (grant.origin?.kind !== "parent-approved-plan" || typeof grant.origin.plan_review_call_id !== "string" || !grant.origin.plan_review_call_id) {
     throw new Error("host-owned parent plan approval required");
+  }
+  if (grant.context_handoff !== undefined) {
+    const context = validateTaskContextHandoff(grant.context_handoff, {
+      parentSessionId: grant.parent_session_id,
+      taskId: grant.task_id,
+    });
+    if (!context.ok) throw new Error(context.reason);
   }
   const artifacts = planAndSpec(root, grant.feature_id);
   if (artifacts.planSha256 !== grant.plan_sha256 || artifacts.specSha256 !== grant.spec_sha256) throw new Error("plan/spec hash mismatch");
@@ -355,7 +363,9 @@ export function decideTaskRunTool(binding, event) {
   if (name === "mark" && (!TASK_MARKERS.has(input.action) || input.task_id !== binding.grant.task_id)) {
     return deny("only markers of the granted task are permitted");
   }
-  if (name === "harness_memory" && input.action === "apply") return deny("durable harvest belongs to global parent");
+  if (name === "harness_memory" && ["apply", "finalize"].includes(input.action)) {
+    return deny("durable harvest and finalization belong to the global parent");
+  }
   if (["bash", "powershell"].includes(name)) {
     const command = String(input.command ?? "");
     if (/\bgit\s+-/.test(command) || /(?:^|\s|\/)git\s+(?:push|pull|merge|rebase|tag)\b/.test(command) ||
@@ -379,6 +389,7 @@ export function taskRunPrompt(taskRuntime, admission) {
     plan_path: admission.planPath,
     spec_path: admission.specPath,
     binding: admission.binding,
+    ...(admission.grant.context_handoff === undefined ? {} : { context_handoff: admission.grant.context_handoff }),
   };
   return `${taskRuntime.trim()}\n\n[HARNESS_TASK_RUN]\n${JSON.stringify({
     resumed: admission.resumed === true,

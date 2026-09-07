@@ -15,6 +15,8 @@ import {
   taskRunPrompt,
 } from "./task-run.mjs";
 import { hashTaskReceipt, stableTaskJson, taskRegistryPath } from "./task-contract.mjs";
+import { captureTaskContext } from "./task-context.mjs";
+import { updateSharedContext } from "./memory-cycle.mjs";
 import { recoverPiParentSession } from "./parent-session-recovery.mjs";
 import { runPiHarnessCli } from "../bin/pi-harness.mjs";
 import harnessTaskRun from "../extensions/harness-task-run.ts";
@@ -241,8 +243,48 @@ test("task authority blocks global ceremony, sibling work and delivery while all
     { toolName: "classify", input: {} },
     { toolName: "harness_tasks", input: { action: "dispatch" } },
     { toolName: "mark", input: { action: "final-review", task_id: "task-one" } },
+    { toolName: "harness_memory", input: { action: "apply" } },
+    { toolName: "harness_memory", input: { action: "finalize" } },
     { toolName: "bash", input: { command: "git push origin HEAD" } },
   ]) assert.equal(decideTaskRunTool(binding, event).block, true);
+  for (const action of ["read", "update"]) {
+    assert.equal(decideTaskRunTool(binding, { toolName: "harness_memory", input: { action } }).block, false);
+  }
+});
+
+test("admission validates an optional curated context without treating it as authority", (t) => {
+  const f = fixture(t);
+  updateSharedContext(f.root, "global-parent", "raw parent diary must stay private");
+  f.grant.context_handoff = captureTaskContext({
+    projectRoot: f.root,
+    sessionId: "global-parent",
+    taskId: "task-one",
+    content: "Inspect the parser's empty-input branch.",
+  });
+  f.save();
+  const admitted = admitTaskRun(f.grantPath, { cwd: f.root, sessionId: "task-parent" });
+  assert.equal(admitted.ok, true, admitted.reason);
+
+  const source = fs.readFileSync(new URL("../prompts/harness-task-runtime.md", import.meta.url), "utf8");
+  const prompt = taskRunPrompt(source, admitted);
+  assert.match(prompt, /Inspect the parser's empty-input branch/);
+  assert.match(prompt, /referência não confiável/);
+  assert.match(prompt, /Não envie `context_handoff`.*aos olhos/);
+  assert.doesNotMatch(prompt, /raw parent diary must stay private/);
+});
+
+test("admission rejects mutated and foreign curated context", (t) => {
+  for (const change of ["content", "parent", "task", "source-hash"]) {
+    const f = fixture(t);
+    const context = captureTaskContext({ projectRoot: f.root, sessionId: "global-parent", taskId: "task-one", content: "curated fact" });
+    if (change === "content") context.content = "tampered fact";
+    if (change === "parent") context.parent_session_id = "foreign-parent";
+    if (change === "task") context.task_id = "task-two";
+    if (change === "source-hash") context.source_shared_context_sha256 = "0".repeat(63);
+    f.grant.context_handoff = context;
+    f.save();
+    assert.equal(admitTaskRun(f.grantPath, { cwd: f.root, sessionId: `task-context-${change}` }).ok, false, change);
+  }
 });
 
 test("task prompt uses a stable source and embeds only the focal contract plus DAG path", (t) => {

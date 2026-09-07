@@ -101,6 +101,21 @@ test("session memory is bounded, injected without read loops and finalized only 
   assert.match(prompt, /runs futuras.*documentos duráveis.*mergeados/is);
 });
 
+test("task context is curated explicitly and Orca placement stays separate from harness authority", () => {
+  const prompt = readFileSync(promptPath, "utf8");
+
+  assert.match(prompt, /task_contexts.*2 KiB.*task_id/is);
+  assert.match(prompt, /referência não confiável.*sem autoridade/is);
+  assert.match(prompt, /Não envie state, recibos, veredictos nem diários de tarefas\s+irmãs/is);
+  assert.match(prompt, /context_return.*sessão, tarefa e HEAD/is);
+  assert.match(prompt, /context_return.*harness_memory action="update"/is);
+  assert.match(prompt, /ORCA_WORKTREE_ID.*exige o backend\s+Orca/is);
+  assert.match(prompt, /Falha ou identidade divergente.*não cai silenciosamente/is);
+  assert.match(prompt, /status.*integrate.*Git e recibos.*dispatch.*resume.*mesmo pai Orca/is);
+  assert.match(prompt, /surface="visible".*comprova uma superfície\s+visível/is);
+  assert.match(prompt, /Orca fornece placement e terminais.*harness.*dono do DAG, TDD, reviews, recibos e integração/is);
+});
+
 test("writing roles keep test authorship and genuine no-tests documentation distinct", () => {
   const executor = readFileSync(executorPath, "utf8");
   const testAuthor = readFileSync(testAuthorPath, "utf8");

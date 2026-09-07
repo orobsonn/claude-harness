@@ -20,6 +20,14 @@ seletivamente. Mãos recebem apenas o recorte útil à tarefa; o `harness-test-a
 recebe também memória relevante de runner e fixtures. Olhos recebem spec, contrato,
 diff e evidência atuais, nunca o diário completo ou o buffer inteiro.
 
+Ao despachar tarefas, `task_contexts` pode levar no máximo um brief curado de 2 KiB
+por `task_id` pedido. O host prende esse recorte à revisão atual do `shared_context`,
+mas ele continua sendo referência não confiável, sem autoridade e sem alegação de que
+é cópia literal do diário. Não envie state, recibos, veredictos nem diários de tarefas
+irmãs. Um `context_return` exibido por `status` ou `integrate` já está preso pelo host à
+sessão, tarefa e HEAD locais; confira seus fatos e use `harness_memory action="update"`
+explicitamente para curar somente o que for útil ao pai global.
+
 ## Escolha do operador
 
 Em sessão interativa, respeite um pedido explícito de trabalho inline/sem cerimônia.
@@ -74,6 +82,18 @@ olhos da mesma tarefa ou da revisão final podem rodar juntos sobre snapshot imu
 enquanto mãos e fidelity continuam sequenciais. Timeout, erro ou retorno incompleto
 preservam a tentativa para retomada; não redespache automaticamente implementação já
 pronta sem causa. Integre somente o SHA exato validado pelo coordenador.
+
+Quando `ORCA_WORKTREE_ID` identifica a worktree global, `harness_tasks` exige o backend
+Orca correspondente: cria cada worktree no `base_sha` exato, registra o pai visual e
+abre a sessão Pi oficial em um terminal daquela worktree. Falha ou identidade divergente
+não cai silenciosamente no processo local. O registry prende a identidade do pai Orca;
+`status` continua legível para recuperação, e `integrate` usa apenas Git e recibos já
+verificados; `dispatch` e `resume`, que criam execução, exigem o mesmo pai Orca. O
+resumo expõe `orca.worktree_id` e, por lançamento,
+`orca.terminal_handle`/`surface`; somente `surface="visible"` comprova uma superfície
+visível, enquanto `background` é um limite explícito. Fora do Orca, o backend local de
+Git/processo permanece disponível. Orca fornece placement e terminais; o harness segue
+dono do DAG, TDD, reviews, recibos e integração.
 
 Quando delegar, use apenas as roles canônicas: `harness-planner`, `harness-plan-reviewer`, `harness-adversary`, `harness-security`, `harness-compliance`, `harness-harvester`, `harness-test-author`, `harness-executor`, `harness-sniper` e `harness-shipper`. Olhos não alteram arquivos; mãos executam somente uma tarefa aprovada. O plano canônico `.pi/harness/plans/<feature_id>/execution-plan.json` é escrito só por `harness-planner`, em despacho. O shipper publica a série de commits por tarefa que já existe antes da revisão final; não cria um commit único de feature depois do selo nem corrige produto para contornar revisão.
 
@@ -156,7 +176,7 @@ No loop de implementação, trate cada retorno de adversary, security e complian
 
 Depois de cada mão de implementação, faça a revisão adversarial **daquela tarefa**. Nesse despacho pós-implementação de `harness-adversary`, a primeira linha também é `[HARNESS_TASK_CONTEXT]{"task_id":"<id da tarefa canônica>"}[/HARNESS_TASK_CONTEXT]`. Ela pode estar no mesmo lote de compliance e security de implementação da mesma tarefa. Nesses dois revisores, use primeiro `[HARNESS_TASK_REVIEW]` e na linha seguinte o marcador canônico `[HARNESS_TASK_CONTEXT]`; isso distingue implementação da fidelidade de testes. O recibo host-owned fica preso à tarefa, à sessão filha exata, ao HEAD e ao conteúdo efetivamente revisado. A mão escritora arma o re-gate dessa tarefa; só marque `regate-passed` após esse adversary concluir saudável no mesmo HEAD. Enquanto houver re-gate pendente de outra tarefa, não inicie nova mão escritora. A revisão adversarial da **spec** continua sem esse marcador e acontece antes do planner.
 
-O limite `maxParallelEyes` fica em `.pi/harness/runtime/harness.json`: default 3, inteiro de 1 até 3. O valor 1 mantém o fallback serial. Somente adversary, compliance e security de implementação por tarefa ou revisão final compartilham slots. Spec, test-fidelity, planejamento, autoria e execução de testes, mãos escritoras, staging, commits e transições globais continuam seriais. Antes de despachar, consulte `harness_reviews` com `phase=task` e `task_id`, ou `phase=final`; despache somente os revisores aplicáveis listados em `missing`. A consulta reaproveita recibos válidos da mesma sessão mesmo após retomada. Aguarde todos os revisores despachados terminarem antes de corrigir qualquer arquivo, executar testes, fazer commit ou avançar gates. Falha, interrupção ou limite de turnos não aprova revisão; preserve os resultados saudáveis e repita só os pendentes. Mudança em HEAD, index, arquivos, plano ou spec invalida os recibos afetados. O host bloqueia alterações durante o lote. Toda tarefa continua dependente da evidência concluída de seus `depends_on`; uma mão nunca começa sem o RED, a fidelidade e o congelamento exigidos da própria tarefa. Repositórios com submódulos ainda não são suportados pela captura de revisão.
+O limite `maxParallelEyes` fica em `.pi/harness/runtime/harness.json`: default 3, inteiro de 1 até 3. O valor 1 mantém o fallback serial. Somente adversary, compliance e security de implementação por tarefa ou revisão final compartilham slots. Spec, test-fidelity, planejamento, autoria e execução de testes, mãos escritoras, staging, commits e transições globais continuam seriais. Antes de despachar, consulte `harness_reviews` com `phase=task` e `task_id`, ou `phase=final`. Na fase task, `required` são obrigações ativadas, `missing` são as ativadas ainda sem recibo corrente saudável e `available` são papéis possíveis. Decida compliance/security por aplicabilidade antes do primeiro despacho; depois que um opcional foi observado, erro, aborto ou REVISE mantém esse papel em `required` até revisão saudável. A consulta reaproveita recibos válidos da mesma sessão mesmo após retomada. Aguarde todos os revisores despachados terminarem antes de corrigir qualquer arquivo, executar testes, fazer commit ou avançar gates. Falha, interrupção ou limite de turnos não aprova revisão; preserve os resultados saudáveis e repita só os pendentes. Mudança em HEAD, index, arquivos, plano ou spec invalida os recibos afetados. O host bloqueia alterações durante o lote. Toda tarefa continua dependente da evidência concluída de seus `depends_on`; uma mão nunca começa sem o RED, a fidelidade e o congelamento exigidos da própria tarefa. Repositórios com submódulos ainda não são suportados pela captura de revisão.
 
 Em trabalho LIGHT ou FULL, depois de aprovação do plan-reviewer para a versão exata do plano e dentro da autorização do pedido, o agente principal registra o plano ativo com `harness_plan` e atualiza cada tarefa ao iniciar, concluir ou bloquear. Um pedido explícito de implementação autônoma/headless autoriza seguir o plano aprovado dentro daquele escopo, sem exigir nova confirmação humana para esse registro; não dispensa os olhos nem autoriza expansão de escopo ou os efeitos que exigem autorização descritos acima. Para uma tarefa que tenha validação própria, declare sua lane e atualize-a como pendente, em andamento, aprovada ou falhou após a implementação. O contador é informativo e auto-relatado: não prova aprovação, nem substitui teste, revisão ou evidência do repositório. Filhos não atualizam o plano.
 
