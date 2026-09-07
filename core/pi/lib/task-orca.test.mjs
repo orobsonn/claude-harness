@@ -17,7 +17,15 @@ async function fixture(t) {
   git(root, "config", "user.email", "fixture@example.test");
   fs.writeFileSync(path.join(root, "base"), "base");
   git(root, "add", "."); git(root, "commit", "-qm", "base");
-  const parent = { id: `repo::${root}`, repoId: "repo", instanceId: "parent-instance", path: root };
+  const parent = {
+    id: `repo::${root}`,
+    repoId: "repo",
+    instanceId: "parent-instance",
+    path: root,
+    hostId: "runtime:shared-host",
+    projectId: "github:owner/repo",
+    projectHostSetupId: "setup-runtime",
+  };
   const state = { children: [], calls: [], failCreate: false, surface: "visible", focused: false };
   const run = async ({ args }) => {
     state.calls.push(args);
@@ -32,7 +40,8 @@ async function fixture(t) {
       const cwd = path.join(dir, "child");
       git(root, "worktree", "add", "-b", "orca-prefix/task", cwd, flag("--base-branch"));
       const child = { id: `repo::${cwd}`, repoId: "repo", instanceId: "child-instance", path: cwd,
-        parentWorktreeId: parent.id, comment: flag("--comment") };
+        parentWorktreeId: parent.id, comment: flag("--comment"), hostId: parent.hostId,
+        projectId: parent.projectId, projectHostSetupId: parent.projectHostSetupId };
       state.children.push(child);
       if (state.failCreate) throw new Error("CLI response lost");
       return { worktree: child };
@@ -52,6 +61,15 @@ async function fixture(t) {
 
 test("Orca receives exact Git base and visual parent, and returned cwd/branch bind the grant", async (t) => {
   const f = await fixture(t);
+  assert.deepEqual(f.backend.parent, {
+    worktree_id: f.parent.id,
+    instance_id: f.parent.instanceId,
+    repo_id: f.parent.repoId,
+    path: f.root,
+    host_id: f.parent.hostId,
+    project_id: f.parent.projectId,
+    project_host_setup_id: f.parent.projectHostSetupId,
+  });
   let persisted = 0;
   await f.backend.prepareWorktree(f.entry, () => persisted++);
   assert.ok(persisted >= 2);
@@ -98,6 +116,28 @@ test("uncertain creation and stale parent never silently create or target anothe
   f.entry.orca = { name: "reserved", comment: "reserved", parent_worktree_id: f.parent.id, repo_id: "repo", create_requested: true };
   await assert.rejects(f.backend.prepareWorktree(f.entry, () => {}), /unresolved/);
   assert.equal(f.state.calls.filter((args) => args[1] === "create").length, 0);
+});
+
+test("parent and child placement identity is pinned while absent legacy fields normalize to null", async (t) => {
+  const f = await fixture(t);
+  const firstParent = f.backend.parent;
+  f.parent.hostId = "runtime:other-host";
+  const moved = await resolveOrcaTaskBackend({ projectRoot: f.root, worktreeId: f.parent.id }, { run: f.run });
+  assert.notDeepEqual(moved.parent, firstParent);
+  assert.equal(moved.parent.host_id, "runtime:other-host");
+
+  f.parent.hostId = "runtime:shared-host";
+  await f.backend.prepareWorktree(f.entry, () => {});
+  f.state.children[0].projectHostSetupId = "foreign-setup";
+  await assert.rejects(f.backend.prepareWorktree(f.entry, () => {}), /identity mismatch/);
+
+  delete f.parent.hostId;
+  delete f.parent.projectId;
+  delete f.parent.projectHostSetupId;
+  const legacy = await resolveOrcaTaskBackend({ projectRoot: f.root, worktreeId: f.parent.id }, { run: f.run });
+  assert.equal(legacy.parent.host_id, null);
+  assert.equal(legacy.parent.project_id, null);
+  assert.equal(legacy.parent.project_host_setup_id, null);
 });
 
 test("terminal handle reports actual visibility and shell arguments stay literal", async (t) => {
