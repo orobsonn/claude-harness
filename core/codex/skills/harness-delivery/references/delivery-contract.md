@@ -52,6 +52,30 @@ achado não refutado reabre o plano.
 
 ## Delegação e roteamento de modelo
 
+### Coordenação por tarefa no Pi
+
+Quando o host é o Pi e a sessão global aprovada registra
+`task_pipeline_version: 1`, o pai global não despacha diretamente test-author,
+executor, sniper ou os olhos de implementação. Ele usa `harness_tasks` para:
+
+1. despachar juntas as tasks independentes prontas;
+2. observar os handles duráveis sem transformar abort de observação em cancelamento;
+3. integrar somente o `expected_head` do resultado verificado;
+4. retomar a mesma task/tentativa quando houver feedback.
+
+Uma dependente só entra depois que os recibos das dependências foram integrados.
+Cada pai local executa o ciclo TDD nativo completo e devolve captura, freeze,
+re-gate e revisões identificados pela sua própria sessão. O pai global preserva
+essas identidades, integra os recibos e executa testes, harvest e olhos finais no
+HEAD agregado. Uma correção de dependência compartilhada aguarda os descendentes
+já admitidos estarem integrados e pausa novos dispatches/integrações até o novo
+recibo; depois dela, os testes e olhos finais do conjunto precisam rodar novamente.
+
+`harness_plan` só apresenta progresso e pode mostrar várias tasks `in_progress`.
+Ele não substitui o registry nem os recibos de `harness_tasks`. Fora desse modo Pi,
+continue usando o dispatch nativo descrito abaixo, sem alterar a coordenação dos
+demais hosts.
+
 Antes de criar um subagente, obtenha a rota explícita:
 
 ```sh

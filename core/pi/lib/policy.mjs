@@ -117,6 +117,7 @@ export function decidePiParentOrchestratorPolicy(call = {}, options = {}) {
     if (tool === "classify" && !["suspend-inline", "resume-ceremony"].includes(input.action)) return blocked
     if (tool === "mark" || tool === "harness_spec_write" || tool === "seal_spec_review") return blocked
     if (tool === "harness_plan" && input.action !== "show") return blocked
+    if (tool === "harness_tasks" && input.action !== "status") return blocked
     if (tool === "subagent" && (status === "suspended-inline" || !["harness-planner", "harness-plan-reviewer"].includes(input.subagent_type))) return blocked
   }
   if (options?.isChild === true || (options?.isHeadless !== true && !isActiveDeliveryCeremony(options?.gateState))) return ALLOW

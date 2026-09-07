@@ -490,11 +490,17 @@ test("regression: three prepared reviews share the reader lease while parent rea
     await finishToolCall(handlers, read);
   }
 
+  const status = {type:"tool_call",toolName:"harness_tasks",toolCallId:"task-status",input:{action:"status"}};
+  assert.equal(await prepareToolCall(handlers,status),undefined);
+  await finishToolCall(handlers,status);
+
   for (const mutation of [
     { toolName: "write", input: { path: "src/a.ts", content: "changed" } },
     { toolName: "bash", input: { command: "git commit -m concurrent-change" } },
     { toolName: "mark", input: { action: "final-review" } },
     { toolName: "classify", input: { mode: "FULL" } },
+    { toolName: "harness_tasks", input: { action: "integrate" } },
+    { toolName: "harness_tasks", input: { action: "resume" } },
   ]) {
     const event = { type: "tool_call", toolCallId: `mutation-${mutation.toolName}`, ...mutation };
     const result = await prepareToolCall(handlers, event);

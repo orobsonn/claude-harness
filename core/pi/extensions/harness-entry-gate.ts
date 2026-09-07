@@ -29,6 +29,7 @@ import {
   parsePiReviewCompletion,
   recordPiReviewReceipt,
 } from "../lib/pi-review-evidence.mjs";
+import { capturePlanReviewInput, parsePlanReviewCompletion } from "../lib/task-run.mjs";
 
 const SUBAGENTS_SERVICE_KEY = Symbol.for("@gotgenes/pi-subagents:service");
 
@@ -71,6 +72,8 @@ export default function harnessEntryGate(pi: ExtensionAPI) {
   const boundChildren = new Map<string, { parentSessionId: string; childSessionId: string }>();
   /** Snapshot observado pelo host antes de cada task/final review reconhecida. */
   const reviewInputs = new Map<string, { phase: "task" | "final"; taskId?: string; snapshot?: any }>();
+  /** Hashes host-owned observados antes de cada plan-reviewer. */
+  const planReviewInputs = new Map<string, any>();
   /** True quando ESTA instância roda numa sessão filha: só o pai liga filhas. */
   let ownSessionIsChild = false;
   /** Sessão exata capturada no session_start; o barramento é compartilhado entre pai e filhas. */
@@ -135,6 +138,18 @@ export default function harnessEntryGate(pi: ExtensionAPI) {
       });
       if (!reviewInput.snapshot || !captured.ok || captured.snapshot.input_digest !== reviewInput.snapshot.input_digest) {
         data.result = { ok: false, reason: "review input changed before child admission" };
+        return;
+      }
+    }
+    const planReviewInput = planReviewInputs.get(callId);
+    if (planReviewInput) {
+      const captured = capturePlanReviewInput({
+        projectRoot,
+        sessionId: ownSessionId,
+        featureId: planReviewInput.feature_id,
+      });
+      if (!captured.ok || JSON.stringify(captured.snapshot) !== JSON.stringify(planReviewInput)) {
+        data.result = { ok: false, reason: "plan/spec changed before plan-reviewer child admission" };
         return;
       }
     }
@@ -252,6 +267,16 @@ export default function harnessEntryGate(pi: ExtensionAPI) {
       });
       reviewInputs.set(event.toolCallId, { ...review, ...(captured.ok ? { snapshot: captured.snapshot } : {}) });
     }
+    if (args.subagent_type === "harness-plan-reviewer" && typeof event?.toolCallId === "string") {
+      const loaded: any = loadPiGateStateFromDisk(projectRoot, { sessionId });
+      const featureId = loaded?.ok === true && typeof loaded.state?.feature_id === "string" ? loaded.state.feature_id : "";
+      const captured = capturePlanReviewInput({ projectRoot, sessionId, featureId });
+      if (captured.ok) {
+        planReviewInputs.set(event.toolCallId, captured.snapshot);
+        const statePath = piGateStatePath({ projectRoot, sessionId });
+        if (statePath.ok) mergeGateState(statePath.path, { plan_review_evidence: null });
+      }
+    }
   });
 
   pi.on("tool_result", (event: any) => {
@@ -276,6 +301,8 @@ export default function harnessEntryGate(pi: ExtensionAPI) {
       if (callId) pendingAdvisory.delete(callId);
       const reviewInput = callId ? reviewInputs.get(callId) : undefined;
       if (callId) reviewInputs.delete(callId);
+      const planReviewInput = callId ? planReviewInputs.get(callId) : undefined;
+      if (callId) planReviewInputs.delete(callId);
       const dispatched = callId ? pendingArgs.get(callId) : undefined;
       if (callId) pendingArgs.delete(callId);
       const bound = callId ? boundChildren.get(callId) : undefined;
@@ -288,7 +315,35 @@ export default function harnessEntryGate(pi: ExtensionAPI) {
         const loaded: any = loadPiGateStateFromDisk(projectRoot, { sessionId });
         const featureId = loaded?.ok === true && typeof loaded.state?.feature_id === "string" ? loaded.state.feature_id : "";
         const statePath = piGateStatePath({ projectRoot, sessionId });
-        if (reviewInput) {
+        if (planReviewInput && args.subagent_type === "harness-plan-reviewer") {
+          const capturedEnd = capturePlanReviewInput({ projectRoot, sessionId, featureId });
+          const service: any = (globalThis as any)[SUBAGENTS_SERVICE_KEY];
+          const nativeRecord = outcome && typeof service?.getRecord === "function" ? service.getRecord(outcome.agentId) : undefined;
+          const parsed = capturedEnd.ok ? parsePlanReviewCompletion({
+            result: event?.result,
+            isError: event?.isError,
+            nativeRecord,
+            snapshotStart: planReviewInput,
+            snapshotEnd: capturedEnd.snapshot,
+          }) : { ok: false };
+          if (outcome && parsed.ok && statePath.ok) {
+            mergeGateState(statePath.path, {
+              plan_review_evidence: {
+                written_by: "host-subagent-completion",
+                parent_session_id: sessionId,
+                feature_id: featureId,
+                role: "harness-plan-reviewer",
+                dispatch_call_id: callId,
+                child_session_id: bound.childSessionId,
+                agent_id: parsed.agentId,
+                status: "completed",
+                plan_sha256: planReviewInput.plan_sha256,
+                spec_sha256: planReviewInput.spec_sha256,
+                verdict: parsed.verdict,
+              },
+            });
+          }
+        } else if (reviewInput) {
           const capturedEnd = capturePiReviewInput({
             projectRoot,
             sessionId,

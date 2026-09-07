@@ -152,37 +152,67 @@ test("recusa state/spec divergentes e nunca cria uma sessão nova", () => {
 test("o mesmo lock de worktree serializa início fresh e retomada de qualquer session id", () => {
   const f = fixture();
   try {
+    const identity = (pid) => ({ pid, state: "S", start: `start-${pid}` });
     const first = acquirePiParentWorktreeLock(f.root, {
-      sessionId: null, pid: 12345, hostname: "same-host",
+      sessionId: null, pid: 12345, hostname: "same-host", processIdentityFn: identity,
     });
     assert.equal(first.ok, true);
     assert.deepEqual(acquirePiParentWorktreeLock(f.root, {
-      sessionId: SESSION, pid: 54321, hostname: "same-host",
+      sessionId: SESSION, pid: 54321, hostname: "same-host", processIdentityFn: identity,
     }), { ok: false, reason: "parent orchestrator already active for worktree" });
     first.release();
     const next = acquirePiParentWorktreeLock(f.root, {
-      sessionId: SESSION, pid: 54321, hostname: "same-host",
+      sessionId: SESSION, pid: 54321, hostname: "same-host", processIdentityFn: identity,
     });
     assert.equal(next.ok, true);
     next.release();
   } finally { f.cleanup(); }
 });
 
-test("lock de worktree fica fail-closed após crash porque o Pi filho pode sobreviver ao launcher", () => {
+test("retomada exata substitui lock órfão quando a identidade do processo prova término", () => {
   const f = fixture();
   try {
     const abandoned = acquirePiParentWorktreeLock(f.root, {
-      sessionId: "fresh-session", pid: 12345, hostname: "host-a",
+      sessionId: SESSION, pid: 12345, hostname: "host-a",
+      processIdentityFn: (pid) => ({ pid, state: "S", start: "old-start" }),
     });
     assert.equal(abandoned.ok, true);
 
-    assert.deepEqual(acquirePiParentWorktreeLock(f.root, {
+    const resumed = acquirePiParentWorktreeLock(f.root, {
       sessionId: SESSION, pid: 54321, hostname: "host-b",
-    }), { ok: false, reason: "parent orchestrator already active for worktree" });
+      processIdentityFn: (pid) => pid === 54321 ? { pid, state: "S", start: "new-start" } : null,
+    });
+    assert.deepEqual(resumed, { ok: false, reason: "parent orchestrator already active for worktree" }, "foreign host cannot take over");
 
-    assert.deepEqual(acquirePiParentWorktreeLock(f.root, {
+    const exact = acquirePiParentWorktreeLock(f.root, {
       sessionId: SESSION, pid: 54321, hostname: "host-a",
-    }), { ok: false, reason: "parent orchestrator already active for worktree" });
-    abandoned.release();
+      processIdentityFn: (pid) => pid === 54321 ? { pid, state: "S", start: "new-start" } : null,
+    });
+    assert.equal(exact.ok, true);
+    assert.equal(exact.recovered, true);
+    assert.equal(abandoned.release(), false, "old token cannot release the recovered owner");
+    exact.release();
   } finally { f.cleanup(); }
+});
+
+test("retomada exata não substitui processo vivo nem identidade indeterminada", () => {
+  for (const [label, prior] of [
+    ["live", { pid: 12345, state: "S", start: "old-start" }],
+    ["indeterminate", undefined],
+  ]) {
+    const f = fixture();
+    try {
+      const first = acquirePiParentWorktreeLock(f.root, {
+        sessionId: SESSION, pid: 12345, hostname: "host-a",
+        processIdentityFn: (pid) => ({ pid, state: "S", start: "old-start" }),
+      });
+      assert.equal(first.ok, true);
+      const next = acquirePiParentWorktreeLock(f.root, {
+        sessionId: SESSION, pid: 54321, hostname: "host-a",
+        processIdentityFn: (pid) => pid === 54321 ? { pid, state: "S", start: "new-start" } : prior,
+      });
+      assert.deepEqual(next, { ok: false, reason: "parent orchestrator already active for worktree" }, label);
+      first.release();
+    } finally { f.cleanup(); }
+  }
 });

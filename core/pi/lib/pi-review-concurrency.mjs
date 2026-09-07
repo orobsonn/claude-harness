@@ -170,6 +170,7 @@ export function createPiReviewConcurrency(options = {}) {
 
         function leaseKind(event) {
           if (PARENT_READ_TOOLS.has(event?.toolName)) return null;
+          if (event?.toolName === "harness_tasks" && event?.input?.action === "status") return null;
           if (event?.toolName === "subagent") {
             const review = classifyPiReviewDispatch(event?.input?.subagent_type, event?.input?.prompt);
             if (review) return "reader";

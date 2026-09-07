@@ -32,7 +32,7 @@ export function isPlanSnapshot(value) {
   if (!text(value.title, MAX_TITLE_LENGTH) || !Array.isArray(value.tasks)) return false;
   if (value.tasks.length < 1 || value.tasks.length > MAX_TASKS || !value.tasks.every(validTask)) return false;
   const ids = new Set(value.tasks.map((task) => task.id));
-  return ids.size === value.tasks.length && value.tasks.filter((task) => task.status === "in_progress").length <= 1;
+  return ids.size === value.tasks.length;
 }
 
 function rejected(snapshot, error) {
@@ -104,7 +104,7 @@ export function applyPlanAction(snapshot, action, { now = Date.now } = {}) {
   }
 
   if (!TASK_STATUSES.has(action.status)) return rejected(snapshot, "invalid-status");
-  if (snapshot.tasks[index].status === "completed" && action.status !== "completed") {
+  if (snapshot.tasks[index].status === "completed" && !["completed", "in_progress"].includes(action.status)) {
     return rejected(snapshot, "completed-task-immutable");
   }
   const note = action.status === "blocked" ? text(action.note, MAX_NOTE_LENGTH) : undefined;
@@ -112,17 +112,15 @@ export function applyPlanAction(snapshot, action, { now = Date.now } = {}) {
 
   const next = clone(snapshot);
   next.revision += 1;
-  if (action.status === "in_progress") {
-    for (const task of next.tasks) {
-      if (task.status === "in_progress") task.status = "pending";
-    }
-  }
+  const resumed = snapshot.tasks[index].status === "completed" && action.status === "in_progress";
   next.tasks[index] = {
     ...next.tasks[index],
     status: action.status,
+    ...(resumed && next.tasks[index].validationStatus !== undefined ? { validationStatus: "pending" } : {}),
     ...(note ? { note } : {}),
   };
   if (!note) delete next.tasks[index].note;
+  if (resumed) delete next.tasks[index].validationNote;
   return { ok: true, snapshot: next };
 }
 
@@ -141,24 +139,28 @@ export function restorePlanSnapshot(entries) {
 export function formatPlanProgress(snapshot) {
   if (!snapshot || !isPlanSnapshot(snapshot)) return ["Sem plano ativo"];
   const completed = snapshot.tasks.filter((task) => task.status === "completed").length;
-  const current = snapshot.tasks.find((task) => task.status === "in_progress");
+  const current = snapshot.tasks.filter((task) => task.status === "in_progress");
   const blocked = snapshot.tasks.find((task) => task.status === "blocked");
   const implementation = blocked
     ? `Plano ${completed}/${snapshot.tasks.length} · bloqueado: ${blocked.title}`
-    : current
-      ? `Plano ${completed}/${snapshot.tasks.length} · atual: ${current.title}`
+    : current.length === 1
+      ? `Plano ${completed}/${snapshot.tasks.length} · atual: ${current[0].title}`
+      : current.length > 1
+        ? `Plano ${completed}/${snapshot.tasks.length} · em andamento (${current.length}): ${current.map((task) => task.title).join(", ")}`
       : completed === snapshot.tasks.length
         ? `Plano ${completed}/${snapshot.tasks.length} · concluído`
         : `Plano ${completed}/${snapshot.tasks.length} · pendente`;
   const validationTasks = snapshot.tasks.filter((task) => task.validationStatus !== undefined);
   if (validationTasks.length === 0) return [implementation];
   const passed = validationTasks.filter((task) => task.validationStatus === "passed").length;
-  const running = validationTasks.find((task) => task.validationStatus === "running");
+  const running = validationTasks.filter((task) => task.validationStatus === "running");
   const failed = validationTasks.find((task) => task.validationStatus === "failed");
   const validation = failed
     ? `Validação ${passed}/${validationTasks.length} · falhou: ${failed.title}`
-    : running
-      ? `Validação ${passed}/${validationTasks.length} · atual: ${running.title}`
+    : running.length === 1
+      ? `Validação ${passed}/${validationTasks.length} · atual: ${running[0].title}`
+      : running.length > 1
+        ? `Validação ${passed}/${validationTasks.length} · em andamento (${running.length}): ${running.map((task) => task.title).join(", ")}`
       : passed === validationTasks.length
         ? `Validação ${passed}/${validationTasks.length} · aprovada`
         : `Validação ${passed}/${validationTasks.length} · pendente`;

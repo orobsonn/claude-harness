@@ -12,6 +12,7 @@
  */
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -850,4 +851,72 @@ test("shipper não pode escrever produto mesmo quando sua identidade de olho é 
   } finally {
     f.close();
   }
+});
+
+test("plan-reviewer APPROVE real grava recibo host-owned dos hashes observados no dispatch", async () => {
+  const f = fixture();
+  try {
+    const events = fakeEvents();
+    const h = handlers(events);
+    const callId = "call-plan-review";
+    const childSessionId = "ses-plan-review-child";
+    const agentId = "agent-plan-review";
+    const args = {
+      subagent_type: "harness-plan-reviewer",
+      prompt: "Review the exact canonical plan and return the schema.",
+      description: "plan review",
+    };
+    h.get("session_start")({}, ctxOf(f.root));
+    h.get("tool_execution_start")({ toolName: "subagent", toolCallId: callId, args });
+    assert.equal(await h.get("tool_call")({ toolName: "subagent", toolCallId: callId, input: args }, ctxOf(f.root)), undefined);
+    events.emit("subagents:child:session-created", { sessionId: childSessionId, parentSessionId: SESSION });
+    const body = '{"verdict":"APPROVE","findings":[]}';
+    const unpublish = publishNativeRecord({ agentId, role: "harness-plan-reviewer", body });
+    h.get("tool_execution_end")({
+      toolName: "subagent",
+      toolCallId: callId,
+      result: wrappedReviewResult(agentId, body),
+      isError: false,
+    }, ctxOf(f.root));
+    unpublish();
+
+    const state = JSON.parse(readFileSync(join(f.root, ".pi", "harness", "state", SESSION, "gate-state.json"), "utf8"));
+    assert.deepEqual(state.plan_review_evidence, {
+      written_by: "host-subagent-completion",
+      parent_session_id: SESSION,
+      feature_id: FEATURE,
+      role: "harness-plan-reviewer",
+      dispatch_call_id: callId,
+      child_session_id: childSessionId,
+      agent_id: agentId,
+      status: "completed",
+      plan_sha256: createHash("sha256").update(readFileSync(join(f.root, ".pi", "harness", "plans", FEATURE, "execution-plan.json"))).digest("hex"),
+      spec_sha256: createHash("sha256").update(readFileSync(join(f.root, ".pi", "harness", "plans", FEATURE, "spec.md"))).digest("hex"),
+      verdict: "APPROVE",
+    });
+  } finally { f.close(); }
+});
+
+test("plan-reviewer não aprova quando plano muda durante a execução", async () => {
+  const f = fixture();
+  try {
+    const events = fakeEvents();
+    const h = handlers(events);
+    const callId = "call-plan-review-drift";
+    const args = { subagent_type: "harness-plan-reviewer", prompt: "Review exact plan.", description: "plan review" };
+    h.get("session_start")({}, ctxOf(f.root));
+    h.get("tool_execution_start")({ toolName: "subagent", toolCallId: callId, args });
+    assert.equal(await h.get("tool_call")({ toolName: "subagent", toolCallId: callId, input: args }, ctxOf(f.root)), undefined);
+    events.emit("subagents:child:session-created", { sessionId: "ses-plan-drift", parentSessionId: SESSION });
+    writeFileSync(join(f.root, ".pi", "harness", "plans", FEATURE, "execution-plan.json"), `${readFileSync(join(f.root, ".pi", "harness", "plans", FEATURE, "execution-plan.json"), "utf8")}\n`);
+    const body = '{"verdict":"APPROVE","findings":[]}';
+    const unpublish = publishNativeRecord({ agentId: "agent-plan-drift", role: "harness-plan-reviewer", body });
+    h.get("tool_execution_end")({
+      toolName: "subagent", toolCallId: callId,
+      result: wrappedReviewResult("agent-plan-drift", body), isError: false,
+    }, ctxOf(f.root));
+    unpublish();
+    const state = JSON.parse(readFileSync(join(f.root, ".pi", "harness", "state", SESSION, "gate-state.json"), "utf8"));
+    assert.equal(state.plan_review_evidence, null);
+  } finally { f.close(); }
 });

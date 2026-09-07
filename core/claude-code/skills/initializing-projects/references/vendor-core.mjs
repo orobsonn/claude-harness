@@ -225,6 +225,12 @@ export const FRESH_NATIVE_PATHS = {
  */
 const REQUIRED_PI_SOURCE = [
   { rel: "bin/pi-harness.mjs", kind: "file" },
+  { rel: "bin/pi-task-worker.mjs", kind: "file" },
+  { rel: "prompts/harness-task-runtime.md", kind: "file" },
+  { rel: "skills/harness-task-pipeline/SKILL.md", kind: "file" },
+  ...["task-contract", "task-run", "task-process", "task-coordinator", "task-receipts", "task-runtime-assets"].map((name) => ({ rel: `lib/${name}.mjs`, kind: "file" })),
+  { rel: "extensions/harness-task-run.ts", kind: "file" },
+  { rel: "extensions/harness-tasks.ts", kind: "file" },
   { rel: "prompts/harness-runtime.md", kind: "file" },
   { rel: "skills/harness-grill/SKILL.md", kind: "file" },
   { rel: "skills/harness-grill/references/lavish-usage.md", kind: "file" },

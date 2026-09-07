@@ -232,3 +232,21 @@ test("orçamento de bytes pequeno demais devolve null", () => {
   assert.equal(encodeRecoveryPayload({ schema: "harness.compaction-recovery.v1" }, 10), null);
   assert.equal(encodeRecoveryPayload({ schema: "harness.compaction-recovery.v1" }, 0), null);
 });
+
+test('new task pipeline recovers durable handles as observations and keeps local task identity', () => {
+  const f = fixture({ state: { session_id: SESSION, feature_id: FEATURE, mode: 'FULL', task_pipeline_version: 1 } });
+  try {
+    const registryPath = path.join(f.root, '.pi/harness/state', SESSION, 'task-runs/index.json');
+    fs.mkdirSync(path.dirname(registryPath), {recursive:true});
+    fs.writeFileSync(registryPath,JSON.stringify({version:1,parent_session_id:SESSION,feature_id:FEATURE,tasks:{'task-one':{task_id:'task-one',attempt_id:'attempt-one',status:'running'}}}));
+    const recovered = payload(buildPiSessionRecovery(f.root,SESSION).context);
+    assert.equal(recovered.task_pipeline.kind,'global');
+    assert.deepEqual(recovered.task_pipeline.handles,[{task_id:'task-one',attempt_id:'attempt-one',status:'running'}]);
+    assert.match(recovered.task_pipeline.observation,/harness_tasks/);
+    const state=JSON.parse(fs.readFileSync(f.statePath));state.task_run={task_id:'task-one',attempt_id:'attempt-one',parent_session_id:'global-parent'};fs.writeFileSync(f.statePath,JSON.stringify(state));
+    const local=payload(buildPiSessionRecovery(f.root,SESSION).context);
+    assert.equal(local.task_pipeline.kind,'task');
+    assert.equal(local.task_pipeline.task_id,'task-one');
+    assert.equal(local.task_pipeline.handles,undefined);
+  } finally {f.cleanup();}
+});

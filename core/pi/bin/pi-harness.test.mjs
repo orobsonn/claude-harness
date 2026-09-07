@@ -252,10 +252,12 @@ test("every ported gate is loaded, policy first and the UI tracker last", () => 
 
   assert.deepEqual(loaded, [
     join(root, "core/pi/extensions/harness-policy.ts"),
+    join(root, "core/pi/extensions/harness-task-run.ts"),
     join(root, "core/pi/extensions/harness-bootstrap.ts"),
     bridge,
     join(root, "core/pi/extensions/harness-dispatch.ts"),
     join(root, "core/pi/extensions/harness-memory.ts"),
+    join(root, "core/pi/extensions/harness-tasks.ts"),
     join(root, "core/pi/extensions/harness-entry-gate.ts"),
     join(root, "core/pi/extensions/harness-reviews.ts"),
     join(root, "core/pi/extensions/harness-plan-gate.ts"),
