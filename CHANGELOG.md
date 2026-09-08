@@ -5,6 +5,13 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [2.6.2](https://github.com/orobsonn/claude-harness/compare/v2.6.1...v2.6.2) (2026-09-08)
+
+
+### Bug Fixes
+
+* **pi:** completa evidência no primeiro brief de revisão ([#908](https://github.com/orobsonn/claude-harness/issues/908)) ([48ab919](https://github.com/orobsonn/claude-harness/commit/48ab919de817258c45efe50303c53ec713646d3d))
+
 ## [2.6.1](https://github.com/orobsonn/claude-harness/compare/v2.6.0...v2.6.1) (2026-09-08)
 
 
