@@ -41,6 +41,11 @@ after reading the sealed spec and code, make the smallest defensible, testable
 decision, record it in `resolved_judgments`, and list that key in
 `resolved_judgments_model_resolved`.
 
+When a planned change alters a signature, call, or emitted literal, use targeted
+`grep` on relevant code and tests for its uses/imports/old literal. Inspect existing
+tests that depend on that contract and put the minimum needed update in its owning task
+before freeze; do not turn this into a repository-wide audit.
+
 ## Revision mode
 
 When the prompt begins with `[HARNESS_PLAN_REVIEW_CONTEXT]`, it is a fresh
