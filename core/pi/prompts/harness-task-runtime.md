@@ -43,6 +43,11 @@ completo com `git log -1 --format=%H`; nunca complete por inferência um SHA abr
 Falha de infraestrutura não é RED. Antes do freeze, execute as verificações de
 tipagem/sintaxe aplicáveis aos testes novos e devolva erros ao test-author; um teste
 que só executa por transpilar tipos inválidos não está pronto para congelamento.
+O test-author só pode alterar paths literais presentes em `locked_tests[].path` ou
+`locked_tests[].fixture_paths`. Um teste que aparece apenas em `scope_paths` não pertence
+a essa mão: trate sua atualização compatível como delta da implementação, ou reporte
+`PLAN_CONTRADICTION` se ele precisar virar evidência congelada. Nunca peça novamente ao
+test-author um path que o gate já recusou pela mesma autorização.
 Ao pedir harness-test-reviewer de fidelidade, inclua o contrato, cwd/HEAD observados, comandos,
 códigos de saída e trechos reais da saída do RED e da tipagem/sintaxe que permitam
 conferir coleta, falhas e diagnósticos. Um resumo alegando que passaram não substitui
@@ -55,15 +60,21 @@ estado atual e nomeie cada arquivo novo untracked para leitura integral; diff tr
 vazio não prova esse arquivo. Não exija freeze SHA antes do freeze.
 Na primeira fidelidade, peça a matriz completa da tarefa: obrigação, PASS/FAIL/BLOCKED,
 evidência de arquivo/linha ou comando e dependências de fixture/import/runner. Esse é
-o ledger de fidelidade. Resolva contradições contra spec, plano e dependências reais
-e entregue ao test-author fresco um pacote consolidado de ledger, falhas, comando
-observado e paths afetados.
-Na revalidação, envie esse ledger factual e o diff da correção. Confira todas as falhas
+o ledger de fidelidade. Exija que o reviewer inspecione todas as obrigações e todos os
+locked tests relevantes antes de concluir `REVISE`; encontrar um defeito suficiente para
+reprovar não encerra a primeira varredura. Resolva contradições contra spec, plano e
+dependências reais e entregue ao test-author fresco um pacote consolidado com o ledger
+completo, IDs de todos os findings abertos, comando observado e paths afetados. O retorno
+do test-author deve mapear cada finding e cada PASS afetado para sua alteração ou evidência.
+Na revalidação, envie o ledger factual completo, o diff exato da correção e a saída bruta
+atual dos comandos com exit status, inline ou em artefato regular nomeado e legível. Não
+despache o reviewer com contagens/resumos no lugar dessas provas. Confira todas as falhas
 anteriores, coleta/RED e cada PASS cuja evidência seja afetada pelo diff de teste,
 fixture, import, runner, manifest ou baseline. Preserve linhas não afetadas somente
 quando a evidência continua atual; não repita uma varredura ampla por rotina.
 Achado novo deve mapear uma obrigação aprovada e indicar se foi omitido antes,
-causado pela correção ou revelado por evidência nova. A mesma assinatura de falha
+causado pela correção ou revelado por evidência nova. Marque como `LATE_FINDING` todo
+defeito material já observável que a primeira revisão omitiu. A mesma assinatura de falha
 sem diff material ou evidência nova pede corrigir o brief, a fixture ou a contradição
 que mantém o ciclo. Limite de rodadas não equivale a aprovação; o ledger anterior
 também não substitui a revisão nativa atual.
@@ -81,6 +92,12 @@ Depois despache executor, verifique escopo, diff e testes, e registre a captura 
 hand-record atual. Envie aos olhos o pacote completo: contrato, critérios, diff,
 comandos/resultados, freeze e HEAD atuais. Trate achados aplicáveis com sniper e os
 markers/re-gate nativos; refute achados incorretos com evidência observada.
+Antes de despachar uma correção pós-implementação, classifique os paths que o finding
+precisa alterar. Se qualquer teste ou fixture congelado precisar mudar, reabra primeiro o
+mesmo task pelo `harness-test-author`, obtenha RED/sensibilidade e fidelity atuais, e só
+depois despache sniper para o delta de produto. Envie direto ao sniper somente findings
+resolvíveis sem alterar teste/fixture congelado; nunca use um sniper exploratório para ele
+descobrir que a cobertura precisa ser reaberta.
 No primeiro brief de implementação, declare a fase, paths canônicos de produto/teste,
 cwd/base/HEAD/status de index, worktree e untracked, diff e provas negativas dos paths
 intactos; compare freeze→HEAD revisado para testes/fixtures e base de implementação→HEAD
