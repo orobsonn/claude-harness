@@ -5,6 +5,13 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [2.6.4](https://github.com/orobsonn/claude-harness/compare/v2.6.3...v2.6.4) (2026-09-08)
+
+
+### Bug Fixes
+
+* corrige fechamento de tasks e atualiza Lavish e RTK ([#912](https://github.com/orobsonn/claude-harness/issues/912)) ([dd50111](https://github.com/orobsonn/claude-harness/commit/dd50111d89d6dabb8abb88bc3e1c941c65f2db7b))
+
 ## [2.6.3](https://github.com/orobsonn/claude-harness/compare/v2.6.2...v2.6.3) (2026-09-08)
 
 
