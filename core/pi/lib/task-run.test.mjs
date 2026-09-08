@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import crypto from "node:crypto";
 import { execFileSync } from "node:child_process";
 
 import {
@@ -13,6 +14,7 @@ import {
   parsePlanReviewCompletion,
   readTaskRunBinding,
   taskRunPrompt,
+  validateTaskFidelityFreeze,
 } from "./task-run.mjs";
 import { hashTaskReceipt, stableTaskJson, taskRegistryPath } from "./task-contract.mjs";
 import { captureTaskContext } from "./task-context.mjs";
@@ -230,6 +232,56 @@ test("an admitted child keeps its historical dependency receipt after an ancesto
   assert.equal(admitTaskRun(f.grantPath, { cwd: f.root, sessionId: "fresh-task-parent" }).ok, false, "fresh admission cannot reuse stale A receipt");
 });
 
+test("task fidelity accepts only one clean test-only freeze commit after the test-author hand", (t) => {
+  const prepare = () => {
+    const f = fixture(t);
+    const testAuthorSha = f.git("rev-parse", "HEAD");
+    const admitted = admitTaskRun(f.grantPath, { cwd: f.root, sessionId: `task-parent-${crypto.randomUUID()}` });
+    assert.equal(admitted.ok, true, admitted.reason);
+    return { ...f, sessionId: admitted.sessionId, testAuthorSha };
+  };
+  const writeLockedTest = (f) => {
+    fs.mkdirSync(path.join(f.root, "test"), { recursive: true });
+    fs.writeFileSync(path.join(f.root, "test", "task-one.test.ts"), "// expected RED\n");
+  };
+  const check = (f) => validateTaskFidelityFreeze({
+    projectRoot: f.root,
+    sessionId: f.sessionId,
+    taskId: "task-one",
+    testAuthorSha: f.testAuthorSha,
+  });
+
+  const valid = prepare();
+  writeLockedTest(valid);
+  valid.git("add", "--", "test/task-one.test.ts");
+  valid.git("-c", "user.name=Harness", "-c", "user.email=harness@example.invalid", "commit", "-q", "-m", "freeze tests");
+  assert.deepEqual(check(valid), {
+    ok: true,
+    freezeSha: valid.git("rev-parse", "HEAD"),
+    frozenPaths: ["test/task-one.test.ts"],
+  });
+
+  const beforeCommit = prepare();
+  writeLockedTest(beforeCommit);
+  assert.match(check(beforeCommit).reason, /one linear freeze commit/);
+
+  const mixed = prepare();
+  writeLockedTest(mixed);
+  fs.mkdirSync(path.join(mixed.root, "src"), { recursive: true });
+  fs.writeFileSync(path.join(mixed.root, "src", "task-one.ts"), "export const value = 1;\n");
+  mixed.git("add", "--", "test/task-one.test.ts", "src/task-one.ts");
+  mixed.git("-c", "user.name=Harness", "-c", "user.email=harness@example.invalid", "commit", "-q", "-m", "mixed freeze");
+  assert.match(check(mixed).reason, /only canonical locked tests/);
+
+  const dirty = prepare();
+  writeLockedTest(dirty);
+  dirty.git("add", "--", "test/task-one.test.ts");
+  dirty.git("-c", "user.name=Harness", "-c", "user.email=harness@example.invalid", "commit", "-q", "-m", "freeze tests");
+  fs.mkdirSync(path.join(dirty.root, "src"), { recursive: true });
+  fs.writeFileSync(path.join(dirty.root, "src", "task-one.ts"), "export const dirty = true;\n");
+  assert.match(check(dirty).reason, /worktree must be clean/);
+});
+
 test("task authority blocks global ceremony, sibling work and delivery while allowing native task reviews", (t) => {
   const f = fixture(t);
   assert.equal(admitTaskRun(f.grantPath, { cwd: f.root, sessionId: "task-parent" }).ok, true);
@@ -296,6 +348,9 @@ test("task prompt uses a stable source and embeds only the focal contract plus D
   assert.match(prompt, /pai local de uma única tarefa/);
   assert.match(prompt, /"id": "task-one"/);
   assert.match(prompt, /execution-plan\.json/);
+  assert.match(prompt, /\(4\) freeze commit[\s\S]*\(5\) marker `fidelity`[\s\S]*\(7\) executor/);
+  assert.match(prompt, /Não passe `sha` aos markers/);
+  assert.match(prompt, /git log -1 --format=%H/);
   assert.doesNotMatch(prompt, /"id": "task-two"/);
   assert.doesNotMatch(prompt, /indexOf\(|slice\(/);
 });

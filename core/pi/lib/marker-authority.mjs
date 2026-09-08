@@ -35,6 +35,7 @@ import { readPiSpecApproval, readPiSpecDraft } from "./spec-approval.mjs";
 import { capturePiReviewInput, hasAcceptedPiReviewEvidence, readPiReviewPlan } from "./pi-review-evidence.mjs";
 import { requiredPiFinalReviewRoles } from "./roles.mjs";
 import { readIntegratedTaskEvidence } from "./task-receipts.mjs";
+import { validateTaskFidelityFreeze } from "./task-run.mjs";
 
 /** @description Conjunto exato de ações privilegiadas aceitas pela tool `mark`. Mesmo Set da lane OC. */
 export const MARKER_ACTIONS = new Set([
@@ -243,6 +244,7 @@ function atomicJsonWrite(file, value) {
  *   isAncestorSha?: (projectRoot: string, sha: string) => boolean | null,
  *   captureReviewInputFn?: typeof capturePiReviewInput,
  *   readIntegratedTaskEvidenceFn?: typeof readIntegratedTaskEvidence,
+ *   validateTaskFidelityFreezeFn?: typeof validateTaskFidelityFreeze,
  *   now?: () => string,
  * }} options
  * @returns {{
@@ -263,6 +265,9 @@ export function createPiMarkerAuthority(options = {}) {
   const readIntegratedEvidence = typeof options?.readIntegratedTaskEvidenceFn === "function"
     ? options.readIntegratedTaskEvidenceFn
     : readIntegratedTaskEvidence;
+  const validateFidelityFreeze = typeof options?.validateTaskFidelityFreezeFn === "function"
+    ? options.validateTaskFidelityFreezeFn
+    : validateTaskFidelityFreeze;
   const now = typeof options?.now === "function" ? options.now : () => new Date().toISOString();
 
   /** Chave determinística garantida pelo host (event.toolCallId). */
@@ -379,7 +384,21 @@ export function createPiMarkerAuthority(options = {}) {
           if (!sha || isAncestorSha(projectRoot, sha) !== true) {
             return { ok: false, reason: "fidelity requires the test-author record SHA to be ancestral to HEAD" };
           }
-          payload = formatFeatureTaskEntry(authorization.featureId, taskId, sha);
+          let fidelitySha = sha;
+          if (previous.task_run) {
+            if (!Array.isArray(previous.hand_finished) || !previous.hand_finished.includes(bare)) {
+              return { ok: false, reason: "fidelity requires host-owned test-author completion" };
+            }
+            const frozen = validateFidelityFreeze({
+              projectRoot,
+              sessionId: authorization.sessionId,
+              taskId,
+              testAuthorSha: sha,
+            });
+            if (!frozen?.ok) return { ok: false, reason: frozen?.reason ?? "task fidelity freeze validation failed" };
+            fidelitySha = frozen.freezeSha;
+          }
+          payload = formatFeatureTaskEntry(authorization.featureId, taskId, fidelitySha);
           patch = { fidelity_pass: [payload] };
         } else if (action === "regate-pending") {
           patch = { regate_pending: [bare] };

@@ -7,7 +7,9 @@ import { execFileSync } from "node:child_process";
 import test from "node:test";
 
 import { hashTaskReceipt } from "./task-contract.mjs";
+import { createPiMarkerAuthority } from "./marker-authority.mjs";
 import { inspectTaskRun, readIntegratedTaskEvidence } from "./task-receipts.mjs";
+import { validateTaskFidelityFreeze } from "./task-run.mjs";
 
 const FEATURE = "receipt-feature";
 const TASK = "receipt-task";
@@ -159,6 +161,185 @@ test("inspectTaskRun issues a child-bound receipt from native lifecycle, fidelit
   assert.equal(inspected.result.latest_run_id, "run-current");
   assert.deepEqual(inspected.result.changed_paths, ["src/task.mjs", "src/task.spec.mjs"]);
   assert.match(inspected.result.frozen_blobs["src/task.spec.mjs"], /^[0-9a-f]{64}$/);
+});
+
+test("native task markers bind a real test-only freeze commit through executor capture and inspection", () => {
+  const { root, base } = repo();
+  const bare = `${FEATURE}/${TASK}`;
+  const statePath = path.join(root, ".pi", "harness", "state", CHILD, "gate-state.json");
+  const handPath = path.join(root, ".pi", "harness", "state", "hand-records", FEATURE, CHILD, `${TASK}.json`);
+  const task = {
+    id: TASK,
+    depends_on: [],
+    scope_paths: ["src/"],
+    locked_tests: [{ id: "lt-1", path: "src/task.spec.mjs", assertion: "expected behavior" }],
+  };
+  const grantPath = path.join(root, ".pi", "harness", "state", "task-admission", `${ATTEMPT}.json`);
+  const grant = {
+    task_id: TASK,
+    attempt_id: ATTEMPT,
+    parent_session_id: PARENT,
+    parent_root: root,
+    feature_id: FEATURE,
+    plan_sha256: "c".repeat(64),
+    spec_sha256: "d".repeat(64),
+    base_sha: base,
+    cwd: root,
+    dependencies: [],
+  };
+  write(`${grantPath}.claim`, { session_id: CHILD, grant_sha256: "b".repeat(64) });
+  write(statePath, {
+    session_id: CHILD,
+    feature_id: FEATURE,
+    task_pipeline_version: 1,
+    task_run: { task_id: TASK, attempt_id: ATTEMPT },
+  });
+
+  const dispatches = new Map([
+    ["author", "harness-test-author"],
+    ["executor", "harness-executor"],
+  ]);
+  const removedDispatches = [];
+  const binding = { ok: true, grant, task, grantPath };
+  const authority = createPiMarkerAuthority({
+    projectRoot: root,
+    readDispatchRecord: (_projectRoot, { parentSessionId, callId }) => {
+      const role = dispatches.get(callId);
+      return parentSessionId === CHILD && role
+        ? { ok: true, record: {
+            parent_session_id: CHILD,
+            dispatch_call_id: callId,
+            feature_id: FEATURE,
+            task_id: TASK,
+            role,
+          } }
+        : { ok: false, reason: "dispatch record absent" };
+    },
+    removeDispatchRecord: (_projectRoot, ids) => {
+      removedDispatches.push(ids);
+      return { ok: true, removed: true };
+    },
+    validateTaskFidelityFreezeFn: (input) => validateTaskFidelityFreeze(input, {
+      readTaskRunBindingFn: () => binding,
+    }),
+    now: () => "2026-09-08T00:00:00.000Z",
+  });
+  const mark = (action, callId) => {
+    const args = { action, task_id: TASK };
+    assert.deepEqual(authority.authorize({ toolName: "mark", input: args, sessionId: CHILD, toolCallId: callId }), { ok: true });
+    const result = authority.execute({ toolCallId: callId, params: args, sessionId: CHILD, isChild: false });
+    assert.equal(result.ok, true, result.output);
+    return result;
+  };
+  const hand = (agent, producerCallId, freezeCommitSha) => write(handPath, {
+    writtenBy: "host-hand-finished",
+    featureId: FEATURE,
+    taskId: TASK,
+    sessionId: CHILD,
+    agent,
+    producerCallId,
+    freezeCommitSha,
+    outcome: "DONE",
+    scopeViolations: [],
+    frozenViolations: [],
+  });
+
+  write(path.join(root, "src", "task.spec.mjs"), "export const expected = 1;\n");
+  hand("harness-test-author", "author", base);
+  const authorFinished = mark("hand-finished", "author-finished");
+  run(root, "git", "add", "--", "src/task.spec.mjs");
+  run(root, "git", "commit", "-m", "freeze tests");
+  const freeze = run(root, "git", "rev-parse", "HEAD");
+  const fidelity = mark("fidelity", "fidelity");
+  const authorCapture = mark("capture-verified", "author-capture");
+  let state = JSON.parse(fs.readFileSync(statePath, "utf8"));
+  assert.deepEqual(state.fidelity_pass, [`${bare}@${freeze}`]);
+  assert.deepEqual(state.capture_verified, [`${bare}@${base}`]);
+  assert.deepEqual(removedDispatches, [{ sessionId: CHILD, callId: "author" }]);
+
+  write(path.join(root, "src", "task.mjs"), "export const actual = 1;\n");
+  hand("harness-executor", "executor", freeze);
+  const executorFinished = mark("hand-finished", "executor-finished");
+  run(root, "git", "add", "--", "src/task.mjs");
+  run(root, "git", "commit", "-m", "implement task");
+  const head = run(root, "git", "rev-parse", "HEAD");
+  const capture = mark("capture-verified", "capture");
+
+  state = JSON.parse(fs.readFileSync(statePath, "utf8"));
+  assert.deepEqual(state.capture_verified, [`${bare}@${base}`, `${bare}@${freeze}`]);
+  assert.deepEqual(removedDispatches, [
+    { sessionId: CHILD, callId: "author" },
+    { sessionId: CHILD, callId: "executor" },
+  ]);
+  state.task_adversary_evidence = { [bare]: review("harness-adversary", head) };
+  write(statePath, state);
+  const events = [
+    event("session", { id: CHILD }),
+    event("tool_execution_start", { toolCallId: "author", toolName: "subagent", args: { subagent_type: "harness-test-author" } }),
+    event("tool_execution_end", { toolCallId: "author", toolName: "subagent", isError: false, result: { details: { status: "completed" } } }),
+    event("tool_execution_start", { toolCallId: "author-finished", toolName: "mark", args: { action: "hand-finished", task_id: TASK } }),
+    event("tool_execution_end", { toolCallId: "author-finished", toolName: "mark", isError: false, result: { details: authorFinished.metadata } }),
+    event("tool_execution_start", { toolCallId: "fidelity-eye", toolName: "subagent", args: { subagent_type: "harness-compliance" } }),
+    event("tool_execution_end", { toolCallId: "fidelity-eye", toolName: "subagent", isError: false, result: { details: { status: "completed" } } }),
+    event("tool_execution_start", { toolCallId: "freeze", toolName: "bash", args: { command: "git commit -m 'freeze tests'" } }),
+    event("tool_execution_end", { toolCallId: "freeze", toolName: "bash", isError: false, result: { content: [{ type: "text", text: `[task ${freeze.slice(0, 7)}] freeze tests` }] } }),
+    event("tool_execution_start", { toolCallId: "fidelity", toolName: "mark", args: { action: "fidelity", task_id: TASK } }),
+    event("tool_execution_end", { toolCallId: "fidelity", toolName: "mark", isError: false, result: { details: fidelity.metadata } }),
+    event("tool_execution_start", { toolCallId: "author-capture", toolName: "mark", args: { action: "capture-verified", task_id: TASK } }),
+    event("tool_execution_end", { toolCallId: "author-capture", toolName: "mark", isError: false, result: { details: authorCapture.metadata } }),
+    event("tool_execution_start", { toolCallId: "executor", toolName: "subagent", args: { subagent_type: "harness-executor", prompt: `[HARNESS_TASK_CONTEXT]{"task_id":"${TASK}"}[/HARNESS_TASK_CONTEXT]` } }),
+    event("tool_execution_end", { toolCallId: "executor", toolName: "subagent", isError: false, result: { details: { status: "completed" } } }),
+    event("tool_execution_start", { toolCallId: "executor-finished", toolName: "mark", args: { action: "hand-finished", task_id: TASK } }),
+    event("tool_execution_end", { toolCallId: "executor-finished", toolName: "mark", isError: false, result: { details: executorFinished.metadata } }),
+    event("tool_execution_start", { toolCallId: "capture", toolName: "mark", args: { action: "capture-verified", task_id: TASK } }),
+    event("tool_execution_end", { toolCallId: "capture", toolName: "mark", isError: false, result: { details: capture.metadata } }),
+    event("tool_execution_start", { toolCallId: "call-harness-adversary", toolName: "subagent", args: { subagent_type: "harness-adversary", prompt: `[HARNESS_TASK_REVIEW]\n[HARNESS_TASK_CONTEXT]{"task_id":"${TASK}"}[/HARNESS_TASK_CONTEXT]` } }),
+    event("tool_execution_end", { toolCallId: "call-harness-adversary", toolName: "subagent", isError: false, result: { details: { status: "completed" } } }),
+  ];
+  const jobRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pi-task-native-marker-job-"));
+  roots.push(jobRoot);
+  const launchDir = path.join(jobRoot, "run-native-markers");
+  const launch = {
+    run_id: "run-native-markers",
+    pid: 999992,
+    events_path: path.join(launchDir, "events.jsonl"),
+    process_path: path.join(launchDir, "process.json"),
+    result_path: path.join(launchDir, "result.json"),
+  };
+  write(launch.events_path, `${events.join("\n")}\n`);
+  const entry = {
+    task_id: TASK,
+    attempt_id: ATTEMPT,
+    parent_session_id: PARENT,
+    parent_root: root,
+    feature_id: FEATURE,
+    plan_sha256: grant.plan_sha256,
+    spec_sha256: grant.spec_sha256,
+    base_sha: base,
+    worktree: root,
+    branch: "task/receipt",
+    grant_path: grantPath,
+    job_dir: jobRoot,
+    status: "ready",
+    launches: [launch],
+    result: null,
+    integration: null,
+  };
+  const inspected = inspectTaskRun(entry, {
+    readTaskRunBindingFn: () => binding,
+    readTaskProcessFn: () => ({
+      ok: true,
+      running: false,
+      terminal: true,
+      result: { exitCode: 0, signal: null, timedOut: false, ended_at: "2026-09-08T00:01:00.000Z" },
+    }),
+    captureReviewInputFn: () => ({ ok: true, snapshot: { head_sha: head, input_digest: DIGEST } }),
+    readTaskContextReturnFn: () => null,
+  });
+  assert.equal(inspected.ok, true, inspected.reason);
+  assert.equal(inspected.result.freeze_sha, freeze);
+  assert.equal(inspected.result.hand_capture.freeze_sha, freeze);
+  assert.equal(inspected.result.child_head, head);
 });
 
 test("inspectTaskRun rejects the latest failed continuation even when an older event stream is healthy", () => {

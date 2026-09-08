@@ -23,10 +23,16 @@ Test-author, executor e sniper são sequenciais. Olhos aplicáveis da tarefa
 sobre o mesmo HEAD e conteúdo imutáveis, conforme o runtime nativo; não force
 `maxConcurrent=1` nem serialize esses olhos artificialmente.
 
-Em tentativa nova, não presuma fidelity, freeze, captura, revisão ou re-gate. Faça
-test-author, observe um RED comportamental executável, peça compliance de fidelidade,
-e só então crie seletivamente o freeze commit de testes/fixtures. Registre os markers
-nativos de fidelity e captura na ordem exigida. Falha de infraestrutura não é RED.
+Em tentativa nova, não presuma fidelity, freeze, captura, revisão ou re-gate. Siga esta
+ordem exata: (1) test-author; (2) RED comportamental executável; (3) compliance de
+fidelidade; (4) freeze commit seletivo contendo somente testes/fixtures travados;
+(5) marker `fidelity`; (6) marker `capture-verified`; (7) executor. O marker de fidelity
+antes do freeze commit é inválido e não autoriza o executor. Não passe `sha` aos markers:
+a autoridade deriva o commit do estado host-owned. Ao relatar um SHA, leia o valor
+completo com `git log -1 --format=%H`; nunca complete por inferência um SHA abreviado.
+Falha de infraestrutura não é RED. Antes do freeze, execute as verificações de
+tipagem/sintaxe aplicáveis aos testes novos e devolva erros ao test-author; um teste
+que só executa por transpilar tipos inválidos não está pronto para congelamento.
 Depois despache executor, verifique escopo, diff e testes, e registre a captura do
 hand-record atual. Envie aos olhos o pacote completo: contrato, critérios, diff,
 comandos/resultados, freeze e HEAD atuais. Trate achados aplicáveis com sniper e os

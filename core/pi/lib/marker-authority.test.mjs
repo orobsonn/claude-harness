@@ -933,25 +933,37 @@ test("commits locais freeze e impl preservam a linhagem real de fidelity e captu
   execFileSync("git", ["commit", "-qm", "chore: seed"], { cwd: root });
   const handSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
 
-  seedGateState(root);
+  seedGateState(root, { task_run: {} });
   seedHandRecord(root, { agent: "test-author", freezeCommitSha: handSha });
-  const { authority } = makeAuthority(root, {
-    dispatchRole: "test-author",
-    resolveHeadSha: undefined,
-    isAncestorSha: undefined,
-  });
 
   fs.mkdirSync(path.join(root, "tests"), { recursive: true });
   fs.writeFileSync(path.join(root, "tests", "app.test.mjs"), "// expected-red locked test\n", "utf8");
   execFileSync("git", ["add", "--", "tests/app.test.mjs"], { cwd: root });
   execFileSync("git", ["commit", "-qm", "test(app): freeze locked test for task-one"], { cwd: root });
   const freezeCommit = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
+  let freezeValidations = 0;
+  const { authority } = makeAuthority(root, {
+    dispatchRole: "test-author",
+    resolveHeadSha: undefined,
+    isAncestorSha: undefined,
+    validateTaskFidelityFreezeFn: (input) => {
+      freezeValidations++;
+      assert.deepEqual(input, {
+        projectRoot: root,
+        sessionId: SESSION,
+        taskId: TASK,
+        testAuthorSha: handSha,
+      });
+      return { ok: true, freezeSha: freezeCommit };
+    },
+  });
 
   assert.equal(call(authority, { action: "hand-finished", task_id: TASK }, { toolCallId: "real-hf" }).result.ok, true);
   assert.equal(call(authority, { action: "fidelity", task_id: TASK }, { toolCallId: "real-fidelity" }).result.ok, true);
   assert.equal(call(authority, { action: "capture-verified", task_id: TASK }, { toolCallId: "real-capture" }).result.ok, true);
-  assert.deepEqual(readGateState(root).fidelity_pass, [`${FEATURE}/${TASK}@${handSha}`]);
+  assert.deepEqual(readGateState(root).fidelity_pass, [`${FEATURE}/${TASK}@${freezeCommit}`]);
   assert.deepEqual(readGateState(root).capture_verified, [`${FEATURE}/${TASK}@${handSha}`]);
+  assert.equal(freezeValidations, 1);
 
   fs.mkdirSync(path.join(root, "src"), { recursive: true });
   fs.writeFileSync(path.join(root, "src", "app.ts"), "export const ready = true;\n", "utf8");

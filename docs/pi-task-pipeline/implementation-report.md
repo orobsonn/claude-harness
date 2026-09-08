@@ -84,6 +84,21 @@ descobertas revalidar e incorporar. Diários completos não são herdados pelos 
   diretamente por `piDispatchRoute`, a mesma função usada pelo gate: seis roles,
   modelo/esforço exatos e complexidade nas três mãos. Security conserva a ausência
   de `thinking`. Não foi criado outro router nem alterada a política de modelos.
+- A prova real revelou que o test-author registra sua mão no HEAD anterior ao
+  commit dos testes. O marker de fidelity usava esse SHA, enquanto o receipt exigia
+  o freeze commit posterior. A correção local de task valida um commit linear,
+  limpo e restrito aos testes/fixtures e registra fidelity no SHA desse commit.
+  A captura da mão continua ancorada no record original; os dois fatos têm
+  identidades distintas. Marcar fidelity antes do commit passa a ser recusado.
+  O verificador de retorno conserva suas exigências.
+- O prompt agora explicita a sequência freeze, fidelity e captura, orienta obter
+  o SHA completo com `git log -1 --format=%H` e exige verificar tipagem/sintaxe dos
+  testes antes de congelá-los. Na primeira T1, uma fixture inválida só foi detectada
+  depois do freeze, durante a implementação.
+- A revisão da entrada encontrou relatórios antigos e evidências da PR junto dos
+  artefatos normativos. A entrada do replay corrigido foi reduzida à issue,
+  spec/plano e configuração da base. A execução anterior fica como diagnóstico;
+  seus resultados, código e aprovações não validam a nova sessão.
 
 ## Validação real escolhida
 
@@ -168,8 +183,8 @@ plano sem inventar aprovação.
 ## Evidências e fechamento pendente
 
 - [PR funcional #903](https://github.com/orobsonn/claude-harness/pull/903), ainda draft.
-  O [CI em `df7c560`](https://github.com/orobsonn/claude-harness/actions/runs/34175099277)
-  registrou **3495 testes: 3493 passaram, nenhum falhou e 2 foram ignorados**. Os dois
+  O [CI em `2a421ca`](https://github.com/orobsonn/claude-harness/actions/runs/34177909420)
+  registrou **3509 testes: 3507 passaram, nenhum falhou e 2 foram ignorados**. Os dois
   smokes Orca executados localmente passaram (**2/2**).
 - Testes focais de contexto, coordenação, revisão e adapter Orca: **73/73**.
 - A correção do contrato JSON passou em **205 testes** de role, aprovação nativa,
@@ -194,8 +209,14 @@ plano sem inventar aprovação.
 - A TUI passou em um teste integrado com Pi real, provider local determinístico e PTY:
   executou `read`, exibiu a resposta, gravou o header idêntico ao da sessão e os eventos
   nativos e encerrou com código zero. O teste também cobre ausência do prompt de trust
-  de projeto; não substitui a prova FULL nem a conferência da TUI no Orca.
-- Ainda pendentes: conferência final da TUI no Orca, conclusão e aprovação da issue
+  de projeto. A revisão independente executou **72 testes focais**. Um smoke separado
+  executou o Pi em TUI pelo terminal oficial do Orca, gravou os eventos nativos e
+  encerrou com código zero; o terminal temporário foi removido. Isso não substitui a
+  prova FULL nem confirma renderização no cliente remoto.
+- O ajuste fidelity/freeze passou em **73 testes focais**, incluindo uma cadeia com
+  Git, autoridade de markers e receipt reais: captura do test-author na base,
+  fidelity no freeze, captura do executor no freeze e retorno verificado.
+- Ainda pendentes: confirmação visual da TUI no cliente, conclusão e aprovação da issue
   FULL real, CI do fechamento do PR funcional, merge e release esperada **2.6.0** pelo
   release-please. Nenhuma versão, changelog ou tag foi alterada manualmente.
 

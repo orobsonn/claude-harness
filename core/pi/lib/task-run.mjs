@@ -346,6 +346,39 @@ export function readTaskRunBinding(cwd, sessionId) {
   }
 }
 
+/** Prove that task HEAD is the single clean, test-only freeze commit after the test-author hand. */
+export function validateTaskFidelityFreeze({ projectRoot, sessionId, taskId, testAuthorSha }, dependencies = {}) {
+  try {
+    if (!HEX_40.test(testAuthorSha ?? "")) return fail("test-author commit identity required before fidelity");
+    const binding = (dependencies.readTaskRunBindingFn ?? readTaskRunBinding)(projectRoot, sessionId);
+    if (!binding?.ok || binding.grant?.task_id !== taskId) return fail("current task-run binding required before fidelity");
+    const frozen = [...new Set((Array.isArray(binding.task?.locked_tests) ? binding.task.locked_tests : []).flatMap((item) =>
+      item && typeof item === "object"
+        ? [item.path, ...(Array.isArray(item.fixture_paths) ? item.fixture_paths : [])]
+        : [],
+    ).filter((item) => typeof item === "string" && item))];
+    if (frozen.length === 0) return fail("canonical locked tests required before fidelity");
+    const gitFn = dependencies.gitFn ?? ((...args) => git(projectRoot, ...args));
+    const commit = String(gitFn("rev-list", "--parents", "-n", "1", "HEAD")).trim().split(/\s+/);
+    if (commit.length !== 2 || !HEX_40.test(commit[0] ?? "") || commit[1] !== testAuthorSha) {
+      return fail("fidelity requires one linear freeze commit immediately after the test-author hand");
+    }
+    const status = String(gitFn(
+      "status", "--porcelain", "--untracked-files=all", "--", ".",
+      ":(exclude).pi/harness/", ":(exclude)node_modules/",
+    )).trim();
+    if (status) return fail("task worktree must be clean before fidelity");
+    const changed = String(gitFn("diff-tree", "--no-commit-id", "--name-only", "-r", "-z", "HEAD"))
+      .split("\0").filter(Boolean);
+    if (changed.length === 0 || changed.some((item) => !frozen.includes(item))) {
+      return fail("fidelity freeze commit must change only canonical locked tests and fixtures");
+    }
+    return { ok: true, freezeSha: commit[0], frozenPaths: frozen };
+  } catch (error) {
+    return fail(error instanceof Error ? error.message : String(error));
+  }
+}
+
 /** Restrict the local parent and all inherited native children to one task. */
 export function decideTaskRunTool(binding, event) {
   const deny = (reason) => ({ block: true, reason: `[task-run] ${reason}` });
