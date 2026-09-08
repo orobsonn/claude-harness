@@ -33,6 +33,7 @@ const RUNTIME_PROMPT = readFileSync(join(PACKAGE_ROOT, "core/pi/prompts/harness-
 
 const EXPECTED_EXTENSION_BASENAMES = [
   "harness-policy.ts",
+  "harness-task-events.ts",
   "harness-task-run.ts",
   "harness-bootstrap.ts",
   "harness-subagents.ts",
