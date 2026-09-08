@@ -17,7 +17,10 @@ mão, compliance de fidelidade e adversary de implementação, a primeira linha 
 e security de implementação, a primeira linha é exatamente `[HARNESS_TASK_REVIEW]` e
 a seguinte é o marcador canônico `[HARNESS_TASK_CONTEXT]`. Use as rotas
 literais de `contract.dispatch_routes`: copie `model`, `thinking` e `complexity`
-exatamente quando estiverem presentes na entrada da role; não invente campos ausentes.
+exatamente quando estiverem presentes na entrada da role. Para `harness-test-author`,
+`harness-executor` e `harness-sniper`, inclua sempre `complexity` no objeto de argumentos
+da própria chamada `subagent`; mencionar a complexidade no prompt do filho não substitui
+esse campo estruturado. Não invente campos ausentes.
 Não consulte o routing do Codex em `model-routing.mjs` nesta lane, incluindo
 `.codex/model-routing.mjs` e `.pi/harness/vendor/codex/model-routing.mjs`.
 Test-author, executor e sniper são sequenciais. `harness-adversary` é obrigatório após
