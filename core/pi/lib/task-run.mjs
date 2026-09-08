@@ -9,6 +9,7 @@ import { parseReviewReportText, validateReviewReport } from "../../shared/lib/re
 import { validatePlan } from "../../shared/lib/validate-plan.mjs";
 import { parseTaskDispatchIdentity } from "../../opencode/lib/task-dispatch-identity.mjs";
 import { piSubagentArgs } from "./pi-adapter-map.mjs";
+import { piDispatchRoute } from "./dispatch-rail.mjs";
 import { readPiSpecApproval } from "./spec-approval.mjs";
 import { validateTaskContextHandoff } from "./task-context.mjs";
 import {
@@ -30,6 +31,7 @@ const TASK_ROLES = new Set([
   "harness-adversary",
   "harness-security",
 ]);
+const TASK_WRITING_ROLES = new Set(["harness-test-author", "harness-executor", "harness-sniper"]);
 const TASK_MARKERS = new Set(["fidelity", "hand-finished", "capture-verified", "regate-pending", "regate-passed"]);
 const HEX_40 = /^[a-f0-9]{40}$/;
 const HEX_64 = /^[a-f0-9]{64}$/;
@@ -380,6 +382,14 @@ export function decideTaskRunTool(binding, event) {
 /** Build the task brief from a stable task-runtime source and the one assigned contract. */
 export function taskRunPrompt(taskRuntime, admission) {
   if (typeof taskRuntime !== "string" || !taskRuntime.trim()) throw new Error("stable task runtime prompt required");
+  const dispatchRoutes = Object.fromEntries([...TASK_ROLES].map((role) => {
+    const resolved = piDispatchRoute(role, admission.task.complexity);
+    if (!resolved.ok) throw new Error(`task dispatch route unavailable for ${role}`);
+    const { ok: _ok, ...route } = resolved;
+    return [role, TASK_WRITING_ROLES.has(role)
+      ? { ...route, complexity: admission.task.complexity }
+      : route];
+  }));
   const contract = {
     feature_id: admission.grant.feature_id,
     task: admission.task,
@@ -389,6 +399,7 @@ export function taskRunPrompt(taskRuntime, admission) {
     plan_path: admission.planPath,
     spec_path: admission.specPath,
     binding: admission.binding,
+    dispatch_routes: dispatchRoutes,
     ...(admission.grant.context_handoff === undefined ? {} : { context_handoff: admission.grant.context_handoff }),
   };
   return `${taskRuntime.trim()}\n\n[HARNESS_TASK_RUN]\n${JSON.stringify({

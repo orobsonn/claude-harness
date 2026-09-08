@@ -72,6 +72,12 @@ descobertas revalidar e incorporar. Diários completos não são herdados pelos 
   e o prompt do pai não explicavam esse contrato. Ambos agora exigem o formato
   canônico completo; o erro de despacho orienta uma revisão nova nos artefatos
   atuais. Os testes preservam a recusa de tokens/prosa sem fabricar recibos.
+- As primeiras sessões locais tentaram deduzir o modelo do test-author dos tiers do
+  plano e da cópia vendorizada do routing Codex. Essas fontes não forneciam o
+  contrato Pi completo. O briefing de task agora recebe `dispatch_routes` gerado
+  diretamente por `piDispatchRoute`, a mesma função usada pelo gate: seis roles,
+  modelo/esforço exatos e complexidade nas três mãos. Security conserva a ausência
+  de `thinking`. Não foi criado outro router nem alterada a política de modelos.
 
 ## Validação real escolhida
 
@@ -88,12 +94,13 @@ mesmo projeto, setup e host da main registrada. O código do harness estava em
 `8397a9e9c80ee766693a58ac3cfce1364018b394`. O provider foi lançado em
 2026-09-07 às 23:46:31 UTC na sessão global
 `b2681197-8aa4-4ebb-856e-a35898d5c4bb`. O primeiro terminal foi
-`term_4c012bf1-9bec-44be-ae61-e2b47e40edb4`; a retomada usa
-`term_664750f1-4d26-4f54-a311-bf750f141909`, com o mesmo título
+`term_4c012bf1-9bec-44be-ae61-e2b47e40edb4`; a retomada atual usa
+`term_85b28899-f664-4644-89af-2521ce8de825`, com o mesmo título
 `RUN REAL · Pi Harness FULL · Lainny #47`. O inventário confirmou um único
-terminal, e o estado oficial do agente retornou `working`. O gate registra a feature `escritor-publico-lead-orca` e
+terminal global, e o estado oficial do agente retornou `working`. O gate registra a feature `escritor-publico-lead-orca` e
 `task_pipeline_version: 1` desde a classificação. Os registros desta execução ficam
-em `/tmp/pi-full-lainny-47-orca-run` e `/tmp/pi-full-lainny-47-orca-resume-1`.
+em `/tmp/pi-full-lainny-47-orca-run`, `/tmp/pi-full-lainny-47-orca-resume-1`
+e `/tmp/pi-full-lainny-47-orca-resume-2`.
 Antes da retomada, o instalador incorporou as orientações de visibilidade de
 `e053d7b` no commit local `4b0c42f`; esse delta não altera o código do executor.
 
@@ -117,9 +124,33 @@ o host não registrou aprovação e recusou o despacho. A tentativa de pedir um 
 isolado também não satisfazia o contrato. O worker foi encerrado às 00:37:54 UTC
 de 2026-09-08 para instalar a correção de formato e retomar a mesma sessão. O
 preflight dessa retomada passou com os mesmos hashes, sem promover aprovação.
-Nenhum gate foi alterado manualmente. Ainda não há task filha despachada nem
-aprovação FULL nesta atualização; falta obter o recibo canônico e percorrer tasks,
-integração e olhos finais para servir como prova completa.
+
+O contrato corrigido de `cdcf441` foi instalado no commit local `66578c2`; as
+roles materializadas coincidem com os defaults atualizados. A mesma sessão foi
+retomada às 00:45:32 UTC pelo Orca. O novo reviewer `9417ba49-cf5e-4d4` concluiu
+em 127 segundos com `{"verdict":"APPROVE","findings":[]}`. Dessa vez o host
+gravou `plan_review_evidence` ligado aos hashes atuais e o `harness_tasks` despachou
+T1/T2 com sucesso, ambas a partir de `66578c2`:
+
+- T1, dados/idempotência: tentativa `ba901361-aa36-428b-af98-6cbf7ca32a58`, terminal
+  `term_edec6c73-76c2-4f59-8fe2-3f05ab740c36`.
+- T2, allowlist pública: tentativa `3812d701-d5ef-45f6-bfd2-9b407e00f852`, terminal
+  `term_67487983-db32-40ce-a09f-b833de89de74`.
+
+As duas worktrees Orca registram a global como parent explícito. O status oficial
+dos três agentes retornou `working` na mesma observação. As abas filhas receberam
+os títulos `TASK REAL · T1 dados e idempotência · Lainny #47` e
+`TASK REAL · T2 allowlist pública · Lainny #47`; nenhuma nova aba foi criada para
+renomear. T3 continua aguardando a integração de T1/T2. Nenhum gate foi alterado
+manualmente. Despacho e processos ativos ainda não comprovam conclusão das tasks,
+integração ou aprovação FULL.
+
+Os workers locais iniciaram às 00:48:37 e 00:48:48 UTC, com `task_run` e
+`task_pipeline_version: 1`, comprovando sobreposição de processos sem repetir a
+cerimônia global. As primeiras chamadas das mãos foram recusadas por rota incorreta;
+a T1 corrigiu modelo, esforço e complexidade e iniciou um test-author nativo às
+00:53:39 UTC. A correção preventiva de `dispatch_routes` está no código fonte,
+sem substituir os assets imutáveis dessas tentativas já admitidas.
 
 A tentativa anterior no Victor foi encerrada e removida pela operação oficial do
 Orca. Sua branch foi preservada em `2eb4033`, com evidência arquivada em
@@ -131,15 +162,18 @@ plano sem inventar aprovação.
 ## Evidências e fechamento pendente
 
 - [PR funcional #903](https://github.com/orobsonn/claude-harness/pull/903), ainda draft.
-  O [CI em `5148365`](https://github.com/orobsonn/claude-harness/actions/runs/34172957388)
-  registrou **3488 testes: 3486 passaram, nenhum falhou e 2 foram ignorados**. Os dois
+  O [CI em `cdcf441`](https://github.com/orobsonn/claude-harness/actions/runs/34174380208)
+  registrou **3494 testes: 3492 passaram, nenhum falhou e 2 foram ignorados**. Os dois
   smokes Orca executados localmente passaram (**2/2**).
 - Testes focais de contexto, coordenação, revisão e adapter Orca: **73/73**.
 - A correção do contrato JSON passou em **205 testes** de role, aprovação nativa,
   coordenação, prompt e instalação. A auditoria independente também alinhou as
   chaves exatas dos três revisores de implementação/final; seus **26 testes** de
-  contrato e isolamento passaram. A prova nativa ainda precisa consumir esse
-  contrato na retomada.
+  contrato e isolamento passaram. A retomada nativa já consumiu o JSON de aprovação
+  do plano e liberou o despacho de T1/T2; as revisões de implementação seguem pendentes.
+- As rotas derivadas passaram em **22 testes** de task-run/dispatch-rail e nos
+  **24 testes** do prompt global. Um smoke do código vendorizado confirmou que as
+  seis roles são aceitas pelo gate nos quatro níveis de complexidade.
 - A correção de identidade do host passou em **6/6** testes focais e está no CI atual.
 - O CLI host agora usa o payload AppImage extraído e o launcher estável oficial. A
   correção preserva os dois wrappers anteriores e tem rollback registrado em

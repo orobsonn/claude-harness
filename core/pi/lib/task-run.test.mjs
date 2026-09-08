@@ -18,6 +18,7 @@ import { hashTaskReceipt, stableTaskJson, taskRegistryPath } from "./task-contra
 import { captureTaskContext } from "./task-context.mjs";
 import { updateSharedContext } from "./memory-cycle.mjs";
 import { recoverPiParentSession } from "./parent-session-recovery.mjs";
+import { validateSubagentDispatch } from "./dispatch-rail.mjs";
 import { runPiHarnessCli } from "../bin/pi-harness.mjs";
 import harnessTaskRun from "../extensions/harness-task-run.ts";
 import { writePiChildIdentity } from "./pi-child-identity.mjs";
@@ -37,7 +38,7 @@ const MODELS = {
   harvester: "openai-codex/gpt-5.6-luna",
 };
 
-function fixture(t, { dependent = false } = {}) {
+function fixture(t, { dependent = false, complexity = "low" } = {}) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "pi-task-run-")));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const git = (...args) => execFileSync("git", args, { cwd: root, encoding: "utf8" }).trim();
@@ -50,7 +51,7 @@ function fixture(t, { dependent = false } = {}) {
     description: `Implement isolated ${id} behavior`,
     depends_on,
     severity: "medium",
-    complexity: "low",
+    complexity,
     scope_paths: [`src/${id}.ts`, `test/${id}.test.ts`],
     resolved_judgments: { behavior: "fixed" },
     criterion_refs: ["#ac-1"],
@@ -297,6 +298,36 @@ test("task prompt uses a stable source and embeds only the focal contract plus D
   assert.match(prompt, /execution-plan\.json/);
   assert.doesNotMatch(prompt, /"id": "task-two"/);
   assert.doesNotMatch(prompt, /indexOf\(|slice\(/);
+});
+
+test("task prompt exposes gate-derived dispatch routes consumable at every task complexity", (t) => {
+  const roles = [
+    "harness-test-author", "harness-executor", "harness-sniper",
+    "harness-compliance", "harness-adversary", "harness-security",
+  ];
+  for (const complexity of ["low", "medium", "high", "max"]) {
+    const f = fixture(t, { complexity });
+    const admitted = admitTaskRun(f.grantPath, { cwd: f.root, sessionId: `task-parent-${complexity}` });
+    assert.equal(admitted.ok, true, admitted.reason);
+    const source = fs.readFileSync(new URL("../prompts/harness-task-runtime.md", import.meta.url), "utf8");
+    const prompt = taskRunPrompt(source, admitted);
+    const encoded = prompt.match(/\[HARNESS_TASK_RUN\]\n([\s\S]+)\n\[\/HARNESS_TASK_RUN\]$/)?.[1];
+    const envelope = JSON.parse(encoded);
+
+    assert.deepEqual(Object.keys(envelope.contract.dispatch_routes), roles);
+    for (const role of roles) {
+      const route = envelope.contract.dispatch_routes[role];
+      assert.equal(route.ok, undefined);
+      assert.deepEqual(validateSubagentDispatch({ subagent_type: role, ...route }), { ok: true });
+    }
+    for (const role of roles.slice(0, 3)) assert.equal(envelope.contract.dispatch_routes[role].complexity, complexity);
+    assert.deepEqual(envelope.contract.dispatch_routes["harness-security"], {
+      model: "openai-codex/gpt-5.6-sol",
+    });
+    assert.match(prompt, /contract\.dispatch_routes/);
+    assert.match(prompt, /não consulte.*Codex.*model-routing\.mjs/is);
+    assert.match(prompt, /\.pi\/harness\/vendor\/codex\/model-routing\.mjs/);
+  }
 });
 
 test("plan review completion requires unchanged hashes, native identity and canonical APPROVE", (t) => {

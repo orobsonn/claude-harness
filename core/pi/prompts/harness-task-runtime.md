@@ -14,7 +14,10 @@ Você orquestra a pipeline nativa da tarefa e não escreve produto ou testes. To
 despacho deve ser novo, sem `resume`, `run_in_background` ou `max_turns`. A primeira
 linha do prompt de cada mão e olho é exatamente
 `[HARNESS_TASK_CONTEXT]{"task_id":"<task-id>"}[/HARNESS_TASK_CONTEXT]`. Use as rotas
-literais do plano; em cada mão escritora passe também `complexity` igual ao contrato.
+literais de `contract.dispatch_routes`: copie `model`, `thinking` e `complexity`
+exatamente quando estiverem presentes na entrada da role; não invente campos ausentes.
+Não consulte o routing do Codex em `model-routing.mjs` nesta lane, incluindo
+`.codex/model-routing.mjs` e `.pi/harness/vendor/codex/model-routing.mjs`.
 Test-author, executor e sniper são sequenciais. Olhos aplicáveis da tarefa
 (`harness-compliance`, `harness-adversary` e `harness-security`) podem rodar em paralelo
 sobre o mesmo HEAD e conteúdo imutáveis, conforme o runtime nativo; não force
