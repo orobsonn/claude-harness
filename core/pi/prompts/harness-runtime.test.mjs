@@ -265,6 +265,54 @@ test("o pai local não redespacha path sem autoridade e roteia reabertura antes 
   assert.match(taskPrompt, /nunca use um sniper exploratório/i);
 });
 
+test("fidelidade resolve bloqueio de evidência sem repetir mão ou comando válido", () => {
+  const taskPrompt = readFileSync(taskPromptPath, "utf8");
+  const testReviewer = readFileSync(testReviewerPath, "utf8");
+
+  assert.match(taskPrompt, /BLOCKED.*somente.*evidência.*não abra test-author.*reexecute/is);
+  assert.match(taskPrompt, /resume.*proibido.*revalidação nova e compacta/is);
+  assert.match(taskPrompt, /ledger completo anterior.*exatamente a evidência atual nomeada/is);
+  assert.match(taskPrompt, /stale\/desatualizados/i);
+  assert.match(testReviewer, /BLOCKED.*missing current evidence/i);
+});
+
+test("fidelidade exige contraprova concreta para cada PASS", () => {
+  const taskPrompt = readFileSync(taskPromptPath, "utf8");
+  const testReviewer = readFileSync(testReviewerPath, "utf8");
+
+  assert.match(taskPrompt, /decisão observável independente.*linhas novas ou afetadas.*implementação violadora/is);
+  assert.match(taskPrompt, /Separe decisões acopladas/i);
+  assert.match(taskPrompt, /linha `PASS` não afetada.*sem repetir contraprovas/is);
+  assert.match(taskPrompt, /asserção estática ou textual.*fixture negativa/is);
+  assert.match(testReviewer, /independent observable decision.*new or affected PASS.*violating implementation/is);
+  assert.match(testReviewer, /Split coupled decisions/i);
+  assert.match(testReviewer, /static or textual\s+assertion.*bounded behavioral sensitivity.*negative fixture/is);
+  assert.match(testReviewer, /no such counterexample.*REVISE/is);
+});
+
+test("olhos pós-implementação convergem findings com ledger estável", () => {
+  const taskPrompt = readFileSync(taskPromptPath, "utf8");
+
+  assert.match(taskPrompt, /adversary.*compliance.*security.*lote consolidado/is);
+  assert.match(taskPrompt, /ledger.*pós-implementação.*IDs estáveis.*família.*invariante/is);
+  assert.match(taskPrompt, /mapa por ID e família/i);
+  assert.match(taskPrompt, /repita todos os\s+olhos já ativados/is);
+  assert.match(taskPrompt, /findings anteriores, os invariantes afetados/is);
+  assert.match(taskPrompt, /receipts.*HEAD\/input digest exatos.*repita todos os\s+olhos já ativados/is);
+  assert.match(taskPrompt, /LATE_FINDING.*variantes.*classes de equivalência/is);
+  for (const role of ["adversary", "compliance", "security"]) {
+    const instructions = readFileSync(new URL(`../runtime/agents/harness-${role}.md`, import.meta.url), "utf8");
+    assert.match(instructions, /stable finding ID/i, role);
+    assert.match(instructions, /LATE_FINDING/, role);
+    assert.match(instructions, /equivalence class|variant/i, role);
+    assert.match(instructions, /independently verified factual/i, role);
+    assert.match(instructions, /never.*prior.*verdict.*preferred fix/i, role);
+    assert.match(instructions, /reuse.*supplied ID/i, role);
+  }
+  assert.match(taskPrompt, /ID.*família.*status.*evidência.*independentemente verificados/is);
+  assert.match(taskPrompt, /nunca.*veredito anterior.*fix preferido/is);
+});
+
 test("o prompt exige vermelho executável antes do fidelity-pass", () => {
   const prompt = readFileSync(promptPath, "utf8");
 

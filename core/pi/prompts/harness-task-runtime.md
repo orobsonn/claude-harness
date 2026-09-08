@@ -78,6 +78,19 @@ defeito material já observável que a primeira revisão omitiu. A mesma assinat
 sem diff material ou evidência nova pede corrigir o brief, a fixture ou a contradição
 que mantém o ciclo. Limite de rodadas não equivale a aprovação; o ledger anterior
 também não substitui a revisão nativa atual.
+Se o `harness-test-reviewer` devolver `BLOCKED` **somente** por evidência atual ausente,
+não abra test-author nem reexecute comando já atual. Como `resume` de role permanece
+proibido pelo rail de identidade, despache uma revalidação nova e compacta contendo o
+ledger completo anterior e exatamente a evidência atual nomeada; peça apenas a resolução
+do bloqueio e das linhas afetadas. Regenere a evidência somente quando diff, HEAD, index,
+teste, fixture, runner ou comando estiverem stale/desatualizados; registre qual mudou.
+Para cada decisão observável independente nas linhas novas ou afetadas marcadas `PASS`,
+exija também a contraprova concreta: uma implementação violadora que aquele teste
+rejeitaria. Separe decisões acopladas; se alguma não tiver contraprova, a linha é `REVISE`.
+Uma linha `PASS` não afetada preserva sua evidência atual sem repetir contraprovas. Em
+asserção estática ou textual, a contraprova deve usar sensibilidade comportamental limitada
+ou fixture negativa apropriada ao contrato, sem pedir preferência de implementação nem
+ampliar o verificador.
 Peça o relatório de fidelidade em prosa com `Verdict: APPROVE|REVISE|BLOCKED`,
 não o JSON dos olhos de implementação. Encerre o loop quando os observáveis
 aprovados, precondições das fixtures e evidência executável forem suficientes.
@@ -90,8 +103,18 @@ exigências excessivas com evidência e consolide as correções reais. Esse loo
 na tarefa; não o escale ao pai global por rotina.
 Depois despache executor, verifique escopo, diff e testes, e registre a captura do
 hand-record atual. Envie aos olhos o pacote completo: contrato, critérios, diff,
-comandos/resultados, freeze e HEAD atuais. Trate achados aplicáveis com sniper e os
-markers/re-gate nativos; refute achados incorretos com evidência observada.
+comandos/resultados, freeze e HEAD atuais. Despache adversary, compliance e security
+aplicáveis como um lote consolidado sobre esse HEAD imutável e aguarde todos antes de
+corrigir. Converta os achados materiais em ledger pós-implementação com IDs estáveis e
+família/invariante comum; um olho usa o mesmo ID no começo de `description` quando ele
+reencontra a mesma falha. A correção devolve um mapa por ID e família. Como os receipts
+são ligados ao HEAD/input digest exatos, depois de mudança de conteúdo repita todos os
+olhos já ativados; cada olho revalida seus findings anteriores, os invariantes afetados e
+o risco de regressão do diff, sem refazer linhas não afetadas por rotina. Marque
+`LATE_FINDING` se o defeito já era observável no lote anterior e, para a mesma família,
+procure variantes/classes de equivalência concretas do invariante antes de nova correção.
+Não transforme variantes hipotéticas ou preferências em defeitos. Trate achados aplicáveis
+com sniper e os markers/re-gate nativos; refute achados incorretos com evidência observada.
 Antes de despachar uma correção pós-implementação, classifique os paths que o finding
 precisa alterar. Se qualquer teste ou fixture congelado precisar mudar, reabra primeiro o
 mesmo task pelo `harness-test-author`, obtenha RED/sensibilidade e fidelity atuais, e só
@@ -115,6 +138,9 @@ Não envie `context_handoff` nem o diário local aos revisores. Aos olhos de imp
 não envie veredictos anteriores; inclua somente fatos que você verificou de forma
 independente e a evidência correspondente. O ledger factual da fidelidade segue as
 regras de revalidação acima e não concede aprovação à implementação.
+No re-gate dos olhos, isso permite apenas ID, família/invariante, status e evidência
+independentemente verificados; nunca envie veredito anterior ou fix preferido. O olho
+reutiliza o ID fornecido ao reencontrar o mesmo finding, sem herdar sua conclusão.
 
 Se um test-author corrigir testes enquanto há delta de produção de uma mão anterior,
 após author guarde somente os paths de produção autorizados com

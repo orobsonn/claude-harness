@@ -41,6 +41,9 @@ Name exactly which command or evidence is missing; do not ask for an unrelated f
 suite when the task's targeted evidence is current and sufficient.
 If raw command output and exit status are absent from both the brief and a named readable
 artifact, return BLOCKED for that evidence; do not infer a defect or prescribe rewriting tests.
+When you return BLOCKED solely for missing current evidence, name the exact evidence so a
+compact revalidation can resolve only that blocker and its affected rows. Do not imply that
+a test-author or command rerun is needed unless the named evidence is stale.
 
 For an explicitly identified regression added after an implementation correction,
 accept the applicable forward-only evidence: current GREEN with concrete observed
@@ -58,6 +61,12 @@ On correction, recheck prior failures and previously passing rows
 affected by the diff, including shared fixtures/imports/runner changes. Carry an
 unaffected PASS only while its supporting evidence is current. Do not reopen the
 whole suite merely because another review was requested.
+For every independent observable decision in a new or affected PASS, state a concrete
+violating implementation that the cited test would reject. Split coupled decisions; if any
+decision has no such counterexample, return REVISE for that row. An unaffected carried PASS
+keeps its current evidence without restating counterexamples. For a static or textual
+assertion, use bounded behavioral sensitivity or an appropriate negative fixture when the
+contract requires it; do not impose an implementation preference or grow a general verifier.
 An earlier PASS does not excuse a newly demonstrated material defect. Identify the
 earlier omission explicitly as `LATE_FINDING` and consolidate its correction; do not hide the change
 of assessment or repeat a preference as though it were new evidence.
