@@ -26,6 +26,7 @@ import {
   hashTaskReceipt,
   taskAdmissionPath,
   taskRegistryPath,
+  unsupportedTaskScopePattern,
 } from "./task-contract.mjs";
 import {
   captureTaskRuntime,
@@ -102,16 +103,13 @@ function scopeOf(task) {
       entry.split("/").includes("..")
     )
       throw new Error("task scope must use safe repo-relative paths");
+    if (unsupportedTaskScopePattern(entry))
+      throw new Error(
+        `task scope ${JSON.stringify(entry)} uses unsupported glob syntax; use an explicit file or directory path`,
+      );
     const normalized = path.posix.normalize(entry).replace(/\/$/, "");
     if (normalized === ".") return "";
-    // Wildcards serialize conservatively at their enclosing directory.
-    const wildcard = normalized.search(/[?*\[{:]/);
-    return wildcard < 0
-      ? normalized
-      : normalized
-          .slice(0, wildcard)
-          .replace(/[^/]*$/, "")
-          .replace(/\/$/, "");
+    return normalized;
   });
 }
 export function taskScopesOverlap(a, b) {

@@ -70,9 +70,10 @@ function review(role, head) {
 
 function event(type, fields) { return JSON.stringify({ type, ...fields }); }
 
-function inspectionFixture({ historicFailure = false } = {}) {
+function inspectionFixture({ historicFailure = false, frozenFixture = false } = {}) {
   const { root, base } = repo();
   write(path.join(root, "src", "task.spec.mjs"), "export const expected = 1;\n");
+  if (frozenFixture) write(path.join(root, "fixtures", "task.json"), '{"expected":1}\n');
   const freeze = commit(root, "freeze tests");
   write(path.join(root, "src", "task.mjs"), "export const actual = 1;\n");
   const head = commit(root, "implement task");
@@ -136,7 +137,17 @@ function inspectionFixture({ historicFailure = false } = {}) {
     feature_id: FEATURE, plan_sha256: "c".repeat(64), spec_sha256: "d".repeat(64),
     base_sha: base, cwd: root, dependencies: [],
   };
-  const task = { id: TASK, depends_on: [], scope_paths: ["src/"], locked_tests: [{ id: "lt-1", path: "src/task.spec.mjs", assertion: "expected behavior" }] };
+  const task = {
+    id: TASK,
+    depends_on: [],
+    scope_paths: ["src/"],
+    locked_tests: [{
+      id: "lt-1",
+      path: "src/task.spec.mjs",
+      assertion: "expected behavior",
+      ...(frozenFixture ? { fixture_paths: ["fixtures/task.json"] } : {}),
+    }],
+  };
   const entry = {
     task_id: TASK, attempt_id: ATTEMPT, parent_session_id: PARENT, parent_root: root,
     feature_id: FEATURE, plan_sha256: grant.plan_sha256, spec_sha256: grant.spec_sha256,
@@ -161,6 +172,31 @@ test("inspectTaskRun issues a child-bound receipt from native lifecycle, fidelit
   assert.equal(inspected.result.latest_run_id, "run-current");
   assert.deepEqual(inspected.result.changed_paths, ["src/task.mjs", "src/task.spec.mjs"]);
   assert.match(inspected.result.frozen_blobs["src/task.spec.mjs"], /^[0-9a-f]{64}$/);
+});
+
+test("inspectTaskRun accepts cumulative locked tests and fixtures outside production scope", () => {
+  const fixture = inspectionFixture({ frozenFixture: true });
+  const binding = fixture.dependencies.readTaskRunBindingFn();
+  binding.task.scope_paths = ["src/task.mjs"];
+  fixture.dependencies.readTaskRunBindingFn = () => binding;
+  const inspected = inspectTaskRun(fixture.entry, fixture.dependencies);
+  assert.equal(inspected.ok, true, inspected.reason);
+  assert.deepEqual(inspected.result.changed_paths, [
+    "fixtures/task.json",
+    "src/task.mjs",
+    "src/task.spec.mjs",
+  ]);
+  assert.match(inspected.result.frozen_blobs["fixtures/task.json"], /^[0-9a-f]{64}$/);
+});
+
+test("inspectTaskRun does not grant wildcard semantics absent from the native hand rails", () => {
+  const fixture = inspectionFixture();
+  const binding = fixture.dependencies.readTaskRunBindingFn();
+  binding.task.scope_paths = ["src/**/*.mjs"];
+  fixture.dependencies.readTaskRunBindingFn = () => binding;
+  const inspected = inspectTaskRun(fixture.entry, fixture.dependencies);
+  assert.equal(inspected.ok, false);
+  assert.match(inspected.reason, /unsupported glob syntax/i);
 });
 
 test("native task markers bind a real test-only freeze commit through executor capture and inspection", () => {
@@ -576,10 +612,17 @@ test("inspectTaskRun rejects a frozen test modified after the event-proven freez
 
 function integratedFixture() {
   const { root, base } = repo();
+  const planPath = path.join(root, ".pi", "harness", "plans", FEATURE, "execution-plan.json");
+  const specPath = path.join(root, ".pi", "harness", "plans", FEATURE, "spec.md");
+  write(planPath, { feature_id: FEATURE, tasks: [{ id: TASK }] });
+  write(specPath, "approved task spec\n");
+  const planSha = crypto.createHash("sha256").update(fs.readFileSync(planPath)).digest("hex");
+  const specSha = crypto.createHash("sha256").update(fs.readFileSync(specPath)).digest("hex");
+  const planReviewCallId = "plan-review-current";
   const result = {
     version: 1, written_by: "host-task-inspection", parent_session_id: PARENT, feature_id: FEATURE,
     task_id: TASK, attempt_id: ATTEMPT, parent_root: root, worktree: path.join(root, ".tasks", TASK),
-    session_id: CHILD, plan_sha256: "c".repeat(64), spec_sha256: "d".repeat(64), base_sha: base,
+    session_id: CHILD, plan_sha256: planSha, spec_sha256: specSha, base_sha: base,
     child_head: base, changed_paths: [], freeze_sha: null, frozen_blobs: {},
     hand_capture: { agent: "harness-executor", producer_call_id: "producer", freeze_sha: base,
       captured_verified_at: "2026-09-07T00:00:00.000Z", capture_marker: `${FEATURE}/${TASK}@${base}` },
@@ -599,11 +642,44 @@ function integratedFixture() {
     plan_sha256: result.plan_sha256, spec_sha256: result.spec_sha256, base_sha: base, child_head: base,
     integrated_head: base, result_sha256: hashTaskReceipt(result),
   };
-  const entry = { ...result, status: "integrated", launches: [{ run_id: "run-current", pid: 999990 }], result, integration };
+  const grant = {
+    version: 1,
+    kind: "task-run",
+    parent_session_id: PARENT,
+    feature_id: FEATURE,
+    task_id: TASK,
+    plan_sha256: planSha,
+    spec_sha256: specSha,
+    origin: { kind: "parent-approved-plan", plan_review_call_id: planReviewCallId },
+  };
+  const entry = { ...result, grant, status: "integrated", launches: [{ run_id: "run-current", pid: 999990 }], result, integration };
   const registryPath = path.join(root, ".pi", "harness", "state", PARENT, "task-runs", "index.json");
   const registry = { version: 1, parent_session_id: PARENT, feature_id: FEATURE, plan_sha256: result.plan_sha256, spec_sha256: result.spec_sha256, tasks: { [TASK]: entry } };
+  const statePath = path.join(root, ".pi", "harness", "state", PARENT, "gate-state.json");
+  write(statePath, {
+    session_id: PARENT,
+    feature_id: FEATURE,
+    mode: "FULL",
+    spec_status: "adversary-reviewed",
+    reviewed_spec_sha256: specSha,
+    adversary_fired: true,
+    adversary_spec_sha256: specSha,
+    plan_review_evidence: {
+      written_by: "host-subagent-completion",
+      parent_session_id: PARENT,
+      feature_id: FEATURE,
+      role: "harness-plan-reviewer",
+      status: "completed",
+      verdict: "APPROVE",
+      dispatch_call_id: planReviewCallId,
+      child_session_id: "plan-review-child",
+      agent_id: "plan-review-agent",
+      plan_sha256: planSha,
+      spec_sha256: specSha,
+    },
+  });
   write(registryPath, registry);
-  return { root, base, registryPath, registry, entry, integration };
+  return { root, base, planPath, specPath, statePath, registryPath, registry, entry, integration };
 }
 
 test("readIntegratedTaskEvidence preserves the child session and accepts ancestry at a later global HEAD", () => {
@@ -614,6 +690,48 @@ test("readIntegratedTaskEvidence preserves the child session and accepts ancestr
   assert.equal(evidence.ok, true, evidence.reason);
   assert.equal(evidence.result.session_id, CHILD);
   assert.equal(evidence.result.integrated_head, fixture.base);
+});
+
+test("readIntegratedTaskEvidence rejects current canonical plan or spec drift with unchanged task ids", () => {
+  const changedPlan = integratedFixture();
+  write(changedPlan.planPath, { feature_id: FEATURE, tasks: [{ id: TASK, changed: true }] });
+  const stalePlan = readIntegratedTaskEvidence({
+    projectRoot: changedPlan.root,
+    sessionId: PARENT,
+    featureId: FEATURE,
+    taskId: TASK,
+    headSha: changedPlan.base,
+  });
+  assert.equal(stalePlan.ok, false);
+  assert.match(stalePlan.reason, /current canonical artifacts/i);
+
+  const changedSpec = integratedFixture();
+  write(changedSpec.specPath, "replacement task spec\n");
+  const staleSpec = readIntegratedTaskEvidence({
+    projectRoot: changedSpec.root,
+    sessionId: PARENT,
+    featureId: FEATURE,
+    taskId: TASK,
+    headSha: changedSpec.base,
+  });
+  assert.equal(staleSpec.ok, false);
+  assert.match(staleSpec.reason, /current canonical artifacts|current approved canonical spec/i);
+});
+
+test("readIntegratedTaskEvidence rejects a replaced plan approval for the same artifact hashes", () => {
+  const fixture = integratedFixture();
+  const state = JSON.parse(fs.readFileSync(fixture.statePath, "utf8"));
+  state.plan_review_evidence.dispatch_call_id = "replacement-plan-review";
+  write(fixture.statePath, state);
+  const replaced = readIntegratedTaskEvidence({
+    projectRoot: fixture.root,
+    sessionId: PARENT,
+    featureId: FEATURE,
+    taskId: TASK,
+    headSha: fixture.base,
+  });
+  assert.equal(replaced.ok, false);
+  assert.match(replaced.reason, /current host-owned plan approval/i);
 });
 
 test("readIntegratedTaskEvidence accepts a receipt containing only the baseline adversary review", () => {

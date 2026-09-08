@@ -6,15 +6,17 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 
 import { formatFeatureTaskEntry, matchesAbsolution } from "../../shared/lib/absolution.mjs";
+import { checkScope } from "../../shared/lib/capture-oracle.mjs";
 import { isCaptureEligibleHandRecord, recordViolations } from "../../shared/lib/real-file-capture-rail.mjs";
 import { isSafeFeatureId, isSafeSessionId, isSafeTaskId } from "../../shared/lib/feature-id.mjs";
 import { validateOcCaptureEligibleHandRecord } from "../../opencode/lib/hand-records.mjs";
-import { hashTaskReceipt } from "./task-contract.mjs";
+import { hashTaskReceipt, unsupportedTaskScopePattern } from "./task-contract.mjs";
 import { readTaskContextReturn, validateTaskContextReturn } from "./task-context.mjs";
 import { capturePiReviewInput, findPiReviewReceipt, hasAcceptedPiReviewEvidence } from "./pi-review-evidence.mjs";
 import { piGateStatePath, piHandRecordPath } from "./pi-paths.mjs";
 import { readTaskProcess } from "./task-process.mjs";
-import { readTaskRunBinding } from "./task-run.mjs";
+import { capturePlanReviewInput, readTaskRunBinding } from "./task-run.mjs";
+import { readPiSpecApproval } from "./spec-approval.mjs";
 
 const COMMIT_SHA = /^[0-9a-f]{40}$/;
 const SHA256 = /^[0-9a-f]{64}$/;
@@ -82,10 +84,7 @@ function splitZero(value) {
 }
 
 function covered(relativePath, scopes) {
-  return scopes.some((scope) => {
-    const base = scope.endsWith("/") ? scope.slice(0, -1) : scope;
-    return relativePath === base || relativePath.startsWith(`${base}/`);
-  });
+  return checkScope([relativePath], scopes).length === 0;
 }
 
 function frozenPaths(task) {
@@ -327,7 +326,14 @@ export function inspectTaskRun(entry, dependencies = {}) {
     const untracked = tracked ? "" : String(git(worktree, ["status", "--porcelain", "--untracked-files=all", "--", ".", ":(exclude).pi/harness/runtime/", ":(exclude).pi/harness/state/", ":(exclude).pi/harness/sessions/", ":(exclude)node_modules/"])).trim();
     if (tracked || untracked) return failure("task worktree must be clean before inspection");
     const changed = splitZero(git(worktree, ["diff", "--name-only", "-z", entry.base_sha, head]));
-    const scopes = Array.isArray(binding.task?.scope_paths) ? binding.task.scope_paths : [];
+    const scopes = [
+      ...(Array.isArray(binding.task?.scope_paths) ? binding.task.scope_paths : []),
+      ...frozenPaths(binding.task),
+    ];
+    const unsupportedScope = scopes.find(unsupportedTaskScopePattern);
+    if (unsupportedScope !== undefined) {
+      return failure(`task scope ${JSON.stringify(unsupportedScope)} uses unsupported glob syntax`);
+    }
     if (changed.some((item) => !covered(item, scopes))) return failure("task changed paths outside canonical scope", { changed });
     const native = readEvents(entry.launches, jobRoot, launches.interruptedIndexes);
     if (native.sessionIds.size !== 1 || !native.sessionIds.has(claim.session_id)) return failure("native event session does not match the claimed child session");
@@ -489,6 +495,34 @@ function validateIntegration(entry, integration, { projectRoot, sessionId, featu
   return { ok: true };
 }
 
+function validateCurrentIntegrationAuthority(entry, registry, { projectRoot, sessionId, featureId }) {
+  const captured = capturePlanReviewInput({ projectRoot, sessionId, featureId });
+  if (!captured.ok || captured.snapshot.plan_sha256 !== registry.plan_sha256 ||
+      captured.snapshot.spec_sha256 !== registry.spec_sha256) {
+    return failure("integrated task plan/spec hashes do not match the current canonical artifacts");
+  }
+  const approvedSpec = readPiSpecApproval({ projectRoot, sessionId, featureId });
+  if (!approvedSpec.ok || approvedSpec.sha256 !== registry.spec_sha256) {
+    return failure("integrated task spec is not the current approved canonical spec");
+  }
+  const grant = object(entry.grant);
+  const origin = object(grant?.origin);
+  const approval = object(approvedSpec.state?.plan_review_evidence);
+  if (!grant || grant.version !== 1 || grant.kind !== "task-run" ||
+      grant.parent_session_id !== sessionId || grant.feature_id !== featureId || grant.task_id !== entry.task_id ||
+      grant.plan_sha256 !== registry.plan_sha256 || grant.spec_sha256 !== registry.spec_sha256 ||
+      origin?.kind !== "parent-approved-plan" || typeof origin.plan_review_call_id !== "string" || !origin.plan_review_call_id ||
+      !approval || approval.written_by !== "host-subagent-completion" || approval.parent_session_id !== sessionId ||
+      approval.feature_id !== featureId || approval.role !== "harness-plan-reviewer" || approval.status !== "completed" ||
+      approval.verdict !== "APPROVE" || approval.dispatch_call_id !== origin.plan_review_call_id ||
+      typeof approval.child_session_id !== "string" || !approval.child_session_id ||
+      typeof approval.agent_id !== "string" || !approval.agent_id ||
+      approval.plan_sha256 !== registry.plan_sha256 || approval.spec_sha256 !== registry.spec_sha256) {
+    return failure("integrated task is not bound to the current host-owned plan approval");
+  }
+  return { ok: true };
+}
+
 /** Read one integration receipt from the global parent registry without rewriting child identity. */
 export function readIntegratedTaskEvidence({ projectRoot, sessionId, featureId, taskId, headSha } = {}) {
   try {
@@ -502,6 +536,8 @@ export function readIntegratedTaskEvidence({ projectRoot, sessionId, featureId, 
         registry.correction_barrier != null ||
         entry.status !== "integrated" || entry.parent_session_id !== sessionId || entry.feature_id !== featureId || entry.task_id !== taskId ||
         entry.plan_sha256 !== registry.plan_sha256 || entry.spec_sha256 !== registry.spec_sha256) return failure("current integrated task registry entry required");
+    const authority = validateCurrentIntegrationAuthority(entry, registry, { projectRoot: root, sessionId, featureId });
+    if (!authority.ok) return authority;
     const validated = validateIntegration(entry, entry.integration, { projectRoot: root, sessionId, featureId, taskId, headSha });
     if (!validated.ok) return validated;
     return { ok: true, result: entry.integration, entry };

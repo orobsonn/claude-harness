@@ -19,6 +19,7 @@ import {
   stableTaskJson,
   taskAdmissionPath,
   taskRegistryPath,
+  unsupportedTaskScopePattern,
 } from "./task-contract.mjs";
 
 export { TASK_PIPELINE_VERSION, TASK_RUN_ENV } from "./task-contract.mjs";
@@ -186,6 +187,19 @@ function inspectGrant(grantPath, cwd, { allowHistoricalDeps = false } = {}) {
   if (artifacts.plan.feature_id !== grant.feature_id || !["light", "full"].includes(artifacts.plan.mode)) throw new Error("plan identity mismatch");
   const task = artifacts.plan.tasks.find((candidate) => candidate.id === grant.task_id);
   if (!task) throw new Error("task missing from canonical plan");
+  const taskScope = [
+    ...task.scope_paths,
+    ...(task.locked_tests ?? []).flatMap((test) => [
+      test.path,
+      ...(test.fixture_paths ?? []),
+    ]),
+  ];
+  const unsupportedScope = taskScope.find(unsupportedTaskScopePattern);
+  if (unsupportedScope !== undefined) {
+    throw new Error(
+      `task scope ${JSON.stringify(unsupportedScope)} uses unsupported glob syntax; use an explicit file or directory path`,
+    );
+  }
 
   const parentArtifacts = planAndSpec(parentRoot, grant.feature_id);
   if (parentArtifacts.planSha256 !== grant.plan_sha256 || parentArtifacts.specSha256 !== grant.spec_sha256) {

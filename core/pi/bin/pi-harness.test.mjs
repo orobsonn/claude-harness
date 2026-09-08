@@ -19,9 +19,13 @@ import {
   resolveOrcaStatusExtension,
   resolvePiDependencyPaths,
   runPiHarnessCli,
+  verifyPiHarness,
 } from "./pi-harness.mjs";
 import { applyPiAuthPathPatch, PI_AUTH_PATH_ENV, PI_AUTH_PATH_PATCH_MARKER, PI_RESUME_ENV, verifyPiAuthPathPatch } from "../lib/pi-auth-path-patch.mjs";
 import { piChildResourceSettings } from "../lib/pi-child-extensions.mjs";
+import { ensurePiRuntime } from "../lib/pi-runtime-cache.mjs";
+
+const RUNTIME_ASSETS = fileURLToPath(new URL("../runtime-deps/", import.meta.url));
 
 const DEPENDENCIES = {
   piCli: "/npx/node_modules/@earendil-works/pi-coding-agent/dist/cli.js",
@@ -55,6 +59,23 @@ test("launcher refuses project packages when the dedicated runtime cache is abse
     assert.equal(readFileSync(join(root, "node_modules/@earendil-works/pi-coding-agent/dist/cli.js"), "utf8"), "{}");
     assert.equal(existsSync(join(root, "empty-cache")), false, "resolution must not provision or repair");
   } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("launcher verification requires the task-pipeline skill from the package layout", { timeout: 120_000 }, () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-verify-task-pipeline-skill-"));
+  try {
+    cpSync(join(process.cwd(), "core"), join(root, "core"), { recursive: true });
+    const cacheOptions = { cacheRoot: join(root, "cache"), assetsDir: RUNTIME_ASSETS };
+    const runtime = ensurePiRuntime(cacheOptions);
+    assert.equal(runtime.ok, true, runtime.ok ? "" : runtime.reason);
+    assert.equal(verifyPiHarness(root, cacheOptions).ok, true, "complete package fixture must verify");
+
+    const skill = join(root, "core/pi/skills/harness-task-pipeline/SKILL.md");
+    rmSync(skill);
+    assert.deepEqual(verifyPiHarness(root, cacheOptions), { ok: false, reason: `missing:${skill}` });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("launcher disables discovered project resources and loads only the harness package", () => {

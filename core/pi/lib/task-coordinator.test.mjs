@@ -152,6 +152,42 @@ test("scope overlap includes tests and fixtures, with component boundaries", () 
     () => taskScopesOverlap({ ...task("a"), scope_paths: ["../escape"] }, b),
     /scope/,
   );
+  assert.equal(taskScopesOverlap(
+    { ...task("slug"), scope_paths: ["src/app/[slug]/page.mjs"] },
+    { ...task("id"), scope_paths: ["src/app/[id]/page.mjs"] },
+  ), false, "Next.js bracket segments are literal paths");
+});
+
+test("dispatch rejects unsupported scope globs before creating a registry, worktree or job", async (t) => {
+  const cases = [
+    ["scope_paths", (candidate) => { candidate.scope_paths = ["src/**/*.mjs"]; }],
+    ["locked test", (candidate) => { candidate.locked_tests[0].path = "tests/a?.test.mjs"; }],
+    ["fixture", (candidate) => { candidate.locked_tests[0].fixture_paths = ["fixtures/{one,two}.json"]; }],
+    ["brace range", (candidate) => { candidate.scope_paths = ["src/file-{1..3}.mjs"]; }],
+  ];
+  for (const [label, mutate] of cases) {
+    const candidate = task("a");
+    mutate(candidate);
+    const f = fixture(t, [candidate]);
+    const result = await executeTaskAction({ action: "dispatch", task_ids: ["a"] }, f.context, f.deps);
+    assert.equal(result.ok, false, label);
+    assert.match(result.reason, /unsupported glob syntax/, label);
+    assert.equal(f.launches(), 0, label);
+    assert.equal(fs.existsSync(taskRegistryPath(f.dir, "parent")), false, label);
+    const taskRuns = path.dirname(taskRegistryPath(f.dir, "parent"));
+    assert.equal(fs.existsSync(path.join(taskRuns, "worktrees")), false, label);
+    assert.equal(fs.existsSync(path.join(taskRuns, "jobs")), false, label);
+    assert.equal(git(f.dir, "worktree", "list", "--porcelain").match(/^worktree /gm)?.length, 1, label);
+  }
+});
+
+test("dispatch accepts literal bracket and non-expanding brace path names", async (t) => {
+  const candidate = task("a");
+  candidate.scope_paths = ["src/app/[slug]/page.mjs", "src/schema/{version}/entry.mjs"];
+  const f = fixture(t, [candidate]);
+  const result = await executeTaskAction({ action: "dispatch", task_ids: ["a"] }, f.context, f.deps);
+  assert.equal(result.ok, true, result.reason);
+  assert.equal(f.launches(), 1);
 });
 
 test("dispatch snapshots only each selected task's curated context and preserves it across retries", async (t) => {

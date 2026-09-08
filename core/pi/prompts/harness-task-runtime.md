@@ -23,8 +23,11 @@ da própria chamada `subagent`; mencionar a complexidade no prompt do filho não
 esse campo estruturado. Não invente campos ausentes.
 Não consulte o routing do Codex em `model-routing.mjs` nesta lane, incluindo
 `.codex/model-routing.mjs` e `.pi/harness/vendor/codex/model-routing.mjs`.
-Test-author, executor e sniper são sequenciais. `harness-adversary` é obrigatório após
-toda task com escrita; seu recibo aprovado libera o re-gate. `harness-compliance` e `harness-security` de
+Test-author, executor e sniper são sequenciais. Execute também as chamadas de `bash`
+em série nesta lane, inclusive git, testes e typecheck: cada chamada usa um lease
+exclusivo. Aguarde o resultado de uma verificação antes de iniciar a próxima.
+`harness-adversary` é obrigatório após toda task com escrita; seu recibo aprovado libera
+o re-gate. `harness-compliance` e `harness-security` de
 implementação são escolhidos por aplicabilidade. Esses olhos podem rodar em paralelo
 sobre o mesmo HEAD e conteúdo imutáveis, conforme o runtime nativo; não force
 `maxConcurrent=1` nem os serialize artificialmente. `contract.task.adversarial.enabled`
@@ -50,6 +53,16 @@ para despachar todas. Decida compliance e security por aplicabilidade antes do p
 despacho. Depois de ativar um olho opcional, erro, aborto ou REVISE exige repeti-lo.
 Não envie `context_handoff`, o diário local ou veredictos anteriores aos olhos; inclua
 somente fatos que você verificou de forma independente e a evidência correspondente.
+
+Se um test-author corrigir testes enquanto há delta de produção de uma mão anterior,
+após author guarde somente os paths de produção autorizados com
+`git stash push --include-untracked -- <pathspecs exatos>`. Não guarde testes/fixtures
+nem a árvore inteira. Confirme que restaram apenas testes travados e execute o RED e
+as verificações de tipagem/sintaxe nesse estado. Depois da compliance de fidelidade,
+faça o freeze seletivo diretamente sobre o HEAD registrado pelo author e seus markers com árvore
+limpa. Reaplique o stash exato e trate conflitos pela mão autorizada. Despache um
+executor novo para verificar/completar o produto e capturar seu record atual antes do
+commit de produção. O trabalho preservado não substitui captura, olhos ou re-gate.
 
 Não repita mão, teste ou revisão válida quando não houve delta de produto, teste,
 índice, plano ou spec. Em retomada, reconcilie o estado existente da mesma sessão e

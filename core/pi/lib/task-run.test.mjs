@@ -183,6 +183,26 @@ test("admission requires the current host-owned plan APPROVE and initializes no 
   assert.equal(readTaskRunBinding(f.root, "task-parent").ok, true);
 });
 
+test("fresh admission rejects unsupported scope globs before claim or local state", (t) => {
+  const f = fixture(t);
+  const plan = JSON.parse(fs.readFileSync(f.planPath, "utf8"));
+  plan.tasks[0].locked_tests[0].fixture_paths = ["test/fixtures/{valid,invalid}.json"];
+  fs.writeFileSync(f.planPath, JSON.stringify(plan));
+  const planSha = hashTaskArtifact(f.planPath);
+  f.grant.plan_sha256 = planSha;
+  f.save();
+  const parentStatePath = path.join(f.root, ".pi", "harness", "state", "global-parent", "gate-state.json");
+  const parentState = JSON.parse(fs.readFileSync(parentStatePath, "utf8"));
+  parentState.plan_review_evidence.plan_sha256 = planSha;
+  fs.writeFileSync(parentStatePath, JSON.stringify(parentState));
+
+  const admitted = admitTaskRun(f.grantPath, { cwd: f.root, sessionId: "task-parent" });
+  assert.equal(admitted.ok, false);
+  assert.match(admitted.reason, /unsupported glob syntax/);
+  assert.equal(fs.existsSync(`${f.grantPath}.claim`), false);
+  assert.equal(fs.existsSync(path.join(f.root, ".pi", "harness", "state", "task-parent")), false);
+});
+
 test("a changed plan/spec, grant, branch or plan receipt invalidates task authority", (t) => {
   for (const change of ["plan", "spec", "receipt", "branch"]) {
     const f = fixture(t);

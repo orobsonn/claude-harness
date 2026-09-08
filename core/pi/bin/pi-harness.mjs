@@ -384,6 +384,7 @@ export function verifyPiHarness(root, cacheOptions = {}) {
     join(root, "core/codex/skills"),
     join(root, "core/pi/skills/harness-grill/SKILL.md"),
     join(root, "core/pi/skills/harness-grill/references/lavish-usage.md"),
+    join(root, "core/pi/skills/harness-task-pipeline/SKILL.md"),
     join(root, "core/pi/prompts/harness-runtime.md"),
     join(root, "core/pi/prompts/harness-task-runtime.md"),
     join(root, "core/pi/runtime/subagents.json"),
