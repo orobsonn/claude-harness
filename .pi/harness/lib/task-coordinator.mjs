@@ -404,9 +404,14 @@ async function prepareWorktree(entry, artifacts, deps, persist) {
 async function launchTask(entry, context, persist, deps, instruction) {
   const runId = randomUUID();
   const jobDir = path.join(entry.job_dir, runId);
+  // An admitted attempt keeps its transport: older pinned runtimes have no TUI event sink.
+  const presentation = entry.launches.length
+    ? (entry.launches[0].presentation ?? "json")
+    : (deps.orcaBackend ? "tui" : "json");
   const launch = {
     run_id: runId,
     pid: null,
+    presentation,
     ...(deps.orcaBackend ? { terminal_mode: true } : {}),
     runtime: entry.runtime,
     creator_pid: process.pid,
@@ -432,9 +437,7 @@ async function launchTask(entry, context, persist, deps, instruction) {
     ...(localSession
       ? ["--harness-resume", localSession]
       : ["--harness-task", entry.grant_path]),
-    "--mode",
-    "json",
-    "-p",
+    ...(presentation === "tui" ? ["--no-approve"] : ["--mode", "json", "-p"]),
     ...(context.thinkingLevel ? ["--thinking", context.thinkingLevel] : []),
     ...(context.model?.provider && context.model?.id
       ? ["--provider", context.model.provider, "--model", context.model.id]
@@ -454,6 +457,7 @@ async function launchTask(entry, context, persist, deps, instruction) {
       cwd: entry.worktree,
       command: process.execPath,
       args,
+      presentation,
       runtime: entry.runtime,
       ...(deps.orcaBackend ? {
         launchTerminal: (input) => deps.orcaBackend.launchTerminal({ ...input, worktreeId: entry.orca.worktree_id, instanceId: entry.orca.instance_id, title: `${entry.task_id} · ${localSession ? "resume" : "implementação"}` }),

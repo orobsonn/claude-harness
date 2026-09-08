@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { spawn } from "node:child_process";
 import {
   startTaskProcess,
   readTaskProcess,
@@ -24,6 +25,52 @@ function fixture(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-task-worker-"));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   return dir;
+}
+
+function shellQuote(value) {
+  return `'${String(value).replaceAll("'", `'\\''`)}'`;
+}
+
+function realPtyLauncher(t, { input = "", beforeLaunch } = {}) {
+  const state = { output: "", error: "", process: null, closed: null };
+  t.after(() => {
+    try { state.process?.kill("SIGKILL"); } catch {}
+  });
+  return {
+    state,
+    launch: async (request) => {
+      beforeLaunch?.(request);
+      const transcript = path.join(
+        request.cwd,
+        `pty-${Date.now()}-${Math.random().toString(16).slice(2)}.log`,
+      );
+      const command = [request.command, ...request.args]
+        .map(shellQuote)
+        .join(" ");
+      const child = spawn("/usr/bin/script", ["-qefc", command, transcript], {
+        cwd: request.cwd,
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+      state.process = child;
+      child.stdout.on("data", (chunk) => { state.output += chunk.toString("utf8"); });
+      child.stderr.on("data", (chunk) => { state.error += chunk.toString("utf8"); });
+      state.closed = new Promise((resolve, reject) => {
+        child.once("error", reject);
+        child.once("close", (code, signal) => resolve({ code, signal }));
+      });
+      await new Promise((resolve, reject) => {
+        child.once("spawn", resolve);
+        child.once("error", reject);
+      });
+      if (input) child.stdin.write(input);
+      child.stdin.end();
+      return {
+        terminal_handle: "real-pty",
+        worktree_id: "repo::/worktree",
+        surface: "visible",
+      };
+    },
+  };
 }
 test("detached worker persists identity, output and completion across coordinator instances", async (t) => {
   const dir = fixture(t);
@@ -67,6 +114,7 @@ test("terminal launch persists its descriptor first and returns Orca identity", 
       );
       assert.equal(descriptor.run_id, "orca-terminal");
       assert.equal(descriptor.terminal_mode, true);
+      assert.equal(descriptor.presentation, undefined);
       return {
         terminal_handle: "term_1",
         worktree_id: "repo::/worktree",
@@ -85,6 +133,197 @@ test("terminal launch persists its descriptor first and returns Orca identity", 
     tab_id: "tab_1",
   });
   assert.equal(launch.pid, null);
+});
+
+test("tui presentation inherits a real PTY, exposes its private descriptor and tees stderr", {
+  skip: process.platform !== "linux" || !fs.existsSync("/usr/bin/script"),
+}, async (t) => {
+  const dir = fixture(t);
+  const pty = realPtyLauncher(t, {
+    input: "from-terminal\n",
+    beforeLaunch: (request) => {
+      const descriptor = request.args.at(-1);
+      const job = JSON.parse(fs.readFileSync(descriptor, "utf8"));
+      job.descriptor_path = path.join(dir, "forged-job.json");
+      fs.writeFileSync(descriptor, `${JSON.stringify(job)}\n`, { mode: 0o600 });
+    },
+  });
+  const program = [
+    'const fs = require("node:fs")',
+    'const readline = require("node:readline")',
+    'const descriptor = process.env.PI_HARNESS_TUI_JOB_FILE',
+    'const job = JSON.parse(fs.readFileSync(descriptor, "utf8"))',
+    'fs.appendFileSync(job.events_path, JSON.stringify({source:"event-sink", descriptor}) + "\\n")',
+    'console.log(`TUI tty=${process.stdin.isTTY}/${process.stdout.isTTY}`)',
+    'console.log(JSON.stringify({type:"tool_execution_start",toolName:"bash"}))',
+    'console.error("private-stderr")',
+    'const rl = readline.createInterface({input: process.stdin})',
+    'rl.once("line", line => { console.log(`input=${line}`); rl.close() })',
+  ].join(";");
+  const launch = await startTaskProcess({
+    jobDir: dir,
+    runId: "tui-real-pty",
+    cwd: dir,
+    command: process.execPath,
+    args: ["-e", program],
+    presentation: "tui",
+    launchTerminal: pty.launch,
+  });
+  assert.equal(launch.presentation, "tui");
+  assert.equal(launch.terminal_mode, true);
+  const descriptor = JSON.parse(fs.readFileSync(launch.descriptor_path, "utf8"));
+  assert.equal(descriptor.presentation, "tui");
+
+  const end = await terminal(launch);
+  assert.equal(end.ok, true);
+  assert.equal(end.result.exitCode, 0);
+  assert.deepEqual(await pty.state.closed, { code: 0, signal: null });
+  assert.match(pty.state.output, /TUI tty=true\/true/);
+  assert.match(pty.state.output, /input=from-terminal/);
+  assert.match(pty.state.output, /"type":"tool_execution_start"/);
+  assert.doesNotMatch(pty.state.output, /\[tool\] bash/);
+  assert.match(pty.state.output, /private-stderr/);
+  assert.equal(fs.readFileSync(launch.stderr_path, "utf8"), "private-stderr\n");
+  const event = JSON.parse(fs.readFileSync(launch.events_path, "utf8"));
+  assert.deepEqual(event, {
+    source: "event-sink",
+    descriptor: launch.descriptor_path,
+  });
+  assert.equal(fs.statSync(launch.events_path).mode & 0o777, 0o600);
+});
+
+test("tui timeout terminates the PTY child group and writes a terminal result", {
+  skip: process.platform !== "linux" || !fs.existsSync("/usr/bin/script"),
+}, async (t) => {
+  const dir = fixture(t);
+  const pty = realPtyLauncher(t);
+  const launch = await startTaskProcess({
+    jobDir: dir,
+    runId: "tui-timeout",
+    cwd: dir,
+    command: process.execPath,
+    args: ["-e", 'console.log(`timeout-tty=${process.stdout.isTTY}`);setInterval(()=>{},30000)'],
+    timeoutMs: 100,
+    presentation: "tui",
+    launchTerminal: pty.launch,
+  });
+  const end = await terminal(launch);
+  assert.equal(end.ok, true);
+  assert.equal(end.result.timedOut, true);
+  assert.notEqual(end.result.exitCode, 0);
+  await pty.state.closed;
+  assert.match(pty.state.output, /timeout-tty=true/);
+  assert.deepEqual(taskGroupMembers(end.record.process_group), []);
+});
+
+test("tui worker does not follow an events symlink before the recorder opens it", {
+  skip: process.platform !== "linux" || !fs.existsSync("/usr/bin/script"),
+}, async (t) => {
+  const dir = fixture(t);
+  const target = path.join(dir, "outside-events");
+  fs.writeFileSync(target, "sentinel\n");
+  const pty = realPtyLauncher(t, {
+    beforeLaunch: (request) => {
+      const job = JSON.parse(fs.readFileSync(request.args.at(-1), "utf8"));
+      fs.symlinkSync(target, job.events_path);
+    },
+  });
+  const launch = await startTaskProcess({
+    jobDir: dir,
+    runId: "tui-events-symlink",
+    cwd: dir,
+    command: process.execPath,
+    args: ["-e", 'require("node:fs").appendFileSync("child-ran", "yes")'],
+    presentation: "tui",
+    launchTerminal: pty.launch,
+  });
+  const end = await terminal(launch);
+  await pty.state.closed;
+  assert.equal(end.terminal, true);
+  assert.equal(end.interrupted, true);
+  assert.equal(fs.readFileSync(target, "utf8"), "sentinel\n");
+  assert.equal(fs.existsSync(path.join(dir, "child-ran")), false);
+  assert.equal(fs.existsSync(launch.result_path), false);
+});
+
+test("tui worker confines its event sink to the descriptor directory", {
+  skip: process.platform !== "linux" || !fs.existsSync("/usr/bin/script"),
+}, async (t) => {
+  const dir = fixture(t);
+  const outside = path.join(dir, "outside.jsonl");
+  const pty = realPtyLauncher(t, {
+    beforeLaunch: (request) => {
+      const descriptor = request.args.at(-1);
+      const job = JSON.parse(fs.readFileSync(descriptor, "utf8"));
+      job.events_path = outside;
+      fs.writeFileSync(descriptor, `${JSON.stringify(job)}\n`, { mode: 0o600 });
+    },
+  });
+  const launch = await startTaskProcess({
+    jobDir: dir,
+    runId: "tui-events-outside",
+    cwd: dir,
+    command: process.execPath,
+    args: ["-e", 'require("node:fs").appendFileSync("child-ran", "yes")'],
+    presentation: "tui",
+    launchTerminal: pty.launch,
+  });
+  const end = await terminal(launch);
+  await pty.state.closed;
+  assert.equal(end.terminal, true);
+  assert.equal(end.interrupted, true);
+  assert.equal(fs.existsSync(outside), false);
+  assert.equal(fs.existsSync(path.join(dir, "child-ran")), false);
+});
+
+test("tui presentation is explicit and requires a terminal launcher", async (t) => {
+  const dir = fixture(t);
+  await assert.rejects(
+    startTaskProcess({
+      jobDir: dir,
+      runId: "tui-without-terminal",
+      cwd: dir,
+      command: process.execPath,
+      args: ["-e", ""],
+      presentation: "tui",
+    }),
+    (error) => error?.before_spawn === true && /requires a terminal launcher/.test(error.message),
+  );
+  assert.equal(fs.existsSync(path.join(dir, "job.json")), false);
+  await assert.rejects(
+    startTaskProcess({
+      jobDir: dir,
+      runId: "unknown-presentation",
+      cwd: dir,
+      command: process.execPath,
+      args: ["-e", ""],
+      presentation: "html",
+    }),
+    /unsupported task presentation/,
+  );
+});
+
+test("legacy json workers remove an inherited tui descriptor", async (t) => {
+  const dir = fixture(t);
+  const previous = process.env.PI_HARNESS_TUI_JOB_FILE;
+  process.env.PI_HARNESS_TUI_JOB_FILE = "/foreign/job.json";
+  t.after(() => {
+    if (previous === undefined) delete process.env.PI_HARNESS_TUI_JOB_FILE;
+    else process.env.PI_HARNESS_TUI_JOB_FILE = previous;
+  });
+  const launch = await startTaskProcess({
+    jobDir: dir,
+    runId: "legacy-clears-tui",
+    cwd: dir,
+    command: process.execPath,
+    args: ["-e", 'console.log(process.env.PI_HARNESS_TUI_JOB_FILE ?? "cleared")'],
+  });
+  const end = await terminal(launch);
+  assert.equal(end.ok, true);
+  assert.equal(end.result.exitCode, 0);
+  assert.equal(fs.readFileSync(launch.events_path, "utf8"), "cleared\n");
+  const descriptor = JSON.parse(fs.readFileSync(launch.descriptor_path, "utf8"));
+  assert.equal(descriptor.presentation, undefined);
 });
 
 test("uncertain terminal launch failures preserve the observable identity", async (t) => {

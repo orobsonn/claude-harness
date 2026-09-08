@@ -203,6 +203,7 @@ test("Orca parent pins placement and every launch receives the terminal adapter"
   let placements = 0;
   let terminals = 0;
   const originalStart = f.deps.startProcess;
+  const starts = [];
   const deps = { ...f.deps,
     resolveOrca: async (input) => {
       assert.equal(input.worktreeId, "parent-orca");
@@ -210,14 +211,18 @@ test("Orca parent pins placement and every launch receives the terminal adapter"
         parent: { worktree_id: "parent-orca", instance_id: "parent-generation", repo_id: "repo", path: f.dir },
         prepareWorktree: async (entry, persist) => {
           placements++;
-          git(f.dir, "worktree", "add", "-b", entry.branch, entry.worktree, entry.base_sha);
+          if (!fs.existsSync(entry.worktree))
+            git(f.dir, "worktree", "add", "-b", entry.branch, entry.worktree, entry.base_sha);
           entry.orca = { worktree_id: `task-${entry.task_id}`, instance_id: "task-generation" };
           persist();
         },
         launchTerminal: async () => { terminals++; return { terminal_handle: "term-a", surface: "visible" }; },
       };
     },
-    startProcess: async (input) => ({ ...await originalStart(input), orca: await input.launchTerminal({ command: "node", args: [], cwd: input.cwd }) }),
+    startProcess: async (input) => {
+      starts.push(input);
+      return { ...await originalStart(input), orca: await input.launchTerminal({ command: "node", args: [], cwd: input.cwd }) };
+    },
   };
   const result = await executeTaskAction({ action: "dispatch", task_ids: ["a"] }, context, deps);
   assert.equal(result.ok, true, result.reason);
@@ -225,12 +230,33 @@ test("Orca parent pins placement and every launch receives the terminal adapter"
   assert.equal(terminals, 1);
   assert.equal(result.tasks[0].launches[0].orca.surface, "visible");
   assert.equal(f.registry().orca_parent.worktree_id, "parent-orca");
+  assert.equal(starts[0].presentation, "tui");
+  assert.equal(starts[0].args.includes("--no-approve"), true);
+  assert.equal(starts[0].args.includes("--mode"), false);
+  assert.equal(starts[0].args.includes("-p"), false);
+  assert.equal(f.registry().tasks.a.launches[0].presentation, "tui");
   const status = await executeTaskAction({ action: "status" }, f.context, f.deps);
   assert.equal(status.ok, true, status.reason);
   const fallback = await executeTaskAction({ action: "dispatch", task_ids: ["b"] }, f.context, f.deps);
   assert.equal(fallback.ok, false);
   assert.match(fallback.reason, /Orca workspace/);
   assert.equal(f.launches(), 1);
+  const entry = f.registry().tasks.a;
+  write(`${entry.grant_path}.claim`, { session_id: "local-session" });
+  const resume = () => executeTaskAction({ action: "resume", task_id: "a", attempt_id: entry.attempt_id }, context, deps);
+  const resumedTui = await resume();
+  assert.equal(resumedTui.ok, true, resumedTui.reason);
+  assert.equal(starts[1].presentation, "tui");
+  assert.equal(starts[1].args.includes("--harness-resume"), true);
+  // Launch histories created before TUI must retain JSON for their pinned runtime.
+  const legacy = f.registry();
+  for (const launch of legacy.tasks.a.launches) delete launch.presentation;
+  write(taskRegistryPath(f.dir, "parent"), legacy);
+  const resumedLegacy = await resume();
+  assert.equal(resumedLegacy.ok, true, resumedLegacy.reason);
+  assert.equal(starts[2].presentation, "json");
+  assert.equal(starts[2].args.includes("--no-approve"), false);
+  assert.deepEqual(starts[2].args.slice(3, 6), ["--mode", "json", "-p"]);
 });
 
 test("a recent partial registry lock remains owned instead of being reclaimed during its write", async (t) => {
@@ -376,6 +402,12 @@ test("integration rejects wrong HEAD and preserves ancestry using a merge journa
 });
 test("same-attempt resume requires terminal groups and invalidates old return before launch", async (t) => {
   const f = fixture(t);
+  const originalStart = f.deps.startProcess;
+  f.deps.startProcess = async (input) => {
+    assert.equal(input.presentation, "json");
+    assert.deepEqual(input.args.slice(3, 6), ["--mode", "json", "-p"]);
+    return originalStart(input);
+  };
   await executeTaskAction(
     { action: "dispatch", task_ids: ["a"] },
     f.context,

@@ -369,10 +369,15 @@ export async function startTaskProcess({
   timeoutMs = 7_200_000,
   launchTerminal,
   title,
+  presentation = "json",
 }) {
   let launch;
   let worker;
   try {
+    if (presentation !== "json" && presentation !== "tui")
+      throw new Error(`unsupported task presentation: ${presentation}`);
+    if (presentation === "tui" && !launchTerminal)
+      throw new Error("tui task presentation requires a terminal launcher");
     fs.mkdirSync(jobDir, { recursive: true });
     const creator = taskProcessIdentity(process.pid);
     if (!creator?.start)
@@ -391,6 +396,7 @@ export async function startTaskProcess({
       process_path: path.join(jobDir, "process.json"),
       result_path: path.join(jobDir, "result.json"),
       ...(launchTerminal ? { terminal_mode: true } : {}),
+      ...(presentation === "tui" ? { presentation } : {}),
     };
     writeTaskJson(descriptor, {
       ...launch,

@@ -20,8 +20,14 @@ A presença no inventário do servidor e em `visualLayouts` não comprova que o 
 remoto exibiu a execução. No runtime headless, o CLI `terminal focus` navega somente
 o host; a abertura no cliente exige os RPCs nativos `worktree.activate` e
 `session.tabs.activate` com `navigation: clients`. A entrega desses eventos não
-inclui confirmação de renderização pelo cliente. Essa confirmação continua pendente
-depois de o operador informar que não via a run.
+inclui confirmação de renderização pelo cliente. As capturas enviadas pelo operador em
+8 de setembro confirmaram a exibição da global e de T1. Também mostraram que o
+renderer de texto do worker era insuficiente para acompanhar o trabalho.
+
+Novas tasks Orca agora abrem a TUI nativa do Pi. O worker conserva supervisão e PTY;
+uma extensão na mesma sessão grava os eventos nativos usados na verificação do retorno.
+O Pi encerra pelo ciclo normal após o trabalho. A validação em andamento conserva
+seu transporte JSON, inclusive nos resumes, para preservar os runtimes já fixados.
 
 Na tentativa anterior com o Victor, a verificação das 22:52 UTC não encontrou uma
 conexão remota estabelecida para receber a navegação. Antes da remoção, o
@@ -162,8 +168,8 @@ plano sem inventar aprovação.
 ## Evidências e fechamento pendente
 
 - [PR funcional #903](https://github.com/orobsonn/claude-harness/pull/903), ainda draft.
-  O [CI em `cdcf441`](https://github.com/orobsonn/claude-harness/actions/runs/34174380208)
-  registrou **3494 testes: 3492 passaram, nenhum falhou e 2 foram ignorados**. Os dois
+  O [CI em `df7c560`](https://github.com/orobsonn/claude-harness/actions/runs/34175099277)
+  registrou **3495 testes: 3493 passaram, nenhum falhou e 2 foram ignorados**. Os dois
   smokes Orca executados localmente passaram (**2/2**).
 - Testes focais de contexto, coordenação, revisão e adapter Orca: **73/73**.
 - A correção do contrato JSON passou em **205 testes** de role, aprovação nativa,
@@ -185,7 +191,11 @@ plano sem inventar aprovação.
   O artefato oficial e o rollback foram preparados, sem instalar: reiniciar o serviço
   atual encerra todas as runs no seu cgroup. Essa falha é distinta da falta de cliente
   remoto conectado e não foi tratada como prova da causa da invisibilidade.
-- Ainda pendentes: confirmação visual no cliente Orca, conclusão e aprovação da issue
+- A TUI passou em um teste integrado com Pi real, provider local determinístico e PTY:
+  executou `read`, exibiu a resposta, gravou o header idêntico ao da sessão e os eventos
+  nativos e encerrou com código zero. O teste também cobre ausência do prompt de trust
+  de projeto; não substitui a prova FULL nem a conferência da TUI no Orca.
+- Ainda pendentes: conferência final da TUI no Orca, conclusão e aprovação da issue
   FULL real, CI do fechamento do PR funcional, merge e release esperada **2.6.0** pelo
   release-please. Nenhuma versão, changelog ou tag foi alterada manualmente.
 

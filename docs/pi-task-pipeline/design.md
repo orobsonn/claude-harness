@@ -44,7 +44,13 @@ Quando `ORCA_WORKTREE_ID` está presente, o registry fixa `orca_parent`. `dispat
 disponível sem inicializar runtime para permitir recuperação, e `integrate` depende de
 Git e recibos já verificados, não da disponibilidade do Orca. O backend cria a worktree task no `base_sha` global com
 `parent_worktree_id` explícito, confirma repo/path/instance e inicia o worker em terminal
-próprio. O summary expõe `orca.worktree_id` e
+próprio. Novas tentativas Orca usam `presentation:"tui"`, prompt posicional e `--no-approve`:
+o worker herda o PTY e o Pi mantém sua interface nativa. Uma extensão no mesmo processo grava
+o header real e eventos de ferramentas em `events.jsonl`; `agent_end` solicita o shutdown
+nativo, consumido em `agent_settled`. O receipt continua exigindo eventos atuais e saída
+limpa do processo. A apresentação da primeira launch é preservada em resumes; ausência
+do campo significa JSON legado, compatível com o runtime já fixado. Não há attach de uma
+segunda sessão ao arquivo vivo. O summary expõe `orca.worktree_id` e
 `launches[].orca.{terminal_handle,surface}`. `surface:"visible"` prova adoção pelo
 notifier/renderer do host, não ACK de navegação de cliente remoto; em `background`, a sessão
 continua listável e reanexável pelo mesmo handle. A revelação explícita de uma task escolhida

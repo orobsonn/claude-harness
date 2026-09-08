@@ -230,6 +230,7 @@ const REQUIRED_PI_SOURCE = [
   { rel: "skills/harness-task-pipeline/SKILL.md", kind: "file" },
   ...["task-contract", "task-run", "task-process", "task-coordinator", "task-receipts", "task-runtime-assets", "task-context", "task-orca"].map((name) => ({ rel: `lib/${name}.mjs`, kind: "file" })),
   { rel: "extensions/harness-task-run.ts", kind: "file" },
+  { rel: "extensions/harness-task-events.ts", kind: "file" },
   { rel: "extensions/harness-tasks.ts", kind: "file" },
   { rel: "prompts/harness-runtime.md", kind: "file" },
   { rel: "skills/harness-grill/SKILL.md", kind: "file" },

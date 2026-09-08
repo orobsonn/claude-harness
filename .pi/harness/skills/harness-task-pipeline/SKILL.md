@@ -30,7 +30,9 @@ sessão pai local, usando a pipeline nativa de mãos, fidelidade, freeze, captur
   paralelo; autoria, mãos, fidelidade e revisão da spec continuam exclusivas.
 - Dentro de uma sessão Orca (`ORCA_WORKTREE_ID` presente), use obrigatoriamente o backend Orca
   ligado à worktree pai. Cada task nasce no `base_sha` global com parent visual explícito e roda a
-  sessão Pi oficial em terminal próprio. Divergência ou falha não autoriza fallback silencioso.
+  TUI nativa do Pi em terminal próprio, com conclusão automática após o trabalho. O host registra
+  os eventos nativos e verifica o retorno. Resumes preservam a apresentação original da tentativa;
+  não abra outra sessão no JSONL de um job vivo. Divergência ou falha não autoriza fallback silencioso.
   O registry fixa o pai Orca; `status` segue disponível para recuperação e `integrate` usa Git e
   recibos já validados. `dispatch` e `resume`, que criam execução, exigem a mesma identidade. Em summaries,
   `launches[].orca.surface="visible"` comprova adoção pelo notifier/renderer do host, não ACK de

@@ -27,6 +27,7 @@
     ".pi/harness/extensions/harness-run-hand.ts",
     ".pi/harness/extensions/harness-spec.ts",
     ".pi/harness/extensions/harness-subagents.ts",
+    ".pi/harness/extensions/harness-task-events.ts",
     ".pi/harness/extensions/harness-task-run.ts",
     ".pi/harness/extensions/harness-tasks.ts",
     ".pi/harness/extensions/harness-version-check.ts",

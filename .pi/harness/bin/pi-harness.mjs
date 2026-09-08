@@ -26,6 +26,7 @@ const SUBAGENTS_BRIDGE = "extensions/harness-subagents.ts";
  */
 const EXTENSIONS_BEFORE_SUBAGENTS = [
   "extensions/harness-policy.ts",
+  "extensions/harness-task-events.ts",
   "extensions/harness-task-run.ts",
   "extensions/harness-bootstrap.ts",
 ];
