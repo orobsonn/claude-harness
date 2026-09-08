@@ -83,6 +83,13 @@ enquanto mãos e fidelity continuam sequenciais. Timeout, erro ou retorno incomp
 preservam a tentativa para retomada; não redespache automaticamente implementação já
 pronta sem causa. Integre somente o SHA exato validado pelo coordenador.
 
+Para executar esses olhos em paralelo, emita chamadas `subagent` separadas no mesmo
+lote de ferramentas da resposta, todas em foreground: omita `run_in_background`
+ou use `false`. Paralelismo de revisão não requer background. Se receber
+`background-disabled`, corrija esse campo e redespache os olhos pendentes no mesmo
+lote foreground; essa rejeição não indica falta de suporte a paralelismo nem estouro
+de turnos. Aguarde todos os resultados admitidos antes de corrigir o conteúdo.
+
 Se há tasks em execução e nenhum trabalho independente pronto, chame
 `harness_tasks` com `action="wait"`, opcionalmente com `task_id`. Essa chamada espera
 no host sem novas chamadas ao modelo e volta quando um job muda de estado. Não faça
