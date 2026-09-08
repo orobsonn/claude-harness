@@ -27,7 +27,9 @@ sessão pai local, usando a pipeline nativa de mãos, fidelidade, freeze, captur
   nativas que a correção invalidar; acompanhe-a como `in_progress` no tracker e revalide sua lane.
 - Após integrar todas as tarefas, execute no HEAD agregado os testes, harvest, revisores finais
   aplicáveis e shipping normais. Revisões de implementação e finais podem usar até três olhos em
-  paralelo; autoria, mãos, fidelidade e revisão da spec continuam exclusivas.
+  paralelo; autoria, mãos, fidelidade e revisão da spec continuam exclusivas. Toda task com escrita
+  exige adversary pós-implementação e re-gate; `adversarial.enabled` apenas acrescenta foco de risco
+  e `false` não remove essa revisão baseline.
 - Dentro de uma sessão Orca (`ORCA_WORKTREE_ID` presente), use obrigatoriamente o backend Orca
   ligado à worktree pai. Cada task nasce no `base_sha` global com parent visual explícito e roda a
   TUI nativa do Pi em terminal próprio, com conclusão automática após o trabalho. O host registra

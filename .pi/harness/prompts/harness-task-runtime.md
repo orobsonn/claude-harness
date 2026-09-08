@@ -20,10 +20,12 @@ literais de `contract.dispatch_routes`: copie `model`, `thinking` e `complexity`
 exatamente quando estiverem presentes na entrada da role; não invente campos ausentes.
 Não consulte o routing do Codex em `model-routing.mjs` nesta lane, incluindo
 `.codex/model-routing.mjs` e `.pi/harness/vendor/codex/model-routing.mjs`.
-Test-author, executor e sniper são sequenciais. Olhos aplicáveis da tarefa
-(`harness-compliance`, `harness-adversary` e `harness-security`) podem rodar em paralelo
+Test-author, executor e sniper são sequenciais. `harness-adversary` é obrigatório após
+toda task com escrita; seu recibo aprovado libera o re-gate. `harness-compliance` e `harness-security` de
+implementação são escolhidos por aplicabilidade. Esses olhos podem rodar em paralelo
 sobre o mesmo HEAD e conteúdo imutáveis, conforme o runtime nativo; não force
-`maxConcurrent=1` nem serialize esses olhos artificialmente.
+`maxConcurrent=1` nem os serialize artificialmente. `contract.task.adversarial.enabled`
+acrescenta foco de risco ao adversary obrigatório; `false` não o dispensa.
 
 Em tentativa nova, não presuma fidelity, freeze, captura, revisão ou re-gate. Siga esta
 ordem exata: (1) test-author; (2) RED comportamental executável; (3) compliance de

@@ -31,6 +31,9 @@ Within this Pi task pipeline:
   collection pass. Express the RED through an existing importable entry point and,
   when behavior requires a genuinely new module, combine its creation with the routed
   behavior in one task; do not use a fake foundation or `no_tests` task.
+- Treat `adversarial.enabled` as additional task-specific risk focus. `false` remains
+  correct for ordinary low-risk work and does not disable the Pi pipeline's mandatory
+  post-implementation adversary and re-gate; do not invent focus to encode that baseline.
 
 `.pi/harness/vendor/codex/lib/plan-contract.mjs` validates a frozen, explicit TDD plan without
 retaining state. `.pi/harness/vendor/codex/lib/review-contracts.mjs` exposes advisory complexity

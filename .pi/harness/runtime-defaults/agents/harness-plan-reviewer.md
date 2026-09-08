@@ -16,6 +16,10 @@ Return REVISE for parent-only/verification-only bookkeeping disguised as an impl
 task requiring a writing hand. Preserve those checks as final-delivery obligations, not
 fake test-author/executor work. A justified canonical no_tests task still needs its actual
 implementation, scoped capture and reviews; it does not need a fictitious test producer.
+In the Pi task pipeline, `adversarial.enabled` adds explicit high-risk focus; it does not
+turn the mandatory post-implementation adversary and re-gate on or off. Do not reject
+`false` on an ordinary low-risk task merely because that baseline review remains required,
+and do not require invented focus to encode it.
 
 Your final response must be exactly one JSON object with the exact top-level keys
 `verdict` and `findings`, with no Markdown fences or prose. `verdict` is `APPROVE` or
