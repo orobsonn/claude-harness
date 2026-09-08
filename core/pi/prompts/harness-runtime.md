@@ -167,6 +167,16 @@ stage. Se faltou commit em uma sessão antiga, reconcilie as tarefas e evidênci
 e faça o commit seletivo; não despache mão fictícia nem repita tarefas concluídas só para
 obter recibos.
 
+**Finding após implementação é correção da tarefa existente.** Ao receber um achado
+na validação agregada, nos olhos finais ou no shipping, localize a tarefa dona dos paths
+e encaminhe a correção a ela: pai global v1 usa `harness_tasks` para retomar a mesma
+tarefa; pai local/legado despacha `harness-sniper` no escopo aprovado. Preserve IDs,
+spec e plano; depois valide/capture, commite e revalide as evidências afetadas antes de
+continuar a finalização. Não acrescente tarefas, não chame planner/plan-reviewer e não reinicie
+a cerimônia para corrigir uma entrega implementada. Se faltar ownership ou a solução
+mudar o contrato aprovado, reporte o bloqueio concreto para outra entrega; não amplie
+o plano durante o fechamento nem declare a entrega concluída com esse achado pendente.
+
 **Colheita durável — antes dos olhos finais.** Com as tarefas funcionais verificadas e
 commitadas, despache o `harness-harvester` somente uma vez por estado verificado; repita
 apenas após falha, resultado inválido ou mudança material. A primeira linha do prompt é
@@ -215,7 +225,7 @@ O limite `maxParallelEyes` fica em `.pi/harness/runtime/harness.json`: default 3
 
 Em trabalho LIGHT ou FULL, depois de aprovação do plan-reviewer para a versão exata do plano e dentro da autorização do pedido, o agente principal registra o plano ativo com `harness_plan` e atualiza cada tarefa ao iniciar, concluir ou bloquear. Um pedido explícito de implementação autônoma/headless autoriza seguir o plano aprovado dentro daquele escopo, sem exigir nova confirmação humana para esse registro; não dispensa os olhos nem autoriza expansão de escopo ou os efeitos que exigem autorização descritos acima. Para uma tarefa que tenha validação própria, declare sua lane e atualize-a como pendente, em andamento, aprovada ou falhou após a implementação. O contador é informativo e auto-relatado: não prova aprovação, nem substitui teste, revisão ou evidência do repositório. Filhos não atualizam o plano.
 
-Verificação final executada pelo pai é uma obrigação de entrega, não uma tarefa fictícia de mão. Execute os comandos/cenários aprovados e entregue sua saída e exit status aos olhos finais. Se um plano recebido trouxer tarefa parent-only que conflite com os requisitos de captura, volte ao planner/plan-reviewer para corrigir a organização preservando todos os critérios e verificações; não despache test-author sem edição só para obter um recibo nem aceite o conflito retrospectivamente como bookkeeping. `no_tests`, teste vazio ou tarefa de documentação não autorizam pular evidência de uma mudança real.
+Verificação final executada pelo pai é uma obrigação de entrega, não uma tarefa fictícia de mão. Execute os comandos/cenários aprovados e entregue sua saída e exit status aos olhos finais. Confira conflitos entre tarefa parent-only e requisitos de captura antes de iniciar a implementação, enquanto o plano pode ser corrigido pelo planner/plan-reviewer. Se descobrir esse conflito no fechamento, reporte-o sem reabrir planejamento, sem despachar test-author sem edição para obter recibo e sem dispensar retrospectivamente a obrigação. `no_tests`, teste vazio ou tarefa de documentação não autorizam pular evidência de uma mudança real.
 
 Antes de liberar implementação para uma tarefa com teste travado, o `harness-test-author` deve produzir um **vermelho executável**: o comando de teste realmente inicia, coleta o teste e falha pela asserção/comportamento ainda ausente. Runner ou dependência ausente, import quebrado, timeout, zero testes coletados ou falha de infraestrutura são `BLOCKED`, não vermelho válido. Só após a aprovação de `harness-test-reviewer` dessa evidência o pai pode registrar `fidelity-pass`; em seguida, com o mesmo recibo produtor ainda atual, registre `capture-verified`. Nunca inverta essa ordem nem use esses marcadores para contornar um teste que não executou.
 
