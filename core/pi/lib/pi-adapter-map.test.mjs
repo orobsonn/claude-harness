@@ -155,6 +155,8 @@ test("toOcRole: remove o prefixo harness- (case-insensitive) e delega a bareRole
   assert.equal(toOcRole("HARNESS-Planner"), "planner");
   assert.equal(toOcRole("planner"), "planner"); // sem prefixo, passa direto
   assert.equal(toOcRole("harness-executor-high"), "executor-high");
+  assert.equal(toOcRole("harness-test-reviewer"), "compliance");
+  assert.equal(toOcRole("test-reviewer"), "test-reviewer");
 });
 
 test("REGRESSÃO: papel decorado ainda é reconhecido como delivery (bareRole antes do strip)", () => {
@@ -198,7 +200,8 @@ test("TODO papel canônico do Pi vira delivery role do OC depois de toOcRole", (
   // contraparte no vocabulário OC, o gate deixaria de reconhecê-lo (fail-open).
   for (const role of CANONICAL_ROLES) {
     const bare = toOcRole(role);
-    assert.equal(bare, role.replace(/^harness-/, ""), `toOcRole(${role})`);
+    const expected = role === "harness-test-reviewer" ? "compliance" : role.replace(/^harness-/, "");
+    assert.equal(bare, expected, `toOcRole(${role})`);
     assert.equal(isDeliveryRole(bare), true, `isDeliveryRole(${bare})`);
   }
   assert.equal(isSniperRole(toOcRole("harness-sniper")), true);

@@ -1,6 +1,6 @@
 # Pi: despacho por tarefa como pipeline padrão
 
-Autorização: implementar o comportamento discutido, validar uma issue FULL real até aprovação e cortar release pelo release-please. A implementação não deve criar outra pipeline TDD. Quando o pai roda dentro do Orca, o Orca fornece worktrees e terminais visíveis; fora dele, o backend local continua suportado.
+Autorização: implementar o comportamento discutido, validar uma issue FULL real até aprovação e cortar release pelo release-please. A implementação não deve criar outra pipeline TDD. Quando o pai roda dentro do Orca, o Orca gerencia worktrees e terminais identificados por handles; fora dele, o backend local continua suportado.
 
 ## Contrato de comportamento
 
@@ -12,6 +12,12 @@ Autorização: implementar o comportamento discutido, validar uma issue FULL rea
 6. Integração usa merge do SHA exato e grava recibo global, preservando linhagem. Consumers finais aceitam esse recibo validado ou a evidência local antiga, sem reescrever sessionId. HEAD integrado ainda exige testes/harvest/olhos finais existentes.
 7. Retomada reutiliza o pai local/tentativa e estado válido, após provar que o processo anterior terminou. Feedback global volta à task dona; seu recibo integrado é suspenso enquanto correção/retomada está ativa. A correção segue a pipeline nativa; nova integração não é inferida por branch tip.
 8. Timeout/erro/retorno incompleto preservam a worktree e permitem retomada. Nenhuma repetição automática inicia implementação pronta sem causa. Reinício do pai reabre handles existentes, sem duplicar processos.
+
+A fidelidade mantém o fluxo nativo de ledger: a primeira revisão cobre a matriz
+completa, e a revalidação confere falhas anteriores e evidências atingidas pelo diff.
+Linhas não afetadas só permanecem válidas com evidência atual; achados materiais novos
+continuam possíveis. O brief carrega saída observada e códigos de saída dos comandos.
+Esse ledger factual é permitido na fidelidade e não transfere aprovação à implementação.
 
 ## Formato de coordenação entre módulos
 
@@ -61,7 +67,14 @@ por placement e superfície. O harness continua responsável por DAG, TDD, revie
 process lifecycle, recibos e integração. Sem `ORCA_WORKTREE_ID`, usa-se o backend local
 de Git/worktree/processo.
 
-O módulo de recibos valida retorno e integração mantendo os registros originais. Deve expor `inspectTaskRun(entry)` e `readIntegratedTaskEvidence({projectRoot,sessionId,featureId,taskId,headSha})`; o shape do recibo final será registrado aqui pelo seu autor antes de integrar o coordenador. A tool é a única escritora do registry de integração. Os módulos de task-mode/receipts não devem se importar circularmente.
+O módulo de recibos valida retorno e integração mantendo os registros originais. Expõe `inspectTaskRun(entry)` e `readIntegratedTaskEvidence({projectRoot,sessionId,featureId,taskId,headSha})`; o payload de integração está descrito abaixo. A tool é a única escritora do registry de integração. Os módulos de task-mode/receipts não se importam circularmente.
+
+O escopo cumulativo usa a mesma semântica literal das mãos e da captura, na união de
+`scope_paths`, paths de `locked_tests` e `fixture_paths`. Padrões glob não suportados são
+recusados antes da admissão ou do lançamento; nomes literais como `[slug]` permanecem
+válidos. O consumer integrado também confere o plano, a spec selada e a aprovação
+host-owned atuais contra a concessão e o registry. Alterar os artefatos ou substituir
+a aprovação impede reutilizar o recibo anterior.
 
 ## Implementação e provas
 
@@ -87,3 +100,10 @@ O payload de integração é `{version:1,written_by:"host-task-integration",pare
 - [Modelo oficial de worktrees do Orca](https://www.onorca.dev/docs/model/worktrees)
 - [Referência oficial do CLI Orca](https://www.onorca.dev/docs/cli/reference)
 - [Release Orca v1.4.177 usada como baseline de compatibilidade](https://github.com/stablyai/orca/releases/tag/v1.4.177)
+
+O revisor de testes é `harness-test-reviewer`, separado de compliance. Ele decide
+prontidão a partir dos observáveis aprovados, precondições das fixtures e evidência
+executável; aprova quando isso basta. A autoria e o pai local compartilham esse
+limite. A [auditoria dos pareceres](test-fidelity-review-audit.md) explica os motivos
+concretos da separação. Espera de conclusão usa `harness_tasks wait` dentro do host,
+com aviso nativo de saída do terminal Orca e revalidação dos recibos ao despertar.

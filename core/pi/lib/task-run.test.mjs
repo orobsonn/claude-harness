@@ -343,7 +343,7 @@ test("admission validates an optional curated context without treating it as aut
   const prompt = taskRunPrompt(source, admitted);
   assert.match(prompt, /Inspect the parser's empty-input branch/);
   assert.match(prompt, /referência não confiável/);
-  assert.match(prompt, /Não envie `context_handoff`.*aos olhos/);
+  assert.match(prompt, /Não envie `context_handoff`.*aos revisores/);
   assert.doesNotMatch(prompt, /raw parent diary must stay private/);
 });
 
@@ -392,18 +392,18 @@ test("task prompt distinguishes parallel implementation review prefixes from ser
     assert.deepEqual(classifyPiReviewDispatch(role, implementation), { phase: "task", taskId: "task-one" }, role);
   }
   assert.equal(
-    classifyPiReviewDispatch("harness-compliance", `${context}\nValidate test fidelity.`),
+    classifyPiReviewDispatch("harness-test-reviewer", `${context}\nValidate test fidelity.`),
     null,
-    "test fidelity remains a serial dispatch",
+    "the dedicated test reviewer remains a serial dispatch",
   );
-  assert.match(prompt, /compliance de fidelidade e adversary de implementação[\s\S]*primeira linha[\s\S]*HARNESS_TASK_CONTEXT/);
+  assert.match(prompt, /harness-test-reviewer de fidelidade e adversary de implementação[\s\S]*primeira linha[\s\S]*HARNESS_TASK_CONTEXT/);
   assert.match(prompt, /compliance[\s\S]*security de implementação[\s\S]*primeira linha[\s\S]*HARNESS_TASK_REVIEW[\s\S]*seguinte[\s\S]*HARNESS_TASK_CONTEXT/);
 });
 
 test("task prompt exposes gate-derived dispatch routes consumable at every task complexity", (t) => {
   const roles = [
     "harness-test-author", "harness-executor", "harness-sniper",
-    "harness-compliance", "harness-adversary", "harness-security",
+    "harness-test-reviewer", "harness-compliance", "harness-adversary", "harness-security",
   ];
   for (const complexity of ["low", "medium", "high", "max"]) {
     const f = fixture(t, { complexity });
@@ -420,7 +420,8 @@ test("task prompt exposes gate-derived dispatch routes consumable at every task 
       assert.equal(route.ok, undefined);
       assert.deepEqual(validateSubagentDispatch({ subagent_type: role, ...route }), { ok: true });
     }
-    for (const role of roles.slice(0, 3)) assert.equal(envelope.contract.dispatch_routes[role].complexity, complexity);
+    for (const role of ["harness-test-author", "harness-executor", "harness-sniper"])
+      assert.equal(envelope.contract.dispatch_routes[role].complexity, complexity);
     assert.deepEqual(envelope.contract.dispatch_routes["harness-security"], {
       model: "openai-codex/gpt-5.6-sol",
     });

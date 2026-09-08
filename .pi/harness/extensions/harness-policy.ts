@@ -1,10 +1,9 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-import { decidePiPolicy, piAuditDir, recordPiPolicyAudit, shouldAuditPiTool } from "../lib/policy.mjs";
+import { decidePiPolicy, isPiReadOnlyReviewerRole, piAuditDir, recordPiPolicyAudit, shouldAuditPiTool } from "../lib/policy.mjs";
 import { isPiHeadlessContext, isPiReadTool, piSessionId } from "../lib/pi-adapter-map.mjs";
 import { readPiChildIdentity } from "../lib/pi-child-identity.mjs";
 import { loadPiGateStateFromDisk } from "../lib/pi-gate-state.mjs";
-import { isParallelReviewRole } from "../lib/roles.mjs";
 
 const CHILD_READ_IDENTITY_REASON = "Child read tools require an exact valid dispatch identity.";
 
@@ -35,7 +34,7 @@ export default function harnessPolicy(pi: ExtensionAPI) {
     if (child && isPiReadTool(event?.toolName) && !identity?.ok) {
       return { block: true, reason: CHILD_READ_IDENTITY_REASON };
     }
-    const reviewerRole = identity?.ok && isParallelReviewRole(identity.record?.role)
+    const reviewerRole = identity?.ok && isPiReadOnlyReviewerRole(identity.record?.role)
       ? identity.record.role
       : null;
     const decision = decidePiPolicy(

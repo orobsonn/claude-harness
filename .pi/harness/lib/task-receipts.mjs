@@ -93,6 +93,23 @@ function frozenPaths(task) {
   ).filter((item) => typeof item === "string" && item))];
 }
 
+function fidelityReviewRole(runtime) {
+  const launcher = typeof runtime?.launcher_path === "string" ? runtime.launcher_path : "";
+  if (!path.isAbsolute(launcher)) return "harness-compliance";
+  const piRoot = path.dirname(path.dirname(launcher));
+  const candidates = [
+    path.join(piRoot, "runtime", "agents", "harness-test-reviewer.md"),
+    path.join(piRoot, "runtime-defaults", "agents", "harness-test-reviewer.md"),
+  ];
+  const present = candidates.some((file) => {
+    try {
+      const info = fs.lstatSync(file);
+      return info.isFile() && !info.isSymbolicLink();
+    } catch { return false; }
+  });
+  return present ? "harness-test-reviewer" : "harness-compliance";
+}
+
 function eventText(result) {
   return Array.isArray(result?.content)
     ? result.content.filter((item) => item?.type === "text" && typeof item.text === "string").map((item) => item.text).join("\n")
@@ -101,6 +118,17 @@ function eventText(result) {
 
 function eventSucceeded(event) {
   return event?.end && event.end.isError !== true && event.end.result?.details?.status === "completed";
+}
+
+function fidelityReviewApproved(event, reviewRole) {
+  if (!eventSucceeded(event)) return false;
+  // Legacy pinned runtimes used compliance completion as the fidelity signal. The
+  // dedicated reviewer has an explicit terminal verdict, so completion alone must
+  // never turn REVISE or BLOCKED into approval.
+  if (reviewRole === "harness-compliance") return true;
+  const lines = eventText(event.end.result).trimEnd().split(/\r?\n/);
+  const verdicts = lines.filter((line) => /^Verdict: (?:APPROVE|REVISE|BLOCKED)$/.test(line));
+  return verdicts.length === 1 && verdicts[0] === "Verdict: APPROVE" && lines.at(-1) === verdicts[0];
 }
 
 function markerSucceeded(event) {
@@ -255,9 +283,9 @@ function validateLaunches(entry, jobRoot, readTaskProcessFn = readTaskProcess) {
   return { ok: true, lifecycles, interruptedIndexes };
 }
 
-function validateFidelity({ events, task, taskId, worktree, head }) {
+function validateFidelity({ events, task, taskId, worktree, head, reviewRole }) {
   const paths = frozenPaths(task);
-  if (paths.length === 0) return { ok: true, freezeSha: null, frozenBlobs: {} };
+  if (paths.length === 0) return { ok: true, freezeSha: null, frozenBlobs: {}, markerIndex: -1 };
   const fidelityMarkers = events.filter((event) => event.tool === "mark" && event.args?.action === "fidelity" && event.args?.task_id === taskId && markerSucceeded(event));
   const marker = fidelityMarkers.at(-1);
   if (!marker) return failure("latest successful native fidelity marker required");
@@ -271,8 +299,10 @@ function validateFidelity({ events, task, taskId, worktree, head }) {
   if (!commitSha || !ancestor(worktree, commitSha, head)) return failure("fidelity freeze commit is missing or not ancestral to task HEAD");
   const commitIndex = events.indexOf(commitEvent);
   const authorIndex = events.findLastIndex((event, index) => index < commitIndex && event.tool === "subagent" && event.args?.subagent_type === "harness-test-author" && eventSucceeded(event));
-  const complianceIndex = events.findLastIndex((event, index) => index > authorIndex && index < commitIndex && event.tool === "subagent" && event.args?.subagent_type === "harness-compliance" && eventSucceeded(event));
-  if (authorIndex < 0 || complianceIndex < 0) return failure("fidelity requires native test-author then compliance before the freeze commit");
+  const reviewIndex = events.findLastIndex((event, index) => index > authorIndex && index < commitIndex && event.tool === "subagent" &&
+    event.args?.subagent_type === reviewRole && (reviewRole === "harness-compliance" ? eventSucceeded(event) : true));
+  if (authorIndex < 0 || reviewIndex < 0 || !fidelityReviewApproved(events[reviewIndex], reviewRole))
+    return failure(`fidelity requires native test-author then ${reviewRole} APPROVE before the freeze commit`);
   const changed = String(git(worktree, ["diff-tree", "--no-commit-id", "--name-only", "-r", commitSha])).trim().split("\n").filter(Boolean);
   if (changed.length === 0 || changed.some((item) => !paths.includes(item))) return failure("fidelity freeze commit must change only canonical frozen files");
   const blobs = {};
@@ -284,7 +314,7 @@ function validateFidelity({ events, task, taskId, worktree, head }) {
       blobs[file] = crypto.createHash("sha256").update(current).digest("hex");
     } catch { return failure(`canonical frozen file is absent from the fidelity chain: ${file}`); }
   }
-  return { ok: true, freezeSha: commitSha, frozenBlobs: blobs };
+  return { ok: true, freezeSha: commitSha, frozenBlobs: blobs, markerIndex };
 }
 
 /**
@@ -348,12 +378,31 @@ export function inspectTaskRun(entry, dependencies = {}) {
     const violations = recordViolations(hand);
     if (!identity.ok || violations.scope.length || violations.frozen.length || typeof hand.capturedVerifiedAt !== "string" || !hand.capturedVerifiedAt ||
         !COMMIT_SHA.test(hand.freezeCommitSha ?? "") || !ancestor(worktree, hand.freezeCommitSha, head)) return failure("current child hand capture is invalid");
-    const producer = native.events.find((event) => event.callId === hand.producerCallId && event.tool === "subagent" &&
-      event.args?.subagent_type === hand.agent && taskFromPrompt(event.args?.prompt) === entry.task_id && eventSucceeded(event));
-    if (!producer) return failure("current hand producer is not bound to a successful native call");
-    const fidelity = validateFidelity({ events: native.events, task: binding.task, taskId: entry.task_id, worktree, head });
+    const isImplementationForTask = (event) => event.tool === "subagent" &&
+      ["harness-executor", "harness-sniper"].includes(event.args?.subagent_type) &&
+      taskFromPrompt(event.args?.prompt) === entry.task_id && eventSucceeded(event);
+    const producerIndex = native.events.findIndex((event) => event.callId === hand.producerCallId &&
+      event.args?.subagent_type === hand.agent && isImplementationForTask(event));
+    if (producerIndex < 0) return failure("current hand producer is not bound to a successful native call by an implementation agent");
+    const fidelity = validateFidelity({
+      events: native.events,
+      task: binding.task,
+      taskId: entry.task_id,
+      worktree,
+      head,
+      reviewRole: fidelityReviewRole(entry.runtime),
+    });
     if (!fidelity.ok) return fidelity;
-    if (fidelity.freezeSha !== null && hand.freezeCommitSha !== fidelity.freezeSha) return failure("current hand capture is not bound to the event-proven latest freeze");
+    if (fidelity.freezeSha !== null) {
+      if (!ancestor(worktree, fidelity.freezeSha, hand.freezeCommitSha)) {
+        return failure("current hand capture is not descended from the event-proven latest freeze");
+      }
+      const latestProducerIndex = native.events.findLastIndex((event, index) =>
+        index > fidelity.markerIndex && isImplementationForTask(event));
+      if (producerIndex <= fidelity.markerIndex || producerIndex !== latestProducerIndex) {
+        return failure("current hand producer is not the latest successful implementation call after fidelity");
+      }
+    }
     const bare = formatFeatureTaskEntry(entry.feature_id, entry.task_id);
     if (fidelity.freezeSha !== null && (!Array.isArray(state.fidelity_pass) || !state.fidelity_pass.includes(`${bare}@${fidelity.freezeSha}`))) {
       return failure("event-proven latest freeze lacks its persisted fidelity marker");
@@ -432,7 +481,10 @@ function validateIntegration(entry, integration, { projectRoot, sessionId, featu
     typeof item === "string" && item.length > 0 && !path.isAbsolute(item) && !item.split(/[\\/]/).includes(".."));
   const frozenBlobsValid = object(result.frozen_blobs) && Object.entries(result.frozen_blobs).every(([file, digest]) =>
     file.length > 0 && !path.isAbsolute(file) && !file.split(/[\\/]/).includes("..") && SHA256.test(digest));
-  const handCaptureValid = object(result.hand_capture) && typeof result.hand_capture.agent === "string" && result.hand_capture.agent &&
+  const frozenReceiptValid = frozenBlobsValid && (result.freeze_sha === null
+    ? Object.keys(result.frozen_blobs).length === 0
+    : COMMIT_SHA.test(result.freeze_sha ?? "") && Object.keys(result.frozen_blobs).length > 0);
+  const handCaptureValid = object(result.hand_capture) && ["harness-executor", "harness-sniper"].includes(result.hand_capture.agent) &&
     typeof result.hand_capture.producer_call_id === "string" && result.hand_capture.producer_call_id &&
     COMMIT_SHA.test(result.hand_capture.freeze_sha ?? "") && typeof result.hand_capture.captured_verified_at === "string" &&
     result.hand_capture.captured_verified_at && result.hand_capture.capture_marker === `${featureId}/${taskId}@${result.hand_capture.freeze_sha}`;
@@ -467,7 +519,7 @@ function validateIntegration(entry, integration, { projectRoot, sessionId, featu
     result.attempt_id === entry.attempt_id && result.parent_root === projectRoot && result.worktree === entry.worktree &&
     isSafeSessionId(result.session_id) && result.plan_sha256 === entry.plan_sha256 && result.spec_sha256 === entry.spec_sha256 &&
     result.base_sha === entry.base_sha && COMMIT_SHA.test(result.child_head ?? "") && typeof result.latest_run_id === "string" &&
-    result.latest_run_id.length > 0 && entry.launches?.at?.(-1)?.run_id === result.latest_run_id && changedPathsValid && frozenBlobsValid &&
+    result.latest_run_id.length > 0 && entry.launches?.at?.(-1)?.run_id === result.latest_run_id && changedPathsValid && frozenReceiptValid &&
     handCaptureValid && SHA256.test(result.review_input_digest ?? "") && reviewReceiptsValid && regateValid && contextReturnValid && launchesValid &&
     (entry.runtime === undefined || validRuntime(entry.runtime) && validRuntime(result.runtime) && result.runtime.sha256 === entry.runtime.sha256 &&
       result.runtime.launcher_path === entry.runtime.launcher_path);
@@ -483,6 +535,10 @@ function validateIntegration(entry, integration, { projectRoot, sessionId, featu
   if (!COMMIT_SHA.test(headSha ?? "") || !ancestor(projectRoot, result.base_sha, result.child_head) ||
       !ancestor(projectRoot, result.child_head, integration.integrated_head) || !ancestor(projectRoot, integration.integrated_head, headSha)) {
     return failure("task integration is not ancestral to the requested HEAD");
+  }
+  if (!ancestor(projectRoot, result.hand_capture.freeze_sha, result.child_head) ||
+      result.freeze_sha !== null && !ancestor(projectRoot, result.freeze_sha, result.hand_capture.freeze_sha)) {
+    return failure("task receipt freeze and hand capture are not ancestral to the child HEAD");
   }
   const actualChanged = splitZero(git(projectRoot, ["diff", "--name-only", "-z", result.base_sha, result.child_head]));
   if (JSON.stringify(actualChanged) !== JSON.stringify(result.changed_paths)) return failure("task inspection changed-path receipt no longer matches Git");

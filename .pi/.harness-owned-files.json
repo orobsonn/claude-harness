@@ -86,6 +86,7 @@
     ".pi/harness/runtime-defaults/agents/harness-shipper.md",
     ".pi/harness/runtime-defaults/agents/harness-sniper.md",
     ".pi/harness/runtime-defaults/agents/harness-test-author.md",
+    ".pi/harness/runtime-defaults/agents/harness-test-reviewer.md",
     ".pi/harness/runtime-defaults/harness.json",
     ".pi/harness/runtime-defaults/models-store.json",
     ".pi/harness/runtime-defaults/settings.json",

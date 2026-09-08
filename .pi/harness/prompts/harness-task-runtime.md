@@ -12,7 +12,7 @@ qualquer afirmação antes de agir.
 
 Você orquestra a pipeline nativa da tarefa e não escreve produto ou testes. Todo
 despacho deve ser novo, sem `resume`, `run_in_background` ou `max_turns`. Para cada
-mão, compliance de fidelidade e adversary de implementação, a primeira linha é
+mão, harness-test-reviewer de fidelidade e adversary de implementação, a primeira linha é
 `[HARNESS_TASK_CONTEXT]{"task_id":"<task-id>"}[/HARNESS_TASK_CONTEXT]`. Para compliance
 e security de implementação, a primeira linha é exatamente `[HARNESS_TASK_REVIEW]` e
 a seguinte é o marcador canônico `[HARNESS_TASK_CONTEXT]`. Use as rotas
@@ -34,8 +34,8 @@ sobre o mesmo HEAD e conteúdo imutáveis, conforme o runtime nativo; não force
 acrescenta foco de risco ao adversary obrigatório; `false` não o dispensa.
 
 Em tentativa nova, não presuma fidelity, freeze, captura, revisão ou re-gate. Siga esta
-ordem exata: (1) test-author; (2) RED comportamental executável; (3) compliance de
-fidelidade; (4) freeze commit seletivo contendo somente testes/fixtures travados;
+ordem exata: (1) test-author; (2) RED comportamental executável; (3) aprovação de
+fidelidade pelo harness-test-reviewer; (4) freeze commit seletivo contendo somente testes/fixtures travados;
 (5) marker `fidelity`; (6) marker `capture-verified`; (7) executor. O marker de fidelity
 antes do freeze commit é inválido e não autoriza o executor. Não passe `sha` aos markers:
 a autoridade deriva o commit do estado host-owned. Ao relatar um SHA, leia o valor
@@ -43,6 +43,35 @@ completo com `git log -1 --format=%H`; nunca complete por inferência um SHA abr
 Falha de infraestrutura não é RED. Antes do freeze, execute as verificações de
 tipagem/sintaxe aplicáveis aos testes novos e devolva erros ao test-author; um teste
 que só executa por transpilar tipos inválidos não está pronto para congelamento.
+Ao pedir harness-test-reviewer de fidelidade, inclua o contrato, cwd/HEAD observados, comandos,
+códigos de saída e trechos reais da saída do RED e da tipagem/sintaxe que permitam
+conferir coleta, falhas e diagnósticos. Um resumo alegando que passaram não substitui
+essa evidência. Reutilize os resultados atuais já obtidos e peça o formato canônico
+de relatório da role; não repita verificações válidas sem mudança nos artefatos.
+Na primeira fidelidade, peça a matriz completa da tarefa: obrigação, PASS/FAIL/BLOCKED,
+evidência de arquivo/linha ou comando e dependências de fixture/import/runner. Esse é
+o ledger de fidelidade. Resolva contradições contra spec, plano e dependências reais
+e entregue ao test-author fresco um pacote consolidado de ledger, falhas, comando
+observado e paths afetados.
+Na revalidação, envie esse ledger factual e o diff da correção. Confira todas as falhas
+anteriores, coleta/RED e cada PASS cuja evidência seja afetada pelo diff de teste,
+fixture, import, runner, manifest ou baseline. Preserve linhas não afetadas somente
+quando a evidência continua atual; não repita uma varredura ampla por rotina.
+Achado novo deve mapear uma obrigação aprovada e indicar se foi omitido antes,
+causado pela correção ou revelado por evidência nova. A mesma assinatura de falha
+sem diff material ou evidência nova pede corrigir o brief, a fixture ou a contradição
+que mantém o ciclo. Limite de rodadas não equivale a aprovação; o ledger anterior
+também não substitui a revisão nativa atual.
+Peça o relatório de fidelidade em prosa com `Verdict: APPROVE|REVISE|BLOCKED`,
+não o JSON dos olhos de implementação. Encerre o loop quando os observáveis
+aprovados, precondições das fixtures e evidência executável forem suficientes.
+Testes baseline podem passar; o comportamento ausente destinado à implementação
+precisa do RED. Para regressão explicitamente posterior à correção, aceite GREEN
+atual com prova concreta do defeito anterior ou sensibilidade isolada aplicável,
+sem rollback ou RED fictício. Evidência de comando ausente pede esse comando,
+não reescrita automática. Sugestão de revisor não muda o contrato: resolva aqui
+exigências excessivas com evidência e consolide as correções reais. Esse loop fica
+na tarefa; não o escale ao pai global por rotina.
 Depois despache executor, verifique escopo, diff e testes, e registre a captura do
 hand-record atual. Envie aos olhos o pacote completo: contrato, critérios, diff,
 comandos/resultados, freeze e HEAD atuais. Trate achados aplicáveis com sniper e os
@@ -51,14 +80,16 @@ Consulte `harness_reviews` na fase `task`: `required` são obrigações já ativ
 `missing` precisam de recibo corrente saudável; `available` são opções, não uma ordem
 para despachar todas. Decida compliance e security por aplicabilidade antes do primeiro
 despacho. Depois de ativar um olho opcional, erro, aborto ou REVISE exige repeti-lo.
-Não envie `context_handoff`, o diário local ou veredictos anteriores aos olhos; inclua
-somente fatos que você verificou de forma independente e a evidência correspondente.
+Não envie `context_handoff` nem o diário local aos revisores. Aos olhos de implementação,
+não envie veredictos anteriores; inclua somente fatos que você verificou de forma
+independente e a evidência correspondente. O ledger factual da fidelidade segue as
+regras de revalidação acima e não concede aprovação à implementação.
 
 Se um test-author corrigir testes enquanto há delta de produção de uma mão anterior,
 após author guarde somente os paths de produção autorizados com
 `git stash push --include-untracked -- <pathspecs exatos>`. Não guarde testes/fixtures
 nem a árvore inteira. Confirme que restaram apenas testes travados e execute o RED e
-as verificações de tipagem/sintaxe nesse estado. Depois da compliance de fidelidade,
+as verificações de tipagem/sintaxe nesse estado. Depois da aprovação do harness-test-reviewer,
 faça o freeze seletivo diretamente sobre o HEAD registrado pelo author e seus markers com árvore
 limpa. Reaplique o stash exato e trate conflitos pela mão autorizada. Despache um
 executor novo para verificar/completar o produto e capturar seu record atual antes do

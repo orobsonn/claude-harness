@@ -11,6 +11,7 @@ const INDEPENDENT_REVIEW_ROLES = new Set([
   "harness-adversary",
   "harness-discussion-adversary",
   "harness-plan-reviewer",
+  "harness-test-reviewer",
   "harness-compliance",
   "harness-security",
 ]);
@@ -19,6 +20,7 @@ const INDEPENDENT_REVIEW_ROLES = new Set([
 const FIXED_PI_ROUTES = Object.freeze({
   "harness-planner": Object.freeze({ model: "openai-codex/gpt-5.6-sol", thinking: "high" }),
   "harness-plan-reviewer": Object.freeze({ model: "openai-codex/gpt-6-astra", thinking: "high" }),
+  "harness-test-reviewer": Object.freeze({ model: "openai-codex/gpt-5.6-terra", thinking: "high" }),
   "harness-adversary": Object.freeze({ model: "openai-codex/gpt-5.6-sol", thinking: "medium" }),
   "harness-security": Object.freeze({ model: "openai-codex/gpt-5.6-sol" }),
   "harness-compliance": Object.freeze({ model: "openai-codex/gpt-5.6-terra", thinking: "high" }),

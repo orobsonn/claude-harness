@@ -10,6 +10,7 @@ const REVIEW_ROLES = [
   "harness-adversary",
   "harness-discussion-adversary",
   "harness-plan-reviewer",
+  "harness-test-reviewer",
   "harness-compliance",
   "harness-security",
 ];

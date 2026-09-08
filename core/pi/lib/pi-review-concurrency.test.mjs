@@ -170,7 +170,7 @@ test("regression: reviews share bounded slots while a queued non-review stays FI
 test("spec adversary and test fidelity remain exclusive even though their roles also perform final reviews", { timeout: 5_000 }, async (t) => {
   for (const [role, prompt] of [
     ["harness-adversary", "Review the specification before implementation."],
-    ["harness-compliance", '[HARNESS_TASK_CONTEXT]{"task_id":"task-1"}[/HARNESS_TASK_CONTEXT] Validate test fidelity.'],
+    ["harness-test-reviewer", '[HARNESS_TASK_CONTEXT]{"task_id":"task-1"}[/HARNESS_TASK_CONTEXT] Validate test fidelity.'],
     ["harness-security", "Review the proposed security architecture."],
   ]) {
     const ledger = startLedger();
@@ -382,6 +382,7 @@ test("regression: the published service cannot spawn any harness runtime role ar
   assert.equal(extensionResult, nativeCleanup, "the native extension lifecycle result must pass through unchanged");
   for (const role of [
     "harness-planner",
+    "harness-test-reviewer",
     "harness-compliance",
     "harness-adversary",
     "harness-security",
@@ -490,9 +491,11 @@ test("regression: three prepared reviews share the reader lease while parent rea
     await finishToolCall(handlers, read);
   }
 
-  const status = {type:"tool_call",toolName:"harness_tasks",toolCallId:"task-status",input:{action:"status"}};
-  assert.equal(await prepareToolCall(handlers,status),undefined);
-  await finishToolCall(handlers,status);
+  for (const action of ["status", "wait"]) {
+    const observation = {type:"tool_call",toolName:"harness_tasks",toolCallId:`task-${action}`,input:{action}};
+    assert.equal(await prepareToolCall(handlers,observation),undefined);
+    await finishToolCall(handlers,observation);
+  }
 
   for (const mutation of [
     { toolName: "write", input: { path: "src/a.ts", content: "changed" } },

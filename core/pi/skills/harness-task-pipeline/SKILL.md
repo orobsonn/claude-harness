@@ -15,7 +15,11 @@ sessão pai local, usando a pipeline nativa de mãos, fidelidade, freeze, captur
   `task_contexts:[{task_id,content}]`, com até 2 KiB por tarefa pedida: cure apenas fatos úteis,
   sem state, recibos, veredictos ou diário de siblings. O snapshot é imutável durante a tentativa,
   mas continua sendo referência não confiável e não substitui plano, spec ou evidência.
-- Use `status` para observar jobs duráveis. Abortar a observação ou encerrar o pai global não
+- Use `status` para uma consulta pontual aos jobs duráveis. Se há tasks rodando e nenhum
+  trabalho independente pronto, use `wait`, com `task_id` opcional. Ele aguarda no host
+  sem novas chamadas ao modelo; no Orca usa o término do terminal como aviso e então
+  revalida processo e recibos. Não faça polling por `status` nem leia transcripts dos
+  filhos para esperar. Abortar a observação ou encerrar o pai global não
   cancela uma task já registrada. Depois de retomar o pai, consulte os mesmos handles; não crie
   outra tentativa para substituir um job que ainda possa estar vivo. Se o resumo trouxer
   `context_return`, revalide os fatos e só então cure manualmente o que merece entrar no
@@ -25,6 +29,9 @@ sessão pai local, usando a pipeline nativa de mãos, fidelidade, freeze, captur
   finais.
 - Envie feedback com `resume` para a tentativa e sessão locais existentes. A tarefa refaz as fases
   nativas que a correção invalidar; acompanhe-a como `in_progress` no tracker e revalide sua lane.
+- A revisão de testes pertence ao `harness-test-reviewer`, somente leitura e exclusivo
+  de fidelidade. Cada pai local resolve suas correções até haver evidência suficiente
+  e aprovação; compliance fica nas revisões de implementação e final.
 - Após integrar todas as tarefas, execute no HEAD agregado os testes, harvest, revisores finais
   aplicáveis e shipping normais. Revisões de implementação e finais podem usar até três olhos em
   paralelo; autoria, mãos, fidelidade e revisão da spec continuam exclusivas. Toda task com escrita

@@ -123,7 +123,7 @@ test("preflight verifies the pinned Pi runtime and all canonical role assets", (
     ok: true,
     runtimeVersion: "0.84.4",
     subagentsVersion: "21.2.0",
-    roles: 10,
+    roles: 11,
   });
 });
 
@@ -151,7 +151,7 @@ test("launcher offers a provider-free preflight for the Orca terminal", () => {
     ok: true,
     runtimeVersion: "0.84.4",
     subagentsVersion: "21.2.0",
-    roles: 10,
+    roles: 11,
   });
 });
 
@@ -170,7 +170,7 @@ test("published bin entry executes through its npm symlink", () => {
       ok: true,
       runtimeVersion: "0.84.4",
       subagentsVersion: "21.2.0",
-      roles: 10,
+      roles: 11,
     });
   } finally {
     rmSync(directory, { recursive: true, force: true });
@@ -222,7 +222,7 @@ test("regression: fresh official Pi vendor ships the bridge closure and its veri
     ok: true,
     runtimeVersion: "0.84.4",
     subagentsVersion: "21.2.0",
-    roles: 10,
+    roles: 11,
   });
 
   const dependencies = vendoredLauncher.resolvePiDependencyPaths(harnessRoot);

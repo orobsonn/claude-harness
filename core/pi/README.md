@@ -88,6 +88,14 @@ Nunca bloqueiam, só observam ou injetam contexto: `harness-obs`, `harness-idle-
 
 Autoridade do plano canônico: no OpenCode ela vem do SDK (`session.agent === 'planner'`). O `SessionHeader` do Pi não carrega o nome do agente, então a lane grava a identidade da filha em `.pi/harness/state/<pai>/child-identity/` no evento `subagents:child:session-created` do pi-subagents, e o gate lê dali. O wrapper vincula cada chamada à filha exata antes de ligar suas extensões. Um binding ausente ou divergente interrompe a criação; três filhos podem terminar fora de ordem sem trocar papéis ou recibos.
 
+## Revisão de testes
+
+`harness-test-reviewer` avalia somente se os testes representam a tarefa aprovada,
+as fixtures estabelecem as precondições e a evidência executável exigida é suficiente.
+Retorna matriz e achados consolidados em prosa, com `Verdict: APPROVE|REVISE|BLOCKED`.
+O pai local corrige o necessário, revalida as linhas afetadas e encerra ao aprovar.
+Compliance continua responsável pela implementação e pela entrega final.
+
 ## Revisores em paralelo
 
 O harness inicia com até três revisores em paralelo. Para consultar ou alterar o
@@ -152,4 +160,4 @@ O launcher não injeta provedor nem `--model`. O default vem de `core/pi/runtime
 
 ## Rota de modelos
 
-O orquestrador usa Sol como padrão. O rail de dispatch exige: planner Sol/high; plan-reviewer Astra/high; adversary Sol/medium; security Sol padrão; compliance e test-author Terra/high; shipper/harvester Luna/high. Executor e sniper são escolhidos pela complexidade da tarefa canônica: low Luna/high, medium Terra/medium, high Terra/xhigh. Modelo, esforço ou `complexity` divergentes são negados antes do subagente iniciar. O transporte usa limite de inatividade de 15 minutos por chamada de modelo; é finito para ainda expor conexão morta.
+O orquestrador usa Sol como padrão. O rail de dispatch exige: planner Sol/high; plan-reviewer Astra/high; adversary Sol/medium; security Sol padrão; compliance, test-reviewer e test-author Terra/high; shipper/harvester Luna/high. Executor e sniper são escolhidos pela complexidade da tarefa canônica: low Luna/high, medium Terra/medium, high Terra/xhigh. Modelo, esforço ou `complexity` divergentes são negados antes do subagente iniciar. O transporte usa limite de inatividade de 15 minutos por chamada de modelo; é finito para ainda expor conexão morta.

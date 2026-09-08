@@ -28,6 +28,56 @@ async function runOrca({ cli, args, cwd }) {
   return response.result;
 }
 
+/** Long-poll one host-issued task terminal. Exit is only a wake hint; callers must
+ * re-read the task process and receipt before treating the task as complete. */
+export async function waitForOrcaTaskTerminalExit({
+  projectRoot,
+  terminalHandle,
+  timeoutMs = 300_000,
+  signal,
+  cli = process.env.PI_HARNESS_ORCA_CLI || process.env.ORCA_CLI_COMMAND || "orca",
+}, injected = {}) {
+  if (typeof terminalHandle !== "string" || !terminalHandle)
+    throw new Error("Orca task terminal handle required");
+  if (!Number.isInteger(timeoutMs) || timeoutMs < 1)
+    throw new Error("Orca task terminal wait requires a positive timeout");
+  const cwd = fs.realpathSync(projectRoot);
+  const args = [
+    "terminal", "wait", "--terminal", terminalHandle,
+    "--for", "exit", "--timeout-ms", String(timeoutMs),
+  ];
+  if (injected.run) {
+    const result = await injected.run({ cli, args, cwd, timeoutMs, signal });
+    if (typeof result?.wait?.satisfied !== "boolean")
+      throw new Error("Orca terminal wait returned an invalid structured result");
+    return result.wait;
+  }
+  const executeWait = injected.execute ?? execute;
+  let stdout;
+  try {
+    ({ stdout } = await executeWait(cli, [...args, "--json"], {
+      cwd,
+      encoding: "utf8",
+      // The CLI gives its RPC transport a 5 s grace beyond the requested wait.
+      timeout: timeoutMs + 15_000,
+      maxBuffer: 1024 * 1024,
+      signal,
+    }));
+  } catch (error) {
+    if (signal?.aborted || error?.name === "AbortError" || error?.code === "ABORT_ERR")
+      throw error;
+    // The public CLI exits 1 for a healthy, structured unsatisfied timeout.
+    stdout = error?.stdout;
+    if (typeof stdout !== "string" || !stdout) throw error;
+  }
+  const response = JSON.parse(stdout);
+  if (response?.ok === false && response.error?.code === "timeout")
+    return { satisfied: false, condition: "exit", timedOut: true };
+  if (response?.ok !== true || typeof response.result?.wait?.satisfied !== "boolean")
+    throw new Error("Orca terminal wait returned an invalid structured result");
+  return response.result.wait;
+}
+
 /** Called only for a parent launched inside Orca; a stale inherited pane cannot select another repo. */
 export async function resolveOrcaTaskBackend({ projectRoot, worktreeId, cli = process.env.PI_HARNESS_ORCA_CLI || process.env.ORCA_CLI_COMMAND || "orca" }, injected = {}) {
   if (typeof worktreeId !== "string" || !worktreeId)

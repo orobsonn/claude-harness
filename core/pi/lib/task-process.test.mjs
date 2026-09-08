@@ -202,7 +202,7 @@ test("tui timeout terminates the PTY child group and writes a terminal result", 
     runId: "tui-timeout",
     cwd: dir,
     command: process.execPath,
-    args: ["-e", 'console.log(`timeout-tty=${process.stdout.isTTY}`);setInterval(()=>{},30000)'],
+    args: ["-e", 'setInterval(()=>{},30000)'],
     timeoutMs: 100,
     presentation: "tui",
     launchTerminal: pty.launch,
@@ -212,7 +212,8 @@ test("tui timeout terminates the PTY child group and writes a terminal result", 
   assert.equal(end.result.timedOut, true);
   assert.notEqual(end.result.exitCode, 0);
   await pty.state.closed;
-  assert.match(pty.state.output, /timeout-tty=true/);
+  // A valid short timeout may precede the child program's first output under load.
+  // PTY inheritance is asserted by the successful interactive case above.
   assert.deepEqual(taskGroupMembers(end.record.process_group), []);
 });
 

@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
-import { quoteOrcaCommand, resolveOrcaTaskBackend } from "./task-orca.mjs";
+import { quoteOrcaCommand, resolveOrcaTaskBackend, waitForOrcaTaskTerminalExit } from "./task-orca.mjs";
 
 const git = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 async function fixture(t) {
@@ -156,4 +156,49 @@ test("terminal handle reports actual visibility and shell arguments stay literal
   assert.deepEqual(JSON.parse(result), args);
   assert.equal(fs.existsSync(marker), false);
   assert.throws(() => quoteOrcaCommand("node", ["bad\0argument"]), /without NUL/);
+});
+
+test("terminal exit wait uses the public bounded Orca condition and forwards cancellation", async (t) => {
+  const f = await fixture(t);
+  const controller = new AbortController();
+  let observed;
+  const wait = await waitForOrcaTaskTerminalExit({
+    projectRoot: f.root,
+    terminalHandle: "term-task",
+    timeoutMs: 1234,
+    signal: controller.signal,
+    cli: "/opt/orca",
+  }, { run: async (input) => {
+    observed = input;
+    return { wait: { satisfied: false, condition: "exit" } };
+  } });
+  assert.equal(wait.satisfied, false);
+  assert.deepEqual(observed.args, [
+    "terminal", "wait", "--terminal", "term-task",
+    "--for", "exit", "--timeout-ms", "1234",
+  ]);
+  assert.equal(observed.cwd, fs.realpathSync(f.root));
+  assert.equal(observed.cli, "/opt/orca");
+  assert.equal(observed.signal, controller.signal);
+  await assert.rejects(
+    waitForOrcaTaskTerminalExit({ projectRoot: f.root, terminalHandle: "", timeoutMs: 1 }, { run: async () => ({}) }),
+    /handle required/,
+  );
+
+  const timeout = Object.assign(new Error("orca exited 1"), {
+    stdout: JSON.stringify({ ok: false, error: { code: "timeout", message: "timeout" } }),
+  });
+  const timedOut = await waitForOrcaTaskTerminalExit({
+    projectRoot: f.root,
+    terminalHandle: "term-task",
+    timeoutMs: 2,
+    cli: "/opt/orca",
+  }, { execute: async () => { throw timeout; } });
+  assert.deepEqual(timedOut, { satisfied: false, condition: "exit", timedOut: true });
+  await assert.rejects(
+    waitForOrcaTaskTerminalExit({ projectRoot: f.root, terminalHandle: "term-task", timeoutMs: 2 }, {
+      execute: async () => { throw Object.assign(new Error("stale"), { stdout: JSON.stringify({ ok: false, error: { code: "terminal_handle_stale" } }) }); },
+    }),
+    /invalid structured result/,
+  );
 });

@@ -90,6 +90,18 @@ Uma correção de dependência feita depois de seus consumers preserva os recibo
 históricos, mas invalida o fechamento agregado: testes e olhos finais rodam novamente
 no novo HEAD antes do shipping.
 
+No TUI, cards recolhidos dos agentes do harness concluídos mostram um resumo público.
+O planner exibe a quantidade de tasks quando ela pode ser verificada na saída; os
+revisores exibem o parecer e, quando há revisão ou bloqueio, o primeiro motivo
+material. Um relatório ausente, ambíguo ou contraditório aparece como
+`PARECER: INDISPONÍVEL`; expanda o card para consultar a saída original completa.
+Executor, test-author, sniper e shipper exibem o status declarado e uma linha do
+resultado; harvester exibe a quantidade de deltas propostos. Os demais papéis do
+harness recebem um resumo neutro, sem inferir aprovação. Não há chamada extra ao modelo.
+Cards parciais, papéis externos e cards expandidos continuam usando o renderer
+nativo sem alteração. O comportamento entra após init/update do runtime Pi; ele não
+modifica uma execução que já esteja presa a um runtime imutável.
+
 `harness_plan` é apenas o painel desse fluxo. Várias tarefas podem permanecer
 `in_progress` simultaneamente, sem uma atualização apagar o estado das irmãs. O
 registry e os recibos de `harness_tasks` são a autoridade operacional. Essa pipeline
@@ -129,7 +141,7 @@ que chegou à branch mergeada.
 ## Papéis e modelo
 
 O fluxo separa os dez papéis de entrega (`planner`, revisão de plano,
-adversarial, segurança, compliance, harvester, autor de testes, executor,
+adversarial, segurança, compliance, harvester, autor de testes, revisor exclusivo de testes, executor,
 sniper e shipper) do olho opcional `harness-discussion-adversary`, usado só na
 conversa de Grill. O rail fixa a rota de cada despacho. Em particular,
 `harness-plan-reviewer` usa `openai-codex/gpt-6-astra` com esforço `high`.

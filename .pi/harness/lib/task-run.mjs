@@ -28,6 +28,7 @@ const TASK_ROLES = new Set([
   "harness-test-author",
   "harness-executor",
   "harness-sniper",
+  "harness-test-reviewer",
   "harness-compliance",
   "harness-adversary",
   "harness-security",

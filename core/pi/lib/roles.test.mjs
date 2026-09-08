@@ -12,12 +12,12 @@ const SHIPPER_TOOLS = ["read", "grep", "find", "ls", "bash"];
 const PLANNER_TOOLS = ["read", "grep", "find", "ls", "write"];
 
 test("only namespaced harness roles are canonical", () => {
-  assert.equal(CANONICAL_ROLES.length, 10);
-  assert.equal(new Set(CANONICAL_ROLES).size, 10);
+  assert.equal(CANONICAL_ROLES.length, 11);
+  assert.equal(new Set(CANONICAL_ROLES).size, 11);
   assert.equal(isCanonicalRole("harness-planner"), true);
   assert.equal(isCanonicalRole("harness-discussion-adversary"), false);
   assert.deepEqual(DISCUSSION_ROLES, ["harness-discussion-adversary"]);
-  assert.equal(RUNTIME_ROLES.length, 11);
+  assert.equal(RUNTIME_ROLES.length, 12);
   assert.equal(isDiscussionRole("harness-discussion-adversary"), true);
   assert.equal(isRuntimeRole("harness-discussion-adversary"), true);
   assert.equal(isCanonicalRole("planner"), false);
@@ -38,6 +38,7 @@ test("role policies preserve the harness split between eyes and hands", () => {
     "harness-plan-reviewer",
     "harness-planner",
     "harness-security",
+    "harness-test-reviewer",
   ]);
   assert.deepEqual([...HAND_ROLES].sort(), [
     "harness-executor",

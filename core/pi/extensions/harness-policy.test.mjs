@@ -85,7 +85,7 @@ async function executeNativeGrep(root, input) {
   return result.content.map((part) => part.type === "text" ? part.text : "").join("\n");
 }
 
-test("the three reviewers cannot use extra mutation or dispatch tools even if exposed by the runtime", (t) => {
+test("read-only reviewers cannot use extra mutation or dispatch tools even if exposed by the runtime", (t) => {
   const f = fixture();
   t.after(f.close);
   writeFileSync(join(f.root, "ordinary.txt"), "readable synthetic fixture");
@@ -98,7 +98,7 @@ test("the three reviewers cannot use extra mutation or dispatch tools even if ex
     { toolName: "unexpected_tool", input: {} },
   ];
   const onToolCall = handler();
-  for (const role of ["harness-adversary", "harness-compliance", "harness-security"]) {
+  for (const role of ["harness-adversary", "harness-test-reviewer", "harness-compliance", "harness-security"]) {
     const childSessionId = `child-${role}`;
     assert.equal(writePiChildIdentity(f.root, { parentSessionId: SESSION, childSessionId, role, callId: `call-${role}` }).ok, true);
     const ctx = childCtx(f.root, { childSessionId });
@@ -210,6 +210,9 @@ test("suspended ceremony permits local native editing but cannot dispatch or mar
     for (const toolName of ["subagent", "mark", "harness_spec_write", "seal_spec_review"]) assert.equal(run(toolName)?.block, true, toolName);
     assert.equal(run("harness_plan", { action: "update" })?.block, true);
     assert.equal(run("harness_plan", { action: "show" }), undefined);
+    assert.equal(run("harness_tasks", { action: "status" }), undefined);
+    assert.equal(run("harness_tasks", { action: "wait" }), undefined);
+    assert.equal(run("harness_tasks", { action: "resume" })?.block, true);
     assert.equal(run("classify", { mode: "QUICK", feature_id: "replacement" })?.block, true);
     assert.equal(run("classify", { action: "resume-ceremony" }), undefined);
   } finally { f.close(); }
@@ -232,6 +235,8 @@ test("reconciling permits plan reconciliation but no execution, shipping or fina
     assert.equal(run("mark", { action: "final-review" })?.block, true);
     assert.equal(run("mark", { action: "demo-done" })?.block, true);
     assert.equal(run("mark", { action: "regate-passed", task_id: "task1" })?.block, true);
+    assert.equal(run("harness_tasks", { action: "wait" }), undefined);
+    assert.equal(run("harness_tasks", { action: "integrate" })?.block, true);
   } finally { f.close(); }
 });
 

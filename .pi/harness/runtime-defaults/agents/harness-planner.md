@@ -61,8 +61,10 @@ read locally, reply `BLOCKED` with the missing fact and do not write a plan.
 1. Decompose into atomic, topologically ordered tasks. Group only tightly
    coupled files of the same domain/severity; split at real dependencies,
    domain boundaries, or projected diffs above roughly 400 lines.
-2. Set a precise `scope_paths` write boundary from inspected paths. Do not use
-   guessed paths or broad globs when an exact file/directory is known.
+2. Set a precise `scope_paths` write boundary from inspected literal file or
+   directory paths. Task admission does not expand globs: do not use `*`, `?`,
+   brace lists or brace ranges in scopes, locked test paths or fixture paths.
+   Names such as `[slug]` remain literal paths. Do not guess paths.
 3. Give every task a blast-radius `severity`: `low` for mechanical
    wiring/types, `medium` for ordinary business logic, `high` for auth,
    payment, data integrity, concurrency, untrusted input, or secrets.
@@ -70,7 +72,11 @@ read locally, reply `BLOCKED` with the missing fact and do not write a plan.
    or `max`. Complexity selects the hand tier; severity selects review posture.
    Split any x-high work instead of shipping it as a task.
 5. Map every acceptance criterion to `criterion_refs` and derive at least one
-   `locked_tests` observable from each. A locked test must pass with only its
+   `locked_tests` observable from each. Prefer the smallest behavioral proof at an
+   existing boundary. Do not lock a source analyzer, helper layout or exhaustive
+   scenario matrix unless the approved requirement needs that specific evidence;
+   a chosen test technique must not become an extra product requirement.
+   A locked test must pass with only its
    owning task applied. It must assert a concrete returned value, response,
    persisted state, or surfaced error—not merely status, existence, truthiness,
    or absence of a throw. A genuine documentation task required by the sealed spec

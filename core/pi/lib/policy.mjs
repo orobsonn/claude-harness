@@ -23,6 +23,10 @@ import { piStateRoot } from './pi-paths.mjs'
 import { isPiCanonicalPlanPath } from './plan-write-decide.mjs'
 import { isParallelReviewRole } from './roles.mjs'
 
+export function isPiReadOnlyReviewerRole(role) {
+  return role === 'harness-test-reviewer' || isParallelReviewRole(role)
+}
+
 /** Mesma frase de policy.mjs (denyForCommand) — não inventar prefixo novo. */
 const SECRET_REASON = 'Secret-bearing paths are blocked from shell access by the delivery harness.'
 /** Mesma frase de policy.mjs (mutatesProtectedPath). */
@@ -124,7 +128,7 @@ export function decidePiParentOrchestratorPolicy(call = {}, options = {}) {
     if (tool === "classify" && !["suspend-inline", "resume-ceremony"].includes(input.action)) return blocked
     if (tool === "mark" || tool === "harness_spec_write" || tool === "seal_spec_review") return blocked
     if (tool === "harness_plan" && input.action !== "show") return blocked
-    if (tool === "harness_tasks" && input.action !== "status") return blocked
+    if (tool === "harness_tasks" && !["status", "wait"].includes(input.action)) return blocked
     if (tool === "subagent" && (status === "suspended-inline" || !["harness-planner", "harness-plan-reviewer"].includes(input.subagent_type))) return blocked
   }
   if (options?.isChild === true || (options?.isHeadless !== true && !isActiveDeliveryCeremony(options?.gateState))) return ALLOW
@@ -189,11 +193,11 @@ export function isPiReviewSecretPath(path) {
   ))
 }
 
-/** @description Restringe os três revisores independentes a leituras canônicas do projeto.
+/** @description Restringe revisores de implementação e fidelidade a leituras canônicas do projeto.
  * Para grep recursivo sem glob, devolve o patch fixo que o adaptador injeta antes da execução
  * da tool nativa. Um glob do modelo não pode ser composto com essa exclusão única e é negado. */
 function decideReviewerReadPolicy(toolName, input, options) {
-  if (!isParallelReviewRole(options?.reviewerRole)) return ALLOW
+  if (!isPiReadOnlyReviewerRole(options?.reviewerRole)) return ALLOW
 
   let root
   try { root = realpathSync(options?.projectRoot ?? options?.cwd) } catch { return { block: true, reason: REVIEWER_READ_REASON } }
@@ -250,7 +254,7 @@ export function decidePiPolicy(call = {}, options = {}) {
   const toolName = call?.toolName
   const input = call?.input && typeof call.input === 'object' ? call.input : {}
 
-  if (isParallelReviewRole(options.reviewerRole) && !isPiReadTool(toolName)) {
+  if (isPiReadOnlyReviewerRole(options.reviewerRole) && !isPiReadTool(toolName)) {
     return { block: true, reason: 'Read-only reviewers may use only read, grep, find and ls.' }
   }
 

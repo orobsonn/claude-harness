@@ -132,3 +132,134 @@ test("production entrypoint rejects a missing child rail before child model work
   );
   assert.equal(childModelCalls, 0);
 });
+
+test("collapsed native cards show public planner and reviewer outcomes without changing expanded results", async () => {
+  const entryModule = await createJiti(import.meta.url, { moduleCache: false, tsconfigPaths: true })
+    .import(ENTRY);
+  const pi = fakePi();
+  await entryModule.default(pi, {
+    root: SOURCE_ROOT,
+    maxParallelEyes: 3,
+    async loadNativeFactory() {
+      return (api) => api.registerTool({
+        name: "subagent",
+        execute() {},
+        renderResult(result, options) { return { result, options }; },
+      });
+    },
+  });
+
+  const tool = pi.tools.get("subagent");
+  const completed = (subagentType, text) => ({
+    content: [{ type: "text", text }],
+    details: { status: "completed", subagentType },
+  });
+  const collapsed = { expanded: false, isPartial: false };
+
+  const plannerText = [
+    '{"version":1,"tasks":[{"id":"task-1"},{"id":"task-2"}]}',
+    "Plano de entrega criado com 2 tarefas, severidades low/high e adversarial em task-2.",
+  ].join("\n");
+  const planner = tool.renderResult(completed("harness-planner", plannerText), collapsed, {});
+  assert.equal(planner.options.expanded, true);
+  assert.match(planner.result.content[0].text, /^└ Done\n└ PLANO · .*2 tarefas/);
+
+  const planRevision = tool.renderResult(completed("harness-plan-reviewer", JSON.stringify({
+    verdict: "REVISE",
+    findings: [{
+      area: "scope", severity: "high", task_id: "task-2",
+      problem: "O caminho de migração não pertence à tarefa.",
+      planner_instruction: "Mova o caminho para a tarefa proprietária.",
+    }],
+  })), collapsed, {});
+  assert.match(planRevision.result.content[0].text, /PARECER: REVISAR · O caminho de migração/);
+
+  const approval = tool.renderResult(completed("harness-security", '{"issues":[]}'), collapsed, {});
+  assert.match(approval.result.content[0].text, /PARECER: APROVADO · sem achados/);
+
+  const original = completed("harness-compliance", '{"issues":[]}');
+  const expanded = tool.renderResult(original, { expanded: true, isPartial: false }, {});
+  assert.strictEqual(expanded.result, original);
+  assert.equal(expanded.options.expanded, true);
+});
+
+test("collapsed review summaries remain neutral without one completed canonical verdict", async () => {
+  const { testApi } = await createJiti(import.meta.url, { moduleCache: false, tsconfigPaths: true })
+    .import(ENTRY);
+  const result = (status, subagentType, text) => ({
+    content: [{ type: "text", text }],
+    details: { status, subagentType },
+  });
+
+  assert.equal(
+    testApi.summarizeHarnessSubagentResult(result("completed", "harness-test-reviewer", [
+      "Findings:",
+      "- A fixture não alcança o comportamento aprovado.",
+      "Verdict: REVISE",
+    ].join("\n"))),
+    "PARECER: REVISAR · A fixture não alcança o comportamento aprovado.",
+  );
+  assert.equal(
+    testApi.summarizeHarnessSubagentResult(result("completed", "harness-test-reviewer", "Verdict: APPROVE\nVerdict: REVISE")),
+    "PARECER: INDISPONÍVEL · expanda para ver a saída",
+  );
+  assert.equal(
+    testApi.summarizeHarnessSubagentResult(result("completed", "harness-plan-reviewer", "APPROVE")),
+    "PARECER: INDISPONÍVEL · expanda para ver a saída",
+  );
+  assert.equal(
+    testApi.summarizeHarnessSubagentResult(result("completed", "harness-plan-reviewer", JSON.stringify({
+      verdict: "APPROVE",
+      findings: [{
+        area: "scope", severity: "high", task_id: "task-2",
+        problem: "O escopo ainda está incorreto.",
+        planner_instruction: "Corrija o escopo.",
+      }],
+    }))),
+    "PARECER: INDISPONÍVEL · aprovação contradiz os achados reportados",
+  );
+  assert.equal(
+    testApi.summarizeHarnessSubagentResult(result("completed", "harness-plan-reviewer", [
+      '{"verdict":"APPROVE","findings":[]}',
+      '{"verdict":"REVISE","findings":[{"area":"scope","severity":"high","task_id":"task-2","problem":"Conflito.","planner_instruction":"Corrija."}]}',
+    ].join("\n"))),
+    "PARECER: INDISPONÍVEL · expanda para ver a saída",
+  );
+  assert.equal(
+    testApi.summarizeHarnessSubagentResult(result("aborted", "harness-test-reviewer", "Verdict: APPROVE")),
+    null,
+  );
+});
+
+test("collapsed cards summarize the remaining harness roles from their existing public result", async () => {
+  const { testApi } = await createJiti(import.meta.url, { moduleCache: false, tsconfigPaths: true })
+    .import(ENTRY);
+  const completed = (subagentType, text) => ({
+    content: [{ type: "text", text }],
+    details: { status: "completed", subagentType },
+  });
+  const envelope = (body) => `Agent completed in 2.0s (3 tool uses).\nAgent ID: child-1\n\n${body}`;
+
+  for (const role of ["harness-executor", "harness-test-author", "harness-sniper", "harness-shipper"]) {
+    assert.equal(
+      testApi.summarizeHarnessSubagentResult(completed(role, envelope("Corrigi o limite observado e rodei a suíte focal.\nStatus: DONE"))),
+      "STATUS: DONE · Corrigi o limite observado e rodei a suíte focal.",
+    );
+  }
+  assert.equal(
+    testApi.summarizeHarnessSubagentResult(completed("harness-harvester", envelope(
+      '[HARNESS_HARVEST_RESULT]{"changes":[{"path":"MEMORY.md"},{"path":"kaizen.md"}]}[/HARNESS_HARVEST_RESULT]',
+    ))),
+    "HARVEST · 2 deltas propostos",
+  );
+  assert.equal(
+    testApi.summarizeHarnessSubagentResult(completed("harness-discussion-adversary", envelope(
+      "A proposta ainda não demonstra a fronteira de autorização.",
+    ))),
+    "RESULTADO · A proposta ainda não demonstra a fronteira de autorização.",
+  );
+  assert.equal(
+    testApi.summarizeHarnessSubagentResult(completed("external-helper", "Status: DONE")),
+    null,
+  );
+});

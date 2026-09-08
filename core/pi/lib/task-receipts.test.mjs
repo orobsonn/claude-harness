@@ -85,7 +85,7 @@ function inspectionFixture({ historicFailure = false, frozenFixture = false } = 
     feature_id: FEATURE,
     hand_finished: [bare],
     fidelity_pass: [`${bare}@${freeze}`],
-    capture_verified: [`${bare}@${freeze}`],
+    capture_verified: [`${bare}@${head}`],
     task_adversary_evidence: { [bare]: review("harness-adversary", head) },
     task_review_evidence: { [bare]: {
       compliance: review("harness-compliance", head),
@@ -100,7 +100,7 @@ function inspectionFixture({ historicFailure = false, frozenFixture = false } = 
     sessionId: CHILD,
     agent: "harness-executor",
     producerCallId: "producer",
-    freezeCommitSha: freeze,
+    freezeCommitSha: head,
     outcome: "DONE",
     scopeViolations: [],
     frozenViolations: [],
@@ -113,7 +113,7 @@ function inspectionFixture({ historicFailure = false, frozenFixture = false } = 
     event("tool_execution_start", { toolCallId: "author", toolName: "subagent", args: { subagent_type: "harness-test-author" } }),
     event("tool_execution_end", { toolCallId: "author", toolName: "subagent", isError: false, result: { details: { status: "completed" } } }),
     event("tool_execution_start", { toolCallId: "fidelity-eye", toolName: "subagent", args: { subagent_type: "harness-compliance" } }),
-    event("tool_execution_end", { toolCallId: "fidelity-eye", toolName: "subagent", isError: false, result: { details: { status: "completed" } } }),
+    event("tool_execution_end", { toolCallId: "fidelity-eye", toolName: "subagent", isError: false, result: { content: [{ type: "text", text: "Fidelity evidence.\nVerdict: APPROVE" }], details: { status: "completed" } } }),
     event("tool_execution_start", { toolCallId: "freeze", toolName: "bash", args: { command: "git commit -m freeze" } }),
     event("tool_execution_end", { toolCallId: "freeze", toolName: "bash", isError: false, result: { content: [{ type: "text", text: `[task ${freeze.slice(0, 7)}] freeze` }] } }),
     event("tool_execution_start", { toolCallId: "fidelity", toolName: "mark", args: { action: "fidelity", task_id: TASK } }),
@@ -162,6 +162,23 @@ function inspectionFixture({ historicFailure = false, frozenFixture = false } = 
   return { root, base, freeze, head, entry, dependencies, statePath: path.join(root, ".pi", "harness", "state", CHILD, "gate-state.json") };
 }
 
+function bindPinnedRuntime(fixture, { testReviewer = false } = {}) {
+  const piRoot = path.join(fixture.entry.job_dir, "pinned", "core", "pi");
+  const launcher = path.join(piRoot, "bin", "pi-harness.mjs");
+  write(launcher, "// pinned runtime\n");
+  if (testReviewer) write(path.join(piRoot, "runtime", "agents", "harness-test-reviewer.md"), "---\nlocked: true\n---\n");
+  const runtime = { launcher_path: launcher, sha256: "9".repeat(64) };
+  fixture.entry.runtime = runtime;
+  for (const launch of fixture.entry.launches) {
+    launch.runtime = runtime;
+    const processRecord = JSON.parse(fs.readFileSync(launch.process_path, "utf8"));
+    write(launch.process_path, { ...processRecord, run_runtime_sha256: runtime.sha256 });
+    const result = JSON.parse(fs.readFileSync(launch.result_path, "utf8"));
+    write(launch.result_path, { ...result, run_runtime_sha256: runtime.sha256 });
+  }
+  return runtime;
+}
+
 test("inspectTaskRun issues a child-bound receipt from native lifecycle, fidelity, capture and strong reviews", () => {
   const fixture = inspectionFixture({ historicFailure: true });
   const inspected = inspectTaskRun(fixture.entry, fixture.dependencies);
@@ -169,9 +186,58 @@ test("inspectTaskRun issues a child-bound receipt from native lifecycle, fidelit
   assert.equal(inspected.result.session_id, CHILD);
   assert.equal(inspected.result.child_head, fixture.head);
   assert.equal(inspected.result.freeze_sha, fixture.freeze);
+  assert.equal(inspected.result.hand_capture.freeze_sha, fixture.head);
   assert.equal(inspected.result.latest_run_id, "run-current");
   assert.deepEqual(inspected.result.changed_paths, ["src/task.mjs", "src/task.spec.mjs"]);
   assert.match(inspected.result.frozen_blobs["src/task.spec.mjs"], /^[0-9a-f]{64}$/);
+});
+
+test("pinned runtimes with the dedicated test reviewer cannot use compliance as new fidelity evidence", () => {
+  const fixture = inspectionFixture();
+  bindPinnedRuntime(fixture, { testReviewer: true });
+  const legacyReview = inspectTaskRun(fixture.entry, fixture.dependencies);
+  assert.equal(legacyReview.ok, false);
+  assert.match(legacyReview.reason, /harness-test-reviewer/);
+
+  const eventsPath = fixture.entry.launches.at(-1).events_path;
+  const events = fs.readFileSync(eventsPath, "utf8").replace(
+    '"subagent_type":"harness-compliance"',
+    '"subagent_type":"harness-test-reviewer"',
+  );
+  write(eventsPath, events);
+  const dedicatedReview = inspectTaskRun(fixture.entry, fixture.dependencies);
+  assert.equal(dedicatedReview.ok, true, dedicatedReview.reason);
+
+  for (const verdict of ["REVISE", "BLOCKED"]) {
+    write(eventsPath, events.replace("Verdict: APPROVE", `Verdict: ${verdict}`));
+    const rejectedReview = inspectTaskRun(fixture.entry, fixture.dependencies);
+    assert.equal(rejectedReview.ok, false, verdict);
+    assert.match(rejectedReview.reason, /harness-test-reviewer/);
+  }
+
+  for (const invalid of ["Verdict: APPROVED", "Verdict: REVISE\nVerdict: APPROVE"]) {
+    write(eventsPath, events.replace("Verdict: APPROVE", invalid));
+    const malformedReview = inspectTaskRun(fixture.entry, fixture.dependencies);
+    assert.equal(malformedReview.ok, false, invalid);
+    assert.match(malformedReview.reason, /harness-test-reviewer/);
+  }
+
+  const freezeStart = event("tool_execution_start", { toolCallId: "freeze", toolName: "bash", args: { command: "git commit -m freeze" } });
+  const laterStart = event("tool_execution_start", { toolCallId: "fidelity-eye-later", toolName: "subagent", args: { subagent_type: "harness-test-reviewer" } });
+  for (const laterEnd of [
+    event("tool_execution_end", { toolCallId: "fidelity-eye-later", toolName: "subagent", isError: false, result: { content: [{ type: "text", text: "Corrective finding.\nVerdict: REVISE" }], details: { status: "completed" } } }),
+    event("tool_execution_end", { toolCallId: "fidelity-eye-later", toolName: "subagent", isError: true, result: { details: { status: "failed" } } }),
+  ]) {
+    write(eventsPath, events.replace(freezeStart, `${laterStart}\n${laterEnd}\n${freezeStart}`));
+    const supersededApproval = inspectTaskRun(fixture.entry, fixture.dependencies);
+    assert.equal(supersededApproval.ok, false, "a later non-approval must supersede an earlier APPROVE");
+    assert.match(supersededApproval.reason, /harness-test-reviewer/);
+  }
+
+  const legacy = inspectionFixture();
+  bindPinnedRuntime(legacy);
+  const legacyCompatible = inspectTaskRun(legacy.entry, legacy.dependencies);
+  assert.equal(legacyCompatible.ok, true, legacyCompatible.reason);
 });
 
 test("inspectTaskRun accepts cumulative locked tests and fixtures outside production scope", () => {
@@ -294,15 +360,15 @@ test("native task markers bind a real test-only freeze commit through executor c
   assert.deepEqual(removedDispatches, [{ sessionId: CHILD, callId: "author" }]);
 
   write(path.join(root, "src", "task.mjs"), "export const actual = 1;\n");
-  hand("harness-executor", "executor", freeze);
-  const executorFinished = mark("hand-finished", "executor-finished");
   run(root, "git", "add", "--", "src/task.mjs");
   run(root, "git", "commit", "-m", "implement task");
   const head = run(root, "git", "rev-parse", "HEAD");
+  hand("harness-executor", "executor", head);
+  const executorFinished = mark("hand-finished", "executor-finished");
   const capture = mark("capture-verified", "capture");
 
   state = JSON.parse(fs.readFileSync(statePath, "utf8"));
-  assert.deepEqual(state.capture_verified, [`${bare}@${base}`, `${bare}@${freeze}`]);
+  assert.deepEqual(state.capture_verified, [`${bare}@${base}`, `${bare}@${head}`]);
   assert.deepEqual(removedDispatches, [
     { sessionId: CHILD, callId: "author" },
     { sessionId: CHILD, callId: "executor" },
@@ -374,8 +440,81 @@ test("native task markers bind a real test-only freeze commit through executor c
   });
   assert.equal(inspected.ok, true, inspected.reason);
   assert.equal(inspected.result.freeze_sha, freeze);
-  assert.equal(inspected.result.hand_capture.freeze_sha, freeze);
+  assert.equal(inspected.result.hand_capture.freeze_sha, head);
   assert.equal(inspected.result.child_head, head);
+});
+
+test("inspectTaskRun rejects a captured implementation hand that predates the latest fidelity freeze", () => {
+  const fixture = inspectionFixture();
+  const handPath = path.join(fixture.root, ".pi", "harness", "state", "hand-records", FEATURE, CHILD, `${TASK}.json`);
+  const hand = JSON.parse(fs.readFileSync(handPath, "utf8"));
+  write(handPath, { ...hand, freezeCommitSha: fixture.base });
+  const state = JSON.parse(fs.readFileSync(fixture.statePath, "utf8"));
+  state.capture_verified = [`${FEATURE}/${TASK}@${fixture.base}`];
+  write(fixture.statePath, state);
+
+  const inspected = inspectTaskRun(fixture.entry, fixture.dependencies);
+  assert.equal(inspected.ok, false);
+  assert.match(inspected.reason, /not descended from.*latest freeze/i);
+});
+
+test("inspectTaskRun requires the current hand producer to be the latest implementation after fidelity", () => {
+  const fixture = inspectionFixture();
+  const eventsPath = fixture.entry.launches.at(-1).events_path;
+  fs.appendFileSync(eventsPath, [
+    event("tool_execution_start", { toolCallId: "later-sniper", toolName: "subagent", args: { subagent_type: "harness-sniper", prompt: `[HARNESS_TASK_CONTEXT]{"task_id":"${TASK}"}[/HARNESS_TASK_CONTEXT]` } }),
+    event("tool_execution_end", { toolCallId: "later-sniper", toolName: "subagent", isError: false, result: { details: { status: "completed" } } }),
+    "",
+  ].join("\n"));
+
+  const inspected = inspectTaskRun(fixture.entry, fixture.dependencies);
+  assert.equal(inspected.ok, false);
+  assert.match(inspected.reason, /latest successful implementation call after fidelity/i);
+});
+
+test("inspectTaskRun accepts a post-freeze sniper hand while retaining the test freeze", () => {
+  const fixture = inspectionFixture();
+  const handPath = path.join(fixture.root, ".pi", "harness", "state", "hand-records", FEATURE, CHILD, `${TASK}.json`);
+  const hand = JSON.parse(fs.readFileSync(handPath, "utf8"));
+  write(handPath, { ...hand, agent: "harness-sniper" });
+  const eventsPath = fixture.entry.launches.at(-1).events_path;
+  write(eventsPath, fs.readFileSync(eventsPath, "utf8").replace(
+    '"subagent_type":"harness-executor"',
+    '"subagent_type":"harness-sniper"',
+  ));
+
+  const inspected = inspectTaskRun(fixture.entry, fixture.dependencies);
+  assert.equal(inspected.ok, true, inspected.reason);
+  assert.equal(inspected.result.freeze_sha, fixture.freeze);
+  assert.equal(inspected.result.hand_capture.freeze_sha, fixture.head);
+  assert.equal(inspected.result.hand_capture.agent, "harness-sniper");
+});
+
+test("inspectTaskRun rejects implementation evidence that only predates fidelity", () => {
+  const fixture = inspectionFixture();
+  const eventsPath = fixture.entry.launches.at(-1).events_path;
+  const lines = fs.readFileSync(eventsPath, "utf8").trimEnd().split("\n");
+  const producer = lines.splice(-2);
+  lines.splice(3, 0, ...producer);
+  write(eventsPath, `${lines.join("\n")}\n`);
+
+  const inspected = inspectTaskRun(fixture.entry, fixture.dependencies);
+  assert.equal(inspected.ok, false);
+  assert.match(inspected.reason, /latest successful implementation call after fidelity/i);
+});
+
+test("inspectTaskRun rejects successful test-author work after the latest fidelity marker", () => {
+  const fixture = inspectionFixture();
+  const eventsPath = fixture.entry.launches.at(-1).events_path;
+  fs.appendFileSync(eventsPath, [
+    event("tool_execution_start", { toolCallId: "late-author", toolName: "subagent", args: { subagent_type: "harness-test-author", prompt: `[HARNESS_TASK_CONTEXT]{"task_id":"${TASK}"}[/HARNESS_TASK_CONTEXT]` } }),
+    event("tool_execution_end", { toolCallId: "late-author", toolName: "subagent", isError: false, result: { details: { status: "completed" } } }),
+    "",
+  ].join("\n"));
+
+  const inspected = inspectTaskRun(fixture.entry, fixture.dependencies);
+  assert.equal(inspected.ok, false);
+  assert.match(inspected.reason, /test-author work has no subsequent fidelity marker/i);
 });
 
 test("inspectTaskRun rejects the latest failed continuation even when an older event stream is healthy", () => {
@@ -750,6 +889,34 @@ test("readIntegratedTaskEvidence accepts a receipt containing only the baseline 
   });
   assert.equal(evidence.ok, true, evidence.reason);
   assert.deepEqual(Object.keys(evidence.entry.result.review_receipts), ["adversary"]);
+});
+
+test("readIntegratedTaskEvidence rejects forged freeze or hand ancestry after receipt hashes are recomputed", () => {
+  for (const field of ["freeze", "hand"]) {
+    const fixture = integratedFixture();
+    const forgedSha = "f".repeat(40);
+    if (field === "freeze") {
+      fixture.registry.tasks[TASK].result.freeze_sha = forgedSha;
+      fixture.registry.tasks[TASK].result.frozen_blobs = {
+        "README.md": crypto.createHash("sha256").update(fs.readFileSync(path.join(fixture.root, "README.md"))).digest("hex"),
+      };
+    } else {
+      fixture.registry.tasks[TASK].result.hand_capture.freeze_sha = forgedSha;
+      fixture.registry.tasks[TASK].result.hand_capture.capture_marker = `${FEATURE}/${TASK}@${forgedSha}`;
+    }
+    fixture.registry.tasks[TASK].integration.result_sha256 = hashTaskReceipt(fixture.registry.tasks[TASK].result);
+    write(fixture.registryPath, fixture.registry);
+
+    const evidence = readIntegratedTaskEvidence({
+      projectRoot: fixture.root,
+      sessionId: PARENT,
+      featureId: FEATURE,
+      taskId: TASK,
+      headSha: fixture.base,
+    });
+    assert.equal(evidence.ok, false, field);
+    assert.match(evidence.reason, /freeze and hand capture.*not ancestral/i, field);
+  }
 });
 
 test("readIntegratedTaskEvidence rejects revoked status and a forged result hash", () => {

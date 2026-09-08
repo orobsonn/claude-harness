@@ -16,6 +16,7 @@ const PLANNER_TOOLS = Object.freeze(["read", "grep", "find", "ls", "write"]);
 
 export const EYE_ROLES = Object.freeze([
   "harness-planner",
+  "harness-test-reviewer",
   "harness-compliance",
   "harness-adversary",
   "harness-security",
@@ -30,7 +31,7 @@ export const HAND_ROLES = Object.freeze([
   "harness-test-author",
 ]);
 
-/** As dez roles que participam do plano, marcadores, captura e aprovação final. */
+/** As onze roles que participam do plano, marcadores, captura e aprovação final. */
 export const DELIVERY_ROLES = Object.freeze([...EYE_ROLES, ...HAND_ROLES]);
 /** Olho local de discussão: não pertence à cerimônia de delivery. */
 export const DISCUSSION_ROLES = Object.freeze(["harness-discussion-adversary"]);
@@ -42,7 +43,7 @@ export const PARALLEL_REVIEW_ROLES = Object.freeze([
   "harness-compliance",
   "harness-security",
 ]);
-// Compatibilidade para consumidores de delivery: "canonical" continua sendo as dez roles.
+// Compatibilidade para consumidores de delivery: "canonical" continua sendo o catálogo de delivery.
 export const CANONICAL_ROLES = DELIVERY_ROLES;
 
 const POLICIES = Object.freeze(Object.fromEntries([

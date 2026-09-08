@@ -20,6 +20,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
+import { convertToLlm } from "@earendil-works/pi-coding-agent";
 import harnessMemory from "./harness-memory.ts";
 import { capturePiReviewInput } from "../lib/pi-review-evidence.mjs";
 
@@ -367,8 +368,8 @@ test("harness-memory: pai recebe contexto atual como dado efêmero sem ordem rec
   assert.deepEqual(baseMessages, baseSnapshot, "o handler não pode mutar o array recebido");
   assert.notEqual(enriched.messages, baseMessages);
   assert.equal(enriched.messages.length, 2);
-  assert.deepEqual(enriched.messages[0], baseMessages[0]);
-  const memoryMessage = enriched.messages[1];
+  assert.deepEqual(enriched.messages[1], baseMessages[0]);
+  const memoryMessage = enriched.messages[0];
   assert.equal(memoryMessage.role, "custom");
   assert.equal(memoryMessage.customType, "harness-memory");
   assert.equal(memoryMessage.display, false);
@@ -385,9 +386,9 @@ test("harness-memory: pai recebe contexto atual como dado efêmero sem ordem rec
   assert.equal(memoryMessage.content.includes("DIÁRIO_ESTRANGEIRO_NÃO_VAZAR"), false);
   assert.equal(enriched.messages.some(({ role }) => role === "system"), false);
 
-  const updatedContext = `DIÁRIO_ATUALIZADO_B\n${"B".repeat(8_000)}`;
-  await api.execute({ action: "update", content: updatedContext }, ctx(root));
-  const priorCycle = [...enriched.messages, {
+  const providerSequence = (messages) => convertToLlm(messages).map((message) => JSON.stringify(message)).join("\n");
+  const firstProviderInput = providerSequence(enriched.messages);
+  const priorCycle = [...baseMessages, {
     role: "assistant",
     content: [{ type: "toolCall", name: "harness_memory", arguments: { action: "read" } }],
     timestamp: 2,
@@ -398,11 +399,35 @@ test("harness-memory: pai recebe contexto atual como dado efêmero sem ordem rec
     timestamp: 3,
   }];
   const repeated = await api.context({ messages: priorCycle }, ctx(root));
+  const secondProviderInput = providerSequence(repeated.messages);
+  assert.ok(secondProviderInput.startsWith(firstProviderInput), "o segundo request preserva integralmente o prefixo serializado do primeiro");
   assert.equal(repeated.messages.filter(({ customType }) => customType === "harness-memory").length, 1);
-  const refreshed = repeated.messages.find(({ customType }) => customType === "harness-memory");
+  assert.deepEqual(repeated.messages.slice(1), priorCycle, "mensagens normais mantêm ordem e conteúdo no pipeline comum");
+
+  const updatedContext = `DIÁRIO_ATUALIZADO_B\n${"B".repeat(8_000)}`;
+  await api.execute({ action: "update", content: updatedContext }, ctx(root));
+  const thirdCycle = [...priorCycle, {
+    role: "assistant",
+    content: [{ type: "text", text: "continuação depois do resultado" }],
+    timestamp: 4,
+  }];
+  const refreshedTurn = await api.context({ messages: thirdCycle }, ctx(root));
+  const refreshed = refreshedTurn.messages[0];
   assert.ok(refreshed.content.includes("DIÁRIO_ATUALIZADO_B"));
   assert.equal(refreshed.content.includes("DIÁRIO_ATUAL_EFÊMERO"), false);
-  assert.equal(repeated.messages.filter(({ role }) => role === "toolResult").length, 1);
+  assert.equal(refreshedTurn.messages.filter(({ customType }) => customType === "harness-memory").length, 1);
+  assert.deepEqual(refreshedTurn.messages.slice(1), thirdCycle, "atualizar a memória não remove nem reordena outras dependências");
+  assert.notEqual(providerSequence(refreshedTurn.messages), secondProviderInput, "a atualização muda o prefixo exatamente na rodada necessária");
+
+  const fourthCycle = [...thirdCycle, {
+    role: "assistant",
+    content: [{ type: "text", text: "mais uma continuação" }],
+    timestamp: 5,
+  }];
+  const stableAfterUpdate = await api.context({ messages: fourthCycle }, ctx(root));
+  assert.ok(providerSequence(stableAfterUpdate.messages).startsWith(providerSequence(refreshedTurn.messages)), "após a atualização, o prefixo volta a crescer sem ser deslocado");
+  assert.equal(stableAfterUpdate.messages.filter(({ customType }) => customType === "harness-memory").length, 1);
+  assert.equal(stableAfterUpdate.messages.filter(({ role }) => role === "toolResult").length, 1);
   assert.doesNotMatch(refreshed.content, /harness_memory\s+read|Use harness_memory read/i);
   assert.doesNotMatch(api.tool.promptSnippet, /read relevant evidence|harness_memory\s+read/i);
   assert.deepEqual(baseMessages, baseSnapshot);

@@ -163,6 +163,9 @@ export function piSubagentArgs(input) {
  */
 export function toOcRole(name) {
   const bare = bareRole(name);
+  // Pi separates the serial test-fidelity eye from implementation/final compliance.
+  // Shared OC ceremony ordering still treats that new eye as the fidelity compliance role.
+  if (bare === "harness-test-reviewer") return "compliance";
   return bare.startsWith("harness-") ? bare.slice("harness-".length) : bare;
 }
 
