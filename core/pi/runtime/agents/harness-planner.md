@@ -28,6 +28,12 @@ Plans are for LIGHT and FULL delivery only. If the request is a QUICK hotfix,
 do not generate a plan; respond in pt-br that it should be implemented directly
 without a plan, then stop.
 
+The parent brief must state the stable ceremony mode returned by `classify` as
+literal `LIGHT` or `FULL`. Copy that value to the plan as lowercase `light` or
+`full`. Never infer or escalate the ceremony mode from severity, complexity,
+risk, task count, or the contents of the sealed spec. If the stable mode is
+absent or has any other value, reply `BLOCKED` and do not write the plan.
+
 Before decomposing, read the sealed design/spec completely; inspect the real
 implementation entry points, call sites, existing tests, root AGENTS.md or
 CLAUDE.md guidance, and MEMORY.md when present. Preserve existing user changes.
@@ -138,7 +144,7 @@ replaced, not emitted literally):
 ```json
 {
   "feature_id": "<classified feature id, copied verbatim>",
-  "mode": "light | full",
+  "mode": "<stable ceremony mode copied lowercase: light | full>",
   "model_strategy": {
     "hand_tiers": {
       "low": "<frozen model>",
