@@ -209,9 +209,11 @@ authoritative source for this step, this section is only the summary:
    OpenCode uses Auto Mode (`permission.bash` default `"*": "allow"` plus targeted denies), so this
    routine command runs without a permission prompt.
 3. `npx -y lavish-axi poll docs/prd/<slug>-mockup.html` to wait for the operator's feedback. Keep it
-   in the foreground; if the bash call times out, that's expected — just re-run `poll`, nothing is
-   lost.
+   in the foreground. If the tool times out before feedback arrives, re-run `poll`; undelivered
+   feedback stays queued. Read a delivered response completely before filtering it.
 4. Apply feedback, `poll --agent-reply "..."` again, repeat until the operator ends the session.
+   `browser_disconnected` pauses this loop: ask whether to resume or end. Final feedback with
+   `session_ended: true` also stops polling; apply it and report in chat.
 
 **If `npx -y lavish-axi` fails outright** (no network, registry unreachable, broken release) — fall
 back to the pre-lavish path: best-effort try to open the static file for the operator via bash

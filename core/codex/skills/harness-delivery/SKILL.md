@@ -14,6 +14,10 @@ Run entry triage first and execute only an approved, bounded plan.
 - Delegate only independent work; hands cannot widen scope or self-approve.
 - For every implementation change: red test, minimal green code, affected suite.
 - At the end, verify acceptance criteria, diff, docs, risks, and residuals.
+- After implementation, route an applicable final finding back to its existing owning
+  task for a scoped fix and revalidation. Do not create another task or dispatch planner/
+  plan-reviewer to restart a finished plan; an unowned path or changed contract needs
+  an explicit scope decision, never an implicit expansion during finalization.
 
 When this skill is loaded by a Pi global parent whose session has
 `task_pipeline_version: 1` and a current approved plan, use `harness_tasks` for implementation dispatch,

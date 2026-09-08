@@ -12,9 +12,33 @@ it is delivered as an opt-in add-on, never hardcoded into the core. The hook is 
 
 ### 1. Install the binary
 
-- **Desktop:** `cargo install rtk` (requires a Rust toolchain).
-- **Cloud routine:** add `cargo install rtk` to the environment **setup script** (runs as root on the
-  fresh container before Claude Code launches; has network access to crates.io at the Trusted level).
+Validated stable release: [RTK v0.48.0](https://github.com/rtk-ai/rtk/releases/tag/v0.48.0)
+(2026-09-08). Install or update the binary on **each execution host**: installing it on a VPS
+does not update a desktop connected to that VPS.
+
+- **Desktop (Homebrew):** `brew update && brew upgrade rtk` for an existing installation,
+  or `brew install rtk` for a new one. Confirm the installed version with `rtk --version`.
+- **Linux/macOS without Homebrew, including the VPS:** use the official installer pinned to
+  the validated release. It checks the downloaded archive's SHA-256 and installs in
+  `~/.local/bin` by default:
+
+  ```bash
+  curl -fsSL https://raw.githubusercontent.com/rtk-ai/rtk/v0.48.0/install.sh -o /tmp/rtk-install-v0.48.0.sh
+  RTK_VERSION=v0.48.0 sh /tmp/rtk-install-v0.48.0.sh
+  rtk --version
+  rtk gain
+  ```
+
+- **Build from source:** `cargo install --git https://github.com/rtk-ai/rtk --tag v0.48.0 --locked`.
+  Do not use bare `cargo install rtk`: crates.io has a different package with that name.
+- **Cloud routine:** put the chosen pinned installation in the environment setup script,
+  before the coding agent launches. Ensure its install directory is on that agent's PATH.
+
+Updating the binary preserves existing agent configuration. Wire the hook separately when
+enabling RTK; do not rerun `rtk init` as part of an ordinary binary update.
+The Pi harness launcher uses its own runtime and explicit extension list; it does not
+automatically load an optimizer installed in the operator's global Pi packages. A binary
+update alone therefore does not enable automatic rewriting in harness-launched Pi sessions.
 
 ### 2. Wire the PreToolUse hook
 
@@ -39,8 +63,9 @@ missing binary never blocks Bash:
 ## Caveats
 
 - RTK sees every Bash command string. Treat it as a trusted dependency; pin its version.
-- In cloud, building from crates.io adds compile time to each cold start and depends on the registry
-  being reachable. Detect-and-skip if `cargo` is unavailable rather than failing the run.
+- In cloud, building from source adds compile time to each cold start and requires access to
+  GitHub and the dependency registry. Prefer the official binary; a missing optional install
+  must not prevent the core harness from running.
 - **To validate on the first cloud test:** confirm the `PreToolUse` hook actually fires in routines
   and that the fail-open passthrough preserves command semantics.
 
