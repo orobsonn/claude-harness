@@ -5,6 +5,13 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [2.6.0](https://github.com/orobsonn/claude-harness/compare/v2.5.0...v2.6.0) (2026-09-08)
+
+
+### Features
+
+* **pi:** despacha tarefas com pipeline própria e integração Orca ([6e20e85](https://github.com/orobsonn/claude-harness/commit/6e20e852a83e5de7b1f0f9027a5c26d2d71f89f5))
+
 ## [2.5.0](https://github.com/orobsonn/claude-harness/compare/v2.4.2...v2.5.0) (2026-09-07)
 
 
