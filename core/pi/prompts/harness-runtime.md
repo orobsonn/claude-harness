@@ -114,6 +114,21 @@ exato ou o recorte integral necessário; não instrua um olho somente leitura a 
 ferramenta que ele não possui. Isso não muda o protocolo fresh de cada despacho nem autoriza usar
 o resultado de outro olho como contexto.
 
+No primeiro despacho de revisão de testes, implementação ou final, declare a fase e os
+caminhos canônicos exatos aplicáveis. Informe cwd, base, HEAD e `git status` observado,
+inclusive index, worktree e untracked; liste os paths/diffs relevantes e a prova negativa
+dos arquivos que devem ficar intactos. Vincule saída real e exit status de cada teste
+aplicável aos arquivos cobertos. Antes do freeze, compare a baseline do test-author/tarefa
+com index/worktree/untracked, sem exigir freeze SHA inexistente; depois dele, compare
+freeze→HEAD revisado para testes/fixtures e base de implementação→HEAD para produto.
+Informe os SHAs/paths observados de freeze, implementação e correção quando houver.
+O brief permanece curto: diff, status e saída de comando ficam inline ou em artefato
+regular nomeado e legível; o olho abre caminhos/artefatos canônicos nomeados com suas
+ferramentas, sem shell, e não procura arquivo de diff não fornecido. Nomeie e leia por
+inteiro cada path novo untracked relevante: diff tracked vazio não o prova intacto.
+Evidência necessária omitida inline só bloqueia se também não estiver acessível em
+artefato nomeado; resumo do pai nunca basta para aprovar nem se repete coleta/teste inaplicável.
+
 As regras por tarefa abaixo são o contrato que cada pai local executa e a evidência que
 o pai global confere nos retornos. No pai global elas não autorizam despachar mãos ou
 olhos locais diretamente; essa entrada passa exclusivamente por `harness_tasks`.

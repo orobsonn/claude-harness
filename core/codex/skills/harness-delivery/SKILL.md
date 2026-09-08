@@ -7,7 +7,10 @@ description: Use to execute an approved delivery plan with TDD, scoped subagents
 
 Run entry triage first and execute only an approved, bounded plan.
 
-- Resolve role and complexity before every dispatch; include evidence expected.
+- Resolve role and complexity before every dispatch. A first test, implementation, or
+  final eye brief names the phase, applicable canonical artifacts, observed cwd/base/HEAD/status
+  (including untracked paths), relevant diffs or negative proofs, and any required real command
+  output plus exit status tied to named files.
 - Delegate only independent work; hands cannot widen scope or self-approve.
 - For every implementation change: red test, minimal green code, affected suite.
 - At the end, verify acceptance criteria, diff, docs, risks, and residuals.
