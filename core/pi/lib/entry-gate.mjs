@@ -881,11 +881,18 @@ export function decidePiDispatchGate(input = {}) {
     const regateReady = pending === undefined || (Array.isArray(pending) && !pending.some((entry) =>
       typeof entry === "string" && (entry === bare || entry.startsWith(`${bare}@`)) &&
       !matchesAbsolution(entry, gateState.regate_passed, isAncestorFn)));
-    if (!identity.ok || typeof record?.capturedVerifiedAt !== "string" || !record.capturedVerifiedAt ||
-      violations.scope.length || violations.frozen.length || isAncestorFn(record.freezeCommitSha) !== true ||
-      !Array.isArray(gateState.hand_finished) || !gateState.hand_finished.includes(bare) ||
-      !Array.isArray(gateState.capture_verified) || !gateState.capture_verified.includes(captured) || !regateReady) {
-      return { ok: false, decision: "deny", reason: `${PREFIX} Blocked: dependency ${bare} requires current completed capture and re-gate evidence.` };
+    if (!identity.ok || !Array.isArray(gateState.hand_finished) || !gateState.hand_finished.includes(bare)) {
+      return { ok: false, decision: "deny", reason: `${PREFIX} Blocked: dependency ${bare} requires a matching capture-eligible hand-record and host completion. Reconcile its current producer before continuing.` };
+    }
+    if (violations.scope.length || violations.frozen.length || isAncestorFn(record.freezeCommitSha) !== true) {
+      return { ok: false, decision: "deny", reason: `${PREFIX} Blocked: dependency ${bare} has a scope/frozen violation or non-ancestral hand-record. Resolve that evidence; another review cannot repair it.` };
+    }
+    if (typeof record.capturedVerifiedAt !== "string" || !record.capturedVerifiedAt ||
+      !Array.isArray(gateState.capture_verified) || !gateState.capture_verified.includes(captured)) {
+      return { ok: false, decision: "deny", reason: `${PREFIX} Blocked: dependency ${bare} current hand requires capture-verified. Validate its recorded changes, then call mark(action="capture-verified", task_id="${dependency}"). The host uses the current producer's SHA ${record.freezeCommitSha}, even after a later commit. Do not repeat fidelity or accepted reviews to repair a missing capture.` };
+    }
+    if (!regateReady) {
+      return { ok: false, decision: "deny", reason: `${PREFIX} Blocked: dependency ${bare} requires re-gate evidence. Consult harness_reviews for this task, complete only applicable missing reviews on the committed input, then mark regate-passed.` };
     }
   }
 

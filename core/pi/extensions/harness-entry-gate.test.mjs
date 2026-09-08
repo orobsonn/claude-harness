@@ -22,6 +22,7 @@ import harnessEntryGate from "./harness-entry-gate.ts";
 import { readPiChildIdentity } from "../lib/pi-child-identity.mjs";
 import { claimPiDispatchForRuntime, readPiDispatchRecord } from "../lib/pi-state-records.mjs";
 import { writePiSpecDraft } from "../lib/spec-approval.mjs";
+import { missingPiReviewRoles } from "../lib/pi-review-evidence.mjs";
 
 /** @description Fake do barramento de eventos do Pi (pi.events), por canal. */
 function fakeEvents() {
@@ -316,6 +317,57 @@ test("dispatch que termina em erro remove o dispatch-record órfão (paridade co
 
 
 const CHILD_SESSION = "ses-pi-child";
+
+test("implementation eyes start after the selective commit and keep their one accepted receipt", async (t) => {
+  for (const phase of ["task", "final"]) {
+    await t.test(phase, async () => {
+      const f = fixture();
+      try {
+        const git = (...args) => execFileSync("git", args, { cwd: f.root, encoding: "utf8" }).trim();
+        git("init", "-q");
+        git("add", ".");
+        git("-c", "user.name=Pi", "-c", "user.email=pi@example.test", "commit", "-qm", "fixture");
+        const statePath = join(f.root, ".pi/harness/state", SESSION, "gate-state.json");
+        const state = JSON.parse(readFileSync(statePath, "utf8"));
+        writeFileSync(statePath, JSON.stringify({ ...state, spec_status: "adversary-reviewed", adversary_fired: true }));
+        mkdirSync(join(f.root, "src"));
+        writeFileSync(join(f.root, "src/a.ts"), "export const value = 1;\n");
+        const events = fakeEvents();
+        const h = handlers(events);
+        const ctx = ctxOf(f.root);
+        h.get("session_start")({}, ctx);
+        const role = "harness-adversary";
+        const args = { subagent_type: role, prompt: phase === "task" ? BRIEF : "[HARNESS_FINAL_REVIEW] review", description: "review" };
+        const blocked = await h.get("tool_call")({ toolName: "subagent", toolCallId: "premature", input: args }, ctx);
+        assert.equal(blocked?.block, true, "deny before the expensive reviewer starts");
+        assert.match(blocked.reason, /commit/i);
+        assert.equal(readPiChildIdentity(f.root, CHILD_SESSION).absent, true);
+        const noCallId = await h.get("tool_call")({ toolName: "subagent", input: args }, ctx);
+        assert.equal(noCallId?.block, true);
+        assert.match(noCallId.reason, /native tool call ID/i);
+        const fidelity = { subagent_type: "harness-compliance", prompt: BRIEF + " Verify test fidelity before freeze." };
+        assert.equal(await h.get("tool_call")({ toolName: "subagent", toolCallId: "fidelity", input: fidelity }, ctx), undefined, "test fidelity still reviews uncommitted tests");
+        git("add", "--", "src/a.ts");
+        assert.equal((await h.get("tool_call")({ toolName: "subagent", toolCallId: "only-staged", input: args }, ctx))?.block, true);
+        git("-c", "user.name=Pi", "-c", "user.email=pi@example.test", "commit", "-qm", "implementation");
+        assert.equal(await h.get("tool_call")({ toolName: "subagent", toolCallId: "review", input: args }, ctx), undefined);
+        h.get("tool_execution_start")({ toolName: "subagent", toolCallId: "review", args });
+        const binding = { toolCallId: "review", subagentType: role, parentSessionId: SESSION, childSessionId: CHILD_SESSION };
+        events.emit("harness:child-bind", binding);
+        assert.deepEqual(binding.result, { ok: true });
+        const body = '{"issues":[]}';
+        const unpublish = publishNativeRecord({ agentId: "accepted-review", role, body });
+        try {
+          h.get("tool_execution_end")({ toolName: "subagent", toolCallId: "review", result: wrappedReviewResult("accepted-review", body), isError: false }, ctx);
+        } finally { unpublish(); }
+        const status = { projectRoot: f.root, sessionId: SESSION, featureId: FEATURE, phase, ...(phase === "task" ? { taskId: "task-1" } : {}), roles: [role] };
+        assert.deepEqual(missingPiReviewRoles(status), [], "one review remains valid after completion and status reconciliation");
+        writeFileSync(join(f.root, "src/a.ts"), "export const value = 2;\n");
+        assert.deepEqual(missingPiReviewRoles(status), [role], "real content changes still invalidate the receipt");
+      } finally { f.close(); }
+    });
+  }
+});
 
 test("session-created liga a filha ao único dispatch em voo: identidade durável + binding do record", () => {
   const f = fixture();
@@ -616,6 +668,9 @@ test("task review completed com prosa ambígua ou achado canônico não grava re
     await t.test(label, async (st) => {
       const f = fixture();
       st.after(f.close);
+      execFileSync("git", ["init", "-q"], { cwd: f.root });
+      execFileSync("git", ["add", "."], { cwd: f.root });
+      execFileSync("git", ["-c", "user.name=Pi", "-c", "user.email=pi@example.test", "commit", "-qm", "fixture"], { cwd: f.root });
       const events = fakeEvents();
       const h = handlers(events);
       const callId = `call-${slug}`;

@@ -36,6 +36,8 @@ function fixture(t) {
   const root = mkdtempSync(join(tmpdir(), "pi-review-evidence-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   git(root, ["init", "-q"]);
+  git(root, ["config", "user.name", "Pi Review"]);
+  git(root, ["config", "user.email", "pi-review@example.test"]);
   mkdirSync(join(root, "src"), { recursive: true });
   writeFileSync(join(root, "src", "feature.ts"), "export const value = 'A';\n");
   writeFileSync(join(root, ".gitignore"), ".pi/harness/state/\nnode_modules/\n.env\n.dev.vars\n");
@@ -72,6 +74,79 @@ function capture(root, overrides = {}) {
   assert.match(captured.snapshot.input_digest, /^[0-9a-f]{64}$/);
   return captured.snapshot;
 }
+
+test("checkPiReviewPreparation rejects every product change source before implementation eyes", async (t) => {
+  const cases = [
+    ["unstaged", (root) => writeFileSync(join(root, "src", "feature.ts"), "export const value = 'WORKTREE-B';\n")],
+    ["staged", (root) => {
+      writeFileSync(join(root, "src", "feature.ts"), "export const value = 'INDEX-B';\n");
+      git(root, ["add", "src/feature.ts"]);
+    }],
+    ["new", (root) => writeFileSync(join(root, "src", "new.ts"), "export const newValue = true;\n")],
+    ["deleted", (root) => unlinkSync(join(root, "src", "feature.ts"))],
+    ["rename", (root) => renameSync(join(root, "src", "feature.ts"), join(root, "src", "renamed.ts"))],
+    ["rename into excluded state", (root) => git(root, ["mv", "src/feature.ts", ".pi/harness/state/renamed.ts"])],
+    ["mode", (root) => chmodSync(join(root, "src", "feature.ts"), 0o755)],
+    ["net-zero index", (root) => {
+      const original = readFileSync(join(root, "src", "feature.ts"), "utf8");
+      writeFileSync(join(root, "src", "feature.ts"), "export const value = 'INDEX-B';\n");
+      git(root, ["add", "src/feature.ts"]);
+      writeFileSync(join(root, "src", "feature.ts"), original);
+    }],
+  ];
+  for (const [label, mutate] of cases) await t.test(label, (st) => {
+    const root = fixture(st);
+    git(root, ["config", "core.filemode", "true"]);
+    mutate(root);
+    const result = api("checkPiReviewPreparation", { projectRoot: root, featureId: FEATURE });
+    assert.equal(result?.ok, false, result?.reason);
+    assert.match(result.reason, /uncommitted.*selective.*implementation.*eyes.*do not rewrite receipts/i);
+    assert.deepEqual(result.paths, ["src/feature.ts"].filter((item) => label !== "new" && label !== "rename")
+      .concat(label === "new" ? ["src/new.ts"] : label === "rename" ? ["src/feature.ts", "src/renamed.ts"] : []).sort());
+  });
+});
+
+test("checkPiReviewPreparation permits untracked harness plans and excludes volatile or secret paths", (t) => {
+  const root = fixture(t);
+  const plan = join(root, ".pi", "harness", "plans", FEATURE, "execution-plan.json");
+  const spec = join(root, ".pi", "harness", "plans", FEATURE, "spec.md");
+  const originalPlan = readFileSync(plan, "utf8");
+  writeFileSync(plan, "{\"feature_id\":\"changed\",\"tasks\":[]}\n");
+  assert.equal(api("checkPiReviewPreparation", { projectRoot: root, featureId: FEATURE }).ok, false, "changed tracked canonical evidence still blocks");
+  writeFileSync(plan, originalPlan);
+  git(root, ["rm", "-r", "--cached", ".pi/harness/plans"]);
+  git(root, ["commit", "-q", "-m", "keep canonical evidence untracked"]);
+  mkdirSync(join(root, ".pi/harness/plans/older-feature"), { recursive: true });
+  writeFileSync(join(root, ".pi/harness/plans/older-feature/draft.md"), "# Older plan\n");
+  writeFileSync(join(root, ".pi/harness/plans", FEATURE, "review-notes.md"), "# Plan helper\n");
+  mkdirSync(join(root, ".pi", "harness", "state", "volatile"), { recursive: true });
+  writeFileSync(join(root, ".pi", "harness", "state", "volatile", "state.json"), "ignored");
+  mkdirSync(join(root, ".pi", "agent"), { recursive: true });
+  writeFileSync(join(root, ".pi", "agent", "auth.json"), "synthetic-secret");
+  assert.deepEqual(api("checkPiReviewPreparation", { projectRoot: root, featureId: FEATURE }), { ok: true });
+
+  git(root, ["add", ".pi/harness/plans"]);
+  assert.equal(api("checkPiReviewPreparation", { projectRoot: root, featureId: FEATURE }).ok, false, "tracked canonical edits still block");
+});
+
+test("checkPiReviewPreparation rejects a peer product file and repositories without HEAD", (t) => {
+  const root = fixture(t);
+  writeFileSync(join(root, "src", "peer.ts"), "export const peer = true;\n");
+  const peer = api("checkPiReviewPreparation", { projectRoot: root, featureId: FEATURE });
+  assert.equal(peer.ok, false);
+  assert.deepEqual(peer.paths, ["src/peer.ts"]);
+  mkdirSync(join(root, ".pi/harness/runtime-defaults"), { recursive: true });
+  writeFileSync(join(root, ".pi/harness/runtime-defaults/harness.json"), "{}\n");
+  assert.deepEqual(api("checkPiReviewPreparation", { projectRoot: root, featureId: FEATURE }).paths,
+    [".pi/harness/runtime-defaults/harness.json", "src/peer.ts"], "vendored defaults are not volatile host state");
+
+  const empty = mkdtempSync(join(tmpdir(), "pi-review-preparation-empty-"));
+  t.after(() => rmSync(empty, { recursive: true, force: true }));
+  git(empty, ["init", "-q"]);
+  const noHead = api("checkPiReviewPreparation", { projectRoot: empty, featureId: FEATURE });
+  assert.equal(noHead.ok, false);
+  assert.match(noHead.reason, /preparation failed|HEAD/i);
+});
 
 function nativeResult(text, { status = "completed", agentId = "agent-review" } = {}) {
   return {

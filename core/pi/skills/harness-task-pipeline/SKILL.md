@@ -36,6 +36,11 @@ sessão pai local, usando a pipeline nativa de mãos, fidelidade, freeze, captur
 - A revisão de testes pertence ao `harness-test-reviewer`, somente leitura e exclusivo
   de fidelidade. Cada pai local resolve suas correções até haver evidência suficiente
   e aprovação; compliance fica nas revisões de implementação e final.
+- No pai local, valide e marque `capture-verified` após cada executor/sniper e faça o
+  commit seletivo antes dos olhos de implementação. Resolva `preparation` da consulta
+  `harness_reviews` antes de despachar. Uma captura esquecida pode ser validada depois
+  do commit pelo SHA ancestral do produtor atual; ela não exige repetir fidelidade,
+  mãos ou revisões ainda aceitas.
 - Após integrar todas as tarefas, execute no HEAD agregado os testes, harvest, revisores finais
   aplicáveis e shipping normais. Revisões de implementação e finais podem usar até três olhos em
   paralelo; autoria, mãos, fidelidade e revisão da spec continuam exclusivas. Toda task com escrita
