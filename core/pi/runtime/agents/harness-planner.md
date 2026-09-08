@@ -87,6 +87,11 @@ read locally, reply `BLOCKED` with the missing fact and do not write a plan.
    the RED through an existing importable entry point and keep any genuinely new
    module with its routed behavior in one task. A new data export through an existing
    module remains valid and does not need to pre-exist the task.
+   `fixture_paths` names test inputs, test helpers, and oracle artifacts that become
+   immutable with the test freeze. Never put the SUT or another production file there
+   when executor or sniper must modify it. A fixture may also fall under a broad
+   `scope_paths` directory; that overlap alone is not a defect. The contradiction is
+   requiring an implementation edit to a file that this list freezes.
 6. Set `adversarial.enabled` only for auth, payment, data integrity,
    concurrency, external input reaching storage/execution, or secrets. Its
    `focus` must then be non-empty. Use `{ "enabled": false, "focus": [] }`

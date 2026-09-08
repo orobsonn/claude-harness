@@ -20,6 +20,12 @@ In the Pi task pipeline, `adversarial.enabled` adds explicit high-risk focus; it
 turn the mandatory post-implementation adversary and re-gate on or off. Do not reject
 `false` on an ordinary low-risk task merely because that baseline review remains required,
 and do not require invented focus to encode it.
+Check each `locked_tests[].fixture_paths` entry against the plan's described edits.
+It must identify an immutable test input, helper, or oracle, never a production SUT
+that executor or sniper must change. Return REVISE for that contradiction or for an
+internally contradictory locked assertion/oracle. Do not reject a fixture merely
+because it is also covered by a broad `scope_paths` directory, and do not claim to
+have inspected future test contents that are not part of the supplied evidence.
 
 Your final response must be exactly one JSON object with the exact top-level keys
 `verdict` and `findings`, with no Markdown fences or prose. `verdict` is `APPROVE` or

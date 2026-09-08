@@ -44,13 +44,13 @@ As três sessões de executor somaram US$ 1,65. Esses números mostram que o ret
 em testes e revisão custou mais que a implementação. T2 teve um ciclo curto, mas é
 uma tarefa de complexidade diferente: não serve como comparação controlada.
 
-## Atualização de 12:50:26 UTC
+## Atualização intermediária de 12:50:26 UTC
 
 Após as correções de produção e a retomada desnecessária causada pelo defeito de
 ancestralidade no reader, a coleta registrou os valores abaixo. Global e T3 foram
 recalculadas dos JSONLs disponíveis. As worktrees de T1/T2 já não estavam no disco;
 seus valores terminais vêm dos snapshots preservados de 11:18 e 11:42, sem alegar
-nova leitura dos logs originais. As sessões global e T3 estavam encerradas.
+nova leitura dos logs originais. Esse corte antecedeu a retomada final do global.
 
 | Sessão | Pai direto | Filhos | Total estimado registrado |
 | --- | ---: | ---: | ---: |
@@ -66,6 +66,27 @@ automática entre cada categoria e preço. O global chegou a 623 chamadas de sta
 O artefato `/tmp/pi-full-cost-current-20260908T125026Z.json` mantém a proveniência
 de cada parcela. Ainda são custos do runtime anterior às correções de espera/cache;
 não constituem medição de economia do runtime atualizado.
+
+## Fechamento terminal de 13:11:06 UTC
+
+A execução FULL encerrou às `13:11:06.272Z`, com código zero no job global. A
+coleta terminal registrou 179 sessões, 2.541 respostas e 247.768.953 tokens
+reportados. Os valores de T1 e T2 continuam sendo as métricas terminais preservadas
+no artefato anterior, pois suas worktrees haviam sido removidas; global e T3 foram
+recalculadas dos JSONLs estruturados ainda disponíveis.
+
+| Sessão | Pai direto | Filhos | Total estimado registrado |
+| --- | ---: | ---: | ---: |
+| Global | US$ 556,49 | US$ 12,40 | US$ 568,89 |
+| T1 | US$ 134,17 | US$ 18,33 | US$ 152,51 |
+| T2 | US$ 3,27 | US$ 0,58 | US$ 3,86 |
+| T3 | US$ 171,66 | US$ 22,81 | US$ 194,47 |
+| Total | US$ 865,60 | US$ 54,12 | US$ 919,73 |
+
+O artefato `/tmp/pi-full-cost-current-20260908T131525Z.json` registra essa
+proveniência por lane. A cifra exclui o uso do Codex raiz e eventuais ajustes de
+faturamento do provider. A coleta de custo não é, por si só, evidência de aprovação
+funcional.
 
 ## Significado da cifra
 
@@ -101,8 +122,8 @@ histórico mudava antes de alcançar a posição antiga da memória. Agora ela o
 um prefixo estável, continua marcada como conteúdo não confiável e não é persistida
 no JSONL. O teste usa a conversão real de mensagens do Pi e quatro requisições:
 conteúdo inalterado preserva o prefixo; uma atualização muda a memória; a requisição
-seguinte volta a preservar o prefixo. Ainda não há medição de cache da API depois
-dessa correção; não atribuímos a ela uma economia percentual observada.
+seguinte volta a preservar o prefixo. A amostra real posterior abaixo mede o cache
+reportado pelo provider; ela não isola uma economia percentual causada pela correção.
 
 A auditoria inicial de 43 chamadas de fidelidade está em
 [test-fidelity-review-audit.md](test-fidelity-review-audit.md). A mudança de prosa
@@ -120,6 +141,29 @@ do papel e a condição explícita de suficiência tratam essa segunda causa.
 
 A [avaliação comportamental](test-reviewer-evaluation.md) produziu cinco respostas
 com o resultado esperado; o caso forward-only permaneceu inconclusivo em duas
-chamadas sem resposta final. Ainda são necessárias a conclusão da prova e nova
-coleta de custo. Não há demonstração de redução ponta a ponta nesta
-fotografia; validar o mecanismo e medir a economia são evidências diferentes.
+chamadas sem resposta final. A execução FULL e a coleta terminal foram concluídas,
+mas esse resultado inconclusivo permanece como limite da avaliação. Não há
+demonstração de redução ponta a ponta; validar o mecanismo e medir a economia são
+evidências diferentes.
+
+## Janela terminal do runtime atualizado
+
+A mesma sessão global foi retomada às `12:58:32.079Z` com runtime `04c30b...` e
+esforço `medium`, depois de um checkpoint de instalação com todos os processos
+anteriores encerrados. A janela terminal vai até `13:11:06.272Z`. No pai, 48
+respostas somaram 455.210 tokens de entrada sem cache e 4.640.128 de entrada em
+cache: **91,066%** da entrada foi atendida por cache, contra **10,447%** na
+fotografia anterior, uma diferença de 80,619 pontos percentuais. O custo registrado
+do pai nessa janela foi US$ 4,773804.
+
+Cinco filhos iniciados na mesma janela produziram 24 respostas, com **60,646%** de
+cache e custo de US$ 2,399674. Pai e filhos somaram 72 respostas, 6.348.896 tokens
+reportados, **85,148%** de cache e US$ 7,173478. A fotografia provisória de
+`13:02:05Z` foi, portanto, substituída por esse fechamento.
+
+O arquivo
+`/tmp/pi-global-post-migration-usage-terminal-20260908T131525Z.json` contém os
+campos estruturados por resposta e a janela exata. A comparação continua
+observacional e não controlada: fase, contexto, compactação, conjunto de filhos e
+chamadas de modelo diferem. Ela não demonstra economia ponta a ponta nem atribui
+toda a diferença a uma única mudança.

@@ -913,7 +913,7 @@ export function decideTaskCoordinatorEdit(event, context = {}) {
       return {
         block: true,
         reason:
-          "[harness_tasks] Plan and spec are bound to admitted task runs. Complete or reconcile those runs before replacing their approval.",
+          "[harness_tasks] Plan and spec are fixed for this session after the first task admission, including completed tasks. Correct implementation within the approved plan via resume. A changed plan requires a new session and fresh approval; preserve the existing worktrees and evidence.",
       };
     }
     return null;

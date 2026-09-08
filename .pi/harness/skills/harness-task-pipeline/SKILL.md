@@ -29,6 +29,10 @@ sessão pai local, usando a pipeline nativa de mãos, fidelidade, freeze, captur
   finais.
 - Envie feedback com `resume` para a tentativa e sessão locais existentes. A tarefa refaz as fases
   nativas que a correção invalidar; acompanhe-a como `in_progress` no tracker e revalide sua lane.
+- Após a primeira admissão, plano e spec ficam fixos para essa sessão, mesmo depois de todas as
+  tasks terminarem. `resume` corrige implementação dentro desse contrato. Se o próprio plano
+  precisar mudar, preserve worktrees e evidências e use uma nova sessão com nova aprovação;
+  não apague o registry nem reutilize markers antigos para liberar o plano novo.
 - A revisão de testes pertence ao `harness-test-reviewer`, somente leitura e exclusivo
   de fidelidade. Cada pai local resolve suas correções até haver evidência suficiente
   e aprovação; compliance fica nas revisões de implementação e final.

@@ -1,10 +1,11 @@
 # Relatório de implementação da pipeline Pi
 
-Estado: implementação concluída no código fonte; a primeira integração das três
-tasks passou no agregado e no harvest. A revisão final reabriu T3 por um achado no
-limite de leitura do stream; o código corrigido recebeu os três pareceres sem achados.
-A reintegração aguarda a correção de um defeito do próprio validador de recibos.
-O PR funcional ainda aguarda a prova completa, merge e release pelo release-please.
+Estado: implementação concluída no código fonte e prova FULL local concluída. As
+três tasks foram integradas e revalidadas; agregado, harvest, olhos finais, demo,
+shipment e memória finalizaram no HEAD limpo
+`6d69656f6abe2944ede38feee8f5d9c8eaaed7b9`. Este registro fecha a prova local em
+8 de setembro de 2026; a publicação do harness é rastreada pelo
+[PR #903](https://github.com/orobsonn/claude-harness/pull/903) e pelo release-please.
 
 ## Comportamento final
 
@@ -119,17 +120,23 @@ A run corrente usa:
 - worktree `/home/orca/orca/workspaces/proj-lainny/pi-harness-full-lainny-47`;
 - sessão global `228d1aaf-1bbe-48d3-8c2f-574b7c7485b1`;
 - feature `escritor-publico-lead-tui`, modo FULL e `task_pipeline_version: 1`;
-- commit funcional validado `c3311f1b28ec58249a48d3112fb7e8346b438bfb`;
+- source funcional validado `0293fce2f4f47dcd50c79f1a3399dd7428980c82`;
 - bootstrap da worktree `41f63723b50338d20015356a2275e25abcedcf9b`;
-- runtime imutável `8db003b17cd55d1b3d15353b850743a65e2dd92e722787eb99dc13eb5c870a87`,
-  anterior às mudanças de source feitas depois do bootstrap e não atualizado em processo vivo;
+- tasks T1–T3 preservadas no runtime imutável
+  `8db003b17cd55d1b3d15353b850743a65e2dd92e722787eb99dc13eb5c870a87`;
+- pai global migrado, somente depois do encerramento do processo antigo, para o runtime
+  `04c30b9541a6113f6b86c82817add82d7315dfb7be093e553c91487c79c00845`, com
+  checkpoint Git `bb67bf5450accc511c6c4c340485dfc4c3487658`;
 - execução global original no terminal `term_3628621d-98c2-48e0-a06a-824e36a93a85`,
   título `RUN REAL · Pi TUI FULL · Lainny #47`, e job
   `/tmp/pi-full-lainny-47-orca-tui-run-2`;
-- retomada global supervisionada no terminal
+- retomada global supervisionada anterior no terminal
   `term_09ed2314-68a4-4ed6-b761-7a5296b8c757`, job
-  `/tmp/pi-full-lainny-47-orca-tui-timeout-resume-054e69e6-32b8-4f6a-8769-3500c332027e`
-  e worker `1300290`/start ticks `49397430`, ativo desde `06:39:38.700Z`.
+  `/tmp/pi-full-lainny-47-orca-tui-timeout-resume-054e69e6-32b8-4f6a-8769-3500c332027e`;
+- retomada final, na mesma sessão e worktree, no terminal
+  `term_cfe31d28-c422-411a-9e13-8f634d6bfd04`, job
+  `/tmp/pi-full-lainny-47-orca-tui-migrated-runtime-resume-9707f08f-d21d-4fcd-b67d-646a75260d35`
+  e esforço `medium`; terminou às `13:11:06.272Z` com exit 0, sem sinal nem timeout.
 
 A spec foi selada no SHA
 `79c8aed74db53fbfab0bfab1160b9ff1400e3a12035e52dcafbd3ddfc58b6d0e`. O plano
@@ -150,14 +157,14 @@ worker terminou com código zero, sem sinal ou timeout. A integração é o merg
 Somente `src/db/colunas-entrada-publica.spec.ts` e
 `src/db/colunas-gravaveis.ts` mudaram nessa task.
 
-O runtime vivo `8db` foi fixado antes dos guards finais de escopo e autoridade do
-source `c3311f1`; portanto, os receipts produzidos pelo processo vivo não bastam
-sozinhos para provar o comportamento do consumer final. O reader de `c3311f1`
-revalidou as três tasks em modo somente leitura no HEAD integrado
-`8daffe75c3582310fca64d45a69978ddd29c7521` e aceitou suas identidades e hashes;
-o resumo está em `/tmp/pi-task-pipeline-all3-c331-integration-control.json`.
-Ao término da FULL, todos os receipts integrados ainda precisam passar novamente
-pelo reader do source final no HEAD que inclui o harvest.
+As tasks foram executadas no runtime `8db`, anterior aos guards finais de escopo,
+autoridade e linhagem do source atual. Depois da migração controlada do pai, o runtime
+novo integrou T3 em `89c9d25295370d52dfaa0955ce7e7c8dacbfcc85`, com child HEAD
+`7b63e94c3b7862b0b31215b269e968b964a3a478`. O reader do source `0293fce`
+revalidou T1, T2 e T3 no HEAD corrente; as três passaram. A evidência está em
+`/tmp/pi-task-pipeline-all3-0293-final-control.json`, no HEAD final `6d69656...`.
+A ausência atual das
+worktrees de T1 e T2 não invalida os receipts host-owned nem exigiu recriá-las.
 
 Os grants de T1 e T2 receberam, respectivamente, 630 e 636 bytes de contexto curado.
 A T2 devolveu 1403 bytes de `task-context-return`, ligados à sessão, task e HEAD; isso
@@ -218,7 +225,7 @@ O retorno de contexto tem 1307 bytes e hash
 O Orca confirmou a TUI nativa no handle retomado; a navegação foi solicitada para a aba
 existente, sem ACK remoto. Depois das integrações, a navegação voltou à TUI global.
 
-No agregado, o pai usou Node `22.23.1`; typecheck passou e `npm test` aprovou
+No primeiro agregado, o pai usou Node `22.23.1`; typecheck passou e `npm test` aprovou
 **785 testes em 88 arquivos**. `npm run audit` encontrou zero vulnerabilidades, e o
 diff-check passou. O wrapper Bash do docs-check foi recusado antes de executar;
 o pai conferiu as mesmas oito seções da CI com comandos `grep -lF` autorizados,
@@ -232,10 +239,20 @@ aplicou e commitou somente `MEMORY.md` em
 global desse HEAD encontrou um achado: o DefaultReader entrega um chunk inteiro
 antes da comparação, enquanto a spec exige parar no byte 65.537. O código já impede
 acumulação, parse e acesso ao banco para o chunk excessivo; a lacuna é a leitura
-limitada no byte stream. O pai global retomou a mesma tentativa de T3, suspendendo
-seu recibo integrado enquanto a correção e as revisões atuais estiverem pendentes.
-As evidências de `8daffe75...` e `8034e3dd...` acima são o primeiro ciclo concluído,
-sem aprovação FULL final.
+limitada no byte stream. O pai global retomou a mesma tentativa de T3 durante a
+correção. Depois da revisão, do encerramento do runtime antigo e da migração
+controlada, T3 foi reintegrada em
+`89c9d25295370d52dfaa0955ce7e7c8dacbfcc85`. Nesse HEAD, `npm test` passou
+**785/785 testes em 88 arquivos** em 74,63 s; typecheck, audit sem vulnerabilidades e
+diff-check terminaram com exit 0. A demonstração pública passou 7/7 testes. O harvester
+nativo `4da10f1c-9b89-460` concluiu em 22,9 s e propôs um delta de `MEMORY.md` sobre o
+acumulador BYOB. O pai aplicou esse delta no commit
+`6d69656f6abe2944ede38feee8f5d9c8eaaed7b9`, mantendo a árvore limpa. Compliance
+`9adbc003`, security `9d760882` e adversary `1970f201` revisaram esse mesmo HEAD e o
+digest `a53b135e708c0ef3e4d07bebd03befb59dfb9d806d0589c3b0a199fe93b6a816`; os três
+retornaram `issues: []` e `accepted: true`. Os markers `final-review` e `demo-done`
+foram aceitos. O shipper `d98621b0-db85-45a` verificou entrega `LOCAL-ONLY`, sem efeito
+externo, e terminou `DONE`.
 
 A primeira execução de T1 atingiu seu timeout de duas horas às `06:05:29.827Z`. O pai
 global retomou nativamente a mesma tentativa às `06:07:58.310Z`, preservando sessão,
@@ -262,16 +279,14 @@ com código zero. A execução corrente tem snapshot legível e navegação desp
 o mesmo handle. Não há ACK confirmado do cliente remoto; esses fatos comprovam
 processo e transporte, sem declarar visibilidade remota nem aprovação FULL.
 
-O commit funcional `c3311f1b28ec58249a48d3112fb7e8346b438bfb` foi enviado e
+O source `0293fce2f4f47dcd50c79f1a3399dd7428980c82` foi enviado e
 vendorizado de `core/pi` para `.pi`. A suíte local com concorrência 2 terminou com
-**3523 testes, 3523 passaram, nenhum falhou e nenhum foi ignorado**; o log é
-`/tmp/pi-task-pipeline-post-audit-full-1.log`. Boyle retornou `APPROVE`. O
-[CI 34195602331](https://github.com/orobsonn/claude-harness/actions/runs/34195602331)
-desse SHA terminou com sucesso às `06:44:09Z`; testes, verificação de secrets e gate
-passaram. Depois desse commit foram acrescentados espera nativa, correção do prefixo de
-memória e revisor exclusivo de testes, além de prompts/docs. Esse delta exige novo
-commit e CI antes do merge. Esse resultado valida o
-commit funcional, sem antecipar a aprovação da FULL real.
+**3540/3540 testes aprovados** e `node_returncode: 0`; a evidência é
+`/tmp/pi-task-pipeline-final-lineage-full-20260908-result.json`. O
+[CI 34228715081](https://github.com/orobsonn/claude-harness/actions/runs/34228715081)
+terminou com sucesso às `12:58:11Z`. Esses resultados validam o source. A instalação
+do runtime novo e a preservação da sessão são demonstradas separadamente pelo digest,
+pelo checkpoint e pelos hashes before/after, sem antecipar a aprovação da FULL real.
 
 ## Diagnóstico preservado
 
@@ -321,16 +336,28 @@ Nenhuma mão artificial ou reescrita de registros deve substituir essa correçã
 Os 31 testes focais do reader passaram. A inspeção somente leitura dos registros
 reais de T3 também passou às `12:49:26.379Z`, sem alterar estado, código ou aprovações;
 o resumo está em `/tmp/pi-t3-receipt-lineage-source-verification-20260908.json`.
-O consumidor integrado confere a mesma ancestralidade. A continuação atualizará
-somente a instalação global já encerrada, com checkpoint e novo digest registrados;
-os assets e as identidades das tasks permanecerão no runtime original.
+O consumidor integrado confere a mesma ancestralidade. A instalação global foi
+atualizada somente após o processo anterior encerrar. A prova before/after e os
+hashes de plans, state e sessions estão em
+`/tmp/pi-global-runtime-migration-0293fce-20260908`; o checkpoint é
+`bb67bf5450accc511c6c4c340485dfc4c3487658`. Os assets e as identidades das tasks
+permaneceram no runtime original `8db`.
 
-## Fechamento pendente
+## Fechamento da prova local
 
-- concluir a correção e reintegração de T3, revalidar o agregado e obter aprovação FULL;
-- revalidar os três receipts com o source final e concluir o CI do último commit;
-- fechar e integrar o [PR funcional #903](https://github.com/orobsonn/claude-harness/pull/903);
-- deixar o release-please produzir changelog, versão e tag, sem edição manual.
+O arquivo `memory-finalized.json` registra sessão
+`228d1aaf-1bbe-48d3-8c2f-574b7c7485b1`, a feature corrente, HEAD `6d69656...` e
+`finalized_at: 2026-09-08T13:10:53.888Z`. Shared context, harvest, shipment e memória
+foram finalizados pelo fluxo nativo. A prova permaneceu local e não fez push, PR,
+deploy, merge ou outra publicação externa.
+
+A publicação usa o [PR funcional #903](https://github.com/orobsonn/claude-harness/pull/903),
+exige CI do último commit e deixa o release-please produzir changelog, versão e tag.
+
+O diagnóstico adicional da [run Victor](victor-planner-diagnosis.md) motivou uma
+orientação de prosa sobre fixtures imutáveis e uma mensagem precisa sobre plano fixo
+após admissão. Esse delta posterior à FULL passou nos 33 testes existentes de prompts
+e contratos; não foi injetado nas sessões de produto.
 
 Contrato oficial consultado: [worktrees](https://www.onorca.dev/docs/model/worktrees),
 [CLI](https://www.onorca.dev/docs/cli/reference) e
@@ -341,11 +368,13 @@ A auditoria por parecer e motivo está em
 [`harness-test-reviewer`](../../core/pi/runtime/agents/harness-test-reviewer.md)
 usa Terra/high e contexto novo, somente leitura. Novos runtimes usam esse papel na
 fidelidade; recibos históricos continuam vinculados ao papel presente no runtime
-imutável da tentativa. A FULL em andamento preserva seu runtime original.
+imutável da tentativa. As tasks preservam o runtime original; somente o pai global
+encerrado foi retomado com o runtime novo.
 
 O snapshot local que introduziu o resumo de planner e revisores passou em
 **3533/3533 testes**, sem falhas ou skips, com `node_returncode: 0` e concorrência 2
-(`/tmp/pi-task-pipeline-final-ui-full-20260908.log`).
+(`/tmp/pi-task-pipeline-final-ui-full-20260908.log`). A validação final do source
+`0293fce` ampliou esse total para **3540/3540**, também com `node_returncode: 0`.
 A execução anterior detectou uma exigência indevida no teste de timeout de 100 ms:
 ele exigia output do programa antes de encerrar. O teste foi corrigido preservando
 as provas de timeout, término do PTY e limpeza do grupo; a herança TTY continua
@@ -360,9 +389,9 @@ parciais, papéis externos e cards já expandidos continuam no renderer nativo. 
 test-author, sniper e shipper mostram o status declarado e uma linha do resultado;
 harvester mostra a quantidade de deltas propostos. Esse complemento passou em 23
 testes focais. Nenhum resumo exige outra chamada ao modelo. Essa
-mudança pertence ao source e aos próximos runtimes atualizados; o runtime imutável da
-prova viva não recebeu hotpatch.
+mudança pertence ao source e ao runtime novo do pai. Os runtimes imutáveis das tasks
+da prova viva não receberam hotpatch.
 
-Esse resultado valida o source, sem concluir a FULL real. Os três olhos mais recentes
-de T3 retornaram sem issues. A reintegração pelo runtime global corrigido, o agregado
-e a revisão final ainda estão pendentes.
+Esse resultado valida o source e a prova FULL local. As três tasks e seus receipts,
+o agregado, o harvest, os olhos finais, a demo, o shipment e a finalização da memória
+concluíram sem publicação externa. PR, CI documental e release permanecem separados.
