@@ -42,6 +42,16 @@ test("planner Pi recebe contexto de revisão sem depender de resposta posterior 
   assert.match(prompt, /do\s+not\s+request or use `resume`/i);
 });
 
+test("planner Pi copia o modo estável da cerimônia sem reclassificar por risco", () => {
+  const prompt = readFileSync(plannerPath, "utf8");
+
+  assert.match(prompt, /parent brief must state the stable ceremony mode.*`LIGHT` or `FULL`/is);
+  assert.match(prompt, /Copy that value.*lowercase `light` or\s+`full`/is);
+  assert.match(prompt, /Never infer or escalate.*severity, complexity,\s+risk/is);
+  assert.match(prompt, /mode is\s+absent.*reply `BLOCKED`.*do not write the plan/is);
+  assert.match(prompt, /"mode": "<stable ceremony mode copied lowercase: light \| full>"/);
+});
+
 test("planner has no harvest mode because finalization preserves the approved plan", () => {
   const prompt = readFileSync(plannerPath, "utf8");
 

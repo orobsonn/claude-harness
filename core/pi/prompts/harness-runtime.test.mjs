@@ -266,6 +266,11 @@ test("REVISE do plano replaneja com evidência do pai, sem retomar filho", () =>
   assert.match(prompt, /plan-reviewer.*REVISE.*leia.*relatório/i);
   assert.match(prompt, /comandos de leitura.*solicitados.*novo.*harness-planner/is);
   assert.match(prompt, /\[HARNESS_PLAN_REVIEW_CONTEXT\]/);
+  assert.match(prompt, /todo.*harness-planner.*feature_id.*modo estável literal.*LIGHT.*FULL/is);
+  assert.match(prompt, /planner deve copiar esse modo em minúsculas.*execution-plan\.json/is);
+  assert.match(prompt, /severidade, complexidade e risco não reclassificam a cerimônia/i);
+  assert.match(prompt, /modo estiver ausente.*planner deve retornar `BLOCKED` sem escrever/is);
+  assert.match(prompt, /HARNESS_PLAN_REVIEW_CONTEXT.*modo estável da cerimônia/is);
   assert.match(prompt, /novo.*harness-planner.*nunca `resume`/i);
 });
 
