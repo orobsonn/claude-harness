@@ -34,6 +34,8 @@ function splitZero(value) {
   return String(value).split("\0").filter(Boolean);
 }
 
+const PREPARATION_REASON = "Uncommitted review input: inspect the pending paths and make the selective implementation/fix commit before implementation or final eyes. Do not rewrite receipts or discard unrelated changes.";
+
 /** Secrets and volatile host state are rejected by path before any worktree bytes are read. */
 function excluded(root, relativePath) {
   const normalized = relativePath.replaceAll("\\", "/");
@@ -47,6 +49,29 @@ function excluded(root, relativePath) {
     lower.startsWith(".pi/agent/") ||
     base === ".env" || base.startsWith(".env.") || base === ".dev.vars" ||
     base === "credentials" || base === "credentials.json" || base === "auth.json";
+}
+
+/** Ensure product input is committed before implementation or final review dispatch. */
+export function checkPiReviewPreparation({ projectRoot, featureId } = {}) {
+  try {
+    if (typeof projectRoot !== "string" || !projectRoot) return { ok: false, reason: "review projectRoot required" };
+    if (!isSafeFeatureId(featureId)) return { ok: false, reason: "safe review featureId required" };
+    const root = fs.realpathSync(projectRoot);
+    const changed = new Set();
+    for (const args of [
+      ["diff", "--no-ext-diff", "--no-renames", "--name-only", "-z", "--cached", "HEAD", "--"],
+      ["diff", "--no-ext-diff", "--no-renames", "--name-only", "-z", "--"],
+    ]) for (const relativePath of splitZero(git(root, args))) if (!excluded(root, relativePath)) changed.add(relativePath);
+    for (const relativePath of splitZero(git(root, ["ls-files", "--others", "--exclude-standard", "-z"]))) {
+      // The vendor marks plans ephemeral. Never demand staging old plans/helper drafts;
+      // tracked changes still block above and canonical plan/spec remain in the snapshot.
+      if (!excluded(root, relativePath) && !relativePath.startsWith(".pi/harness/plans/")) changed.add(relativePath);
+    }
+    const paths = [...changed].sort((a, b) => a.localeCompare(b));
+    return paths.length ? { ok: false, reason: PREPARATION_REASON, paths } : { ok: true };
+  } catch {
+    return { ok: false, reason: "Review preparation could not inspect Git inputs and HEAD. Restore readable repository evidence before dispatching implementation or final eyes." };
+  }
 }
 
 function treeEntries(root) {

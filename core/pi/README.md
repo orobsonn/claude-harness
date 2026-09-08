@@ -101,6 +101,15 @@ Compliance continua responsável pela implementação e pela entrega final.
 
 ## Revisores em paralelo
 
+Olhos de implementação e finais exigem produto commitado antes do despacho.
+`harness_reviews` informa `preparation` com os paths staged, unstaged ou untracked
+pendentes; a revisão de testes continua antes do freeze. Se uma dependente for
+bloqueada por captura do último executor/sniper, valide seu record e use
+`mark(action="capture-verified", task_id="…")`: o host aceita o SHA ancestral do
+produtor mesmo após um commit posterior. Isso preserva olhos ainda válidos e evita
+repetir fidelidade para resolver somente a captura. Alterações posteriores em HEAD,
+index, arquivos, plano ou spec continuam invalidando seus recibos de revisão.
+
 O harness inicia com até três revisores em paralelo. Para consultar ou alterar o
 limite, use `.pi/harness/runtime/harness.json` antes de iniciar a run:
 

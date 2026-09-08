@@ -92,7 +92,11 @@ test("task status separates its required adversary from available opt-in reviewe
   assert.deepEqual(resumed.details, first.details);
   writeFileSync(join(f.root, "feature.txt"), "behavior B");
   const stale = await (await tool()).execute("status-three", args, undefined, undefined, f.ctx);
-  assert.deepEqual(stale.details, {
+  const { preparation, ...staleReviews } = stale.details;
+  assert.equal(preparation.ok, false);
+  assert.deepEqual(preparation.paths, ["feature.txt"]);
+  assert.match(preparation.reason, /commit/i);
+  assert.deepEqual(staleReviews, {
     required: PARALLEL_REVIEW_ROLES.slice(0, 2),
     available: [...PARALLEL_REVIEW_ROLES],
     accepted: [],
@@ -172,7 +176,9 @@ test("final status lists only reviewers required by the canonical plan", async (
   for (const security of [undefined, false]) {
     writeFileSync(file, JSON.stringify({ ...plan, final_review: { compliance: true, adversary: true, ...(security === undefined ? {} : { security }) } }));
     const result = await (await tool()).execute("status", { phase: "final" }, undefined, undefined, f.ctx);
-    assert.deepEqual(result.details, { accepted: [], missing: ["harness-adversary", "harness-compliance"] });
+    const { preparation, ...reviews } = result.details;
+    assert.equal(preparation.ok, false, "tracked canonical changes require preparation too");
+    assert.deepEqual(reviews, { accepted: [], missing: ["harness-adversary", "harness-compliance"] });
   }
   writeFileSync(file, JSON.stringify({ ...plan, final_review: { security: "true" } }));
   assert.equal((await (await tool()).execute("invalid-plan", { phase: "final" }, undefined, undefined, f.ctx)).isError, true);

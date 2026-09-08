@@ -3,7 +3,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { isSafeFeatureId, isSafeTaskId } from "../../shared/lib/feature-id.mjs";
 import { isChildSession, piSessionId } from "../lib/pi-adapter-map.mjs";
 import { loadPiGateStateFromDisk } from "../lib/pi-gate-state.mjs";
-import { capturePiReviewInput, findPiReviewReceipt, missingPiReviewRoles, readPiReviewPlan } from "../lib/pi-review-evidence.mjs";
+import { capturePiReviewInput, checkPiReviewPreparation, findPiReviewReceipt, missingPiReviewRoles, readPiReviewPlan } from "../lib/pi-review-evidence.mjs";
 import { classifyPiReviewDispatch } from "../lib/pi-review-concurrency.mjs";
 import { PARALLEL_REVIEW_ROLES, requiredPiFinalReviewRoles } from "../lib/roles.mjs";
 
@@ -32,7 +32,7 @@ export default function harnessReviews(pi: ExtensionAPI) {
   pi.registerTool({
     name: "harness_reviews",
     label: "Review status",
-    description: "List accepted and missing task or final reviewers for the current parent session and feature. Dispatch only applicable missing roles; this tool never starts work or changes evidence.",
+    description: "List accepted and missing task or final reviewers for the current parent session and feature. Resolve any preparation error before dispatching applicable missing roles; this tool never starts work or changes evidence.",
     parameters: Type.Object({
       phase: Type.Union([Type.Literal("task"), Type.Literal("final")]),
       task_id: Type.Optional(Type.String()),
@@ -73,7 +73,9 @@ export default function harnessReviews(pi: ExtensionAPI) {
             accepted,
             missing: taskRequired.filter((role) => unavailable.includes(role)),
           };
-      return { content: [{ type: "text" as const, text: JSON.stringify(result) }], details: result };
+      const preparation = checkPiReviewPreparation(input);
+      const status = preparation.ok ? result : { ...result, preparation };
+      return { content: [{ type: "text" as const, text: JSON.stringify(status) }], details: status };
     },
   });
 }

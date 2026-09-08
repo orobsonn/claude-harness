@@ -107,6 +107,16 @@ retornar, confira o hand-record CURRENT: `capturedVerifiedAt` deve existir e o m
 Um capture antigo não cobre executor ou sniper posterior. A árvore de produto deve
 estar limpa e todo commit informado deve existir.
 
+Após cada executor ou sniper, valide o record recém-produzido e marque
+`capture-verified` para essa task antes de commit/revisores. Um marker antigo, mesmo
+com o mesmo SHA, não valida um produtor posterior. Se faltou captura e o commit já
+existe, marque a captura do record atual: o host verifica sua ancestralidade e usa o
+SHA do produtor. Não repita `fidelity`, mãos ou olhos aceitos para corrigir só essa
+lacuna. `harness_reviews` informa `preparation` quando há alterações pendentes; resolva
+os paths antes do despacho. Os olhos de implementação só começam após o commit;
+revisão de testes continua antes do freeze. Forneça aos olhos os SHAs e paths
+observados da série freeze/implementação/correção para que possam conferir a linhagem.
+
 Use `harness_memory` com `read` e `update` para manter no diário local somente
 descobertas verificadas, sua evidência e a condição de revalidação. Não use `apply` nem
 `finalize`; o pai global decide manualmente o que merece ser curado para a memória dele.

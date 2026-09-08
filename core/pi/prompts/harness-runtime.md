@@ -136,6 +136,15 @@ Isso é controle de workflow, não sandbox: o Pi roda com as permissões do usu�
 
 **Commits por tarefa no pai local.** Siga a ordem nativa descrita abaixo; ela preserva as fases 2 e 3 da base de controle Claude Code sem depender de paths do monorepo fonte. Antes do primeiro commit, confirme uma branch de feature; nunca commite em main/master. Depois do RED executável, aprovação de fidelidade pelo `harness-test-reviewer` e definição dos testes congelados, o pai local cria o **freeze-commit** com os testes e fixtures autorizados; então registra `fidelity-pass` e `capture-verified`, nessa ordem e com o recibo produtor atual. Antes da implementação, esse commit já deve existir. Depois do executor e da captura atual, crie o **impl-commit** seletivo antes de despachar os olhos de implementação, para que todos revisem o mesmo HEAD imutável. Se um achado exigir sniper, recapture a mudança, crie o **fix-commit** e repita os olhos afetados e o re-gate sobre esse novo HEAD. Cada tarefa termina com seu commit atual verificado e revisado antes de retornar. Preserve a ordem dos marcadores do Pi e a linhagem dos hand-records; nenhum commit substitui fidelidade, captura ou revisão. Nunca use `git add .`/`git add -A`, inclua artefatos transitórios de `.pi/harness/`, force push ou descarte trabalho alheio para limpar a árvore. Reveja paths e diff staged antes de cada commit. Resíduo inesperado fora do escopo bloqueia o commit até ser esclarecido; não o inclua nem o descarte. Não inicie outro escritor entre o commit atual e seus olhos.
 
+Se uma dependente for bloqueada por captura, confira o hand-record atual da anterior.
+Após todo executor/sniper, valide suas alterações e registre `capture-verified` de novo
+para o produtor atual. Se o commit já foi feito, o host usa o SHA ancestral desse
+record; não repita `fidelity` nem revisores aceitos para preencher somente a captura.
+Antes de olhos de implementação/finais, resolva qualquer `preparation` informado por
+`harness_reviews` e faça o commit seletivo. O despacho nega alterações pendentes antes
+de iniciar os revisores. Forneça os SHAs e paths observados dos commits aos olhos;
+fidelidade dos testes continua antes do freeze e não entra nessa restrição.
+
 Antes da colheita, confirme que todas as tarefas funcionais estão verificadas e commitadas:
 examine status, diff staged/unstaged e arquivos novos. Separe resíduos de runtime dos
 arquivos que fazem parte da entrega; não ignore alteração de produto por estar fora do

@@ -1200,7 +1200,7 @@ test("dependency readiness checks the current hand record and unresolved re-gate
     const run = (id) => decidePiDispatchGate({
       projectRoot: f.root, sessionId: f.sessionId, subagentType: "harness-adversary", toolCallId: id,
       toolArgs: { prompt: '[HARNESS_TASK_CONTEXT]{"task_id":"task-2"}[/HARNESS_TASK_CONTEXT]' }, env: {},
-    }).decision;
+    });
     writeFileSync(recordPath.path, JSON.stringify(record));
     writeFileSync(statePath, JSON.stringify(state));
     const healthy = run("dependency-healthy");
@@ -1211,9 +1211,14 @@ test("dependency readiness checks the current hand record and unresolved re-gate
     writeFileSync(recordPath.path, JSON.stringify(record));
     writeFileSync(statePath, JSON.stringify({ ...state, regate_pending: [`${f.featureId}/task-1`] }));
     const unresolved = run("dependency-regate");
-    assert.deepEqual({ healthy, unstamped, foreign, unresolved }, {
+    assert.deepEqual(Object.fromEntries(Object.entries({ healthy, unstamped, foreign, unresolved }).map(([key, result]) => [key, result.decision])), {
       healthy: "allow", unstamped: "deny", foreign: "deny", unresolved: "deny",
     });
+    assert.match(unstamped.reason, /current hand.*capture-verified/i);
+    assert.match(unstamped.reason, /task-1/);
+    assert.match(unstamped.reason, /do not repeat fidelity or accepted reviews/i);
+    assert.match(foreign.reason, /matching capture-eligible hand-record/i);
+    assert.match(unresolved.reason, /re-gate.*harness_reviews/i);
   } finally { f.close(); }
 });
 

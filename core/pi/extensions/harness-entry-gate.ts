@@ -26,6 +26,7 @@ import { isDiscussionRole, isRuntimeRole } from "../lib/roles.mjs";
 import { classifyPiReviewDispatch } from "../lib/pi-review-concurrency.mjs";
 import {
   capturePiReviewInput,
+  checkPiReviewPreparation,
   parsePiReviewCompletion,
   recordPiReviewReceipt,
 } from "../lib/pi-review-evidence.mjs";
@@ -255,9 +256,14 @@ export default function harnessEntryGate(pi: ExtensionAPI) {
     });
     if (decision.decision === "deny") return { block: true, reason: decision.reason };
     const review = classifyPiReviewDispatch(args.subagent_type, args.prompt);
+    if (review && (typeof event?.toolCallId !== "string" || !event.toolCallId)) {
+      return { block: true, reason: "Implementation or final review requires an exact native tool call ID before dispatch." };
+    }
     if (review && typeof event?.toolCallId === "string") {
       const loaded: any = loadPiGateStateFromDisk(projectRoot, { sessionId });
       const featureId = loaded?.ok === true && typeof loaded.state?.feature_id === "string" ? loaded.state.feature_id : "";
+      const preparation = checkPiReviewPreparation({ projectRoot, featureId });
+      if (!preparation.ok) return { block: true, reason: preparation.reason + (preparation.paths ? ` Pending paths: ${JSON.stringify(preparation.paths)}.` : "") };
       const captured = capturePiReviewInput({
         projectRoot,
         sessionId,
@@ -265,7 +271,8 @@ export default function harnessEntryGate(pi: ExtensionAPI) {
         phase: review.phase,
         ...(review.phase === "task" ? { taskId: review.taskId } : {}),
       });
-      reviewInputs.set(event.toolCallId, { ...review, ...(captured.ok ? { snapshot: captured.snapshot } : {}) });
+      if (!captured.ok) return { block: true, reason: captured.reason };
+      reviewInputs.set(event.toolCallId, { ...review, snapshot: captured.snapshot });
     }
     if (args.subagent_type === "harness-plan-reviewer" && typeof event?.toolCallId === "string") {
       const loaded: any = loadPiGateStateFromDisk(projectRoot, { sessionId });
