@@ -5,6 +5,7 @@ import test from "node:test";
 import { parseHandStatusFromOutput } from "../../opencode/lib/hand-records.mjs";
 
 const promptPath = fileURLToPath(new URL("./harness-runtime.md", import.meta.url));
+const taskPromptPath = fileURLToPath(new URL("./harness-task-runtime.md", import.meta.url));
 const executorPath = fileURLToPath(new URL("../runtime/agents/harness-executor.md", import.meta.url));
 const sniperPath = fileURLToPath(new URL("../runtime/agents/harness-sniper.md", import.meta.url));
 const testAuthorPath = fileURLToPath(new URL("../runtime/agents/harness-test-author.md", import.meta.url));
@@ -226,6 +227,7 @@ test("o pai recupera uma única vez dependência declarada com npm ci antes de b
 
 test("a fidelidade reaberta revalida o ledger afetado sem transformar cada correção em nova varredura", () => {
   const prompt = readFileSync(promptPath, "utf8");
+  const taskPrompt = readFileSync(taskPromptPath, "utf8");
   const testReviewer = readFileSync(testReviewerPath, "utf8");
   const testAuthor = readFileSync(testAuthorPath, "utf8");
 
@@ -240,8 +242,27 @@ test("a fidelidade reaberta revalida o ledger afetado sem transformar cada corre
   assert.match(testReviewer, /On correction, recheck prior failures/is);
   assert.match(testReviewer, /previously passing rows\s+affected by the diff/i);
   assert.match(testReviewer, /Do not reopen the\s+whole suite merely because another review was requested/i);
+  assert.match(taskPrompt, /todas as obrigações.*locked tests.*antes de concluir `REVISE`/is);
+  assert.match(taskPrompt, /ledger factual completo.*diff exato.*saída bruta.*exit status/is);
+  assert.match(taskPrompt, /não\s+despache o reviewer com contagens\/resumos/i);
+  assert.match(taskPrompt, /`LATE_FINDING`/);
+  assert.match(testReviewer, /do not\s+stop merely because one finding already justifies `REVISE`/is);
+  assert.match(testReviewer, /complete prior ledger, exact correction diff and raw current command evidence/i);
+  assert.match(testReviewer, /stable finding IDs/i);
   assert.match(testAuthor, /previous ledger/i);
+  assert.match(testAuthor, /resolution map for every supplied finding ID and affected PASS/i);
   assert.match(testAuthor, /TRANSCRIPTION.*TEST_INFRA.*PLAN_CONTRADICTION/is);
+});
+
+test("o pai local não redespacha path sem autoridade e roteia reabertura antes do sniper", () => {
+  const taskPrompt = readFileSync(taskPromptPath, "utf8");
+  const testAuthor = readFileSync(testAuthorPath, "utf8");
+
+  assert.match(taskPrompt, /test-author só pode alterar paths literais.*locked_tests.*fixture_paths/is);
+  assert.match(taskPrompt, /Nunca peça novamente.*path.*gate já recusou/is);
+  assert.match(testAuthor, /path present only in `scope_paths` is not\s+test-author authority/is);
+  assert.match(taskPrompt, /teste ou fixture congelado.*reabra primeiro.*harness-test-author.*só\s+depois despache sniper/is);
+  assert.match(taskPrompt, /nunca use um sniper exploratório/i);
 });
 
 test("o prompt exige vermelho executável antes do fidelity-pass", () => {

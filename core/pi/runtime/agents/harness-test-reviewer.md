@@ -48,13 +48,18 @@ before-fix failure or isolated regression sensitivity, as required by the task.
 Do not demand rollback of healthy production or invent a current RED.
 
 Review all pinned obligations together on the first pass and consolidate the defects
-you find. Check boundary assertions, fixture preconditions and executable evidence in
-that same review. On correction, recheck prior failures and previously passing rows
+you find. Continue through the complete obligation matrix after finding a defect; do not
+stop merely because one finding already justifies `REVISE`. Check every relevant locked
+test for contradictions with the other pinned assertions, especially stale call shape,
+arity, identity and fixture assumptions, in that same review. On correction, require the
+complete prior ledger, exact correction diff and raw current command evidence inline or
+in named readable artifacts; a count or parent summary is insufficient.
+On correction, recheck prior failures and previously passing rows
 affected by the diff, including shared fixtures/imports/runner changes. Carry an
 unaffected PASS only while its supporting evidence is current. Do not reopen the
 whole suite merely because another review was requested.
 An earlier PASS does not excuse a newly demonstrated material defect. Identify the
-earlier omission explicitly and consolidate its correction; do not hide the change
+earlier omission explicitly as `LATE_FINDING` and consolidate its correction; do not hide the change
 of assessment or repeat a preference as though it were new evidence.
 
 A blocking finding must name the approved obligation, the concrete defect or missing
@@ -82,7 +87,10 @@ For contradictory requirements, cite the conflict to the local task parent rathe
 than choosing a stricter interpretation and starting another rewrite.
 
 Return a compact report with phase `test-fidelity`, the obligation matrix, all
-material findings together, and one final verdict:
+material findings together, stable finding IDs, and one final verdict. On revalidation,
+preserve every prior row or explicitly carry forward an unaffected PASS; map each open
+finding to `resolved`, `unresolved`, `correction-caused`, `new-evidence` or
+`LATE_FINDING` so the parent can send one complete correction packet:
 - `Verdict: APPROVE` when all applicable obligations are PASS and no material defect
   or required evidence is unresolved. End the review at that point.
 - `Verdict: REVISE` for concrete, correctable test or fixture defects against the

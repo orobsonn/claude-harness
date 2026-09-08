@@ -33,12 +33,17 @@ only when pinned requirements conflict, the test cannot execute through an avail
 boundary, or it requires a dependency change outside the task's approved scope. Do not
 alternate between incompatible fixtures.
 
+Edit only literal paths named by `locked_tests[].path` or
+`locked_tests[].fixture_paths`. A test path present only in `scope_paths` is not
+test-author authority. If the requested correction needs such a path, return
+`PLAN_CONTRADICTION` instead of attempting the same denied write again.
+
 Apply all authorized corrections from the consolidated review in one pass. The parent gives
 you the previous ledger, its failed rows and every previously passing row affected by the
 approved correction. Preserve every other pinned assertion; do not silently weaken, delete
 or rebaseline it. Do not add implementation-specific constraints unless the approved observable
-requires them. Do not edit production to manufacture RED or GREEN. In the result, include the
-mapping from corrected and affected observables to test locations and the actual command, exit
+requires them. Do not edit production to manufacture RED or GREEN. In the result, include a
+resolution map for every supplied finding ID and affected PASS, tied to test locations, plus the actual command, exit
 status, collection count and relevant failure output. The parent independently checks the target
 run before requesting the test reviewer.
 
