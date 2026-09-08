@@ -76,13 +76,19 @@ Ele não substitui o registry nem os recibos de `harness_tasks`. Fora desse modo
 continue usando o dispatch nativo descrito abaixo, sem alterar a coordenação dos
 demais hosts.
 
-Antes de criar um subagente, obtenha a rota explícita:
+No Pi, cada pai local copia `model`, `thinking` e a complexidade das mãos de
+`contract.dispatch_routes`, fornecido pelo runtime. O pai global usa as rotas Pi
+instaladas para planejamento e revisão global. Não consulte o routing Codex nem
+substitua `thinking` por `reasoning_effort` nesses dispatches.
+
+O comando e os parâmetros de roteamento deste bloco são exclusivos do Codex.
+Nesse host, antes de criar um subagente, obtenha a rota explícita:
 
 ```sh
 node .pi/harness/vendor/codex/model-routing.mjs --role <papel> --complexity <low|medium|high|critical>
 ```
 
-Passe `model`, `reasoning_effort`, escopo e evidência esperada ao dispatch nativo. O sandbox efetivo vem do perfil TOML e da sessão pai; não há campo de dispatch que o substitua. Use Luna/low para inventário mecânico; Terra/medium para execução delimitada; Sol/high para plano, segurança, ambiguidade, adversarial e caminho crítico. xhigh só após uma falha de gate ou incerteza material. Nunca envie segredo, contexto privado desnecessário ou autorização ampla a um filho.
+No Codex, passe `model`, `reasoning_effort`, escopo e evidência esperada ao dispatch nativo. O sandbox efetivo vem do perfil TOML e da sessão pai; não há campo de dispatch que o substitua. Use Luna/low para inventário mecânico; Terra/medium para execução delimitada; Sol/high para plano, segurança, ambiguidade, adversarial e caminho crítico. xhigh só após uma falha de gate ou incerteza material. Nunca envie segredo, contexto privado desnecessário ou autorização ampla a um filho.
 
 Olhos são somente leitura. Mãos só recebem escrita no workspace quando existe uma etapa aprovada e verificável. Um filho não pode ampliar escopo, aprovar a própria mudança nem substituir sandbox/aprovação da sessão pai.
 
