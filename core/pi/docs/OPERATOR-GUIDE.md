@@ -44,11 +44,6 @@ recebe permissão para suspendê-la — pode apenas retomar uma suspensão já c
 no TUI local. Spec, plano, revisão e gates continuam obrigatórios para delivery.
 
 Cada execução operacional começa uma sessão nova e mantém o lock da worktree.
-Se o launcher morrer à força, o lock órfão fica fail-closed para inspeção
-manual: o Pi filho pode continuar vivo, então PID morto ou timeout não provam
-que é seguro iniciar outro pai. Inspecione
-`.pi/harness/state/parent-orchestrator.lock` e só o remova depois de confirmar
-que nenhum Pi daquela worktree continua ativo.
 Para retomar, informe somente a sessão exata:
 
 ```sh
@@ -56,8 +51,62 @@ node .pi/harness/pi-harness.mjs --harness-resume <session-id> "Continue o plano.
 ```
 
 Se o arquivo ou o preflight não conferirem, o launcher não cria substituta.
+Após uma interrupção, esse preflight também reconcilia o owner e os processos
+registrados antes de retomar. Não remova
+`.pi/harness/state/parent-orchestrator.lock` nem abra um segundo pai para a mesma
+worktree enquanto uma execução possa estar ativa.
 Os seletores nativos de sessão do Pi são recusados pelo launcher; texto depois
 de `--` é apenas prompt. Executar `pi` diretamente não recebe esse contrato.
+
+## Implementações por tarefa
+
+Em sessões novas LIGHT/FULL, o pai global continua responsável por spec, plano,
+integração, validação agregada, harvest, revisão final e shipping. Depois de um
+APPROVE host-owned do plan-reviewer para os hashes atuais, ele executa o plano
+com `harness_tasks`:
+
+1. `dispatch` recebe os IDs prontos. Tarefas independentes podem começar juntas;
+   dependentes aguardam a integração de seus recibos, e scopes ativos conflitantes
+   são serializados.
+2. `status` observa os jobs duráveis. Cada implementação roda em processo destacado,
+   worktree própria e sessão pai local. Abortar a observação ou encerrar o pai global
+   não equivale a cancelar o job.
+3. `integrate` exige `task_id`, `attempt_id` e `expected_head`. A ferramenta integra
+   somente aquele SHA verificado e grava um recibo para dependências e consumers finais.
+4. `resume` encaminha feedback para a mesma tentativa e sessão local, somente após
+   comprovar que o processo anterior terminou. A tarefa volta a `in_progress` e sua
+   validação volta a `pending` até o novo resultado ser integrado. Se ela for uma
+   dependência compartilhada, os descendentes já admitidos precisam estar integrados;
+   uma barreira pausa novos dispatches e outras integrações durante a correção.
+
+Cada pai local usa as mesmas mãos, olhos e markers nativos: test-author, fidelity,
+freeze, executor, captura atual, revisões, sniper e re-gate. Ele não inicia outra
+triagem, spec ou planejamento e não faz shipping. As revisões de implementação
+podem executar compliance, adversary e security em paralelo, com até três olhos;
+autoria, mãos, fidelity e revisão da spec permanecem exclusivas. Quando todas as
+tasks estiverem integradas, o pai global roda os testes do conjunto e a finalização
+normal no HEAD agregado.
+Uma correção de dependência feita depois de seus consumers preserva os recibos
+históricos, mas invalida o fechamento agregado: testes e olhos finais rodam novamente
+no novo HEAD antes do shipping.
+
+No TUI, cards recolhidos dos agentes do harness concluídos mostram um resumo público.
+O planner exibe a quantidade de tasks quando ela pode ser verificada na saída; os
+revisores exibem o parecer e, quando há revisão ou bloqueio, o primeiro motivo
+material. Um relatório ausente, ambíguo ou contraditório aparece como
+`PARECER: INDISPONÍVEL`; expanda o card para consultar a saída original completa.
+Executor, test-author, sniper e shipper exibem o status declarado e uma linha do
+resultado; harvester exibe a quantidade de deltas propostos. Os demais papéis do
+harness recebem um resumo neutro, sem inferir aprovação. Não há chamada extra ao modelo.
+Cards parciais, papéis externos e cards expandidos continuam usando o renderer
+nativo sem alteração. O comportamento entra após init/update do runtime Pi; ele não
+modifica uma execução que já esteja presa a um runtime imutável.
+
+`harness_plan` é apenas o painel desse fluxo. Várias tarefas podem permanecer
+`in_progress` simultaneamente, sem uma atualização apagar o estado das irmãs. O
+registry e os recibos de `harness_tasks` são a autoridade operacional. Essa pipeline
+usa Git e o Pi Harness instalados na worktree atual; não exige um clone ou processo
+do Orca.
 
 ## Memória e aprendizados
 
@@ -92,7 +141,7 @@ que chegou à branch mergeada.
 ## Papéis e modelo
 
 O fluxo separa os dez papéis de entrega (`planner`, revisão de plano,
-adversarial, segurança, compliance, harvester, autor de testes, executor,
+adversarial, segurança, compliance, harvester, autor de testes, revisor exclusivo de testes, executor,
 sniper e shipper) do olho opcional `harness-discussion-adversary`, usado só na
 conversa de Grill. O rail fixa a rota de cada despacho. Em particular,
 `harness-plan-reviewer` usa `openai-codex/gpt-6-astra` com esforço `high`.

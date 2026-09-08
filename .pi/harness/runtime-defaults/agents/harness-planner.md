@@ -56,25 +56,15 @@ request or use `resume`. You may use only your own listed read tools for local
 inspection. If indispensable evidence is absent from the envelope and cannot be
 read locally, reply `BLOCKED` with the missing fact and do not write a plan.
 
-## Harvest mode
-
-When the prompt begins with `[HARNESS_HARVEST_CONTEXT]`, read the current canonical
-plan and the host-owned harvest receipt in that envelope. Preserve every existing
-task's fields and values unchanged (JSON formatting may differ). If the receipt has
-zero deltas, do not write the plan. Otherwise
-append exactly one genuine documentation task whose `scope_paths` are the exact durable
-paths named by the deltas. Its `depends_on` must list every existing task, and it must declare
-`no_tests: true` with `locked_tests: []`; do not add a test-author task or reuse the
-last functional task. Give it a stable criterion reference tied to applying and
-verifying the receipt. Change no other plan field, then run the complete self-check.
-
 ## 2. Procedure
 
 1. Decompose into atomic, topologically ordered tasks. Group only tightly
    coupled files of the same domain/severity; split at real dependencies,
    domain boundaries, or projected diffs above roughly 400 lines.
-2. Set a precise `scope_paths` write boundary from inspected paths. Do not use
-   guessed paths or broad globs when an exact file/directory is known.
+2. Set a precise `scope_paths` write boundary from inspected literal file or
+   directory paths. Task admission does not expand globs: do not use `*`, `?`,
+   brace lists or brace ranges in scopes, locked test paths or fixture paths.
+   Names such as `[slug]` remain literal paths. Do not guess paths.
 3. Give every task a blast-radius `severity`: `low` for mechanical
    wiring/types, `medium` for ordinary business logic, `high` for auth,
    payment, data integrity, concurrency, untrusted input, or secrets.
@@ -82,19 +72,41 @@ verifying the receipt. Change no other plan field, then run the complete self-ch
    or `max`. Complexity selects the hand tier; severity selects review posture.
    Split any x-high work instead of shipping it as a task.
 5. Map every acceptance criterion to `criterion_refs` and derive at least one
-   `locked_tests` observable from each. A locked test must pass with only its
+   `locked_tests` observable from each. Prefer the smallest behavioral proof at an
+   existing boundary. Do not lock a source analyzer, helper layout or exhaustive
+   scenario matrix unless the approved requirement needs that specific evidence;
+   a chosen test technique must not become an extra product requirement.
+   A locked test must pass with only its
    owning task applied. It must assert a concrete returned value, response,
    persisted state, or surfaced error—not merely status, existence, truthiness,
-   or absence of a throw. The sole exception is the harvest documentation task:
-   it uses canonical `no_tests: true` and an empty `locked_tests` array.
+   or absence of a throw. A genuine documentation task required by the sealed spec
+   may use canonical `no_tests: true` and an empty `locked_tests` array.
+   Validate that its RED can be collected on the exact base plus already integrated
+   dependencies; import or collection failure is not the expected RED. The
+   test-author never creates production scaffolds or stubs to fix imports: express
+   the RED through an existing importable entry point and keep any genuinely new
+   module with its routed behavior in one task. A new data export through an existing
+   module remains valid and does not need to pre-exist the task.
+   `fixture_paths` names test inputs, test helpers, and oracle artifacts that become
+   immutable with the test freeze. Never put the SUT or another production file there
+   when executor or sniper must modify it. A fixture may also fall under a broad
+   `scope_paths` directory; that overlap alone is not a defect. The contradiction is
+   requiring an implementation edit to a file that this list freezes.
 6. Set `adversarial.enabled` only for auth, payment, data integrity,
    concurrency, external input reaching storage/execution, or secrets. Its
    `focus` must then be non-empty. Use `{ "enabled": false, "focus": [] }`
-   for ordinary tasks.
+   for ordinary tasks. In the Pi task pipeline this flag adds task-specific
+   risk focus; it never disables the mandatory post-implementation adversary
+   and re-gate. Do not enable it on a low-risk task merely to represent that
+   baseline review.
 7. Copy the exact `model_strategy` snapshot below. It is the vendored Pi
    routing contract for this runtime, not a missing product requirement; never
    ask the operator for it or invent routes. Keep `final_review.compliance` and
    `final_review.adversary` true.
+   Set `final_review.security` to true when the aggregate feature touches auth,
+   secrets, external input, dependencies, service entrypoints, webhooks, or sensitive
+   paths. This flag is optional and defaults to false; when true, the final security
+   review is required evidence before delivery, including LIGHT work.
 
 ```json
 {
@@ -196,8 +208,8 @@ before replying. The Pi stable-plan gate revalidates it on every guarded
 dispatch; do not create an alternate plan path. Confirm all of the following:
 
 1. Every approved acceptance criterion is owned by at least one task.
-2. Every task criterion has an observable locked test on that task, except the
-   canonical harvest documentation task with `no_tests: true`.
+2. Every task criterion has an observable locked test on that task, except a genuine
+   documentation-only task required by the sealed spec with `no_tests: true`.
 3. IDs, dependencies, severity, complexity, scope paths, criterion refs,
    locked tests, and model strategy conform to the schema above.
 4. Each locked test is satisfiable at its own task boundary and its test path

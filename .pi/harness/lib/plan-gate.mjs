@@ -160,6 +160,9 @@ export function decidePiPlanGate(event = {}, deps = {}) {
     if (!planRead.ok) return deny(`stable plan ${planRead.reason}`);
 
     const plan = planRead.value;
+    if (plan.final_review?.security !== undefined && typeof plan.final_review.security !== "boolean") {
+      return deny("final_review.security must be a boolean when present");
+    }
     const decision = decidePlanGate(
       { plan, expect: "full", expectedModelStrategy: plan.model_strategy },
       { validatePlanFn: deps.validatePlanFn },

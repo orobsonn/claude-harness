@@ -16,6 +16,7 @@ const PLANNER_TOOLS = Object.freeze(["read", "grep", "find", "ls", "write"]);
 
 export const EYE_ROLES = Object.freeze([
   "harness-planner",
+  "harness-test-reviewer",
   "harness-compliance",
   "harness-adversary",
   "harness-security",
@@ -30,13 +31,19 @@ export const HAND_ROLES = Object.freeze([
   "harness-test-author",
 ]);
 
-/** As dez roles que participam do plano, marcadores, captura e aprovação final. */
+/** As onze roles que participam do plano, marcadores, captura e aprovação final. */
 export const DELIVERY_ROLES = Object.freeze([...EYE_ROLES, ...HAND_ROLES]);
 /** Olho local de discussão: não pertence à cerimônia de delivery. */
 export const DISCUSSION_ROLES = Object.freeze(["harness-discussion-adversary"]);
 /** Tudo que o runtime pode materializar, sombrear e despachar. */
 export const RUNTIME_ROLES = Object.freeze([...DELIVERY_ROLES, ...DISCUSSION_ROLES]);
-// Compatibilidade para consumidores de delivery: "canonical" continua sendo as dez roles.
+/** Revisores independentes que podem rodar em paralelo sobre o mesmo HEAD. */
+export const PARALLEL_REVIEW_ROLES = Object.freeze([
+  "harness-adversary",
+  "harness-compliance",
+  "harness-security",
+]);
+// Compatibilidade para consumidores de delivery: "canonical" continua sendo o catálogo de delivery.
 export const CANONICAL_ROLES = DELIVERY_ROLES;
 
 const POLICIES = Object.freeze(Object.fromEntries([
@@ -64,6 +71,16 @@ export function isDiscussionRole(name) {
 /** @param {unknown} name */
 export function isRuntimeRole(name) {
   return typeof name === "string" && RUNTIME_ROLES.includes(name);
+}
+
+/** @param {unknown} name */
+export function isParallelReviewRole(name) {
+  return typeof name === "string" && PARALLEL_REVIEW_ROLES.includes(name);
+}
+
+/** The canonical plan adds security to the two mandatory final reviewers when applicable. */
+export function requiredPiFinalReviewRoles(plan) {
+  return PARALLEL_REVIEW_ROLES.filter((role) => role !== "harness-security" || plan?.final_review?.security === true);
 }
 
 /** @param {unknown} name */

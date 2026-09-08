@@ -466,6 +466,38 @@ test("isWritingHandRole reconhece o vocabulário do Pi e o bare da lane OC", () 
   }
 });
 
+test("sessão global task-pipeline bloqueia mão nativa direta e orienta harness_tasks", () => {
+  for (const role of ["harness-test-author", "harness-executor", "harness-sniper"]) {
+    const result = decidePiDispatchGate({
+      projectRoot: "/tmp",
+      sessionId: "ses-global-task-pipeline",
+      subagentType: role,
+      toolArgs: {},
+      loadGateStateFn: () => ({ ok: true, state: {
+        session_id: "ses-global-task-pipeline", feature_id: FEATURE, mode: "FULL",
+        classified: true, task_pipeline_version: 1,
+      } }),
+    });
+    assert.equal(result.decision, "deny");
+    assert.match(result.reason, /harness_tasks/);
+  }
+});
+
+test("sessão local task-run preserva os gates nativos de mão", () => {
+  const result = decidePiDispatchGate({
+    projectRoot: "/tmp",
+    sessionId: "ses-local-task-pipeline",
+    subagentType: "harness-executor",
+    toolArgs: {},
+    loadGateStateFn: () => ({ ok: true, state: {
+      session_id: "ses-local-task-pipeline", feature_id: FEATURE, mode: "FULL",
+      classified: true, task_pipeline_version: 1, task_run: { task_id: "task-local" },
+    } }),
+  });
+  assert.equal(result.decision, "deny");
+  assert.doesNotMatch(result.reason, /harness_tasks/);
+});
+
 /* ------------------------------------------------------------------ *
  * Bash                                                                *
  * ------------------------------------------------------------------ */
@@ -1074,6 +1106,73 @@ test("dependent task cannot dispatch an executor or reviewer before the dependen
       assert.match(dispatched.reason, /dependenc|depends_on/i);
       assert.equal(readPiDispatchRecord(f.root, { parentSessionId: f.sessionId, callId: `dependency-${role}` }).ok, false);
     }
+  } finally { f.close(); }
+});
+
+test("dependent global task accepts the dependency's current integrated receipt", () => {
+  const f = completionFixture({ noTests: true });
+  try {
+    const planPath = join(f.root, ".pi", "harness", "plans", f.featureId, "execution-plan.json");
+    const plan = JSON.parse(readFileSync(planPath, "utf8"));
+    plan.tasks.push({ ...plan.tasks[0], id: "task-2", scope_paths: ["src/b.ts"], depends_on: ["task-1"] });
+    writeFileSync(planPath, JSON.stringify(plan));
+    const seen = [];
+    const dispatched = decidePiDispatchGate({
+      projectRoot: f.root,
+      sessionId: f.sessionId,
+      subagentType: "harness-adversary",
+      toolCallId: "dependency-integrated",
+      toolArgs: { prompt: '[HARNESS_TASK_CONTEXT]{"task_id":"task-2"}[/HARNESS_TASK_CONTEXT]' },
+      env: {},
+      readIntegratedTaskEvidenceFn: (input) => { seen.push(input); return { ok: true, result: { session_id: "ses-child-task-one" } }; },
+    });
+    assert.equal(dispatched.decision, "allow", dispatched.reason);
+    assert.equal(seen.length, 1);
+    assert.equal(seen[0].taskId, "task-1");
+    assert.equal(seen[0].sessionId, f.sessionId);
+  } finally { f.close(); }
+});
+
+test("delivery com todas as tasks integradas não exige hand-record global sintético", async () => {
+  const f = completionFixture({ noTests: true });
+  try {
+    let localCaptureReads = 0;
+    const decision = await decidePiBashGate({
+      projectRoot: f.root,
+      sessionId: f.sessionId,
+      command: "git push origin feature/task-pipeline",
+      loadGateStateFn: () => ({ ok: true, state: {
+        session_id: f.sessionId, feature_id: f.featureId, mode: "FULL", classified: true,
+        task_pipeline_version: 1, final_review_done: true,
+      } }),
+      gitStateFn: () => ({ branch: "feature/task-pipeline", defaultBranch: "main", commitsAhead: 1 }),
+      isAncestorFn: () => true,
+      readReviewPlanFn: () => ({ ok: true, plan: { tasks: [{ id: "task-1" }] } }),
+      readAllIntegratedTaskEvidenceFn: () => ({ ok: true, results: [{ task_id: "task-1" }] }),
+      listHandRecordsForFeatureFn: () => { localCaptureReads += 1; throw new Error("global hand records must not be read"); },
+    });
+    assert.equal(decision.decision, "allow", decision.reason);
+    assert.equal(localCaptureReads, 0);
+  } finally { f.close(); }
+});
+
+test("delivery task-pipeline falha fechado quando uma correção suspende os recibos integrados", async () => {
+  const f = completionFixture({ noTests: true });
+  try {
+    const decision = await decidePiBashGate({
+      projectRoot: f.root,
+      sessionId: f.sessionId,
+      command: "git push origin feature/task-pipeline",
+      loadGateStateFn: () => ({ ok: true, state: {
+        session_id: f.sessionId, feature_id: f.featureId, mode: "FULL", classified: true,
+        task_pipeline_version: 1, final_review_done: true,
+      } }),
+      gitStateFn: () => ({ branch: "feature/task-pipeline", defaultBranch: "main", commitsAhead: 1 }),
+      readReviewPlanFn: () => ({ ok: true, plan: { tasks: [{ id: "task-1" }] } }),
+      readAllIntegratedTaskEvidenceFn: () => ({ ok: false, reason: "correction barrier active" }),
+    });
+    assert.equal(decision.decision, "deny");
+    assert.match(decision.reason, /every canonical task integration/i);
   } finally { f.close(); }
 });
 

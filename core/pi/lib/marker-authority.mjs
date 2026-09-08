@@ -34,6 +34,8 @@ import { piExecutionPlanPath, piGateStatePath, piHandRecordPath } from "./pi-pat
 import { readPiSpecApproval, readPiSpecDraft } from "./spec-approval.mjs";
 import { capturePiReviewInput, hasAcceptedPiReviewEvidence, readPiReviewPlan } from "./pi-review-evidence.mjs";
 import { requiredPiFinalReviewRoles } from "./roles.mjs";
+import { readIntegratedTaskEvidence } from "./task-receipts.mjs";
+import { validateTaskFidelityFreeze } from "./task-run.mjs";
 
 /** @description Conjunto exato de ações privilegiadas aceitas pela tool `mark`. Mesmo Set da lane OC. */
 export const MARKER_ACTIONS = new Set([
@@ -59,7 +61,7 @@ const DENY_PREFIX = "[marker-authority]";
  * válida na sessão atual. O estado sozinho não basta: um record pode ter sido substituído após
  * seu carimbo, por isso esta leitura confere o arquivo factual de cada task novamente.
  */
-function checkFinalReviewEvidence(previous, authorization, isAncestorSha, snapshot) {
+function checkFinalReviewEvidence(previous, authorization, isAncestorSha, snapshot, headSha, readIntegratedEvidence) {
   const loaded = readPiReviewPlan({ ...authorization, expectedSha256: snapshot?.canonical_plan?.sha256 });
   if (!loaded.ok) return { ok: false, reason: "final-review requires a readable canonical execution plan" };
   const plan = loaded.plan;
@@ -73,6 +75,17 @@ function checkFinalReviewEvidence(previous, authorization, isAncestorSha, snapsh
 
   for (const taskId of taskIds) {
     const bare = formatFeatureTaskEntry(authorization.featureId, taskId);
+    const integrated = readIntegratedEvidence({
+      projectRoot: authorization.projectRoot,
+      sessionId: authorization.sessionId,
+      featureId: authorization.featureId,
+      taskId,
+      headSha,
+    });
+    if (integrated?.ok) continue;
+    if (previous.task_pipeline_version === 1 && !previous.task_run) {
+      return { ok: false, reason: `final-review missing current integrated task evidence for ${bare}` };
+    }
     if (!Array.isArray(previous.hand_finished) || !previous.hand_finished.includes(bare)) {
       return { ok: false, reason: `final-review missing hand-finished evidence for ${bare}` };
     }
@@ -118,7 +131,7 @@ function checkFinalReviewEvidence(previous, authorization, isAncestorSha, snapsh
  * registrou a conclusão da filha exatamente despachada. O texto da resposta nunca é prova: no
  * Pi uma falha de WebSocket pode voltar como resultado de tool com `isError=false`.
  */
-function hasSuccessfulAdversaryCompletion(previous, authorization) {
+export function hasSuccessfulAdversaryCompletion(previous, authorization) {
   const evidence = previous?.adversary_completion_evidence;
   if (!evidence || typeof evidence !== "object" || Array.isArray(evidence)) return false;
   return evidence.written_by === "host-subagent-completion" &&
@@ -230,6 +243,8 @@ function atomicJsonWrite(file, value) {
  *   resolveHeadSha?: (projectRoot: string) => string | null,
  *   isAncestorSha?: (projectRoot: string, sha: string) => boolean | null,
  *   captureReviewInputFn?: typeof capturePiReviewInput,
+ *   readIntegratedTaskEvidenceFn?: typeof readIntegratedTaskEvidence,
+ *   validateTaskFidelityFreezeFn?: typeof validateTaskFidelityFreeze,
  *   now?: () => string,
  * }} options
  * @returns {{
@@ -247,6 +262,12 @@ export function createPiMarkerAuthority(options = {}) {
   const resolveHeadSha = typeof options?.resolveHeadSha === "function" ? options.resolveHeadSha : defaultResolveHeadSha;
   const isAncestorSha = typeof options?.isAncestorSha === "function" ? options.isAncestorSha : defaultIsAncestorSha;
   const captureReviewInput = typeof options?.captureReviewInputFn === "function" ? options.captureReviewInputFn : capturePiReviewInput;
+  const readIntegratedEvidence = typeof options?.readIntegratedTaskEvidenceFn === "function"
+    ? options.readIntegratedTaskEvidenceFn
+    : readIntegratedTaskEvidence;
+  const validateFidelityFreeze = typeof options?.validateTaskFidelityFreezeFn === "function"
+    ? options.validateTaskFidelityFreezeFn
+    : validateTaskFidelityFreeze;
   const now = typeof options?.now === "function" ? options.now : () => new Date().toISOString();
 
   /** Chave determinística garantida pelo host (event.toolCallId). */
@@ -329,10 +350,10 @@ export function createPiMarkerAuthority(options = {}) {
         // Demo é uma evidência adicional; revisão final é o ponto que fecha a cobertura de todo o plano.
         if (action === "final-review") {
           const captured = captureReviewInput({ projectRoot, sessionId: authorization.sessionId, featureId: authorization.featureId, phase: "final" });
-          const evidence = checkFinalReviewEvidence(previous, { ...authorization, projectRoot }, isAncestorSha, captured?.snapshot);
-          if (!evidence.ok) return evidence;
           const headSha = resolveHeadSha(projectRoot);
           if (!headSha) return { ok: false, reason: "final-review requires a resolved commit SHA" };
+          const evidence = checkFinalReviewEvidence(previous, { ...authorization, projectRoot }, isAncestorSha, captured?.snapshot, headSha, readIntegratedEvidence);
+          if (!evidence.ok) return evidence;
           for (const role of evidence.reviewRoles) {
             if (!hasCurrentFinalReviewCompletion(previous, { ...authorization, projectRoot }, role, headSha, captured)) {
               return { ok: false, reason: `final-review requires current host-owned final ${role.replace("harness-", "")} evidence` };
@@ -363,7 +384,21 @@ export function createPiMarkerAuthority(options = {}) {
           if (!sha || isAncestorSha(projectRoot, sha) !== true) {
             return { ok: false, reason: "fidelity requires the test-author record SHA to be ancestral to HEAD" };
           }
-          payload = formatFeatureTaskEntry(authorization.featureId, taskId, sha);
+          let fidelitySha = sha;
+          if (previous.task_run) {
+            if (!Array.isArray(previous.hand_finished) || !previous.hand_finished.includes(bare)) {
+              return { ok: false, reason: "fidelity requires host-owned test-author completion" };
+            }
+            const frozen = validateFidelityFreeze({
+              projectRoot,
+              sessionId: authorization.sessionId,
+              taskId,
+              testAuthorSha: sha,
+            });
+            if (!frozen?.ok) return { ok: false, reason: frozen?.reason ?? "task fidelity freeze validation failed" };
+            fidelitySha = frozen.freezeSha;
+          }
+          payload = formatFeatureTaskEntry(authorization.featureId, taskId, fidelitySha);
           patch = { fidelity_pass: [payload] };
         } else if (action === "regate-pending") {
           patch = { regate_pending: [bare] };

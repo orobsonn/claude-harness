@@ -16,11 +16,16 @@ import {
   parseHarnessResume,
   harnessStateDir,
   materializeRuntime,
+  resolveOrcaStatusExtension,
   resolvePiDependencyPaths,
   runPiHarnessCli,
+  verifyPiHarness,
 } from "./pi-harness.mjs";
 import { applyPiAuthPathPatch, PI_AUTH_PATH_ENV, PI_AUTH_PATH_PATCH_MARKER, PI_RESUME_ENV, verifyPiAuthPathPatch } from "../lib/pi-auth-path-patch.mjs";
 import { piChildResourceSettings } from "../lib/pi-child-extensions.mjs";
+import { ensurePiRuntime } from "../lib/pi-runtime-cache.mjs";
+
+const RUNTIME_ASSETS = fileURLToPath(new URL("../runtime-deps/", import.meta.url));
 
 const DEPENDENCIES = {
   piCli: "/npx/node_modules/@earendil-works/pi-coding-agent/dist/cli.js",
@@ -56,6 +61,23 @@ test("launcher refuses project packages when the dedicated runtime cache is abse
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+test("launcher verification requires the task-pipeline skill from the package layout", { timeout: 120_000 }, () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-verify-task-pipeline-skill-"));
+  try {
+    cpSync(join(process.cwd(), "core"), join(root, "core"), { recursive: true });
+    const cacheOptions = { cacheRoot: join(root, "cache"), assetsDir: RUNTIME_ASSETS };
+    const runtime = ensurePiRuntime(cacheOptions);
+    assert.equal(runtime.ok, true, runtime.ok ? "" : runtime.reason);
+    assert.equal(verifyPiHarness(root, cacheOptions).ok, true, "complete package fixture must verify");
+
+    const skill = join(root, "core/pi/skills/harness-task-pipeline/SKILL.md");
+    rmSync(skill);
+    assert.deepEqual(verifyPiHarness(root, cacheOptions), { ok: false, reason: `missing:${skill}` });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("launcher disables discovered project resources and loads only the harness package", () => {
   const root = "/package";
   const invocation = buildPiHarnessInvocation({
@@ -75,6 +97,27 @@ test("launcher disables discovered project resources and loads only the harness 
   assert.equal(invocation.env.PI_CODING_AGENT_DIR, resolve(process.cwd(), ".pi/harness/runtime"));
   assert.equal(invocation.env.PI_CODING_AGENT_SESSION_DIR, resolve(process.cwd(), ".pi/harness/sessions"));
   assert.equal(invocation.env[PI_AUTH_PATH_ENV], "/operator/.pi/agent/auth.json");
+});
+
+test("an Orca terminal loads only the marked official Pi status extension", () => {
+  const source = mkdtempSync(join(tmpdir(), "pi-orca-status-"));
+  const extension = join(source, "extensions/orca-agent-status.ts");
+  mkdirSync(dirname(extension), { recursive: true });
+  try {
+    writeFileSync(extension, "// unmarked\n");
+    const env = { ORCA_WORKTREE_ID: "repo::/worktree", ORCA_PI_SOURCE_AGENT_DIR: source };
+    assert.equal(resolveOrcaStatusExtension(env), null);
+    writeFileSync(extension, "// @orca-managed-pi-extension\nexport default () => {}\n");
+    assert.equal(resolveOrcaStatusExtension(env), extension);
+    const loaded = loadedExtensions(buildPiHarnessInvocation({
+      root: "/package", argv: [], env, dependencyPaths: DEPENDENCIES,
+    }).args);
+    assert.equal(loaded.at(-1), extension);
+    assert.equal(loaded.filter((item) => item === extension).length, 1);
+    assert.equal(resolveOrcaStatusExtension({ ...env, ORCA_WORKTREE_ID: "" }), null);
+  } finally {
+    rmSync(source, { recursive: true, force: true });
+  }
 });
 
 test("launcher starts each new ceremony in an explicit fresh Pi session", () => {
@@ -252,10 +295,13 @@ test("every ported gate is loaded, policy first and the UI tracker last", () => 
 
   assert.deepEqual(loaded, [
     join(root, "core/pi/extensions/harness-policy.ts"),
+    join(root, "core/pi/extensions/harness-task-events.ts"),
+    join(root, "core/pi/extensions/harness-task-run.ts"),
     join(root, "core/pi/extensions/harness-bootstrap.ts"),
     bridge,
     join(root, "core/pi/extensions/harness-dispatch.ts"),
     join(root, "core/pi/extensions/harness-memory.ts"),
+    join(root, "core/pi/extensions/harness-tasks.ts"),
     join(root, "core/pi/extensions/harness-entry-gate.ts"),
     join(root, "core/pi/extensions/harness-reviews.ts"),
     join(root, "core/pi/extensions/harness-plan-gate.ts"),

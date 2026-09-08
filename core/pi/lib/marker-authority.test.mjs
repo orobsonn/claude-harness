@@ -538,6 +538,59 @@ test("final-review rejeita recibos aceitos quando o snapshot atual mudou sem tro
   assert.equal(readGateState(root).final_review_done, undefined);
 });
 
+test("final-review aceita recibos integrados de cada tarefa sem reescrever a sessão filha", () => {
+  const root = makeRoot();
+  seedPlan(root, [{ id: TASK }, { id: "task-two" }]);
+  const receipt = (role, suffix) => ({
+    written_by: "host-subagent-completion", role, parent_session_id: SESSION, feature_id: FEATURE,
+    dispatch_call_id: `integrated-${suffix}`, child_session_id: `review-child-${suffix}`,
+    agent_id: `review-agent-${suffix}`, status: "completed", reviewed_head_sha: SHA,
+    ...acceptedReviewFields(),
+  });
+  seedGateState(root, { final_review_evidence: {
+    adversary: receipt("harness-adversary", "adversary"),
+    compliance: receipt("harness-compliance", "compliance"),
+  } });
+  const seen = [];
+  const authority = makeAuthority(root, {
+    readIntegratedTaskEvidenceFn: (input) => {
+      seen.push(input);
+      return { ok: true, result: { session_id: `child-${input.taskId}` } };
+    },
+  }).authority;
+  const result = call(authority, { action: "final-review" }, { toolCallId: "integrated-final" }).result;
+  assert.equal(result.ok, true, reasonOf(result));
+  assert.deepEqual(seen.map((item) => item.taskId), [TASK, "task-two"]);
+  assert.ok(seen.every((item) => item.sessionId === SESSION && item.headSha === SHA));
+});
+
+test("final-review global task-pipeline não usa captura legada durante barreira de correção", () => {
+  const root = makeRoot();
+  seedPlan(root);
+  seedHandRecord(root, { capturedVerifiedAt: "2025-12-31T00:00:00.000Z" });
+  const receipt = (role, suffix) => ({
+    written_by: "host-subagent-completion", role, parent_session_id: SESSION, feature_id: FEATURE,
+    dispatch_call_id: `barrier-${suffix}`, child_session_id: `barrier-child-${suffix}`,
+    agent_id: `barrier-agent-${suffix}`, status: "completed", reviewed_head_sha: SHA,
+    ...acceptedReviewFields(),
+  });
+  seedGateState(root, {
+    task_pipeline_version: 1,
+    hand_finished: [`${FEATURE}/${TASK}`],
+    capture_verified: [`${FEATURE}/${TASK}@${SHA}`],
+    final_review_evidence: {
+      adversary: receipt("harness-adversary", "adversary"),
+      compliance: receipt("harness-compliance", "compliance"),
+    },
+  });
+  const authority = makeAuthority(root, {
+    readIntegratedTaskEvidenceFn: () => ({ ok: false, reason: "correction barrier active" }),
+  }).authority;
+  const result = call(authority, { action: "final-review" }, { toolCallId: "barrier-final" }).result;
+  assert.equal(result.ok, false);
+  assert.match(reasonOf(result), /missing current integrated task evidence/i);
+});
+
 test("task_id inseguro é rejeitado com a mensagem da ação", () => {
   const root = makeRoot();
   seedGateState(root);
@@ -880,25 +933,37 @@ test("commits locais freeze e impl preservam a linhagem real de fidelity e captu
   execFileSync("git", ["commit", "-qm", "chore: seed"], { cwd: root });
   const handSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
 
-  seedGateState(root);
+  seedGateState(root, { task_run: {} });
   seedHandRecord(root, { agent: "test-author", freezeCommitSha: handSha });
-  const { authority } = makeAuthority(root, {
-    dispatchRole: "test-author",
-    resolveHeadSha: undefined,
-    isAncestorSha: undefined,
-  });
 
   fs.mkdirSync(path.join(root, "tests"), { recursive: true });
   fs.writeFileSync(path.join(root, "tests", "app.test.mjs"), "// expected-red locked test\n", "utf8");
   execFileSync("git", ["add", "--", "tests/app.test.mjs"], { cwd: root });
   execFileSync("git", ["commit", "-qm", "test(app): freeze locked test for task-one"], { cwd: root });
   const freezeCommit = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
+  let freezeValidations = 0;
+  const { authority } = makeAuthority(root, {
+    dispatchRole: "test-author",
+    resolveHeadSha: undefined,
+    isAncestorSha: undefined,
+    validateTaskFidelityFreezeFn: (input) => {
+      freezeValidations++;
+      assert.deepEqual(input, {
+        projectRoot: root,
+        sessionId: SESSION,
+        taskId: TASK,
+        testAuthorSha: handSha,
+      });
+      return { ok: true, freezeSha: freezeCommit };
+    },
+  });
 
   assert.equal(call(authority, { action: "hand-finished", task_id: TASK }, { toolCallId: "real-hf" }).result.ok, true);
   assert.equal(call(authority, { action: "fidelity", task_id: TASK }, { toolCallId: "real-fidelity" }).result.ok, true);
   assert.equal(call(authority, { action: "capture-verified", task_id: TASK }, { toolCallId: "real-capture" }).result.ok, true);
-  assert.deepEqual(readGateState(root).fidelity_pass, [`${FEATURE}/${TASK}@${handSha}`]);
+  assert.deepEqual(readGateState(root).fidelity_pass, [`${FEATURE}/${TASK}@${freezeCommit}`]);
   assert.deepEqual(readGateState(root).capture_verified, [`${FEATURE}/${TASK}@${handSha}`]);
+  assert.equal(freezeValidations, 1);
 
   fs.mkdirSync(path.join(root, "src"), { recursive: true });
   fs.writeFileSync(path.join(root, "src", "app.ts"), "export const ready = true;\n", "utf8");

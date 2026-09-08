@@ -7,6 +7,7 @@ const INDEPENDENT_REVIEW_ROUTES = Object.freeze({
   "harness-adversary": { model: "openai-codex/gpt-5.6-sol", thinking: "medium" },
   "harness-discussion-adversary": { model: "openai-codex/gpt-5.6-sol", thinking: "medium" },
   "harness-plan-reviewer": { model: "openai-codex/gpt-6-astra", thinking: "high" },
+  "harness-test-reviewer": { model: "openai-codex/gpt-5.6-terra", thinking: "high" },
   "harness-compliance": { model: "openai-codex/gpt-5.6-terra", thinking: "high" },
   "harness-security": { model: "openai-codex/gpt-5.6-sol" },
 });
@@ -52,6 +53,9 @@ test("rotas de modelo do Pi são fixas por papel e por complexidade da mão", ()
     ok: true, model: "openai-codex/gpt-5.6-sol", thinking: "high",
   });
   assert.deepEqual(piDispatchRoute("harness-test-author"), {
+    ok: true, model: "openai-codex/gpt-5.6-terra", thinking: "high",
+  });
+  assert.deepEqual(piDispatchRoute("harness-test-reviewer"), {
     ok: true, model: "openai-codex/gpt-5.6-terra", thinking: "high",
   });
   assert.deepEqual(piDispatchRoute("harness-executor", "low"), {

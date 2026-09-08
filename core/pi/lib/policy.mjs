@@ -23,6 +23,10 @@ import { piStateRoot } from './pi-paths.mjs'
 import { isPiCanonicalPlanPath } from './plan-write-decide.mjs'
 import { isParallelReviewRole } from './roles.mjs'
 
+export function isPiReadOnlyReviewerRole(role) {
+  return role === 'harness-test-reviewer' || isParallelReviewRole(role)
+}
+
 /** Mesma frase de policy.mjs (denyForCommand) — não inventar prefixo novo. */
 const SECRET_REASON = 'Secret-bearing paths are blocked from shell access by the delivery harness.'
 /** Mesma frase de policy.mjs (mutatesProtectedPath). */
@@ -32,6 +36,13 @@ const PROTECTED_REASON = 'Harness-owned paths are protected from direct tool mut
 const PI_PROTECTED = /(?:^|[/\s"\x27`])\.pi(?:[/\s"\x27`]|$)/
 /** Mesmos verbos de mutação usados por mutatesProtectedPath em policy.mjs. */
 const MUTATION_VERB = /\b(?:rm|mv|cp|install|touch|mkdir|chmod|chown|truncate|tee|sed|perl)\b|(?:^|[^<])>{1,2}/
+/** Redirecionar apenas um descritor para o sink literal não muta o caminho protegido citado
+ * pelo comando. O delimitador evita aceitar sufixos, expansões ou outros destinos. */
+const DEV_NULL_REDIRECT = /(?:\d*)>{1,2}[ \t]*\/dev\/null(?=$|[ \t\r\n|;&)])/g
+
+function mutationCommand(command) {
+  return command.replace(DEV_NULL_REDIRECT, '')
+}
 
 const ALLOW = { block: false }
 const PARENT_ORCHESTRATOR_REASON =
@@ -117,6 +128,7 @@ export function decidePiParentOrchestratorPolicy(call = {}, options = {}) {
     if (tool === "classify" && !["suspend-inline", "resume-ceremony"].includes(input.action)) return blocked
     if (tool === "mark" || tool === "harness_spec_write" || tool === "seal_spec_review") return blocked
     if (tool === "harness_plan" && input.action !== "show") return blocked
+    if (tool === "harness_tasks" && !["status", "wait"].includes(input.action)) return blocked
     if (tool === "subagent" && (status === "suspended-inline" || !["harness-planner", "harness-plan-reviewer"].includes(input.subagent_type))) return blocked
   }
   if (options?.isChild === true || (options?.isHeadless !== true && !isActiveDeliveryCeremony(options?.gateState))) return ALLOW
@@ -181,11 +193,11 @@ export function isPiReviewSecretPath(path) {
   ))
 }
 
-/** @description Restringe os três revisores independentes a leituras canônicas do projeto.
+/** @description Restringe revisores de implementação e fidelidade a leituras canônicas do projeto.
  * Para grep recursivo sem glob, devolve o patch fixo que o adaptador injeta antes da execução
  * da tool nativa. Um glob do modelo não pode ser composto com essa exclusão única e é negado. */
 function decideReviewerReadPolicy(toolName, input, options) {
-  if (!isParallelReviewRole(options?.reviewerRole)) return ALLOW
+  if (!isPiReadOnlyReviewerRole(options?.reviewerRole)) return ALLOW
 
   let root
   try { root = realpathSync(options?.projectRoot ?? options?.cwd) } catch { return { block: true, reason: REVIEWER_READ_REASON } }
@@ -242,7 +254,7 @@ export function decidePiPolicy(call = {}, options = {}) {
   const toolName = call?.toolName
   const input = call?.input && typeof call.input === 'object' ? call.input : {}
 
-  if (isParallelReviewRole(options.reviewerRole) && !isPiReadTool(toolName)) {
+  if (isPiReadOnlyReviewerRole(options.reviewerRole) && !isPiReadTool(toolName)) {
     return { block: true, reason: 'Read-only reviewers may use only read, grep, find and ls.' }
   }
 
@@ -269,7 +281,11 @@ export function decidePiPolicy(call = {}, options = {}) {
   const target = payload.tool_input.command
   if (typeof target !== 'string' || !PI_PROTECTED.test(target)) return ALLOW
   if (isPiWriteTool(toolName)) return { block: true, reason: PROTECTED_REASON }
-  return MUTATION_VERB.test(target) ? { block: true, reason: PROTECTED_REASON } : ALLOW
+  // /dev/null só é o sink esperado na lane Bash, não no PowerShell de outros hosts.
+  const mutationTarget = typeof toolName === 'string' && toolName.toLowerCase() === 'bash'
+    ? mutationCommand(target)
+    : target
+  return MUTATION_VERB.test(mutationTarget) ? { block: true, reason: PROTECTED_REASON } : ALLOW
 }
 
 /** @description Tool cujo término gera recibo de auditoria. Espelha o matcher da lane Codex

@@ -266,6 +266,39 @@ test('ler config do harness continua liberado enquanto mutações de shell são 
   assert.equal(bash('rm -rf .pi/harness/state').block, true)
 })
 
+test('redirect literal para /dev/null não transforma leitura do harness em mutação', () => {
+  for (const command of [
+    'rg -n "dispatch complexity conflicts|complexity.*stable plan|HARNESS_TASK_CONTEXT" .pi/harness .pi/agents 2>/dev/null | head -100',
+    'rg needle .pi/harness 2> /dev/null | head -100',
+    'cat .pi/harness/state/gate-state.json >/dev/null',
+    'cat .pi/harness/state/gate-state.json 2>> /dev/null',
+  ]) {
+    assert.deepEqual(bash(command), { block: false }, command)
+  }
+})
+
+test('carve-out de /dev/null preserva outras mutações de caminhos do harness', () => {
+  for (const command of [
+    'cat .pi/harness/state/gate-state.json 2>/dev/null > .pi/copied-state.json',
+    'cat .pi/harness/state/gate-state.json 2>/dev/null > output.txt',
+    'cat .pi/harness/state/gate-state.json 2>/dev/null.backup',
+    'cat .pi/harness/state/gate-state.json 2>/dev/null$SUFFIX',
+    'cat .pi/harness/state/gate-state.json 2>/dev/null/child',
+    'rm -rf .pi/harness/state 2>/dev/null',
+    'touch .pi/harness/state/new.json 2> /dev/null',
+  ]) {
+    const out = bash(command)
+    assert.equal(out.block, true, command)
+  }
+})
+
+test('PowerShell não recebe a exceção do sink POSIX /dev/null', () => {
+  for (const toolName of ['powershell', 'PowerShell']) {
+    const out = decidePiPolicy({ toolName, input: { command: 'cat .pi/harness/state/gate-state.json >/dev/null' } })
+    assert.equal(out.block, true, toolName)
+  }
+})
+
 test('payload malformado de bash, write ou edit é negado de forma conservadora', () => {
   for (const call of [
     { toolName: 'bash', input: {} },

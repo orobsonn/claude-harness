@@ -8,7 +8,8 @@
  * As mensagens de negação são IDÊNTICAS às da lane OC/Codex — sem prefixo novo. */
 
 import { homedir } from 'node:os'
-import { basename, isAbsolute, resolve, sep } from 'node:path'
+import { realpathSync, statSync } from 'node:fs'
+import { basename, isAbsolute, relative, resolve, sep } from 'node:path'
 
 import { evaluateHook, protectablePath } from '../vendor/codex/hooks/policy.mjs'
 import { isSafeFeatureId } from '../vendor/shared/lib/feature-id.mjs'
@@ -20,6 +21,11 @@ import {
 } from './pi-adapter-map.mjs'
 import { piStateRoot } from './pi-paths.mjs'
 import { isPiCanonicalPlanPath } from './plan-write-decide.mjs'
+import { isParallelReviewRole } from './roles.mjs'
+
+export function isPiReadOnlyReviewerRole(role) {
+  return role === 'harness-test-reviewer' || isParallelReviewRole(role)
+}
 
 /** Mesma frase de policy.mjs (denyForCommand) — não inventar prefixo novo. */
 const SECRET_REASON = 'Secret-bearing paths are blocked from shell access by the delivery harness.'
@@ -30,10 +36,19 @@ const PROTECTED_REASON = 'Harness-owned paths are protected from direct tool mut
 const PI_PROTECTED = /(?:^|[/\s"\x27`])\.pi(?:[/\s"\x27`]|$)/
 /** Mesmos verbos de mutação usados por mutatesProtectedPath em policy.mjs. */
 const MUTATION_VERB = /\b(?:rm|mv|cp|install|touch|mkdir|chmod|chown|truncate|tee|sed|perl)\b|(?:^|[^<])>{1,2}/
+/** Redirecionar apenas um descritor para o sink literal não muta o caminho protegido citado
+ * pelo comando. O delimitador evita aceitar sufixos, expansões ou outros destinos. */
+const DEV_NULL_REDIRECT = /(?:\d*)>{1,2}[ \t]*\/dev\/null(?=$|[ \t\r\n|;&)])/g
+
+function mutationCommand(command) {
+  return command.replace(DEV_NULL_REDIRECT, '')
+}
 
 const ALLOW = { block: false }
 const PARENT_ORCHESTRATOR_REASON =
   "Parent orchestrator uses the Claude Code Bash allowlist for verification and selective commits during an active LIGHT/FULL ceremony; delegate product file mutations to a designated writing hand."
+const REVIEWER_READ_REASON = 'Read-only reviewers are confined to the canonical project root.'
+export const REVIEWER_GREP_GUARD = '!{.[eE][nN][vV],.[eE][nN][vV].*,**/.[eE][nN][vV],**/.[eE][nN][vV].*,.[dD][eE][vV].[vV][aA][rR][sS],.[dD][eE][vV].[vV][aA][rR][sS].*,**/.[dD][eE][vV].[vV][aA][rR][sS],**/.[dD][eE][vV].[vV][aA][rR][sS].*,.[pP][iI]/[aA][gG][eE][nN][tT]/[aA][uU][tT][hH].[jJ][sS][oO][nN],**/.[pP][iI]/[aA][gG][eE][nN][tT]/[aA][uU][tT][hH].[jJ][sS][oO][nN],.[sS][sS][hH]/**,**/.[sS][sS][hH]/**,.[aA][wW][sS]/**,**/.[aA][wW][sS]/**,.[nN][pP][mM][rR][cC],**/.[nN][pP][mM][rR][cC],.[nN][eE][tT][rR][cC],**/.[nN][eE][tT][rR][cC],.[pP][yY][pP][iI][rR][cC],**/.[pP][yY][pP][iI][rR][cC],.[gG][iI][tT]-[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][sS],**/.[gG][iI][tT]-[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][sS],.[cC][oO][dD][eE][xX]/[aA][uU][tT][hH].[jJ][sS][oO][nN],**/.[cC][oO][dD][eE][xX]/[aA][uU][tT][hH].[jJ][sS][oO][nN],[aA][uU][tT][hH].[jJ][sS][oO][nN],**/[aA][uU][tT][hH].[jJ][sS][oO][nN],[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][sS],**/[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][sS],[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][sS].[jJ][sS][oO][nN],**/[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][sS].[jJ][sS][oO][nN],.[gG][iI][tT]/[cC][oO][nN][fF][iI][gG],**/.[gG][iI][tT]/[cC][oO][nN][fF][iI][gG]}'
 
 // Espelho literal de core/claude-code/settings.json → permissions.allow → Bash(...).
 // Não mantemos uma segunda interpretação menor no Pi: se Claude Code aceita uma chamada,
@@ -113,6 +128,7 @@ export function decidePiParentOrchestratorPolicy(call = {}, options = {}) {
     if (tool === "classify" && !["suspend-inline", "resume-ceremony"].includes(input.action)) return blocked
     if (tool === "mark" || tool === "harness_spec_write" || tool === "seal_spec_review") return blocked
     if (tool === "harness_plan" && input.action !== "show") return blocked
+    if (tool === "harness_tasks" && !["status", "wait"].includes(input.action)) return blocked
     if (tool === "subagent" && (status === "suspended-inline" || !["harness-planner", "harness-plan-reviewer"].includes(input.subagent_type))) return blocked
   }
   if (options?.isChild === true || (options?.isHeadless !== true && !isActiveDeliveryCeremony(options?.gateState))) return ALLOW
@@ -149,6 +165,65 @@ export function isSecretReadPath(path, options = {}) {
   return false
 }
 
+function pathIsInside(root, candidate) {
+  const rel = relative(root, candidate)
+  return rel === '' || (rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel))
+}
+
+export function isPiReviewSecretPath(path) {
+  if (typeof path !== 'string' || path.length === 0) return false
+  const segments = resolve(path).split(sep).filter(Boolean).map((segment) => segment.toLowerCase())
+  // Keep reviewer reads aligned with generic sensitive files and directory ancestry omitted from review snapshots.
+  if (segments.some((segment) => ['auth.json', 'credentials', 'credentials.json'].includes(segment))) return true
+  if (segments.some((segment) =>
+    segment === '.env' || segment.startsWith('.env.') ||
+    segment === '.dev.vars' || segment.startsWith('.dev.vars.') ||
+    segment === '.ssh' || segment === '.aws' ||
+    segment === '.npmrc' || segment === '.netrc' || segment === '.pypirc' ||
+    segment === '.git-credentials'
+  )) {
+    return true
+  }
+  return segments.some((segment, index) => (
+    segment === '.pi' && segments[index + 1] === 'agent' && segments[index + 2] === 'auth.json'
+  ) || (
+    segment === '.codex' && segments[index + 1] === 'auth.json'
+  ) || (
+    segment === '.git' && segments[index + 1] === 'config'
+  ))
+}
+
+/** @description Restringe revisores de implementação e fidelidade a leituras canônicas do projeto.
+ * Para grep recursivo sem glob, devolve o patch fixo que o adaptador injeta antes da execução
+ * da tool nativa. Um glob do modelo não pode ser composto com essa exclusão única e é negado. */
+function decideReviewerReadPolicy(toolName, input, options) {
+  if (!isPiReadOnlyReviewerRole(options?.reviewerRole)) return ALLOW
+
+  let root
+  try { root = realpathSync(options?.projectRoot ?? options?.cwd) } catch { return { block: true, reason: REVIEWER_READ_REASON } }
+  const requested = typeof input.path === 'string' && input.path.length > 0 ? input.path : '.'
+  // Pi rewrites these spellings before opening a file. Accept ordinary paths only so the
+  // checked file is also the file the native tool opens, without copying Pi's path parser.
+  if (/^@|^~(?:[/\\]|$)|^file:\/\/|[\u00A0\u2000-\u200A\u202F\u205F\u3000]/.test(requested) ||
+    (process.platform === 'win32' && /^\/(?:mnt\/|cygdrive\/)?[a-z](?:\/|$)/i.test(requested))) {
+    return { block: true, reason: REVIEWER_READ_REASON }
+  }
+  const candidate = isAbsolute(requested) ? resolve(requested) : resolve(root, requested)
+  let target
+  try { target = realpathSync(candidate) } catch { return { block: true, reason: REVIEWER_READ_REASON } }
+  if (!pathIsInside(root, target)) return { block: true, reason: REVIEWER_READ_REASON }
+  if (isPiReviewSecretPath(candidate) || isPiReviewSecretPath(target)) {
+    return { block: true, reason: SECRET_REASON }
+  }
+
+  if (String(toolName).toLowerCase() !== 'grep') return ALLOW
+  let recursive
+  try { recursive = statSync(target).isDirectory() } catch { return { block: true, reason: REVIEWER_READ_REASON } }
+  if (!recursive) return ALLOW
+  if (typeof input.glob === 'string') return { block: true, reason: REVIEWER_READ_REASON }
+  return { block: false, inputPatch: { glob: REVIEWER_GREP_GUARD } }
+}
+
 /** @description Traduz a decisão do motor Codex ({hookSpecificOutput}) para {block, reason}. */
 function fromCodexDecision(output) {
   const reason = output?.hookSpecificOutput?.permissionDecisionReason
@@ -179,10 +254,16 @@ export function decidePiPolicy(call = {}, options = {}) {
   const toolName = call?.toolName
   const input = call?.input && typeof call.input === 'object' ? call.input : {}
 
+  if (isPiReadOnlyReviewerRole(options.reviewerRole) && !isPiReadTool(toolName)) {
+    return { block: true, reason: 'Read-only reviewers may use only read, grep, find and ls.' }
+  }
+
   const parentAuthority = decidePiParentOrchestratorPolicy({ toolName, input }, options)
   if (parentAuthority.block) return parentAuthority
 
   if (isPiReadTool(toolName)) {
+    const reviewerRead = decideReviewerReadPolicy(toolName, input, options)
+    if (reviewerRead.block || reviewerRead.inputPatch) return reviewerRead
     return isSecretReadPath(input.path, options) ? { block: true, reason: SECRET_REASON } : ALLOW
   }
 
@@ -200,7 +281,11 @@ export function decidePiPolicy(call = {}, options = {}) {
   const target = payload.tool_input.command
   if (typeof target !== 'string' || !PI_PROTECTED.test(target)) return ALLOW
   if (isPiWriteTool(toolName)) return { block: true, reason: PROTECTED_REASON }
-  return MUTATION_VERB.test(target) ? { block: true, reason: PROTECTED_REASON } : ALLOW
+  // /dev/null só é o sink esperado na lane Bash, não no PowerShell de outros hosts.
+  const mutationTarget = typeof toolName === 'string' && toolName.toLowerCase() === 'bash'
+    ? mutationCommand(target)
+    : target
+  return MUTATION_VERB.test(mutationTarget) ? { block: true, reason: PROTECTED_REASON } : ALLOW
 }
 
 /** @description Tool cujo término gera recibo de auditoria. Espelha o matcher da lane Codex

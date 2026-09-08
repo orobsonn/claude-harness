@@ -24,7 +24,7 @@ test("records a bounded active plan with immutable task ids", () => {
   assert.deepEqual(formatPlanProgress(result.snapshot), ["Plano 0/2 · pendente"]);
 });
 
-test("updates a task serially and maintains only one task in progress", () => {
+test("keeps independent tasks in progress without silently resetting either one", () => {
   const initial = applyPlanAction(undefined, {
     action: "record",
     title: "Plano",
@@ -47,8 +47,37 @@ test("updates a task serially and maintains only one task in progress", () => {
   });
 
   assert.equal(second.ok, true);
-  assert.deepEqual(second.snapshot.tasks.map((task) => task.status), ["pending", "in_progress"]);
-  assert.deepEqual(formatPlanProgress(second.snapshot), ["Plano 0/2 · atual: Implementação"]);
+  assert.deepEqual(second.snapshot.tasks.map((task) => task.status), ["in_progress", "in_progress"]);
+  assert.deepEqual(formatPlanProgress(second.snapshot), ["Plano 0/2 · em andamento (2): Teste, Implementação"]);
+});
+
+test("reopens one completed task and resets its validation lane to pending", () => {
+  const initial = applyPlanAction(undefined, {
+    action: "record",
+    title: "Plano",
+    tasks: [{ title: "Implementar", validation: true }, "Documentar"],
+  }, { now: () => 1 }).snapshot;
+  const completed = applyPlanAction(initial, {
+    action: "update", planId: initial.planId, revision: 1, taskId: "t1", status: "completed",
+  }).snapshot;
+  const passed = applyPlanAction(completed, {
+    action: "validate", planId: initial.planId, revision: 2, taskId: "t1", validationStatus: "passed",
+  }).snapshot;
+  const otherRunning = applyPlanAction(passed, {
+    action: "update", planId: initial.planId, revision: 3, taskId: "t2", status: "in_progress",
+  }).snapshot;
+
+  const resumed = applyPlanAction(otherRunning, {
+    action: "update", planId: initial.planId, revision: 4, taskId: "t1", status: "in_progress",
+  });
+
+  assert.equal(resumed.ok, true);
+  assert.deepEqual(resumed.snapshot.tasks.map((task) => task.status), ["in_progress", "in_progress"]);
+  assert.equal(resumed.snapshot.tasks[0].validationStatus, "pending");
+  assert.deepEqual(formatPlanProgress(resumed.snapshot), [
+    "Plano 0/2 · em andamento (2): Implementar, Documentar",
+    "Validação 0/1 · pendente",
+  ]);
 });
 
 test("rejects stale, malformed, and ambiguous updates without changing the snapshot", () => {

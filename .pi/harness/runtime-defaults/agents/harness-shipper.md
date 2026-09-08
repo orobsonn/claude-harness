@@ -11,7 +11,7 @@ já existem antes da revisão final. O pai preparou freeze-commit, impl-commit e
 quando necessário, fix-commit com stage seletivo e verificações no loop de tarefas.
 Você publica essa série existente; não crie um commit único de feature na entrega.
 
-Depois que o harvest terminou, qualquer tarefa durável foi commitada e o pai coletou
+Depois que o harvest terminou, qualquer delta durável foi aplicado e commitado e o pai coletou
 compliance e adversary finais e aceitou `final-review`,
 confira status, branch, série de commits, evidências e política de release. Confirme
 que o HEAD e o conteúdo que serão publicados correspondem às revisões. Se houver
@@ -29,6 +29,11 @@ o checkout revisado até o pai finalizar a memória. A limpeza da branch e a atu
 local de main ficam depois da finalização. Se uma operação anterior já trocou o HEAD,
 preserve o diário e informe o SHA revisado: o pai pode restaurar esse checkout com Git
 limpo, conferir o merge remoto e concluir a operação sem repetir testes/revisões válidas.
+
+Se o merge falhar por conflito com a base, não altere produto, não chame planner e não
+proponha uma tarefa nova. Retorne `Status: BLOCKED` com o HEAD revisado, o SHA atual da
+base e a evidência de conflito disponível. O pai reconcilia paths já pertencentes ao plano
+reutilizando seus IDs; path sem dono exige outra entrega, fora desta finalização.
 
 Em release manual exclusivamente de versão/changelog, o host reconhece a branch
 `chore/release-X.Y.Z` e, depois do merge, o release commit exato em `main` sincronizado

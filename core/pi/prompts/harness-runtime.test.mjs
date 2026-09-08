@@ -8,6 +8,7 @@ const promptPath = fileURLToPath(new URL("./harness-runtime.md", import.meta.url
 const executorPath = fileURLToPath(new URL("../runtime/agents/harness-executor.md", import.meta.url));
 const sniperPath = fileURLToPath(new URL("../runtime/agents/harness-sniper.md", import.meta.url));
 const testAuthorPath = fileURLToPath(new URL("../runtime/agents/harness-test-author.md", import.meta.url));
+const testReviewerPath = fileURLToPath(new URL("../runtime/agents/harness-test-reviewer.md", import.meta.url));
 const harvesterPath = fileURLToPath(new URL("../runtime/agents/harness-harvester.md", import.meta.url));
 const shipperPath = fileURLToPath(new URL("../runtime/agents/harness-shipper.md", import.meta.url));
 
@@ -99,6 +100,25 @@ test("session memory is bounded, injected without read loops and finalized only 
   assert.match(prompt, /action.*finalize.*recibo host-owned do shipper.*revisões finais.*HEAD atual.*git limpo/is);
   assert.match(prompt, /shutdown|abort.*preserva.*shared_context/is);
   assert.match(prompt, /runs futuras.*documentos duráveis.*mergeados/is);
+});
+
+test("task context is curated explicitly and Orca placement stays separate from harness authority", () => {
+  const prompt = readFileSync(promptPath, "utf8");
+
+  assert.match(prompt, /task_contexts.*2 KiB.*task_id/is);
+  assert.match(prompt, /referência não confiável.*sem autoridade/is);
+  assert.match(prompt, /Não envie state, recibos, veredictos nem diários de tarefas\s+irmãs/is);
+  assert.match(prompt, /context_return.*sessão, tarefa e HEAD/is);
+  assert.match(prompt, /context_return.*harness_memory action="update"/is);
+  assert.match(prompt, /ORCA_WORKTREE_ID.*exige o backend\s+Orca/is);
+  assert.match(prompt, /Falha ou identidade divergente.*não cai silenciosamente/is);
+  assert.match(prompt, /status.*integrate.*Git e recibos.*dispatch.*resume.*mesmo pai Orca/is);
+  const orcaSection = prompt.slice(prompt.indexOf("Quando `ORCA_WORKTREE_ID`"), prompt.indexOf("Quando delegar,"));
+  assert.match(orcaSection, /surface="visible".*adoção.*host, não um ACK.*cliente remoto/is);
+  assert.match(orcaSection, /background.*mesmo handle.*listável e reanexável/is);
+  assert.match(orcaSection, /worktree\.activate.*session\.tabs\.activate.*navigation="clients".*sem criar outro terminal/is);
+  assert.match(orcaSection, /não dispute foco em cada task paralela/is);
+  assert.match(prompt, /Orca fornece placement e terminais.*harness.*dono do DAG, TDD, reviews, recibos e integração/is);
 });
 
 test("writing roles keep test authorship and genuine no-tests documentation distinct", () => {
@@ -206,7 +226,7 @@ test("o pai recupera uma única vez dependência declarada com npm ci antes de b
 
 test("a fidelidade reaberta revalida o ledger afetado sem transformar cada correção em nova varredura", () => {
   const prompt = readFileSync(promptPath, "utf8");
-  const compliance = readFileSync(new URL("../runtime/agents/harness-compliance.md", import.meta.url), "utf8");
+  const testReviewer = readFileSync(testReviewerPath, "utf8");
   const testAuthor = readFileSync(testAuthorPath, "utf8");
 
   assert.match(prompt, /primeira.*fidelidade.*matriz completa/is);
@@ -216,10 +236,10 @@ test("a fidelidade reaberta revalida o ledger afetado sem transformar cada corre
   assert.match(prompt, /não repita uma varredura ampla/i);
   assert.match(prompt, /cada linha antes aprovada.*intersecte o diff/is);
   assert.match(prompt, /mesma assinatura de falha/i);
-  assert.match(compliance, /first task fidelity review/i);
-  assert.match(compliance, /reopened test-fidelity review/i);
-  assert.match(compliance, /prior FAIL/i);
-  assert.match(compliance, /affected by that diff/i);
+  assert.match(testReviewer, /all pinned obligations together on the first pass/i);
+  assert.match(testReviewer, /On correction, recheck prior failures/is);
+  assert.match(testReviewer, /previously passing rows\s+affected by the diff/i);
+  assert.match(testReviewer, /Do not reopen the\s+whole suite merely because another review was requested/i);
   assert.match(testAuthor, /previous ledger/i);
   assert.match(testAuthor, /TRANSCRIPTION.*TEST_INFRA.*PLAN_CONTRADICTION/is);
 });
@@ -230,7 +250,7 @@ test("o prompt exige vermelho executável antes do fidelity-pass", () => {
   assert.match(prompt, /vermelho executável/i);
   assert.match(prompt, /dependência.*ausente|runner.*ausente/i);
   assert.match(prompt, /fidelity-pass/i);
-  assert.match(prompt, /compliance.*fidelity.*capture-verified/is);
+  assert.match(prompt, /harness-test-reviewer.*fidelity-pass.*capture-verified/is);
 });
 
 test("o prompt obriga o orquestrador a tratar achados de olhos sem criar burocracia artificial", () => {
@@ -295,6 +315,7 @@ test("os três revisores retornam relatório estruturado somente em task ou fina
     assert.match(instructions, /\{"issues":\[\]\}/);
     assert.match(instructions, /missing evidence/i);
     assert.match(instructions, /fix_hint/);
+    assert.match(instructions, /exactly six keys.*no additional issue keys/i);
   }
 });
 

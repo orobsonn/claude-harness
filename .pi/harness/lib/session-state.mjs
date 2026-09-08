@@ -20,6 +20,7 @@ import path from "node:path";
 import { isSafeFeatureId, isSafeSessionId } from "../vendor/shared/lib/feature-id.mjs";
 import { validatePlan } from "../vendor/shared/lib/validate-plan.mjs";
 import { piExecutionPlanPath, piGateStatePath } from "./pi-paths.mjs";
+import { taskRegistryPath } from "./task-contract.mjs";
 
 import { encodeRecoveryPayload, MAX_REINJECT_BYTES } from "../vendor/opencode/plugin/lib/session-state.mjs";
 
@@ -109,6 +110,20 @@ export function buildPiSessionRecovery(projectRoot, sessionId) {
   const matchingPlan = validated.ok && plan.feature_id === featureId && String(plan.mode).toUpperCase() === mode;
   const totalTasks = matchingPlan && Array.isArray(plan.tasks) ? plan.tasks.length : 0;
   const canonicalRelativePath = path.relative(root, planResult.path);
+  let taskPipeline;
+  if (state.task_pipeline_version === 1) {
+    if (state.task_run) {
+      taskPipeline = { kind: "task", task_id: state.task_run.task_id,
+        attempt_id: state.task_run.attempt_id, parent_session_id: state.task_run.parent_session_id,
+        observation: "Continue this admitted task pipeline; do not restart global ceremony." };
+    } else {
+      const registry = readSafeJson(root, taskRegistryPath(root, sessionId));
+      const valid = registry?.version === 1 && registry.parent_session_id === sessionId && registry.feature_id === featureId;
+      taskPipeline = { kind: "global", handles: valid ? Object.values(registry.tasks ?? {}).map((entry) => ({
+        task_id: entry.task_id, attempt_id: entry.attempt_id, status: entry.status,
+      })) : [], observation: "These are recorded handles, not fresh completion evidence. Use harness_tasks status; do not redispatch existing tasks." };
+    }
+  }
   const context = encodeRecoveryPayload({
     schema: "harness.compaction-recovery.v1",
     mode,
@@ -116,6 +131,7 @@ export function buildPiSessionRecovery(projectRoot, sessionId) {
     canonical_plan_path: canonicalRelativePath,
     plan_available: matchingPlan,
     total_tasks: totalTasks,
+    ...(taskPipeline ? { task_pipeline: taskPipeline } : {}),
   });
   if (!context) return { ok: false, reason: "recovery payload byte budget too small" };
   return { ok: true, context, statePath: stateResult.path };
