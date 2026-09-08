@@ -24,6 +24,64 @@ function fakePi() {
   return pi;
 }
 
+async function nativeReviewTool() {
+  const jiti = createJiti(import.meta.url, { moduleCache: false, tsconfigPaths: true });
+  const { AgentTool } = await jiti.import(fileURLToPath(new URL(
+    "../../../node_modules/@gotgenes/pi-subagents/src/tools/agent-tool.ts", import.meta.url,
+  )));
+  // Use the pinned tool's real description, schema and renderer without launching a child.
+  return AgentTool.prototype.toToolDefinition.call({
+    typeListText: "harness-adversary: review; harness-compliance: review; harness-security: review",
+    availableTypesText: "harness-adversary, harness-compliance, harness-security",
+    agentDir: "/fixture/agents", agentGuidelines: [], registry: {},
+  });
+}
+
+test("the registered native tool teaches foreground review batches instead of forbidden background dispatch", async () => {
+  const { testApi } = await createJiti(import.meta.url, { moduleCache: false, tsconfigPaths: true }).import(ENTRY);
+  const native = await nativeReviewTool();
+  const pi = fakePi();
+  testApi.decorateNativeFactory((api) => api.registerTool(native))(pi);
+  const tool = pi.tools.get("subagent");
+  assert.doesNotMatch(tool.description, /For parallel work, use run_in_background: true|Foreground calls run sequentially|Use run_in_background for work you don't need immediately/);
+  assert.match(tool.description, /foreground.*same (?:tool-call )?batch/is);
+  assert.match(tool.description, /run_in_background.*(?:omit|false|forbidden)/is);
+  assert.match(tool.description, /harness-adversary.*harness-compliance.*harness-security/s);
+  assert.match(tool.parameters.properties.run_in_background.description, /(?:omit|false|forbidden)/i);
+  assert.notEqual(tool.description, native.description, "native guidance is adapted without mutating the native tool");
+  assert.match(native.description, /For parallel work, use run_in_background: true/);
+});
+
+test("native cards show pre-dispatch errors with empty details and preserve actual lifecycle outcomes", async () => {
+  const { testApi } = await createJiti(import.meta.url, { moduleCache: false, tsconfigPaths: true }).import(ENTRY);
+  const native = await nativeReviewTool();
+  const pi = fakePi();
+  testApi.decorateNativeFactory((api) => api.registerTool(native))(pi);
+  const tool = pi.tools.get("subagent");
+  const theme = { fg: (_color, text) => text, bold: (text) => text };
+  const render = (target, result, options) => target.renderResult(result, options, theme).render(160).join("\n");
+  for (const expanded of [false, true]) {
+    const options = { expanded, isPartial: false };
+    for (const reason of ["harness dispatch blocked: background-disabled", "harness dispatch blocked: model-route"]) {
+      const result = { content: [{ type: "text", text: reason }], details: {}, isError: true };
+      const before = structuredClone(result);
+      const card = render(tool, result, options);
+      assert.ok(card.includes(reason), card);
+      assert.doesNotMatch(card, /max turns exceeded|APROVADO|Done/);
+      assert.deepEqual(result, before, "rendering must not change the canonical error or receipt inputs");
+    }
+    for (const status of ["aborted", "stopped", "error", "running", "steered"]) {
+      const result = { content: [{ type: "text", text: "native output" }], details: {
+        status, error: "provider unavailable", durationMs: 10, turnCount: 144, maxTurns: 144,
+      } };
+      assert.equal(render(tool, result, options), render(native, result, options), status);
+    }
+  }
+  const partial = { content: [{ type: "text", text: "pending" }], details: {} };
+  const options = { expanded: false, isPartial: true };
+  assert.equal(render(tool, partial, options), render(native, partial, options));
+});
+
 test("production entrypoint resolves the monorepo root without an injected override", async () => {
   const module = await createJiti(import.meta.url, { moduleCache: false, tsconfigPaths: true })
     .import(ENTRY);

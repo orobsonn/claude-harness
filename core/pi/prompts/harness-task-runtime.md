@@ -32,6 +32,10 @@ implementação são escolhidos por aplicabilidade. Esses olhos podem rodar em p
 sobre o mesmo HEAD e conteúdo imutáveis, conforme o runtime nativo; não force
 `maxConcurrent=1` nem os serialize artificialmente. `contract.task.adversarial.enabled`
 acrescenta foco de risco ao adversary obrigatório; `false` não o dispensa.
+Para paralelizar os olhos aplicáveis, emita chamadas `subagent` separadas no mesmo
+lote da resposta, em foreground, omitindo `run_in_background` ou usando `false`.
+Se houver `background-disabled`, corrija esse campo e repita os pendentes no lote
+foreground; a rejeição não exige serializar. Aguarde todos antes de corrigir arquivos.
 
 Em tentativa nova, não presuma fidelity, freeze, captura, revisão ou re-gate. Siga esta
 ordem exata: (1) test-author; (2) RED comportamental executável; (3) aprovação de

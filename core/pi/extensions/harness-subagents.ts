@@ -187,7 +187,34 @@ function decorateNativeFactory(nativeFactory: (pi: ExtensionAPI) => unknown) {
         const nativeRenderResult = tool.renderResult;
         return Reflect.apply(target.registerTool, target, [{
           ...tool,
+          // The native scheduler is serial, but our bridge admits task/final eyes together.
+          // Keep its role catalog while replacing the instructions that contradict our rail.
+          description: tool.description?.replace(
+            "- For parallel work, use run_in_background: true on each agent. Foreground calls run sequentially — only one executes at a time.",
+            "- For parallel task/final reviews, submit separate foreground subagent calls in the same tool-call batch for harness-adversary, harness-compliance and harness-security as required. Use the same immutable HEAD/content and wait for all dispatched reviews before corrections. The harness enforces maxParallelEyes; other phases remain serial.",
+          ).replace(
+            "- Use run_in_background for work you don't need immediately. You will be notified when it completes.",
+            "- run_in_background: true is forbidden by the harness; omit it or set false. A background-disabled rejection does not mean foreground review batches are unavailable: retry the pending reviews as foreground calls in the same batch.",
+          ),
+          ...(tool.parameters?.properties?.run_in_background ? {
+            parameters: {
+              ...tool.parameters,
+              properties: {
+                ...tool.parameters.properties,
+                run_in_background: {
+                  ...tool.parameters.properties.run_in_background,
+                  description: "Harness: omit or set false. Background is forbidden; task/final eyes can run concurrently as foreground calls in the same batch.",
+                },
+              },
+            },
+          } : {}),
           renderResult(result: any, options: any, theme: any) {
+            // Extension denials have details: {} and never started a native child.
+            // Native rendering treats that truthy object as an aborted turn-limit run.
+            // Select its plain-text fallback on a display copy, preserving the real result.
+            if (!options?.isPartial && result?.details && !result.details.status) {
+              return Reflect.apply(nativeRenderResult, tool, [{ ...result, details: undefined }, options, theme]);
+            }
             if (options?.expanded || options?.isPartial) {
               return Reflect.apply(nativeRenderResult, tool, [result, options, theme]);
             }
