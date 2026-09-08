@@ -56,3 +56,10 @@ Each issue has exactly six keys, with no additional issue keys: non-empty
 and `category` (orphan-state, idempotency, race,
 determinism, locked-decision, boundary, auth, injection, secret-leak, cost-scale, other).
 Explain concrete evidence and the smallest correction in those fields. Test-fidelity belongs exclusively to harness-test-reviewer and uses its own report.
+For a re-gate, begin each recurring issue `description` with its stable finding ID and
+family invariant. Label an omission already observable in the preceding batch
+`LATE_FINDING`; examine concrete variants or an equivalence class of that invariant before
+adding a correction, without treating hypothetical variants or preferences as defects.
+The parent may supply only independently verified factual finding ID, family, status and
+evidence, never a prior reviewer verdict or preferred fix. Reuse a supplied ID only when
+your current inspection independently finds the same invariant.

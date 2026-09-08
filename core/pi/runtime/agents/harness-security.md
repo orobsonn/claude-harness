@@ -26,3 +26,10 @@ determinism, locked-decision, boundary, auth, injection, secret-leak, cost-scale
 Explain concrete evidence and the smallest correction in those fields. This structured
 completion rule is limited to task implementation and final reviews; spec and
 test-fidelity reviews keep their existing required reports and ledgers.
+For a re-gate, begin each recurring issue `description` with its stable finding ID and
+family invariant. Label an omission already observable in the preceding batch
+`LATE_FINDING`; examine concrete variants or an equivalence class of that invariant before
+adding a correction, without treating hypothetical variants or preferences as defects.
+The parent may supply only independently verified factual finding ID, family, status and
+evidence, never a prior reviewer verdict or preferred fix. Reuse a supplied ID only when
+your current inspection independently finds the same invariant.
