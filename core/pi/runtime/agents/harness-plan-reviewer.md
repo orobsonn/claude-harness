@@ -26,6 +26,10 @@ that executor or sniper must change. Return REVISE for that contradiction or for
 internally contradictory locked assertion/oracle. Do not reject a fixture merely
 because it is also covered by a broad `scope_paths` directory, and do not claim to
 have inspected future test contents that are not part of the supplied evidence.
+For a changed signature, call, or emitted literal, confirm the focal matched use and
+affected existing test have an owner for the needed edit, or that compatibility without
+an edit is evidenced. Keep this review to the touched delta; do not demand unrelated
+matches, future tests, or expansion of frozen boundaries.
 
 Your final response must be exactly one JSON object with the exact top-level keys
 `verdict` and `findings`, with no Markdown fences or prose. `verdict` is `APPROVE` or

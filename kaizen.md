@@ -8,6 +8,13 @@ A committed outbox for improvements to the **harness itself**. **Never auto-appl
 
 <!-- append proposals below -->
 
+### Pi: identificar testes dependentes antes de fechar o escopo
+
+- **Evidência:** na issue 222 de Victor, a suíte final encontrou uma assertion de `uploadVideo(i)` num teste de orientação sem ownership, após Tasks 1/2 implementarem `uploadVideo(i, selectedFile)`. Foi necessária uma Task 3 de reconciliação; os recibos anteriores permaneceram válidos.
+- **Mudança autorizada:** orientação focal em planner/plan-reviewer para procurar usos/imports/literais alterados, inspecionar os testes existentes dependentes e atribuir sua atualização mínima antes do freeze. Sem mudança de gate ou expansão de escopo congelado.
+- **Validação:** planner Pi real incluiu produto, teste novo e teste dependente numa task; review completo aprovou; controle sem ownership foi reprovado com correção precisa. Cinquenta testes focais passaram. Evidência, custos e limites em `docs/pi-task-pipeline/late-plan-reconciliation.md`.
+- **Limite:** a regra de prosa não garante descoberta completa nem dispensa a suíte final; observar recorrência em tarefas reais antes de ampliar o mecanismo.
+
 ### Pi: enviar baseline e diffs no primeiro brief de revisão
 
 - **Evidência:** na run legada Pi v2.5.0 de Victor/issue 222, Task 2, o compliance `502f5c55-de94-44a` bloqueou às 14:55:20 UTC de 2026-09-08 por falta de baseline/diffs para comprovar testes intocados e edição somente textual. O novo compliance `0a4f5872-f3c4-4d3` aprovou às 14:57:01 após complemento de contexto; não houve edição entre os dois. Os olhos têm `read/grep/find/ls`, sem shell, e não conseguem reconstruir `git diff` pela leitura dos arquivos atuais.
