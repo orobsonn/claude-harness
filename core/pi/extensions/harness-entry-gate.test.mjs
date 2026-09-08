@@ -920,3 +920,31 @@ test("plan-reviewer não aprova quando plano muda durante a execução", async (
     assert.equal(state.plan_review_evidence, null);
   } finally { f.close(); }
 });
+
+test("veredito textual do plan-reviewer não se transforma em recibo de aprovação", async (t) => {
+  for (const body of ["## Verdict: APPROVE\n\nBlocking corrections: none", "APPROVE"]) {
+    await t.test(body.split("\n")[0], async () => {
+      const f = fixture();
+      try {
+        const events = fakeEvents();
+        const h = handlers(events);
+        const callId = "call-plan-review-text";
+        const agentId = "agent-plan-review-text";
+        const args = { subagent_type: "harness-plan-reviewer", prompt: "Review exact plan.", description: "plan review" };
+        h.get("session_start")({}, ctxOf(f.root));
+        h.get("tool_execution_start")({ toolName: "subagent", toolCallId: callId, args });
+        assert.equal(await h.get("tool_call")({ toolName: "subagent", toolCallId: callId, input: args }, ctxOf(f.root)), undefined);
+        events.emit("subagents:child:session-created", { sessionId: "ses-plan-review-text", parentSessionId: SESSION });
+        const unpublish = publishNativeRecord({ agentId, role: "harness-plan-reviewer", body });
+        try {
+          h.get("tool_execution_end")({
+            toolName: "subagent", toolCallId: callId,
+            result: wrappedReviewResult(agentId, body), isError: false,
+          }, ctxOf(f.root));
+        } finally { unpublish(); }
+        const state = JSON.parse(readFileSync(join(f.root, ".pi", "harness", "state", SESSION, "gate-state.json"), "utf8"));
+        assert.equal(state.plan_review_evidence, null);
+      } finally { f.close(); }
+    });
+  }
+});

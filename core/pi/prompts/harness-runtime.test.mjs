@@ -314,6 +314,7 @@ test("os três revisores retornam relatório estruturado somente em task ou fina
     assert.match(instructions, /\{"issues":\[\]\}/);
     assert.match(instructions, /missing evidence/i);
     assert.match(instructions, /fix_hint/);
+    assert.match(instructions, /exactly six keys.*no additional issue keys/i);
   }
 });
 

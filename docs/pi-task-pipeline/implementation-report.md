@@ -67,6 +67,11 @@ descobertas revalidar e incorporar. Diários completos não são herdados pelos 
   e reunir seus escopos quando necessário. O test-author não cria scaffolds de
   produção para resolver imports; um novo dado exportado por módulo existente
   continua sendo um contrato válido para testar.
+- O plan-reviewer nativo devolveu `APPROVE` em Markdown, enquanto o host exigia
+  JSON `{verdict, findings}`. O gate recusou corretamente o despacho, mas a role
+  e o prompt do pai não explicavam esse contrato. Ambos agora exigem o formato
+  canônico completo; o erro de despacho orienta uma revisão nova nos artefatos
+  atuais. Os testes preservam a recusa de tokens/prosa sem fabricar recibos.
 
 ## Validação real escolhida
 
@@ -105,11 +110,16 @@ task testada pela entrada HTTP já existente. O worker anterior foi encerrado ap
 conferência de identidade, e o launcher retomou a mesma sessão com esse feedback.
 O pai escreveu a nova draft `978e8148` pela ferramenta nativa e recebeu seis achados
 do adversary. Após corrigi-los, a spec `407ec453` recebeu `APPROVE` sem achados
-aplicáveis; o harness registrou o selo e `brainstormed`, e o planner foi despachado.
+aplicáveis; o harness registrou o selo e `brainstormed`. O planner escreveu o plano
+`359b8939`, com três tasks e 44 contratos travados: T1/T2 independentes e T3
+dependente de ambas. O revisor não encontrou bloqueios, mas respondeu em Markdown;
+o host não registrou aprovação e recusou o despacho. A tentativa de pedir um token
+isolado também não satisfazia o contrato. O worker foi encerrado às 00:37:54 UTC
+de 2026-09-08 para instalar a correção de formato e retomar a mesma sessão. O
+preflight dessa retomada passou com os mesmos hashes, sem promover aprovação.
 Nenhum gate foi alterado manualmente. Ainda não há task filha despachada nem
-aprovação FULL nesta atualização.
-A execução precisa percorrer planejamento, tasks, integração e olhos finais antes
-de servir como prova completa.
+aprovação FULL nesta atualização; falta obter o recibo canônico e percorrer tasks,
+integração e olhos finais para servir como prova completa.
 
 A tentativa anterior no Victor foi encerrada e removida pela operação oficial do
 Orca. Sua branch foi preservada em `2eb4033`, com evidência arquivada em
@@ -121,10 +131,15 @@ plano sem inventar aprovação.
 ## Evidências e fechamento pendente
 
 - [PR funcional #903](https://github.com/orobsonn/claude-harness/pull/903), ainda draft.
-  O [CI em `72278d9`](https://github.com/orobsonn/claude-harness/actions/runs/34172093965)
+  O [CI em `5148365`](https://github.com/orobsonn/claude-harness/actions/runs/34172957388)
   registrou **3488 testes: 3486 passaram, nenhum falhou e 2 foram ignorados**. Os dois
   smokes Orca executados localmente passaram (**2/2**).
 - Testes focais de contexto, coordenação, revisão e adapter Orca: **73/73**.
+- A correção do contrato JSON passou em **205 testes** de role, aprovação nativa,
+  coordenação, prompt e instalação. A auditoria independente também alinhou as
+  chaves exatas dos três revisores de implementação/final; seus **26 testes** de
+  contrato e isolamento passaram. A prova nativa ainda precisa consumir esse
+  contrato na retomada.
 - A correção de identidade do host passou em **6/6** testes focais e está no CI atual.
 - O CLI host agora usa o payload AppImage extraído e o launcher estável oficial. A
   correção preserva os dois wrappers anteriores e tem rollback registrado em

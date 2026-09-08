@@ -441,6 +441,36 @@ test("changed approval or local-task identity cannot dispatch", async (t) => {
   assert.equal(f.launches(), 0);
 });
 
+test("missing plan-review receipt blocks launch and points to the foreground canonical report contract", async (t) => {
+  const f = fixture(t);
+  delete f.state.plan_review_evidence;
+  f.state.plan_verdict = "APPROVE";
+  const statePath = path.join(
+    f.dir,
+    ".pi/harness/state/parent/gate-state.json",
+  );
+  write(statePath, f.state);
+
+  const result = await executeTaskAction(
+    { action: "dispatch", task_ids: ["a"] },
+    f.context,
+    f.deps,
+  );
+
+  assert.equal(result.ok, false);
+  assert.equal(f.launches(), 0);
+  assert.equal(fs.existsSync(taskRegistryPath(f.dir, "parent")), false);
+  assert.match(result.reason, /fresh foreground harness-plan-reviewer/);
+  assert.match(
+    result.reason,
+    /canonical JSON report, for example \{"verdict":"APPROVE","findings":\[\]\}/,
+  );
+  assert.match(result.reason, /plaintext APPROVE is not a receipt/);
+  const persistedState = JSON.parse(fs.readFileSync(statePath, "utf8"));
+  assert.equal(persistedState.plan_review_evidence, undefined);
+  assert.equal(persistedState.plan_verdict, "APPROVE");
+});
+
 test("active task grants freeze parent planning, but task observation remains available", async (t) => {
   const f = fixture(t);
   assert.equal(

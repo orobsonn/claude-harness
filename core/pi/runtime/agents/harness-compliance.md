@@ -77,8 +77,9 @@ marked `[HARNESS_FINAL_REVIEW]`, return exactly one JSON object with the sole ke
 Return `{"issues":[]}` only after completing the requested review with no findings.
 Missing evidence, incomplete inspection, or an unresolved concern requires an issue;
 never report an empty list merely because you could not finish.
-Each issue requires non-empty `description`, `scope`, `evidence`, and `fix_hint`, plus
-`severity` (low, medium, high) and `category` (orphan-state, idempotency, race,
+Each issue has exactly six keys, with no additional issue keys: non-empty
+`description`, `scope`, `evidence`, and `fix_hint`, plus `severity` (low, medium, high)
+and `category` (orphan-state, idempotency, race,
 determinism, locked-decision, boundary, auth, injection, secret-leak, cost-scale, other).
 Explain concrete evidence and the smallest correction in those fields. This structured
 completion rule is limited to task implementation and final reviews; spec and

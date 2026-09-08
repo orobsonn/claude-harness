@@ -176,7 +176,7 @@ function approvedPlan(owner) {
     receipt.spec_sha256 !== captured.snapshot.spec_sha256
   )
     throw new Error(
-      "host-confirmed APPROVE for the current plan and spec required",
+      'host-confirmed APPROVE for the current plan and spec required; dispatch a fresh foreground harness-plan-reviewer against the current artifacts and require exactly one canonical JSON report, for example {"verdict":"APPROVE","findings":[]}; plaintext APPROVE is not a receipt',
     );
   const directory = path.join(owner.root, ".pi/harness/plans", owner.featureId);
   const plan = read(path.join(directory, "execution-plan.json"));
