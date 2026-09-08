@@ -21,6 +21,7 @@ import { captureTaskContext } from "./task-context.mjs";
 import { updateSharedContext } from "./memory-cycle.mjs";
 import { recoverPiParentSession } from "./parent-session-recovery.mjs";
 import { validateSubagentDispatch } from "./dispatch-rail.mjs";
+import { classifyPiReviewDispatch } from "./pi-review-concurrency.mjs";
 import { runPiHarnessCli } from "../bin/pi-harness.mjs";
 import harnessTaskRun from "../extensions/harness-task-run.ts";
 import { writePiChildIdentity } from "./pi-child-identity.mjs";
@@ -353,6 +354,30 @@ test("task prompt uses a stable source and embeds only the focal contract plus D
   assert.match(prompt, /git log -1 --format=%H/);
   assert.doesNotMatch(prompt, /"id": "task-two"/);
   assert.doesNotMatch(prompt, /indexOf\(|slice\(/);
+});
+
+test("task prompt distinguishes parallel implementation review prefixes from serial fidelity", (t) => {
+  const f = fixture(t);
+  const admitted = admitTaskRun(f.grantPath, { cwd: f.root, sessionId: "task-parent" });
+  const source = fs.readFileSync(new URL("../prompts/harness-task-runtime.md", import.meta.url), "utf8");
+  const prompt = taskRunPrompt(source, admitted);
+  const context = '[HARNESS_TASK_CONTEXT]{"task_id":"task-one"}[/HARNESS_TASK_CONTEXT]';
+  const implementation = `[HARNESS_TASK_REVIEW]\n${context}\nReview the immutable task HEAD.`;
+
+  assert.deepEqual(classifyPiReviewDispatch("harness-adversary", `${context}\nReview the immutable task HEAD.`), {
+    phase: "task",
+    taskId: "task-one",
+  });
+  for (const role of ["harness-compliance", "harness-security"]) {
+    assert.deepEqual(classifyPiReviewDispatch(role, implementation), { phase: "task", taskId: "task-one" }, role);
+  }
+  assert.equal(
+    classifyPiReviewDispatch("harness-compliance", `${context}\nValidate test fidelity.`),
+    null,
+    "test fidelity remains a serial dispatch",
+  );
+  assert.match(prompt, /compliance de fidelidade e adversary de implementação[\s\S]*primeira linha[\s\S]*HARNESS_TASK_CONTEXT/);
+  assert.match(prompt, /compliance[\s\S]*security de implementação[\s\S]*primeira linha[\s\S]*HARNESS_TASK_REVIEW[\s\S]*seguinte[\s\S]*HARNESS_TASK_CONTEXT/);
 });
 
 test("task prompt exposes gate-derived dispatch routes consumable at every task complexity", (t) => {

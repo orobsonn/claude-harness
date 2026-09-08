@@ -95,6 +95,12 @@ descobertas revalidar e incorporar. Diários completos não são herdados pelos 
   o SHA completo com `git log -1 --format=%H` e exige verificar tipagem/sintaxe dos
   testes antes de congelá-los. Na primeira T1, uma fixture inválida só foi detectada
   depois do freeze, durante a implementação.
+- A revisão real de T1 expôs uma contradição nos prefixos dos olhos. O briefing
+  local exigia contexto na primeira linha de todos, mas compliance/security de
+  implementação precisam de `HARNESS_TASK_REVIEW` antes do contexto para adquirir
+  leases de leitura paralela. O prompt agora segue o classificador existente;
+  compliance de fidelidade conserva o despacho serial. A regressão verifica os
+  três olhos de implementação e a distinção de fidelidade.
 - A revisão da entrada encontrou relatórios antigos e evidências da PR junto dos
   artefatos normativos. A entrada do replay corrigido foi reduzida à issue,
   spec/plano e configuração da base. A execução anterior fica como diagnóstico;

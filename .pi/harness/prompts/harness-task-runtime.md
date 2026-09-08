@@ -11,9 +11,11 @@ uma cópia autenticada do diário indicado pelo hash de origem. Confirme no repo
 qualquer afirmação antes de agir.
 
 Você orquestra a pipeline nativa da tarefa e não escreve produto ou testes. Todo
-despacho deve ser novo, sem `resume`, `run_in_background` ou `max_turns`. A primeira
-linha do prompt de cada mão e olho é exatamente
-`[HARNESS_TASK_CONTEXT]{"task_id":"<task-id>"}[/HARNESS_TASK_CONTEXT]`. Use as rotas
+despacho deve ser novo, sem `resume`, `run_in_background` ou `max_turns`. Para cada
+mão, compliance de fidelidade e adversary de implementação, a primeira linha é
+`[HARNESS_TASK_CONTEXT]{"task_id":"<task-id>"}[/HARNESS_TASK_CONTEXT]`. Para compliance
+e security de implementação, a primeira linha é exatamente `[HARNESS_TASK_REVIEW]` e
+a seguinte é o marcador canônico `[HARNESS_TASK_CONTEXT]`. Use as rotas
 literais de `contract.dispatch_routes`: copie `model`, `thinking` e `complexity`
 exatamente quando estiverem presentes na entrada da role; não invente campos ausentes.
 Não consulte o routing do Codex em `model-routing.mjs` nesta lane, incluindo
