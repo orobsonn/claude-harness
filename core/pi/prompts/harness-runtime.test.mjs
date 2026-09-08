@@ -112,7 +112,11 @@ test("task context is curated explicitly and Orca placement stays separate from 
   assert.match(prompt, /ORCA_WORKTREE_ID.*exige o backend\s+Orca/is);
   assert.match(prompt, /Falha ou identidade divergente.*não cai silenciosamente/is);
   assert.match(prompt, /status.*integrate.*Git e recibos.*dispatch.*resume.*mesmo pai Orca/is);
-  assert.match(prompt, /surface="visible".*comprova uma superfície\s+visível/is);
+  const orcaSection = prompt.slice(prompt.indexOf("Quando `ORCA_WORKTREE_ID`"), prompt.indexOf("Quando delegar,"));
+  assert.match(orcaSection, /surface="visible".*adoção.*host, não um ACK.*cliente remoto/is);
+  assert.match(orcaSection, /background.*mesmo handle.*listável e reanexável/is);
+  assert.match(orcaSection, /worktree\.activate.*session\.tabs\.activate.*navigation="clients".*sem criar outro terminal/is);
+  assert.match(orcaSection, /não dispute foco em cada task paralela/is);
   assert.match(prompt, /Orca fornece placement e terminais.*harness.*dono do DAG, TDD, reviews, recibos e integração/is);
 });
 

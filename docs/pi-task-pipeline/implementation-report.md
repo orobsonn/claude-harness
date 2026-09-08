@@ -77,12 +77,15 @@ mesmo projeto, setup e host da main registrada. O código do harness estava em
 `a9f33865ffa4eeb77631613823a52f8dd17baab6`; o bootstrap instalado foi fixado em
 `8397a9e9c80ee766693a58ac3cfce1364018b394`. O provider foi lançado em
 2026-09-07 às 23:46:31 UTC na sessão global
-`b2681197-8aa4-4ebb-856e-a35898d5c4bb`. O terminal
-`term_4c012bf1-9bec-44be-ae61-e2b47e40edb4` tem o título
-`RUN REAL · Pi Harness FULL · Lainny #47`, e o estado oficial do agente é
-`working`. O gate registra a feature `escritor-publico-lead-orca` e
+`b2681197-8aa4-4ebb-856e-a35898d5c4bb`. O primeiro terminal foi
+`term_4c012bf1-9bec-44be-ae61-e2b47e40edb4`; a retomada usa
+`term_664750f1-4d26-4f54-a311-bf750f141909`, com o mesmo título
+`RUN REAL · Pi Harness FULL · Lainny #47`. O inventário confirmou um único
+terminal, e o estado oficial do agente retornou `working`. O gate registra a feature `escritor-publico-lead-orca` e
 `task_pipeline_version: 1` desde a classificação. Os registros desta execução ficam
-em `/tmp/pi-full-lainny-47-orca-run`.
+em `/tmp/pi-full-lainny-47-orca-run` e `/tmp/pi-full-lainny-47-orca-resume-1`.
+Antes da retomada, o instalador incorporou as orientações de visibilidade de
+`e053d7b` no commit local `4b0c42f`; esse delta não altera o código do executor.
 
 Na base real, a baseline passou **699 testes em 80 arquivos**, além do typecheck,
 audit com zero achados e docs-check em **3 arquivos PRD**. Os dois smokes Orca
@@ -93,8 +96,11 @@ confirmação. Isso comprova o processo e o caminho de navegação, não a exibi
 A primeira draft foi escrita e enviada ao adversary. Uma checagem independente
 identificou que ela atribuía scaffolds de produção ao test-author. A correção de
 decomposição preserva duas raízes paralelas e reúne rota e componentes novos numa
-task testada pela entrada HTTP já existente. A mesma sessão será retomada com esse
-feedback, sem alterar gates. Ainda não há task filha despachada nem aprovação FULL.
+task testada pela entrada HTTP já existente. O worker anterior foi encerrado após
+conferência de identidade, e o launcher retomou a mesma sessão com esse feedback.
+O pai escreveu a nova draft `978e8148` pela ferramenta nativa e despachou nova
+revisão; nenhum gate foi alterado manualmente. Ainda não há task filha despachada
+nem aprovação FULL nesta atualização de 2026-09-08 às 00:04 UTC.
 A execução precisa percorrer planejamento, tasks, integração e olhos finais antes
 de servir como prova completa.
 
