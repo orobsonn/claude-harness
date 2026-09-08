@@ -62,6 +62,11 @@ descobertas revalidar e incorporar. Diários completos não são herdados pelos 
   progresso impedem tratar um plano perdido como planejamento ainda não iniciado.
   A correção reutiliza a validação nativa do recibo adversarial; observar o status e
   criar diretórios vazios não passa a bloquear a retomada.
+- A divisão de tasks também precisa preservar um RED que realmente execute na base.
+  O planejamento Pi agora orienta testar novos componentes por uma entrada existente
+  e reunir seus escopos quando necessário. O test-author não cria scaffolds de
+  produção para resolver imports; um novo dado exportado por módulo existente
+  continua sendo um contrato válido para testar.
 
 ## Validação real escolhida
 
@@ -98,9 +103,11 @@ identificou que ela atribuía scaffolds de produção ao test-author. A correç�
 decomposição preserva duas raízes paralelas e reúne rota e componentes novos numa
 task testada pela entrada HTTP já existente. O worker anterior foi encerrado após
 conferência de identidade, e o launcher retomou a mesma sessão com esse feedback.
-O pai escreveu a nova draft `978e8148` pela ferramenta nativa e despachou nova
-revisão; nenhum gate foi alterado manualmente. Ainda não há task filha despachada
-nem aprovação FULL nesta atualização de 2026-09-08 às 00:04 UTC.
+O pai escreveu a nova draft `978e8148` pela ferramenta nativa e recebeu seis achados
+do adversary. Após corrigi-los, a spec `407ec453` recebeu `APPROVE` sem achados
+aplicáveis; o harness registrou o selo e `brainstormed`, e o planner foi despachado.
+Nenhum gate foi alterado manualmente. Ainda não há task filha despachada nem
+aprovação FULL nesta atualização.
 A execução precisa percorrer planejamento, tasks, integração e olhos finais antes
 de servir como prova completa.
 
@@ -114,7 +121,7 @@ plano sem inventar aprovação.
 ## Evidências e fechamento pendente
 
 - [PR funcional #903](https://github.com/orobsonn/claude-harness/pull/903), ainda draft.
-  O [CI em `a9f3386`](https://github.com/orobsonn/claude-harness/actions/runs/34169860467)
+  O [CI em `72278d9`](https://github.com/orobsonn/claude-harness/actions/runs/34172093965)
   registrou **3488 testes: 3486 passaram, nenhum falhou e 2 foram ignorados**. Os dois
   smokes Orca executados localmente passaram (**2/2**).
 - Testes focais de contexto, coordenação, revisão e adapter Orca: **73/73**.

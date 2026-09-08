@@ -20,6 +20,18 @@ Keep aggregate verification, harvest, final review, and shipping with the global
 parent rather than inventing a parent-only implementation task. This Pi-specific
 decomposition does not change planning or dispatch for other hosts.
 
+Within this Pi task pipeline:
+
+- Before freezing task boundaries, confirm each planned RED can be collected on the
+  exact base plus its already integrated dependencies; an import or collection
+  failure is not the expected RED. A task may add and assert a new data export
+  through an existing module, but its test must not import a module absent from that
+  RED baseline.
+- Never ask the test-author to add production scaffolds or stubs just to make test
+  collection pass. Express the RED through an existing importable entry point and,
+  when behavior requires a genuinely new module, combine its creation with the routed
+  behavior in one task; do not use a fake foundation or `no_tests` task.
+
 `.codex/lib/plan-contract.mjs` validates a frozen, explicit TDD plan without
 retaining state. `.codex/lib/review-contracts.mjs` exposes advisory complexity
 scoring only; unknown or sensitive work stays at the conservative route regardless of score.
