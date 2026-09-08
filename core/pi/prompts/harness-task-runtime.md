@@ -48,6 +48,11 @@ códigos de saída e trechos reais da saída do RED e da tipagem/sintaxe que per
 conferir coleta, falhas e diagnósticos. Um resumo alegando que passaram não substitui
 essa evidência. Reutilize os resultados atuais já obtidos e peça o formato canônico
 de relatório da role; não repita verificações válidas sem mudança nos artefatos.
+No primeiro brief, declare `test-fidelity`, a baseline do test-author/tarefa, os paths
+canônicos de teste/fixture e os que devem ficar intactos, cwd/base/HEAD/status de index,
+worktree e untracked, diffs e provas negativas disponíveis. Compare essa baseline ao
+estado atual e nomeie cada arquivo novo untracked para leitura integral; diff tracked
+vazio não prova esse arquivo. Não exija freeze SHA antes do freeze.
 Na primeira fidelidade, peça a matriz completa da tarefa: obrigação, PASS/FAIL/BLOCKED,
 evidência de arquivo/linha ou comando e dependências de fixture/import/runner. Esse é
 o ledger de fidelidade. Resolva contradições contra spec, plano e dependências reais
@@ -76,6 +81,15 @@ Depois despache executor, verifique escopo, diff e testes, e registre a captura 
 hand-record atual. Envie aos olhos o pacote completo: contrato, critérios, diff,
 comandos/resultados, freeze e HEAD atuais. Trate achados aplicáveis com sniper e os
 markers/re-gate nativos; refute achados incorretos com evidência observada.
+No primeiro brief de implementação, declare a fase, paths canônicos de produto/teste,
+cwd/base/HEAD/status de index, worktree e untracked, diff e provas negativas dos paths
+intactos; compare freeze→HEAD revisado para testes/fixtures e base de implementação→HEAD
+para produto. Vincule cada saída real/exit status aplicável aos arquivos cobertos e informe
+os SHAs/paths reais de freeze, implementação e correção. Diff/status/saída de comando
+ficam inline ou em artefato regular nomeado; o olho abre caminhos canônicos nomeados com
+read-only tools, sem procurar arquivo de diff não fornecido. Nomeie e leia por inteiro
+todo path novo untracked relevante: diff tracked vazio não o cobre. Só bloqueie evidência
+necessária omitida inline que não esteja em artefato nomeado acessível, sem repetir teste inaplicável.
 Consulte `harness_reviews` na fase `task`: `required` são obrigações já ativadas e
 `missing` precisam de recibo corrente saudável; `available` são opções, não uma ordem
 para despachar todas. Decida compliance e security por aplicabilidade antes do primeiro

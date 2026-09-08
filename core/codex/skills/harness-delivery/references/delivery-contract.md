@@ -96,4 +96,20 @@ Olhos são somente leitura. Mãos só recebem escrita no workspace quando existe
 
 Todo resultado entrega: o que mudou, arquivos relevantes, testes/comandos executados e resultado, risco residual e próximo passo seguro. Para uma falha, entregue reprodução mínima e hipótese marcada como hipótese. Um relatório de agente é input; o artefato e a verificação são a autoridade.
 
+No primeiro despacho de revisão de testes, implementação ou final, declare a fase e
+nomeie os artefatos canônicos aplicáveis. Inclua cwd, base e HEAD observados, `git status`
+incluindo untracked, paths/diff relevantes e prova negativa dos arquivos que devem ficar
+intactos. Vincule saída real e exit status de cada teste aplicável aos arquivos que cobre.
+Antes do freeze, compare a baseline do test-author/tarefa com index, worktree e untracked;
+não exija freeze SHA inexistente. Depois dele, compare freeze com o HEAD revisado para
+testes/fixtures e a base de implementação com esse HEAD para produto. Informe SHAs/paths
+reais de freeze, implementação e correção quando houver. Mantenha o brief compacto: um
+olho avalia diff, status e saída de comando fornecidos inline ou em artefato regular
+nomeado e legível, e abre os caminhos/artefatos canônicos nomeados com as ferramentas
+disponíveis no host; no Pi elas são `read`, `grep`, `find` e `ls`, sem shell. Não procure
+um arquivo de diff que não foi fornecido. Nomeie e leia por inteiro cada path novo
+untracked relevante: diff vazio de tracked não prova nada sobre ele. Só bloqueie evidência
+necessária omitida inline que também não esteja em artefato nomeado acessível; nunca aprove
+apenas o resumo do pai nem colete/reexecute algo inaplicável.
+
 Antes de dizer “feito”, execute a verificação proporcional e uma revisão de completude: critérios de aceitação, regressões, diff, segurança, documentação, configuração e resíduos honestos. FULL requer adversarial independente e resposta concreta a cada achado.

@@ -8,6 +8,15 @@ A committed outbox for improvements to the **harness itself**. **Never auto-appl
 
 <!-- append proposals below -->
 
+### Pi: enviar baseline e diffs no primeiro brief de revisão
+
+- **Evidência:** na run legada Pi v2.5.0 de Victor/issue 222, Task 2, o compliance `502f5c55-de94-44a` bloqueou às 14:55:20 UTC de 2026-09-08 por falta de baseline/diffs para comprovar testes intocados e edição somente textual. O novo compliance `0a4f5872-f3c4-4d3` aprovou às 14:57:01 após complemento de contexto; não houve edição entre os dois. Os olhos têm `read/grep/find/ls`, sem shell, e não conseguem reconstruir `git diff` pela leitura dos arquivos atuais.
+- **Resultado esperado:** a primeira revisão recebe os dados necessários para avaliar os requisitos de preservação, sem novo despacho somente para obter baseline/diff.
+- **Menor experimento:** tornar explícito no primeiro brief do pai local o cwd, paths canônicos de plano/spec, fase, base/HEAD observados, status incluindo untracked, diff focal e resultado dos comandos com arquivos e exit status. Antes do freeze, usar a base do test-author; freeze/impl SHA só se aplicam nas fases posteriores. Alinhar `harness-task-runtime`, `harness-runtime`, `harness-delivery` e as instruções de leitura do test-reviewer/compliance. Não exigir transcript completo nem uma nova camada de orquestração.
+- **Custo observado:** a janela entre BLOCKED e aprovação durou 100,4 s; cinco respostas do pai registraram US$ 5,23715, e a criança adicional US$ 0,0710312. Essas coletas continuam necessárias antes do primeiro brief; o total da janela não mede uma economia integral garantida. O primeiro revisor levou 113,1 s e o segundo 39,1 s.
+- **Risco/limite:** um checklist universal pode exigir freeze antes da fase que o cria ou despejar contexto desnecessário. Escopo e evidência devem variar por fase. Se o prompt não bastar, avaliar uma coleta compacta na ferramenta existente; o snapshot de revisão atual não é um recibo de execução de testes.
+- **Promoção:** implementada por autorização do operador e validada em run focal Pi/Orca: primeira fidelidade e primeiro compliance aprovados sem complemento; controle com teste congelado alterado corretamente reprovado apesar de GREEN. Três filhos nativos, sem retry/resume; pai e olhos somaram US$ 0,3912642. Relatório e limites em `docs/pi-task-pipeline/review-brief-evaluation.md`. Confirmar o efeito em tarefas subsequentes; o patch v2.6.1 tratou separadamente ordem commit/revisores e diagnóstico de captura.
+
 ### Pi: limite de turns do planner encerra cerimônia válida
 
 - **Evidência:** a run real da issue #17 no Pi encerrou/re-despachou planner e adversary ao atingir `16` turns, embora ainda estivesse coletando evidência; o runtime e `dispatch-rail.mjs` impõem o mesmo teto.

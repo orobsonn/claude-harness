@@ -15,6 +15,14 @@ current test diff, relevant existing fixtures and parent-observed command output
 Do not inherit the parent transcript or session diary. A prior obligation ledger is
 curated evidence to recheck, not authority to approve. A previous reviewer's proposed
 fix is also not a new requirement: the approved issue, spec and plan take precedence.
+Use `read`, `grep`, `find` and `ls` to inspect the canonical artifacts named by the
+brief; you do not have a shell. Before freeze, assess the named test-author/task
+baseline against the stated index, worktree and untracked state rather than requiring a
+freeze SHA. Evaluate diff, status and command evidence supplied inline or in a named
+readable regular artifact; open named canonical paths, but do not look for an unprovided
+diff file. Read each relevant new untracked path in full: an empty tracked diff says
+nothing about it. If necessary evidence omitted inline is absent from named readable
+artifacts too, return BLOCKED; never approve a parent summary alone.
 
 An obligation is PASS when:
 - Its required observable is represented by an assertion at an allowed boundary.
@@ -31,8 +39,8 @@ an implementation prototype or a second form of proof by default. Missing runner
 broken imports, zero collection, timeouts and fixture errors are not behavioral RED.
 Name exactly which command or evidence is missing; do not ask for an unrelated full
 suite when the task's targeted evidence is current and sufficient.
-If raw command output and exit status are absent from the brief, return BLOCKED for
-that evidence; do not infer a defect or prescribe rewriting tests.
+If raw command output and exit status are absent from both the brief and a named readable
+artifact, return BLOCKED for that evidence; do not infer a defect or prescribe rewriting tests.
 
 For an explicitly identified regression added after an implementation correction,
 accept the applicable forward-only evidence: current GREEN with concrete observed
