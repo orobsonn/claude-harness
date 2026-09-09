@@ -178,6 +178,9 @@ test("o prompt fornece ids literais de modelo para todo despacho", () => {
   assert.match(prompt, /harness-plan-reviewer.*openai-codex\/gpt-6-astra.*high/is);
   assert.doesNotMatch(prompt, /`harness-plan-reviewer`\s*=\s*`openai-codex\/gpt-5\.6-sol`/);
   assert.match(prompt, /harness-adversary.*openai-codex\/gpt-5\.6-sol.*medium/is);
+  assert.match(prompt, /`harness-compliance`\s*=\s*`openai-codex\/gpt-5\.6-terra`\s*\+\s*`high`/);
+  assert.match(prompt, /`harness-test-reviewer`\s*=\s*`openai-codex\/gpt-5\.6-luna`\s*\+\s*`xhigh`/);
+  assert.doesNotMatch(prompt, /`harness-test-reviewer`\s*=\s*`openai-codex\/gpt-5\.6-terra`/);
   assert.match(prompt, /harness-test-author.*openai-codex\/gpt-5\.6-terra.*high/is);
   assert.match(prompt, /incluindo `harness-test-author`, inclua também o campo estruturado de topo `complexity`/i);
   assert.match(prompt, /harness-executor.*low.*openai-codex\/gpt-5\.6-luna.*high/is);
