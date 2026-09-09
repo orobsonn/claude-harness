@@ -33,6 +33,11 @@ test("custom harness permissions inherit the workspace sandbox and retain secret
     ":workspace",
     "a custom profile must extend :workspace so Codex keeps the built-in runtime mounts",
   );
+  assert.equal(
+    harness?.filesystem?.glob_scan_max_depth,
+    8,
+    "the filesystem profile must bound glob scanning to the supported project depth",
+  );
   assert.deepEqual(harness?.filesystem?.[":workspace_roots"], {
     [env]: "deny",
     [`${env}.*`]: "deny",
