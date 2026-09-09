@@ -262,6 +262,28 @@ test("collapsed review summaries remain neutral without one completed canonical 
     "PARECER: INDISPONÍVEL · expanda para ver a saída",
   );
   assert.equal(
+    testApi.summarizeHarnessSubagentResult(result("completed", "harness-test-reviewer", [
+      "Agent completed in 2.0s (3 tool uses).",
+      "Agent ID: child-1",
+      "",
+      "Verdict: APPROVE",
+      "",
+      "Phase: test-fidelity. All obligations pass.",
+    ].join("\n"))),
+    "PARECER: APROVADO · obrigações de teste atendidas",
+  );
+  assert.equal(
+    testApi.summarizeHarnessSubagentResult(result("completed", "harness-test-reviewer", [
+      "Agent completed in 2.0s (3 tool uses).",
+      "Agent ID: child-1",
+      "",
+      "Verdict: REVISE",
+      "Findings:",
+      "- A fixture não alcança o comportamento aprovado.",
+    ].join("\n"))),
+    "PARECER: REVISAR · A fixture não alcança o comportamento aprovado.",
+  );
+  assert.equal(
     testApi.summarizeHarnessSubagentResult(result("completed", "harness-plan-reviewer", "APPROVE")),
     "PARECER: INDISPONÍVEL · expanda para ver a saída",
   );

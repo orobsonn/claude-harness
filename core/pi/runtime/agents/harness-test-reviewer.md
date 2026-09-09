@@ -95,13 +95,14 @@ improvements do not block readiness and must not be presented as mandatory fixes
 For contradictory requirements, cite the conflict to the local task parent rather
 than choosing a stricter interpretation and starting another rewrite.
 
-Return a compact report with phase `test-fidelity`, the obligation matrix, all
-material findings together, stable finding IDs, and one final verdict. On revalidation,
+Return a compact report beginning with exactly one canonical `Verdict:` line, then
+phase `test-fidelity`, the obligation matrix and all material findings together with
+stable finding IDs. On revalidation,
 preserve every prior row or explicitly carry forward an unaffected PASS; map each open
 finding to `resolved`, `unresolved`, `correction-caused`, `new-evidence` or
 `LATE_FINDING` so the parent can send one complete correction packet:
 - `Verdict: APPROVE` when all applicable obligations are PASS and no material defect
-  or required evidence is unresolved. End the review at that point.
+  or required evidence is unresolved.
 - `Verdict: REVISE` for concrete, correctable test or fixture defects against the
   approved task. Include the minimal consolidated correction.
 - `Verdict: BLOCKED` when the required evaluation cannot be completed. Identify the

@@ -9,6 +9,7 @@ import { formatFeatureTaskEntry, matchesAbsolution } from "../../shared/lib/abso
 import { checkScope } from "../../shared/lib/capture-oracle.mjs";
 import { isCaptureEligibleHandRecord, recordViolations } from "../../shared/lib/real-file-capture-rail.mjs";
 import { isSafeFeatureId, isSafeSessionId, isSafeTaskId } from "../../shared/lib/feature-id.mjs";
+import { parseTestReviewVerdict } from "../../shared/lib/test-review-verdict.mjs";
 import { validateOcCaptureEligibleHandRecord } from "../../opencode/lib/hand-records.mjs";
 import { hashTaskReceipt, unsupportedTaskScopePattern } from "./task-contract.mjs";
 import { readTaskContextReturn, validateTaskContextReturn } from "./task-context.mjs";
@@ -127,9 +128,7 @@ function fidelityReviewApproved(event, reviewRole) {
   // dedicated reviewer has an explicit terminal verdict, so completion alone must
   // never turn REVISE or BLOCKED into approval.
   if (reviewRole === "harness-compliance") return true;
-  const lines = eventText(event.end.result).trimEnd().split(/\r?\n/);
-  const verdicts = lines.filter((line) => /^Verdict: (?:APPROVE|REVISE|BLOCKED)$/.test(line));
-  return verdicts.length === 1 && verdicts[0] === "Verdict: APPROVE" && lines.at(-1) === verdicts[0];
+  return parseTestReviewVerdict(eventText(event.end.result))?.verdict === "APPROVE";
 }
 
 function markerSucceeded(event) {
