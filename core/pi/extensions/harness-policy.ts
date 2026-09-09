@@ -4,6 +4,7 @@ import { decidePiPolicy, isPiReadOnlyReviewerRole, piAuditDir, recordPiPolicyAud
 import { isPiHeadlessContext, isPiReadTool, piSessionId } from "../lib/pi-adapter-map.mjs";
 import { readPiChildIdentity } from "../lib/pi-child-identity.mjs";
 import { loadPiGateStateFromDisk } from "../lib/pi-gate-state.mjs";
+import { registerPiCommandEvidence } from "../lib/pi-command-evidence.mjs";
 
 const CHILD_READ_IDENTITY_REASON = "Child read tools require an exact valid dispatch identity.";
 
@@ -19,6 +20,7 @@ function parentSessionId(ctx: any) {
  * O cwd da sessão (ctx.cwd) é repassado à decisão porque o Pi resolve caminho relativo de tool
  * contra ele, não contra o process.cwd() de quem lançou o binário. */
 export default function harnessPolicy(pi: ExtensionAPI) {
+  registerPiCommandEvidence(pi);
   pi.on("tool_call", (event: any, ctx: any) => {
     const cwd = typeof ctx?.cwd === "string" && ctx.cwd.length > 0 ? ctx.cwd : process.cwd();
     const loaded = loadPiGateStateFromDisk(cwd, { sessionId: piSessionId(ctx) || null });

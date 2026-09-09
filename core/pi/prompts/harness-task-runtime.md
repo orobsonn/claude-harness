@@ -162,6 +162,18 @@ limpa. Reaplique o stash exato e trate conflitos pela mão autorizada. Despache 
 executor novo para verificar/completar o produto e capturar seu record atual antes do
 commit de produção. O trabalho preservado não substitui captura, olhos ou re-gate.
 
+Antes do primeiro despacho de olhos, entregue a evidência de modo que eles possam
+abri-la: saída curta inline; saída longa pelo caminho `[harness-evidence]` retornado
+pelo shell, junto do comando, status original (exit/timeout/aborto) e baseline/HEAD
+observados. O host preserva o spool completo em `.pi/harness/state/<sessão>/evidence/`,
+inclusive em RED; isso transporta evidência, não concede aprovação nem prova freshness.
+Emita o diff pelo stdout do `git diff` para usar o mesmo transporte; não redirecione
+evidência para `/tmp` e passe esse caminho inacessível ao reviewer. Se precisar criar
+um artefato manual, use o estado efêmero do worktree e confirme que ele é legível.
+Se o transporte informar indisponibilidade, resolva esse problema antes do despacho,
+preservando o resultado observado; não reescreva testes nem repita execução atual
+somente para mover um arquivo. Não commite logs nem imprima segredos nos comandos.
+
 Não repita mão, teste ou revisão válida quando não houve delta de produto, teste,
 índice, plano ou spec. Em retomada, reconcilie o estado existente da mesma sessão e
 continue do item incompleto. Nunca invente evidência para preencher uma lacuna.
