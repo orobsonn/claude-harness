@@ -486,6 +486,7 @@ export function inspectTaskRun(entry, dependencies = {}) {
 }
 
 function validateIntegration(entry, integration, { projectRoot, sessionId, featureId, taskId, headSha }) {
+  if (entry?.parent_root !== projectRoot) return failure("task registry parent root differs from the integration authority");
   if (!object(entry?.result) || !object(integration)) return failure("integrated task is missing its receipt");
   const result = entry.result;
   const changedPathsValid = Array.isArray(result.changed_paths) && result.changed_paths.every((item) =>

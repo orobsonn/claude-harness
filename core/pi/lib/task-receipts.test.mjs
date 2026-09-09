@@ -972,6 +972,16 @@ test("integrated receipts reject pending recovery and an unbound reconciliation 
   }
 });
 
+test("integrated task entries cannot redirect authority to another parent root", () => {
+  const f = integratedFixture();
+  f.entry.parent_root = path.join(f.root, "foreign-owner");
+  write(f.registryPath, f.registry);
+  const inspected = readIntegratedTaskEvidence({ projectRoot: f.root, sessionId: PARENT,
+    featureId: FEATURE, taskId: TASK, headSha: f.base });
+  assert.equal(inspected.ok, false);
+  assert.match(inspected.reason, /parent root/);
+});
+
 test("readIntegratedTaskEvidence rejects a replaced plan approval for the same artifact hashes", () => {
   const fixture = integratedFixture();
   const state = JSON.parse(fs.readFileSync(fixture.statePath, "utf8"));
