@@ -5,7 +5,12 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { acquirePiParentWorktreeLock, recoverPiParentSession } from "./parent-session-recovery.mjs";
+import {
+  acquirePiParentWorktreeLock,
+  darwinProcessIdentity,
+  linuxProcessIdentity,
+  recoverPiParentSession,
+} from "./parent-session-recovery.mjs";
 import { decidePiDispatchGate } from "./entry-gate.mjs";
 import { readPiSpecApproval, writePiSpecDraft } from "./spec-approval.mjs";
 
@@ -393,4 +398,95 @@ test("retomada exata não substitui processo vivo nem identidade indeterminada",
       first.release();
     } finally { f.cleanup(); }
   }
+});
+
+test("Darwin fixa a invocação de ps e devolve uma identidade de início estável", () => {
+  const calls = [];
+  const identity = darwinProcessIdentity(4321, {
+    env: { PATH: "/test-bin", LC_ALL: "pt_BR.UTF-8", LANG: "pt_BR.UTF-8", TZ: "America/Fortaleza" },
+    spawnSyncFn: (...args) => {
+      calls.push(args);
+      return { status: 0, stdout: "S+   Wed Sep  9 08:07:06 2026\n", stderr: "" };
+    },
+    killFn: () => { throw new Error("kill fallback must not run for valid ps output"); },
+  });
+
+  assert.deepEqual(identity, { pid: 4321, state: "S+", start: "Wed Sep 9 08:07:06 2026" });
+  assert.equal(calls.length, 1);
+  const [command, argv, options] = calls[0];
+  assert.equal(command, "/bin/ps");
+  assert.deepEqual(argv, ["-p", "4321", "-o", "state=", "-o", "lstart="]);
+  assert.equal(options.shell, false);
+  assert.equal(options.encoding, "utf8");
+  assert.equal(Number.isInteger(options.timeout) && options.timeout > 0 && options.timeout <= 5_000, true);
+  assert.equal(Number.isInteger(options.maxBuffer) && options.maxBuffer > 0 && options.maxBuffer <= 64 * 1024, true);
+  assert.deepEqual(options.env, { PATH: "/test-bin", LC_ALL: "C", LANG: "C", TZ: "UTC" });
+});
+
+test("Darwin preserva estados zombie para o lock recusar a identidade", () => {
+  for (const state of ["Z", "Z+"]) {
+    const identity = darwinProcessIdentity(4321, {
+      spawnSyncFn: () => ({ status: 0, stdout: `${state} Tue Jan 13 14:25:26 2026\n`, stderr: "" }),
+      killFn: () => { throw new Error("valid ps output must not use kill fallback"); },
+    });
+    assert.deepEqual(identity, { pid: 4321, state, start: "Tue Jan 13 14:25:26 2026" });
+  }
+});
+
+test("Darwin só prova ausência quando kill(pid, 0) confirma ESRCH", () => {
+  const killCalls = [];
+  const identity = darwinProcessIdentity(4321, {
+    spawnSyncFn: () => ({ status: 1, stdout: "", stderr: "" }),
+    killFn: (...args) => {
+      killCalls.push(args);
+      const error = new Error("no such process");
+      error.code = "ESRCH";
+      throw error;
+    },
+  });
+
+  assert.equal(identity, null);
+  assert.deepEqual(killCalls, [[4321, 0]]);
+});
+
+test("Darwin falha fechado quando ps falha mas o PID ainda está vivo ou inacessível", () => {
+  for (const [label, killFn] of [
+    ["live", () => undefined],
+    ["eperm", () => { const error = new Error("not permitted"); error.code = "EPERM"; throw error; }],
+  ]) {
+    const identity = darwinProcessIdentity(4321, {
+      spawnSyncFn: () => ({ status: 1, stdout: "", stderr: "" }),
+      killFn,
+    });
+    assert.equal(identity, undefined, label);
+  }
+});
+
+test("Darwin falha fechado para erro, timeout e saída de ps inválida", () => {
+  const cases = [
+    ["spawn throws", () => { throw new Error("spawn failed"); }],
+    ["timeout", () => ({ status: null, signal: "SIGTERM", error: Object.assign(new Error("timed out"), { code: "ETIMEDOUT" }), stdout: "", stderr: "" })],
+    ["empty", () => ({ status: 0, stdout: "", stderr: "" })],
+    ["multiple", () => ({ status: 0, stdout: "S Wed Sep 9 08:07:06 2026\nS Wed Sep 9 08:07:07 2026\n", stderr: "" })],
+    ["malformed", () => ({ status: 0, stdout: "S sometime yesterday\n", stderr: "" })],
+    ["non-ascii", () => ({ status: 0, stdout: "S Qua Set 9 08:07:06 2026\n", stderr: "" })],
+  ];
+
+  for (const [label, spawnSyncFn] of cases) {
+    const identity = darwinProcessIdentity(4321, { spawnSyncFn, killFn: () => undefined });
+    assert.equal(identity, undefined, label);
+  }
+});
+
+test("Linux encontra starttime mesmo quando o nome do processo contém parêntese fechado", () => {
+  const fields = ["S", ...Array.from({ length: 18 }, (_, index) => String(index + 1)), "424242", "21"];
+  const identity = linuxProcessIdentity(4321, {
+    readFileSyncFn: (file, encoding) => {
+      assert.equal(file, "/proc/4321/stat");
+      assert.equal(encoding, "utf8");
+      return `4321 (worker ) helper) ${fields.join(" ")}`;
+    },
+  });
+
+  assert.deepEqual(identity, { pid: 4321, state: "S", start: "424242" });
 });
