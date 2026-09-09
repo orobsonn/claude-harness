@@ -5,6 +5,19 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [2.6.7](https://github.com/orobsonn/claude-harness/compare/v2.6.6...v2.6.7) (2026-09-09)
+
+
+### Bug Fixes
+
+* **codex:** restore Linux sandbox startup ([#925](https://github.com/orobsonn/claude-harness/issues/925)) ([cfc48b8](https://github.com/orobsonn/claude-harness/commit/cfc48b8fc92361dce0982b64c61bb841ef1cd094))
+* **pi:** recognize canonical fidelity verdicts ([#924](https://github.com/orobsonn/claude-harness/issues/924)) ([3c1dae5](https://github.com/orobsonn/claude-harness/commit/3c1dae52f90bede9d426a3f8dbb3ef1aff6adaa9))
+
+
+### Performance
+
+* **pi:** route test fidelity review through Luna xhigh ([#901](https://github.com/orobsonn/claude-harness/issues/901)) ([3b74257](https://github.com/orobsonn/claude-harness/commit/3b742570ea6a8349f79820e6e2d0e893cf8c1671))
+
 ## [2.6.6](https://github.com/orobsonn/claude-harness/compare/v2.6.5...v2.6.6) (2026-09-09)
 
 
