@@ -5,6 +5,7 @@
  * mesmo pai antes de o launcher abrir o JSONL existente.
  */
 import { createHash, randomUUID } from "node:crypto";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { hostname as localHostname } from "node:os";
 import path from "node:path";
@@ -341,24 +342,72 @@ function validWorktreeLockOwner(owner) {
     (owner.session_id === null || isSafeSessionId(owner.session_id));
 }
 
-/** null proves ESRCH/ENOENT; undefined means the host could not determine identity. */
-function parentProcessIdentity(pid) {
-  if (process.platform === "linux") {
-    try {
-      const raw = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
-      const fields = raw.slice(raw.lastIndexOf(")") + 2).split(" ");
-      if (!fields[0] || !fields[19]) return undefined;
-      return { pid, state: fields[0], start: fields[19] };
-    } catch (error) {
-      return error?.code === "ENOENT" ? null : undefined;
+/** null proves ENOENT; undefined means Linux could not determine identity. */
+export function linuxProcessIdentity(pid, { readFileSyncFn = fs.readFileSync } = {}) {
+  if (!Number.isInteger(pid) || pid <= 0) return undefined;
+  try {
+    const raw = readFileSyncFn(`/proc/${pid}/stat`, "utf8");
+    const closeIndex = typeof raw === "string" ? raw.lastIndexOf(")") : -1;
+    if (closeIndex < 0) return undefined;
+    const fields = raw.slice(closeIndex + 1).trim().split(/\s+/);
+    if (!fields[0] || !fields[19]) return undefined;
+    return { pid, state: fields[0], start: fields[19] };
+  } catch (error) {
+    return error?.code === "ENOENT" ? null : undefined;
+  }
+}
+
+const DARWIN_LSTART = /^(Mon|Tue|Wed|Thu|Fri|Sat|Sun) (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) ([1-9]|[12]\d|3[01]) ([01]\d|2[0-3]):[0-5]\d:[0-5]\d \d{4}$/;
+
+function probeDarwinPid(pid, killFn) {
+  try {
+    killFn(pid, 0);
+  } catch (error) {
+    return error?.code === "ESRCH" ? null : undefined;
+  }
+  return undefined;
+}
+
+/** null proves ESRCH; undefined means Darwin could not determine identity. */
+export function darwinProcessIdentity(pid, {
+  spawnSyncFn = spawnSync,
+  killFn = process.kill,
+  env = process.env,
+} = {}) {
+  if (!Number.isInteger(pid) || pid <= 0) return undefined;
+  let result;
+  try {
+    result = spawnSyncFn("/bin/ps", ["-p", String(pid), "-o", "state=", "-o", "lstart="], {
+      shell: false,
+      encoding: "utf8",
+      timeout: 1_000,
+      maxBuffer: 4 * 1024,
+      env: { ...env, LC_ALL: "C", LANG: "C", TZ: "UTC" },
+    });
+  } catch {
+    return probeDarwinPid(pid, killFn);
+  }
+
+  if (result?.status === 0 && typeof result.stdout === "string" && /^[\x09\x0A\x0D\x20-\x7E]*$/.test(result.stdout)) {
+    const lines = result.stdout.split(/\r?\n/);
+    if (lines.at(-1) === "") lines.pop();
+    if (lines.length === 1) {
+      const normalized = lines[0].trim().replace(/[\t ]+/g, " ");
+      const separator = normalized.indexOf(" ");
+      const state = separator > 0 ? normalized.slice(0, separator) : "";
+      const start = separator > 0 ? normalized.slice(separator + 1) : "";
+      if (/^[A-Z][A-Za-z+<>]*$/.test(state) && DARWIN_LSTART.test(start)) {
+        return { pid, state, start };
+      }
     }
   }
-  try {
-    process.kill(pid, 0);
-  } catch (error) {
-    if (error?.code === "ESRCH") return null;
-    return undefined;
-  }
+
+  return probeDarwinPid(pid, killFn);
+}
+
+function parentProcessIdentity(pid) {
+  if (process.platform === "linux") return linuxProcessIdentity(pid);
+  if (process.platform === "darwin") return darwinProcessIdentity(pid);
   return undefined;
 }
 
