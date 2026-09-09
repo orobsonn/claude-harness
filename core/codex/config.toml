@@ -3,6 +3,7 @@
 
 sandbox_mode = "workspace-write"
 approval_policy = "on-request"
+default_permissions = "harness"
 
 [agents]
 enabled = true
@@ -11,3 +12,17 @@ max_concurrent_threads_per_session = 3
 [features]
 hooks = true
 multi_agent = true
+
+[permissions.harness]
+extends = ":workspace"
+
+[permissions.harness.filesystem]
+glob_scan_max_depth = 8
+
+[permissions.harness.filesystem.":workspace_roots"]
+".env" = "deny"
+".env.*" = "deny"
+"**/.env" = "deny"
+"**/.env.*" = "deny"
+".dev.vars" = "deny"
+"**/.dev.vars" = "deny"

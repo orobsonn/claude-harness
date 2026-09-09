@@ -488,6 +488,30 @@ export function resolveProjectTarget(raw, cwd) {
   }
 }
 
+/** @description Refuses to install generated runtime copies into the harness source repository. */
+export function assertConsumerProjectTarget(targetDir) {
+  const root = realpathSync(targetDir);
+  const packagePath = join(root, "package.json");
+  const canonicalVendorSource = join(
+    root,
+    "core/claude-code/skills/initializing-projects/references/vendor-core.mjs",
+  );
+  if (!existsSync(packagePath) || !existsSync(canonicalVendorSource)) return root;
+
+  let packageName = null;
+  try {
+    packageName = JSON.parse(readFileSync(packagePath, "utf8")).name;
+  } catch {
+    return root;
+  }
+  if (packageName === "@orobsonn/claude-harness") {
+    throw new Error(
+      "refusing to vendor the harness into its own source repository; edit core/ and target a consumer project",
+    );
+  }
+  return root;
+}
+
 /** @description Pins an existing target to a stable real directory and rejects a symlink root. */
 export function pinTargetRoot(targetDir) {
   const targetAbs = resolve(targetDir);
@@ -2995,6 +3019,7 @@ if (
   let runtime;
   try {
     target = resolveProjectTarget(args.target, process.cwd());
+    assertConsumerProjectTarget(target);
     runtime = normalizeRuntimeTarget(args.runtime);
   } catch (err) {
     fail(err instanceof Error ? err.message : String(err));

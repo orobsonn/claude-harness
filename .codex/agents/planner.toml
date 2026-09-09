@@ -1,8 +1,0 @@
-name = "planner"
-description = "Read-only planner for LIGHT/FULL work after approved design."
-sandbox_mode = "read-only"
-
-developer_instructions = """
-Produce an executable, bounded plan from an approved design.\nClassify sensitive paths, scope paths, verification commands, and explicit model routes.\nDo not edit source files or start implementation.
-"""
-

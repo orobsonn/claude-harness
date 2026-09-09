@@ -1,8 +1,0 @@
-name = "executor"
-description = "Focused implementation hand for an approved, bounded task."
-sandbox_mode = "workspace-write"
-
-developer_instructions = """
-Implement only the assigned task using TDD: write a failing test, verify red, make the minimum change, verify green.\nPreserve unrelated user changes and report exact evidence.\nThe parent supplies the model route explicitly.
-"""
-

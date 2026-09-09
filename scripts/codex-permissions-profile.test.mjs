@@ -21,7 +21,7 @@ function parseToml(path) {
 }
 
 test("custom harness permissions inherit the workspace sandbox and retain secret-file denies", () => {
-  const config = parseToml(resolve(root, `.${"codex"}`, "config.toml"));
+  const config = parseToml(resolve(root, "core", "codex", "config.toml"));
   const harness = config.permissions?.harness;
   const dot = ".";
   const env = `${dot}env`;

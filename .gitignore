@@ -23,3 +23,9 @@ docs/raw/
 projects/
 
 .worktrees/
+
+# Este repositório é a fonte do harness; nunca commitar cópias vendorizadas aqui.
+/.claude/
+/.codex/
+/.opencode/
+/.pi/

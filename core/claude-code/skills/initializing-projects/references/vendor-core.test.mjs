@@ -41,6 +41,7 @@ import {
   isHarnessAutoloadPluginPath,
   normalizeRuntimeTarget,
   resolveProjectTarget,
+  assertConsumerProjectTarget,
   writeOpencodeConfig,
   writeSettings,
   installRepoFiles,
@@ -89,6 +90,37 @@ const RETIRED_NPX_WILDCARDS = [
 // core/claude-code (3 up from references/ to reach core/claude-code/)
 const CC_CORE_DIR = join(harnessRoot, "core/claude-code");
 const CC_SETTINGS_PATH = join(CC_CORE_DIR, "settings.json");
+
+test("vendor-core refuses to vendor into the harness source repository", () => {
+  const target = mkdtempSync(join(tmpdir(), "vendor-source-target-"));
+  try {
+    const marker = join(
+      target,
+      "core/claude-code/skills/initializing-projects/references/vendor-core.mjs",
+    );
+    mkdirSync(dirname(marker), { recursive: true });
+    writeFileSync(marker, "// source marker\n", "utf8");
+    writeFileSync(
+      join(target, "package.json"),
+      `${JSON.stringify({ name: "@orobsonn/claude-harness" })}\n`,
+      "utf8",
+    );
+
+    assert.throws(
+      () => assertConsumerProjectTarget(target),
+      /refusing to vendor the harness into its own source repository/,
+    );
+    const result = spawnSync(
+      process.execPath,
+      [vendorCoreScript, "--source", harnessRoot, "--target", target, "--runtime", "codex"],
+      { encoding: "utf8" },
+    );
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /refusing to vendor the harness into its own source repository/);
+  } finally {
+    rmSync(target, { recursive: true, force: true });
+  }
+});
 
 test("vendor-core CLI stamps the release package version, not an older git-describe ancestor", () => {
   const target = mkdtempSync(join(tmpdir(), "vendor-package-version-"));

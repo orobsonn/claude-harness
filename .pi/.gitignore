@@ -1,9 +1,0 @@
-# Pi Harness — local sessions and package cache, never commit
-harness/runtime/
-harness/sessions/
-harness/state/
-harness/plans/
-sessions/
-npm/
-git/
-.harness-version-check-cache
