@@ -76,8 +76,17 @@ com `harness_tasks`:
 4. `resume` encaminha feedback para a mesma tentativa e sessão local, somente após
    comprovar que o processo anterior terminou. A tarefa volta a `in_progress` e sua
    validação volta a `pending` até o novo resultado ser integrado. Se ela for uma
-   dependência compartilhada, os descendentes já admitidos precisam estar integrados;
-   uma barreira pausa novos dispatches e outras integrações durante a correção.
+   dependência compartilhada, os processos dos descendentes admitidos precisam ter
+   terminado; worktrees pendentes devem estar limpas e na branch reservada. Uma
+   barreira pausa novos dispatches e outras integrações durante a correção.
+   A dependente bloqueada não precisa ser integrada com defeito: depois de corrigir
+   e integrar a tarefa proprietária, use `resume` na dependente. O host incorpora o
+   HEAD corrigido com um merge registrado, preserva commits, plano, IDs e grant
+   original, e exige revisões no novo HEAD antes de aceitar sua integração.
+   `status` não elimina essa pendência. Conflitos ou edições concorrentes preservam
+   o trabalho e bloqueiam o lançamento; não altere receipts nem amplie o escopo
+   para contorná-los. Uma tentativa ainda sem sessão local precisa concluir sua
+   admissão inicial antes de iniciar a correção da ancestral.
 
 Cada pai local usa as mesmas mãos, olhos e markers nativos: test-author, fidelity,
 freeze, executor, captura atual, revisões, sniper e re-gate. Ele não inicia outra

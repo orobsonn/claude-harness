@@ -20,6 +20,8 @@ import {
 import { readPiSpecApproval } from "./spec-approval.mjs";
 import { capturePlanReviewInput } from "./task-run.mjs";
 import { captureTaskContext } from "./task-context.mjs";
+import { checkScope } from "../../shared/lib/capture-oracle.mjs";
+import { taskScopeBase } from "./task-reconciliation.mjs";
 import { resolveOrcaTaskBackend } from "./task-orca.mjs";
 import {
   TASK_PIPELINE_VERSION,
@@ -328,6 +330,93 @@ function invalidateAggregate(owner, registry, persist) {
     persist();
   }
 }
+function requireTaskIdentity(entry) {
+  requireClean(entry.worktree);
+  if (git(entry.worktree, "branch", "--show-current") !== entry.branch ||
+      !isAncestor(entry.worktree, entry.base_sha, "HEAD"))
+    throw new Error("reserved task worktree changed identity");
+}
+function reconcileDependentMerge(entry, persist, scopes) {
+  const intent = entry.reconciliation_intent;
+  if (!intent) return;
+  const root = entry.worktree;
+  if (intent.task_id !== entry.task_id || intent.attempt_id !== entry.attempt_id ||
+      git(root, "branch", "--show-current") !== entry.branch)
+    throw new Error("dependent reconciliation journal identity mismatch");
+  const head = git(root, "rev-parse", "HEAD");
+  if (head === intent.pre_child_head) {
+    let merging;
+    try { merging = git(root, "rev-parse", "--verify", "MERGE_HEAD"); } catch {}
+    if (merging) {
+      if (merging !== intent.parent_head || git(root, "write-tree") !== intent.tree ||
+          git(root, "diff", "--name-only") || git(root, "ls-files", "--others", "--exclude-standard", "-z")
+            .split("\0").filter(Boolean).some((name) => !volatile(name)))
+        throw new Error("interrupted dependent merge has additional changes; preserve the journal and reconcile this worktree");
+      git(root, "merge", "--abort");
+    }
+    requireTaskIdentity(entry);
+    delete entry.reconciliation_intent;
+    persist();
+    return;
+  }
+  requireTaskIdentity(entry);
+  const proof = { ...intent, merged_head: head };
+  const proposed = { ...entry, reconciliations: [...(entry.reconciliations ?? []), proof] };
+  delete proposed.reconciliation_intent;
+  delete proposed.reconciliation_required;
+  taskScopeBase(proposed, root, head, scopes);
+  entry.reconciliations = proposed.reconciliations;
+  delete entry.reconciliation_intent;
+  delete entry.reconciliation_required;
+  entry.result = null;
+  entry.status = "blocked";
+  entry.reason = "dependency correction merged; resume for current capture and reviews";
+  persist();
+}
+async function reconcileDependent(entry, task, owner, registry, persist, deps) {
+  if (!entry.reconciliation_required) return;
+  requireTaskIdentity(entry);
+  requireClean(owner.root);
+  const head = git(entry.worktree, "rev-parse", "HEAD");
+  if (head !== entry.reconciliation_required.pre_child_head)
+    throw new Error("dependent HEAD changed while upstream correction was pending; preserve and reconcile the worktree");
+  const prior = { ...entry };
+  delete prior.reconciliation_required;
+  const scopes = scopeOf(task);
+  const base = taskScopeBase(prior, entry.worktree, head, scopes);
+  const changed = git(entry.worktree, "diff", "--name-only", "-z", base, head).split("\0").filter(Boolean);
+  if (checkScope(changed, scopes).length) throw new Error("dependent changed paths outside canonical scope before reconciliation");
+  const parentHead = git(owner.root, "rev-parse", "HEAD");
+  if (!isAncestor(owner.root, base, parentHead)) throw new Error("dependent scope base is not ancestral to parent HEAD");
+  const upstreams = [];
+  for (const prior of Object.values(entry.reconciliation_required.upstreams ?? {})) {
+    const upstream = registry.tasks[prior.task_id];
+    if (upstream?.attempt_id !== prior.attempt_id || upstream.status !== "integrated" ||
+        !upstream.integration || hashTaskReceipt(upstream.integration) === prior.receipt_sha256 ||
+        !upstream.integration_history?.some((receipt) => hashTaskReceipt(receipt) === prior.receipt_sha256) ||
+        !isAncestor(owner.root, upstream.integration.integrated_head, parentHead))
+      throw new Error(`corrected dependency ${prior.task_id} requires a new integrated receipt in current parent ancestry`);
+    const checked = await deps.readIntegrated({ projectRoot: owner.root, sessionId: owner.sessionId,
+      featureId: owner.featureId, taskId: prior.task_id, headSha: parentHead });
+    if (!checked.ok) throw new Error(`corrected dependency ${prior.task_id}: ${checked.reason}`);
+    upstreams.push({ task_id: prior.task_id, attempt_id: prior.attempt_id,
+      previous_receipt_sha256: prior.receipt_sha256, receipt: upstream.integration });
+  }
+  if (!upstreams.length) throw new Error("corrected dependency identity is missing from the recovery request");
+  const tree = git(entry.worktree, "merge-tree", "--write-tree", head, parentHead).split("\n")[0];
+  const mergedChanges = git(entry.worktree, "diff", "--name-only", "-z", parentHead, tree).split("\0").filter(Boolean);
+  if (checkScope(mergedChanges, scopes).length) throw new Error("dependent merge changes paths outside canonical scope");
+  entry.reconciliation_intent = {
+    written_by: "host-task-reconciliation", task_id: entry.task_id, attempt_id: entry.attempt_id,
+    scope_base_sha: base, pre_child_head: head, parent_head: parentHead, tree, launch_count: entry.launches.length, upstreams,
+  };
+  persist();
+  git(entry.worktree, "merge", "--no-ff", "--no-edit", "-m",
+    `Reconcile harness dependency correction for ${entry.task_id}`, parentHead);
+  reconcileDependentMerge(entry, persist, scopes);
+  if (entry.reconciliation_required)
+    throw new Error("dependent reconciliation did not produce the reserved merge; preserve the worktree and journal");
+}
 async function prepareWorktree(entry, artifacts, deps, persist) {
   if (deps.orcaBackend) await deps.orcaBackend.prepareWorktree(entry, persist);
   if (!fs.existsSync(entry.worktree))
@@ -427,9 +516,12 @@ async function launchTask(entry, context, persist, deps, instruction) {
     localSession = read(`${entry.grant_path}.claim`).session_id;
   if (localSession !== undefined && !isSafeSessionId(localSession))
     throw new Error("task session claim is invalid");
-  const prompt =
-    instruction ||
+  const feedback = instruction ||
     "Execute the admitted task using the task pipeline. Complete the native TDD, applicable reviewers and current capture. Return only after the task is ready for host integration.";
+  const reconciliation = entry.reconciliations?.at(-1);
+  const prompt = reconciliation
+    ? `The host merged a dependency correction at ${reconciliation.merged_head}. Preserve the original task, scope and frozen tests. Dispatch an implementation hand to validate or correct affected behavior and obtain a current capture after that merge; do not make cosmetic edits to obtain a receipt. Run applicable checks and obtain current HEAD-bound implementation reviews before returning.\n\n${feedback}`
+    : feedback;
   const args = [
     entry.runtime.launcher_path,
     ...(localSession
@@ -553,6 +645,14 @@ export async function executeTaskAction(params, context = {}, injected = {}) {
     if (registry?.correction_barrier)
       invalidateAggregate(owner, registry, persist);
     if (registry) reconcileMerge(owner, registry, persist);
+    if (registry) for (const entry of Object.values(registry.tasks)) {
+      if (entry.reconciliation_intent) {
+        if (entry.launches.some((launch) => !deps.readProcess(launch).terminal))
+          throw new Error("dependent process must terminate before reconciliation");
+        const task = approvedPlan(owner).plan.tasks.find((task) => task.id === entry.task_id);
+        reconcileDependentMerge(entry, persist, scopeOf(task));
+      }
+    }
     if (params.action === "status") {
       if (!registry)
         return { ok: true, tasks: [], max_parallel_tasks: MAX_PARALLEL_TASKS };
@@ -562,6 +662,11 @@ export async function executeTaskAction(params, context = {}, injected = {}) {
       if (entries.some((entry) => !entry)) throw new Error("unknown task");
       for (const entry of entries) {
         if (entry.status === "integrated") continue;
+        if (entry.reconciliation_required) {
+          entry.status = "blocked";
+          entry.reason = `dependency correction (${Object.keys(entry.reconciliation_required.upstreams ?? {}).join(", ")}) requires reconciliation; integrate the corrected owner, then resume this dependent for current capture and reviews`;
+          continue;
+        }
         if (entry.launches.length === 0) {
           entry.status = "blocked";
           entry.reason = "reserved task has not started; resume this attempt";
@@ -803,11 +908,37 @@ export async function executeTaskAction(params, context = {}, injected = {}) {
       const pending = affected.filter(
         (id) => registry.tasks[id].status !== "integrated",
       );
-      if (pending.length)
-        throw new Error(
-          `integrate admitted dependents (${pending.join(", ")}) before correcting this task`,
-        );
+      for (const id of affected) {
+        const dependent = registry.tasks[id];
+        if (dependent.launches.some((launch) => !deps.readProcess(launch).terminal))
+          throw new Error(`dependent ${id} process group must terminate before correcting this task`);
+        if (pending.includes(id)) {
+          requireTaskIdentity(dependent);
+          if (!fs.existsSync(`${dependent.grant_path}.claim`))
+            throw new Error(`dependent ${id} must complete initial admission before upstream correction; resume it first`);
+        }
+      }
+      if (pending.length && !entry.integration && registry.correction_barrier?.task_id !== entry.task_id)
+        throw new Error("only an integrated ancestor can start a dependent correction");
       if (entry.integration) {
+        for (const id of pending) {
+          const dependent = registry.tasks[id];
+          dependent.reconciliation_required ??= {
+            pre_child_head: git(dependent.worktree, "rev-parse", "HEAD"),
+            upstreams: {},
+          };
+          dependent.reconciliation_required.upstreams[entry.task_id] ??= {
+            task_id: entry.task_id, attempt_id: entry.attempt_id,
+            receipt_sha256: hashTaskReceipt(entry.integration),
+          };
+          if (dependent.result) {
+            dependent.result_history ??= {};
+            dependent.result_history[hashTaskReceipt(dependent.result)] = dependent.result;
+          }
+          dependent.result = null;
+          dependent.status = "blocked";
+          dependent.reason = `dependency ${entry.task_id} is being corrected; resume this task after reintegration`;
+        }
         entry.integration_history ??= [];
         entry.integration_history.push(entry.integration);
         entry.result_history ??= {};
@@ -823,6 +954,7 @@ export async function executeTaskAction(params, context = {}, injected = {}) {
         persist();
         invalidateAggregate(owner, registry, persist);
       }
+      await reconcileDependent(entry, artifacts.plan.tasks.find((task) => task.id === entry.task_id), owner, registry, persist, deps);
       await prepareWorktree(entry, artifacts, deps, persist);
       await launchTask(entry, context, persist, deps, params.instruction);
       return { ok: true, tasks: [summary(entry)] };
@@ -836,6 +968,7 @@ export async function executeTaskAction(params, context = {}, injected = {}) {
     }
     const checkedRuntime = deps.verifyRuntime(entry.runtime);
     if (!checkedRuntime.ok) throw new Error(checkedRuntime.reason);
+    taskScopeBase(entry, entry.worktree, params.expected_head);
     const inspected = await deps.inspectRun(entry);
     if (!inspected.ok) throw new Error(inspected.reason);
     if (inspected.result.child_head !== params.expected_head)

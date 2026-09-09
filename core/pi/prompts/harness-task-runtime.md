@@ -125,6 +125,12 @@ mesmo task pelo `harness-test-author`, obtenha RED/sensibilidade e fidelity atua
 depois despache sniper para o delta de produto. Envie direto ao sniper somente findings
 resolvíveis sem alterar teste/fixture congelado; nunca use um sniper exploratório para ele
 descobrir que a cobertura precisa ser reaberta.
+Se a correção exigir um arquivo pertencente a outra tarefa, retorne `BLOCKED` com
+finding, arquivo, task proprietária, HEAD e evidência. O pai global deve corrigir
+essa proprietária por `harness_tasks resume` e depois retomar a dependente; não
+repita olhos ou re-gate enquanto o mesmo defeito segue aberto. Depois de um merge
+de recuperação feito pelo host, obtenha captura de uma mão e revisões atuais no
+novo HEAD, preservando a fidelidade válida e sem edições cosméticas para gerar recibo.
 No primeiro brief de implementação, declare a fase, paths canônicos de produto/teste,
 cwd/base/HEAD/status de index, worktree e untracked, diff e provas negativas dos paths
 intactos; compare freeze→HEAD revisado para testes/fixtures e base de implementação→HEAD

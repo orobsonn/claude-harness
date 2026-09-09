@@ -17,6 +17,7 @@ import { piGateStatePath, piHandRecordPath } from "./pi-paths.mjs";
 import { readTaskProcess } from "./task-process.mjs";
 import { capturePlanReviewInput, readTaskRunBinding } from "./task-run.mjs";
 import { readPiSpecApproval } from "./spec-approval.mjs";
+import { taskScopeBase, taskReconciliationDigest } from "./task-reconciliation.mjs";
 
 const COMMIT_SHA = /^[0-9a-f]{40}$/;
 const SHA256 = /^[0-9a-f]{64}$/;
@@ -364,7 +365,9 @@ export function inspectTaskRun(entry, dependencies = {}) {
     if (unsupportedScope !== undefined) {
       return failure(`task scope ${JSON.stringify(unsupportedScope)} uses unsupported glob syntax`);
     }
-    if (changed.some((item) => !covered(item, scopes))) return failure("task changed paths outside canonical scope", { changed });
+    const scopeBase = taskScopeBase(entry, worktree, head, scopes);
+    const scopedChanges = splitZero(git(worktree, ["diff", "--name-only", "-z", scopeBase, head]));
+    if (scopedChanges.some((item) => !covered(item, scopes))) return failure("task changed paths outside canonical scope", { changed: scopedChanges });
     const native = readEvents(entry.launches, jobRoot, launches.interruptedIndexes);
     if (native.sessionIds.size !== 1 || !native.sessionIds.has(claim.session_id)) return failure("native event session does not match the claimed child session");
     const implementationObserved = native.events.some((event) => event.tool === "subagent" && ["harness-executor", "harness-sniper"].includes(event.args?.subagent_type) && eventSucceeded(event));
@@ -378,12 +381,17 @@ export function inspectTaskRun(entry, dependencies = {}) {
     const violations = recordViolations(hand);
     if (!identity.ok || violations.scope.length || violations.frozen.length || typeof hand.capturedVerifiedAt !== "string" || !hand.capturedVerifiedAt ||
         !COMMIT_SHA.test(hand.freezeCommitSha ?? "") || !ancestor(worktree, hand.freezeCommitSha, head)) return failure("current child hand capture is invalid");
+    const reconciliation = entry.reconciliations?.at(-1);
+    if (reconciliation && !ancestor(worktree, reconciliation.merged_head, hand.freezeCommitSha))
+      return failure("current hand requires a new capture after dependency reconciliation");
     const isImplementationForTask = (event) => event.tool === "subagent" &&
       ["harness-executor", "harness-sniper"].includes(event.args?.subagent_type) &&
       taskFromPrompt(event.args?.prompt) === entry.task_id && eventSucceeded(event);
     const producerIndex = native.events.findIndex((event) => event.callId === hand.producerCallId &&
       event.args?.subagent_type === hand.agent && isImplementationForTask(event));
     if (producerIndex < 0) return failure("current hand producer is not bound to a successful native call by an implementation agent");
+    if (reconciliation && native.events[producerIndex].launchIndex < reconciliation.launch_count)
+      return failure("current hand requires an implementation producer after dependency reconciliation");
     const fidelity = validateFidelity({
       events: native.events,
       task: binding.task,
@@ -437,6 +445,8 @@ export function inspectTaskRun(entry, dependencies = {}) {
         plan_sha256: entry.plan_sha256,
         spec_sha256: entry.spec_sha256,
         base_sha: entry.base_sha,
+        scope_base_sha: scopeBase,
+        reconciliation_sha256: taskReconciliationDigest(entry),
         child_head: head,
         changed_paths: changed,
         freeze_sha: fidelity.freezeSha,
@@ -444,6 +454,7 @@ export function inspectTaskRun(entry, dependencies = {}) {
         hand_capture: {
           agent: hand.agent,
           producer_call_id: hand.producerCallId,
+          producer_launch_index: native.events[producerIndex].launchIndex,
           freeze_sha: hand.freezeCommitSha,
           captured_verified_at: hand.capturedVerifiedAt,
           capture_marker: capturePayload,
@@ -532,6 +543,16 @@ function validateIntegration(entry, integration, { projectRoot, sessionId, featu
     integration.child_head === entry.result.child_head && COMMIT_SHA.test(integration.integrated_head ?? "") &&
     integration.result_sha256 === hashTaskReceipt(entry.result);
   if (!exact) return failure("task integration receipt does not match the registry entry");
+  const scopeBase = taskScopeBase(entry, projectRoot, result.child_head);
+  if ((result.scope_base_sha ?? result.base_sha) !== scopeBase ||
+      (result.reconciliation_sha256 ?? null) !== taskReconciliationDigest(entry))
+    return failure("task integration reconciliation proof differs from its inspection receipt");
+  const reconciliation = entry.reconciliations?.at(-1);
+  if (reconciliation && (!ancestor(projectRoot, reconciliation.merged_head, result.hand_capture.freeze_sha) ||
+      !Number.isInteger(result.hand_capture.producer_launch_index) ||
+      result.hand_capture.producer_launch_index < reconciliation.launch_count ||
+      result.hand_capture.producer_launch_index >= entry.launches.length))
+    return failure("integrated hand capture must follow dependency reconciliation");
   if (!COMMIT_SHA.test(headSha ?? "") || !ancestor(projectRoot, result.base_sha, result.child_head) ||
       !ancestor(projectRoot, result.child_head, integration.integrated_head) || !ancestor(projectRoot, integration.integrated_head, headSha)) {
     return failure("task integration is not ancestral to the requested HEAD");

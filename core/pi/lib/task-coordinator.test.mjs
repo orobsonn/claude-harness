@@ -737,6 +737,181 @@ test("correction of an integrated dependency keeps historical receipts and block
   );
 });
 
+test("an admitted dependent can recover an upstream defect without integrating broken work", async (t) => {
+  const f = fixture(t);
+  const action = (params) => executeTaskAction(params, f.context, f.deps);
+  const commit = (id, content) => {
+    const e = f.registry().tasks[id];
+    fs.mkdirSync(path.join(e.worktree, "src"), { recursive: true });
+    fs.writeFileSync(path.join(e.worktree, `src/${id}.mjs`), content);
+    git(e.worktree, "add", `src/${id}.mjs`);
+    git(e.worktree, "commit", "-qm", `implement ${id}`);
+    return git(e.worktree, "rev-parse", "HEAD");
+  };
+  const integrate = (id, head) => action({ action: "integrate", task_id: id,
+    attempt_id: f.registry().tasks[id].attempt_id, expected_head: head });
+  await action({ action: "dispatch", task_ids: ["a"] });
+  assert.equal((await integrate("a", commit("a", "export const a=1;"))).ok, true);
+  await action({ action: "dispatch", task_ids: ["c"] });
+  const childHead = commit("c", "export const c=1;");
+  const before = f.registry();
+  const c = before.tasks.c;
+  write(`${c.grant_path}.claim`, { session_id: "same-dependent-parent" });
+  const grant = fs.readFileSync(c.grant_path, "utf8");
+  const resume = await action({ action: "resume", task_id: "a", attempt_id: before.tasks.a.attempt_id });
+  assert.equal(resume.ok, true, resume.reason);
+  const retry = await action({ action: "resume", task_id: "a", attempt_id: before.tasks.a.attempt_id });
+  assert.equal(retry.ok, true, retry.reason);
+  assert.equal((await integrate("c", childHead)).ok, false, "dependent cannot integrate during upstream correction");
+  assert.equal((await integrate("a", commit("a", "export const a=2;"))).ok, true);
+  const correctedParent = git(f.dir, "rev-parse", "HEAD");
+  assert.equal((await integrate("c", childHead)).ok, false, "old dependent result cannot integrate after correction");
+  const resumed = await action({ action: "resume", task_id: "c", attempt_id: c.attempt_id });
+  assert.equal(resumed.ok, true, resumed.reason);
+  const recovered = f.registry().tasks.c;
+  assert.equal(recovered.attempt_id, c.attempt_id);
+  assert.equal(recovered.base_sha, c.base_sha);
+  assert.equal(fs.readFileSync(c.grant_path, "utf8"), grant);
+  assert.equal(fs.readFileSync(path.join(c.worktree, "src/a.mjs"), "utf8"), "export const a=2;");
+  assert.equal(fs.readFileSync(path.join(c.worktree, "src/c.mjs"), "utf8"), "export const c=1;");
+  git(c.worktree, "merge-base", "--is-ancestor", childHead, "HEAD");
+  git(c.worktree, "merge-base", "--is-ancestor", correctedParent, "HEAD");
+  assert.equal((await integrate("c", git(c.worktree, "rev-parse", "HEAD"))).ok, true);
+  assert.deepEqual(f.registry().tasks.a.integration_history, [before.tasks.a.integration]);
+});
+
+async function pendingCorrectionFixture(t, { overlap = false } = {}) {
+  const dependent = task("c", ["a"]);
+  if (overlap) dependent.scope_paths.push("src/a.mjs");
+  const f = fixture(t, [task("a"), task("b"), dependent]);
+  const action = (params) => executeTaskAction(params, f.context, f.deps);
+  await action({ action: "dispatch", task_ids: ["a"] });
+  const a = f.registry().tasks.a;
+  fs.mkdirSync(path.join(a.worktree, "src"), { recursive: true });
+  fs.writeFileSync(path.join(a.worktree, "src/a.mjs"), "export const a=1;");
+  git(a.worktree, "add", "src/a.mjs");
+  git(a.worktree, "commit", "-qm", "implement a");
+  await action({ action: "integrate", task_id: "a", attempt_id: a.attempt_id,
+    expected_head: git(a.worktree, "rev-parse", "HEAD") });
+  await action({ action: "dispatch", task_ids: ["c"] });
+  const c = f.registry().tasks.c;
+  write(`${c.grant_path}.claim`, { session_id: "dependent-parent" });
+  fs.writeFileSync(path.join(c.worktree, "src/c.mjs"), "export const c=1;");
+  git(c.worktree, "add", "src/c.mjs");
+  git(c.worktree, "commit", "-qm", "implement c");
+  const resumeA = () => action({ action: "resume", task_id: "a", attempt_id: a.attempt_id });
+  const resumeC = () => action({ action: "resume", task_id: "c", attempt_id: c.attempt_id });
+  const correct = async () => {
+    const resumed = await resumeA();
+    assert.equal(resumed.ok, true, resumed.reason);
+    fs.writeFileSync(path.join(a.worktree, "src/a.mjs"), "export const a=2;");
+    git(a.worktree, "add", "src/a.mjs");
+    git(a.worktree, "commit", "-qm", "correct a");
+    const result = await action({ action: "integrate", task_id: "a", attempt_id: a.attempt_id,
+      expected_head: git(a.worktree, "rev-parse", "HEAD") });
+    assert.equal(result.ok, true, result.reason);
+  };
+  return { ...f, a, c, action, resumeA, resumeC, correct };
+}
+
+test("upstream correction refuses active, dirty, unclaimed or switched dependents before mutating authority", async (t) => {
+  for (const variant of ["active", "dirty", "unclaimed", "branch"]) {
+    const f = await pendingCorrectionFixture(t);
+    const before = f.registry();
+    if (variant === "active") {
+      const prior = f.deps.readProcess;
+      f.deps.readProcess = (launch) => launch.pid === f.c.launches[0].pid ? { terminal: false } : prior(launch);
+    }
+    if (variant === "dirty") fs.writeFileSync(path.join(f.c.worktree, "src/c.mjs"), "uncommitted work");
+    if (variant === "unclaimed") fs.unlinkSync(`${f.c.grant_path}.claim`);
+    if (variant === "branch") git(f.c.worktree, "checkout", "-b", "different-branch");
+    const result = await f.resumeA();
+    assert.equal(result.ok, false, variant);
+    assert.deepEqual(f.registry(), before, variant);
+  }
+});
+
+test("pending recovery cannot be made ready by status and rejects concurrent child edits", async (t) => {
+  const f = await pendingCorrectionFixture(t);
+  await f.correct();
+  const status = await f.action({ action: "status", task_id: "c" });
+  assert.equal(status.tasks[0].status, "blocked");
+  assert.match(status.tasks[0].reason, /reconciliation/);
+  git(f.c.worktree, "commit", "--allow-empty", "-qm", "concurrent child edit");
+  const launches = f.launches();
+  const result = await f.resumeC();
+  assert.equal(result.ok, false);
+  assert.match(result.reason, /HEAD changed/);
+  assert.equal(f.launches(), launches);
+});
+
+test("dependent recovery requires the corrected upstream receipt in the current parent ancestry", async (t) => {
+  for (const variant of ["old receipt", "rewound parent"]) {
+    const f = await pendingCorrectionFixture(t);
+    await f.correct();
+    if (variant === "old receipt") {
+      const registry = f.registry();
+      registry.tasks.a.integration = registry.tasks.a.integration_history[0];
+      write(taskRegistryPath(f.dir, "parent"), registry);
+    } else git(f.dir, "reset", "--hard", f.c.base_sha);
+    const before = git(f.c.worktree, "rev-parse", "HEAD");
+    const result = await f.resumeC();
+    assert.equal(result.ok, false, variant);
+    assert.match(result.reason, /corrected dependency/, variant);
+    assert.equal(git(f.c.worktree, "rev-parse", "HEAD"), before);
+  }
+});
+
+test("dependent merge conflicts preserve work and do not launch a task", async (t) => {
+  const f = await pendingCorrectionFixture(t, { overlap: true });
+  // A and C may own the same path when they are ordered by a dependency.
+  fs.writeFileSync(path.join(f.c.worktree, "src/a.mjs"), "conflicting child change");
+  git(f.c.worktree, "add", "src/a.mjs");
+  git(f.c.worktree, "commit", "-qm", "conflicting work");
+  const before = git(f.c.worktree, "rev-parse", "HEAD");
+  await f.correct();
+  const launches = f.launches();
+  const result = await f.resumeC();
+  assert.equal(result.ok, false);
+  assert.match(result.reason, /merge-tree/);
+  assert.equal(git(f.c.worktree, "rev-parse", "HEAD"), before);
+  assert.equal(git(f.c.worktree, "status", "--porcelain", "--untracked-files=no"), "");
+  assert.equal(f.launches(), launches);
+  assert.equal(f.registry().tasks.c.reconciliation_intent, undefined);
+});
+
+test("dependent reconciliation recovers failed commit hooks and a committed merge before journal completion", async (t) => {
+  const f = await pendingCorrectionFixture(t);
+  await f.correct();
+  const hooks = path.join(f.dir, ".git", "hooks");
+  const hook = path.join(hooks, "pre-merge-commit");
+  fs.writeFileSync(hook, "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+  const before = git(f.c.worktree, "rev-parse", "HEAD");
+  const launches = f.launches();
+  const failed = await f.resumeC();
+  assert.equal(failed.ok, false);
+  assert.ok(f.registry().tasks.c.reconciliation_intent);
+  assert.equal(f.launches(), launches);
+  const observed = await f.action({ action: "status", task_id: "c" });
+  assert.equal(observed.ok, true, observed.reason);
+  assert.equal(git(f.c.worktree, "rev-parse", "HEAD"), before);
+  assert.equal(f.registry().tasks.c.reconciliation_intent, undefined);
+  fs.unlinkSync(hook);
+  // Simulate process death after Git commits but before the host finishes its journal.
+  fs.writeFileSync(hook, "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+  await f.resumeC();
+  assert.ok(f.registry().tasks.c.reconciliation_intent);
+  fs.unlinkSync(hook);
+  git(f.c.worktree, "commit", "--no-edit");
+  const recovered = await f.action({ action: "status", task_id: "c" });
+  assert.equal(recovered.ok, true, recovered.reason);
+  assert.equal(f.registry().tasks.c.reconciliations.length, 1);
+  assert.equal(f.registry().tasks.c.reconciliation_required, undefined);
+  const resumed = await f.resumeC();
+  assert.equal(resumed.ok, true, resumed.reason);
+  assert.equal(f.registry().tasks.c.reconciliations.length, 1);
+});
+
 test("a failing merge hook preserves the intent and exact interrupted merge is safely aborted on observation", async (t) => {
   const f = fixture(t);
   await executeTaskAction(

@@ -139,7 +139,7 @@ export default function harnessTasks(pi: ExtensionAPI, injected: Parameters<type
     name: "harness_tasks",
     label: "Task runs",
     description:
-      "Dispatch approved tasks in isolated worktrees, observe or wait on durable handles, integrate an exact verified task HEAD, or resume the same local task session with bounded feedback. Independent tasks may run in parallel. Status and wait never start or repeat work.",
+      "Dispatch approved tasks in isolated worktrees, observe or wait on durable handles, integrate an exact verified task HEAD, or resume the same local task session with bounded feedback. Independent tasks may run in parallel. To fix an upstream defect blocking a dependent, resume and integrate the owning task once affected processes terminate, then resume the dependent to merge the correction and obtain current reviews. Status and wait never start or repeat work.",
     parameters: Type.Object(
       {
         action: Type.Union(
