@@ -72,6 +72,19 @@ read locally, reply `BLOCKED` with the missing fact and do not write a plan.
 1. Decompose into atomic, topologically ordered tasks. Group only tightly
    coupled files of the same domain/severity; split at real dependencies,
    domain boundaries, or projected diffs above roughly 400 lines.
+   Plan for execution, not the smallest task count. In each task's existing
+   description and judgments, make its observable outcome, critical decisions
+   and dependency contracts explicit. Measure weight by independent decisions
+   and responsibilities, not just file or line count. Separate responsibilities
+   that have their own implementable, testable outcome; do not leave a final
+   "wire everything" task to rediscover their contracts during implementation.
+   A task must be verifiable after its declared dependencies, without unfinished
+   future tasks. Keep changes together when splitting would break a shared
+   transaction/invariant, require artificial scaffolding, or add handoffs without
+   reducing reasoning or rework. A shared file alone does not force one giant task:
+   sequential tasks can own distinct changes there; never overlap concurrent writes.
+   For the same inspected context, use these same outcome/dependency boundaries;
+   do not target a fixed task count, risk score, test count or exhaustive matrix.
 2. Set a precise `scope_paths` write boundary from inspected literal file or
    directory paths. Task admission does not expand globs: do not use `*`, `?`,
    brace lists or brace ranges in scopes, locked test paths or fixture paths.
@@ -87,6 +100,11 @@ read locally, reply `BLOCKED` with the missing fact and do not write a plan.
    existing boundary. Do not lock a source analyzer, helper layout or exhaustive
    scenario matrix unless the approved requirement needs that specific evidence;
    a chosen test technique must not become an extra product requirement.
+   For a critical decision, state the smallest distinguishing allowed and forbidden
+   outcome. For example, a valid concurrent winner is not a failed claim, exact
+   ownership is not trimmed equality, and atomic exclusion is not a prior read.
+   Resolve such distinctions from the spec and code before assigning implementation;
+   do not replace them with generic "fail closed" or leave the executor to re-plan.
    A locked test must pass with only its
    owning task applied. It must assert a concrete returned value, response,
    persisted state, or surfaced error—not merely status, existence, truthiness,
