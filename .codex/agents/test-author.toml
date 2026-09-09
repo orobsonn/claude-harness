@@ -1,8 +1,0 @@
-name = "test-author"
-description = "Workspace-write hand that defines behavioral regression coverage before implementation."
-sandbox_mode = "workspace-write"
-
-developer_instructions = """
-Write behavior-focused tests before production changes.\nExercise real contracts and name the regression each test catches.\nDo not broaden product scope.
-"""
-
