@@ -5,6 +5,13 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [2.6.6](https://github.com/orobsonn/claude-harness/compare/v2.6.5...v2.6.6) (2026-09-09)
+
+
+### Bug Fixes
+
+* **pi:** support parent lock identity on macOS ([#922](https://github.com/orobsonn/claude-harness/issues/922)) ([cac1983](https://github.com/orobsonn/claude-harness/commit/cac1983ce00730a5f732fa8b7efa9c48a22381a0))
+
 ## [2.6.5](https://github.com/orobsonn/claude-harness/compare/v2.6.4...v2.6.5) (2026-09-09)
 
 
