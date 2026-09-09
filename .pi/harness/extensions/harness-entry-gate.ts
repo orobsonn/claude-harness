@@ -1,4 +1,3 @@
-import { execFileSync } from "node:child_process";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import {
@@ -23,12 +22,16 @@ import { readPiSpecDraft } from "../lib/spec-approval.mjs";
 import { removePiChildIdentity, writePiChildIdentity } from "../lib/pi-child-identity.mjs";
 import { bindPiChildSession, removePiDispatchRecord } from "../lib/pi-state-records.mjs";
 import { parseTaskDispatchIdentity } from "../vendor/opencode/lib/task-dispatch-identity.mjs";
-import { isDiscussionRole } from "../lib/roles.mjs";
+import { isDiscussionRole, isRuntimeRole } from "../lib/roles.mjs";
+import { classifyPiReviewDispatch } from "../lib/pi-review-concurrency.mjs";
+import {
+  capturePiReviewInput,
+  parsePiReviewCompletion,
+  recordPiReviewReceipt,
+} from "../lib/pi-review-evidence.mjs";
+import { capturePlanReviewInput, parsePlanReviewCompletion } from "../lib/task-run.mjs";
 
-/** Marcador de escopo do olho que revisa o diff agregado imediatamente antes do shipper. */
-function isFinalReviewDispatch(prompt: unknown) {
-  return typeof prompt === "string" && prompt.startsWith("[HARNESS_FINAL_REVIEW]");
-}
+const SUBAGENTS_SERVICE_KEY = Symbol.for("@gotgenes/pi-subagents:service");
 
 /**
  * @description Adaptador fino do entry-gate na lane Pi. Só traduz eventos do Pi para a lógica de
@@ -67,10 +70,14 @@ export default function harnessEntryGate(pi: ExtensionAPI) {
   const pendingAdvisory = new Map<string, string>();
   /** sessão filha ligada a cada dispatch em voo, por toolCallId (para limpar no fim). */
   const boundChildren = new Map<string, { parentSessionId: string; childSessionId: string }>();
-  /** SHA observado pelo host antes de cada olho que precisa provar o diff que revisou. */
-  const reviewHeads = new Map<string, string>();
+  /** Snapshot observado pelo host antes de cada task/final review reconhecida. */
+  const reviewInputs = new Map<string, { phase: "task" | "final"; taskId?: string; snapshot?: any }>();
+  /** Hashes host-owned observados antes de cada plan-reviewer. */
+  const planReviewInputs = new Map<string, any>();
   /** True quando ESTA instância roda numa sessão filha: só o pai liga filhas. */
   let ownSessionIsChild = false;
+  /** Sessão exata capturada no session_start; o barramento é compartilhado entre pai e filhas. */
+  let ownSessionId = "";
 
   /** Só o resultado estruturado da tool nativa, não a prosa da filha, prova término saudável. */
   const successfulForegroundOutcome = (result: any, isError: unknown) => {
@@ -85,8 +92,99 @@ export default function harnessEntryGate(pi: ExtensionAPI) {
     if (typeof ctx?.cwd === "string" && ctx.cwd.length > 0) projectRoot = ctx.cwd;
     try {
       ownSessionIsChild = isChildSession(ctx);
+      ownSessionId = piSessionId(ctx) ?? "";
     } catch {
       ownSessionIsChild = true;
+      ownSessionId = "";
+    }
+  });
+
+  const bindExactChild = (data: any) => {
+    const callId = typeof data?.toolCallId === "string" ? data.toolCallId : "";
+    const parentSessionId = typeof data?.parentSessionId === "string" ? data.parentSessionId : "";
+    const childSessionId = typeof data?.childSessionId === "string" ? data.childSessionId : "";
+    const requestedRole = typeof data?.subagentType === "string" ? data.subagentType : "";
+    const dispatched = callId ? pendingArgs.get(callId) : undefined;
+    const role = piSubagentArgs(dispatched).subagent_type;
+
+    if (!callId || !childSessionId || parentSessionId !== ownSessionId || !dispatched ||
+        role !== requestedRole || !isRuntimeRole(role)) {
+      data.result = { ok: false, reason: "exact pending dispatch call, role, parent, and child required" };
+      return;
+    }
+    if (!isDiscussionRole(role)) {
+      const decision = decidePiDispatchGate({
+        projectRoot,
+        sessionId: ownSessionId,
+        subagentType: role,
+        toolArgs: dispatched,
+        toolCallId: callId,
+      });
+      if (decision.decision === "deny") {
+        data.result = { ok: false, reason: decision.reason };
+        return;
+      }
+    }
+    const reviewInput = reviewInputs.get(callId);
+    if (reviewInput) {
+      const loaded: any = loadPiGateStateFromDisk(projectRoot, { sessionId: ownSessionId });
+      const featureId = loaded?.ok === true && typeof loaded.state?.feature_id === "string" ? loaded.state.feature_id : "";
+      const captured = capturePiReviewInput({
+        projectRoot,
+        sessionId: ownSessionId,
+        featureId,
+        phase: reviewInput.phase,
+        ...(reviewInput.phase === "task" ? { taskId: reviewInput.taskId } : {}),
+      });
+      if (!reviewInput.snapshot || !captured.ok || captured.snapshot.input_digest !== reviewInput.snapshot.input_digest) {
+        data.result = { ok: false, reason: "review input changed before child admission" };
+        return;
+      }
+    }
+    const planReviewInput = planReviewInputs.get(callId);
+    if (planReviewInput) {
+      const captured = capturePlanReviewInput({
+        projectRoot,
+        sessionId: ownSessionId,
+        featureId: planReviewInput.feature_id,
+      });
+      if (!captured.ok || JSON.stringify(captured.snapshot) !== JSON.stringify(planReviewInput)) {
+        data.result = { ok: false, reason: "plan/spec changed before plan-reviewer child admission" };
+        return;
+      }
+    }
+    const written = writePiChildIdentity(projectRoot, { parentSessionId, childSessionId, role, callId });
+    if (written.ok !== true) {
+      data.result = { ok: false, reason: written.reason };
+      return;
+    }
+    if (isWritingHandRole(role)) {
+      const hand = bindPiChildSession(projectRoot, { parentSessionId, childSessionId, role, callId });
+      if (hand.ok !== true) {
+        removePiChildIdentity(projectRoot, { parentSessionId, childSessionId });
+        data.result = { ok: false, reason: hand.reason };
+        return;
+      }
+    }
+    boundChildren.set(callId, { parentSessionId, childSessionId });
+    data.result = { ok: true };
+  };
+
+  pi.events?.on?.("harness:child-bind", (data: any) => {
+    if (!data || typeof data !== "object" || Array.isArray(data)) return;
+    try {
+      if (ownSessionIsChild) return;
+      const callId = typeof data?.toolCallId === "string" ? data.toolCallId : "";
+      const parentSessionId = typeof data?.parentSessionId === "string" ? data.parentSessionId : "";
+      if (parentSessionId !== ownSessionId) {
+        if (callId && pendingArgs.has(callId) && data.result === undefined) {
+          data.result = { ok: false, reason: "exact parent session required" };
+        }
+        return;
+      }
+      bindExactChild(data);
+    } catch (error) {
+      data.result = { ok: false, reason: error instanceof Error ? error.message : "child binding failed" };
     }
   });
 
@@ -156,11 +254,28 @@ export default function harnessEntryGate(pi: ExtensionAPI) {
       toolCallId: event?.toolCallId,
     });
     if (decision.decision === "deny") return { block: true, reason: decision.reason };
-    const reviewsCurrentHead =
-      (args.subagent_type === "harness-adversary" && parseTaskDispatchIdentity(args.prompt).ok) ||
-      ((args.subagent_type === "harness-adversary" || args.subagent_type === "harness-compliance") && isFinalReviewDispatch(args.prompt));
-    if (reviewsCurrentHead && typeof event?.toolCallId === "string") {
-      try { reviewHeads.set(event.toolCallId, execFileSync("git", ["rev-parse", "HEAD"], { cwd: projectRoot, encoding: "utf8" }).trim()); } catch { /* receipt stays absent */ }
+    const review = classifyPiReviewDispatch(args.subagent_type, args.prompt);
+    if (review && typeof event?.toolCallId === "string") {
+      const loaded: any = loadPiGateStateFromDisk(projectRoot, { sessionId });
+      const featureId = loaded?.ok === true && typeof loaded.state?.feature_id === "string" ? loaded.state.feature_id : "";
+      const captured = capturePiReviewInput({
+        projectRoot,
+        sessionId,
+        featureId,
+        phase: review.phase,
+        ...(review.phase === "task" ? { taskId: review.taskId } : {}),
+      });
+      reviewInputs.set(event.toolCallId, { ...review, ...(captured.ok ? { snapshot: captured.snapshot } : {}) });
+    }
+    if (args.subagent_type === "harness-plan-reviewer" && typeof event?.toolCallId === "string") {
+      const loaded: any = loadPiGateStateFromDisk(projectRoot, { sessionId });
+      const featureId = loaded?.ok === true && typeof loaded.state?.feature_id === "string" ? loaded.state.feature_id : "";
+      const captured = capturePlanReviewInput({ projectRoot, sessionId, featureId });
+      if (captured.ok) {
+        planReviewInputs.set(event.toolCallId, captured.snapshot);
+        const statePath = piGateStatePath({ projectRoot, sessionId });
+        if (statePath.ok) mergeGateState(statePath.path, { plan_review_evidence: null });
+      }
     }
   });
 
@@ -184,8 +299,10 @@ export default function harnessEntryGate(pi: ExtensionAPI) {
     try {
       const callId = typeof event?.toolCallId === "string" ? event.toolCallId : "";
       if (callId) pendingAdvisory.delete(callId);
-      const reviewedHead = callId ? reviewHeads.get(callId) : undefined;
-      if (callId) reviewHeads.delete(callId);
+      const reviewInput = callId ? reviewInputs.get(callId) : undefined;
+      if (callId) reviewInputs.delete(callId);
+      const planReviewInput = callId ? planReviewInputs.get(callId) : undefined;
+      if (callId) planReviewInputs.delete(callId);
       const dispatched = callId ? pendingArgs.get(callId) : undefined;
       if (callId) pendingArgs.delete(callId);
       const bound = callId ? boundChildren.get(callId) : undefined;
@@ -193,24 +310,65 @@ export default function harnessEntryGate(pi: ExtensionAPI) {
       if (!isPiDispatchTool(event?.toolName)) return;
       const args = piSubagentArgs(dispatched);
       const sessionId = piSessionId(ctx);
-      if ((args.subagent_type === "harness-adversary" || args.subagent_type === "harness-compliance") && bound && sessionId && callId) {
+      if (bound && sessionId && callId) {
         const outcome = successfulForegroundOutcome(event?.result, event?.isError);
         const loaded: any = loadPiGateStateFromDisk(projectRoot, { sessionId });
         const featureId = loaded?.ok === true && typeof loaded.state?.feature_id === "string" ? loaded.state.feature_id : "";
         const statePath = piGateStatePath({ projectRoot, sessionId });
-        if (outcome && featureId && statePath.ok && isFinalReviewDispatch(args.prompt) && reviewedHead) {
-          const key = args.subagent_type === "harness-adversary" ? "adversary" : "compliance";
-          const prior = loaded?.state?.final_review_evidence;
-          mergeGateState(statePath.path, {
-            final_review_evidence: {
-              ...(prior && typeof prior === "object" && !Array.isArray(prior) ? prior : {}),
-              [key]: {
-                written_by: "host-subagent-completion", parent_session_id: sessionId, feature_id: featureId,
-                role: args.subagent_type, dispatch_call_id: callId, child_session_id: bound.childSessionId,
-                agent_id: outcome.agentId, status: outcome.status, reviewed_head_sha: reviewedHead,
+        if (planReviewInput && args.subagent_type === "harness-plan-reviewer") {
+          const capturedEnd = capturePlanReviewInput({ projectRoot, sessionId, featureId });
+          const service: any = (globalThis as any)[SUBAGENTS_SERVICE_KEY];
+          const nativeRecord = outcome && typeof service?.getRecord === "function" ? service.getRecord(outcome.agentId) : undefined;
+          const parsed = capturedEnd.ok ? parsePlanReviewCompletion({
+            result: event?.result,
+            isError: event?.isError,
+            nativeRecord,
+            snapshotStart: planReviewInput,
+            snapshotEnd: capturedEnd.snapshot,
+          }) : { ok: false };
+          if (outcome && parsed.ok && statePath.ok) {
+            mergeGateState(statePath.path, {
+              plan_review_evidence: {
+                written_by: "host-subagent-completion",
+                parent_session_id: sessionId,
+                feature_id: featureId,
+                role: "harness-plan-reviewer",
+                dispatch_call_id: callId,
+                child_session_id: bound.childSessionId,
+                agent_id: parsed.agentId,
+                status: "completed",
+                plan_sha256: planReviewInput.plan_sha256,
+                spec_sha256: planReviewInput.spec_sha256,
+                verdict: parsed.verdict,
               },
-            },
+            });
+          }
+        } else if (reviewInput) {
+          const capturedEnd = capturePiReviewInput({
+            projectRoot,
+            sessionId,
+            featureId,
+            phase: reviewInput.phase,
+            ...(reviewInput.phase === "task" ? { taskId: reviewInput.taskId } : {}),
           });
+          const service: any = (globalThis as any)[SUBAGENTS_SERVICE_KEY];
+          const nativeRecord = outcome && typeof service?.getRecord === "function" ? service.getRecord(outcome.agentId) : undefined;
+          const parsed = reviewInput.snapshot && capturedEnd.ok ? parsePiReviewCompletion({
+            role: args.subagent_type,
+            result: event?.result,
+            isError: event?.isError,
+            nativeRecord,
+            snapshotStart: reviewInput.snapshot,
+            snapshotEnd: capturedEnd.snapshot,
+          }) : { ok: false };
+          if (parsed.ok) {
+            recordPiReviewReceipt({
+              projectRoot,
+              sessionId,
+              completion: parsed.completion,
+              binding: { dispatchCallId: callId, childSessionId: bound.childSessionId, agentId: outcome?.agentId },
+            });
+          }
         } else if (outcome && featureId && statePath.ok && args.subagent_type === "harness-adversary") {
           const draft: any = readPiSpecDraft({ projectRoot, sessionId, featureId });
           if (draft?.ok && typeof draft.sha256 === "string") {
@@ -222,22 +380,8 @@ export default function harnessEntryGate(pi: ExtensionAPI) {
               },
             });
           } else {
-            const task = parseTaskDispatchIdentity(args.prompt);
-            if (task.ok && reviewedHead) {
-              const key = `${featureId}/${task.taskId}`;
-              const prior = loaded?.state?.task_adversary_evidence;
-              mergeGateState(statePath.path, {
-                task_adversary_evidence: {
-                  ...(prior && typeof prior === "object" && !Array.isArray(prior) ? prior : {}),
-                  [key]: {
-                    written_by: "host-subagent-completion", parent_session_id: sessionId, feature_id: featureId,
-                    task_id: task.taskId, role: "harness-adversary", dispatch_call_id: callId,
-                    child_session_id: bound.childSessionId, agent_id: outcome.agentId, status: outcome.status,
-                    reviewed_head_sha: reviewedHead,
-                  },
-                },
-              });
-            }
+            // Task/final reviews are classified before this fallback. No other adversary phase
+            // may mint a task or final receipt from positive prose.
           }
         }
       }

@@ -28,6 +28,12 @@ Plans are for LIGHT and FULL delivery only. If the request is a QUICK hotfix,
 do not generate a plan; respond in pt-br that it should be implemented directly
 without a plan, then stop.
 
+The parent brief must state the stable ceremony mode returned by `classify` as
+literal `LIGHT` or `FULL`. Copy that value to the plan as lowercase `light` or
+`full`. Never infer or escalate the ceremony mode from severity, complexity,
+risk, task count, or the contents of the sealed spec. If the stable mode is
+absent or has any other value, reply `BLOCKED` and do not write the plan.
+
 Before decomposing, read the sealed design/spec completely; inspect the real
 implementation entry points, call sites, existing tests, root AGENTS.md or
 CLAUDE.md guidance, and MEMORY.md when present. Preserve existing user changes.
@@ -40,6 +46,11 @@ outcome for `demo.scenarios_from_refs`. If a criterion is genuinely ambiguous
 after reading the sealed spec and code, make the smallest defensible, testable
 decision, record it in `resolved_judgments`, and list that key in
 `resolved_judgments_model_resolved`.
+
+When a planned change alters a signature, call, or emitted literal, use targeted
+`grep` on relevant code and tests for its uses/imports/old literal. Inspect existing
+tests that depend on that contract and put the minimum needed update in its owning task
+before freeze; do not turn this into a repository-wide audit.
 
 ## Revision mode
 
@@ -61,8 +72,10 @@ read locally, reply `BLOCKED` with the missing fact and do not write a plan.
 1. Decompose into atomic, topologically ordered tasks. Group only tightly
    coupled files of the same domain/severity; split at real dependencies,
    domain boundaries, or projected diffs above roughly 400 lines.
-2. Set a precise `scope_paths` write boundary from inspected paths. Do not use
-   guessed paths or broad globs when an exact file/directory is known.
+2. Set a precise `scope_paths` write boundary from inspected literal file or
+   directory paths. Task admission does not expand globs: do not use `*`, `?`,
+   brace lists or brace ranges in scopes, locked test paths or fixture paths.
+   Names such as `[slug]` remain literal paths. Do not guess paths.
 3. Give every task a blast-radius `severity`: `low` for mechanical
    wiring/types, `medium` for ordinary business logic, `high` for auth,
    payment, data integrity, concurrency, untrusted input, or secrets.
@@ -70,19 +83,41 @@ read locally, reply `BLOCKED` with the missing fact and do not write a plan.
    or `max`. Complexity selects the hand tier; severity selects review posture.
    Split any x-high work instead of shipping it as a task.
 5. Map every acceptance criterion to `criterion_refs` and derive at least one
-   `locked_tests` observable from each. A locked test must pass with only its
+   `locked_tests` observable from each. Prefer the smallest behavioral proof at an
+   existing boundary. Do not lock a source analyzer, helper layout or exhaustive
+   scenario matrix unless the approved requirement needs that specific evidence;
+   a chosen test technique must not become an extra product requirement.
+   A locked test must pass with only its
    owning task applied. It must assert a concrete returned value, response,
    persisted state, or surfaced error—not merely status, existence, truthiness,
    or absence of a throw. A genuine documentation task required by the sealed spec
    may use canonical `no_tests: true` and an empty `locked_tests` array.
+   Validate that its RED can be collected on the exact base plus already integrated
+   dependencies; import or collection failure is not the expected RED. The
+   test-author never creates production scaffolds or stubs to fix imports: express
+   the RED through an existing importable entry point and keep any genuinely new
+   module with its routed behavior in one task. A new data export through an existing
+   module remains valid and does not need to pre-exist the task.
+   `fixture_paths` names test inputs, test helpers, and oracle artifacts that become
+   immutable with the test freeze. Never put the SUT or another production file there
+   when executor or sniper must modify it. A fixture may also fall under a broad
+   `scope_paths` directory; that overlap alone is not a defect. The contradiction is
+   requiring an implementation edit to a file that this list freezes.
 6. Set `adversarial.enabled` only for auth, payment, data integrity,
    concurrency, external input reaching storage/execution, or secrets. Its
    `focus` must then be non-empty. Use `{ "enabled": false, "focus": [] }`
-   for ordinary tasks.
+   for ordinary tasks. In the Pi task pipeline this flag adds task-specific
+   risk focus; it never disables the mandatory post-implementation adversary
+   and re-gate. Do not enable it on a low-risk task merely to represent that
+   baseline review.
 7. Copy the exact `model_strategy` snapshot below. It is the vendored Pi
    routing contract for this runtime, not a missing product requirement; never
    ask the operator for it or invent routes. Keep `final_review.compliance` and
    `final_review.adversary` true.
+   Set `final_review.security` to true when the aggregate feature touches auth,
+   secrets, external input, dependencies, service entrypoints, webhooks, or sensitive
+   paths. This flag is optional and defaults to false; when true, the final security
+   review is required evidence before delivery, including LIGHT work.
 
 ```json
 {
@@ -93,7 +128,7 @@ read locally, reply `BLOCKED` with the missing fact and do not write a plan.
   },
   "planner": "openai-codex/gpt-5.6-sol",
   "plan-reviewer": "openai-codex/gpt-6-astra",
-  "compliance": "openai-codex/gpt-5.6-luna",
+  "compliance": "openai-codex/gpt-5.6-terra",
   "adversary": "openai-codex/gpt-5.6-sol",
   "security": "openai-codex/gpt-5.6-sol",
   "harvester": "openai-codex/gpt-5.6-luna",
@@ -109,7 +144,7 @@ replaced, not emitted literally):
 ```json
 {
   "feature_id": "<classified feature id, copied verbatim>",
-  "mode": "light | full",
+  "mode": "<stable ceremony mode copied lowercase: light | full>",
   "model_strategy": {
     "hand_tiers": {
       "low": "<frozen model>",

@@ -30,9 +30,7 @@ test("planner Pi usa a spec selada e o routing vendored sem exigir artefatos ext
   assert.match(prompt, /"medium": "openai-codex\/gpt-5\.6-terra"/);
   assert.match(prompt, /"planner": "openai-codex\/gpt-5\.6-sol"/);
   assert.match(prompt, /"plan-reviewer": "openai-codex\/gpt-6-astra"/);
-  assert.match(prompt, /"compliance": "openai-codex\/gpt-5\.6-luna"/);
   assert.doesNotMatch(prompt, /"plan-reviewer": "openai-codex\/gpt-5\.6-sol"/);
-  assert.doesNotMatch(prompt, /"compliance": "openai-codex\/gpt-5\.6-terra"/);
 });
 
 test("planner Pi recebe contexto de revisão sem depender de resposta posterior do pai", () => {
@@ -44,9 +42,26 @@ test("planner Pi recebe contexto de revisão sem depender de resposta posterior 
   assert.match(prompt, /do\s+not\s+request or use `resume`/i);
 });
 
+test("planner Pi copia o modo estável da cerimônia sem reclassificar por risco", () => {
+  const prompt = readFileSync(plannerPath, "utf8");
+
+  assert.match(prompt, /parent brief must state the stable ceremony mode.*`LIGHT` or `FULL`/is);
+  assert.match(prompt, /Copy that value.*lowercase `light` or\s+`full`/is);
+  assert.match(prompt, /Never infer or escalate.*severity, complexity,\s+risk/is);
+  assert.match(prompt, /mode is\s+absent.*reply `BLOCKED`.*do not write the plan/is);
+  assert.match(prompt, /"mode": "<stable ceremony mode copied lowercase: light \| full>"/);
+});
+
 test("planner has no harvest mode because finalization preserves the approved plan", () => {
   const prompt = readFileSync(plannerPath, "utf8");
 
   assert.doesNotMatch(prompt, /HARNESS_HARVEST_CONTEXT/);
   assert.doesNotMatch(prompt, /harvest documentation task/i);
+});
+
+test("planner declara security final para as superfícies de segurança aplicáveis", () => {
+  const prompt = readFileSync(plannerPath, "utf8");
+  assert.match(prompt, /final_review.security.*true/is);
+  assert.match(prompt, /auth.*secrets.*external.*dependenc/is);
+  assert.match(prompt, /optional.*false/is);
 });

@@ -17,7 +17,7 @@ const PlanParams = Type.Object({
   planId: Type.Optional(Type.String({ description: "Plan id returned by the tracker; required for update or validate." })),
   revision: Type.Optional(Type.Number({ description: "Exact current revision returned by the tracker; required for update or validate." })),
   taskId: Type.Optional(Type.String({ description: "Immutable task id returned by the tracker; required for update or validate." })),
-  status: Type.Optional(StringEnum(["pending", "in_progress", "completed", "blocked"] as const, { description: "New task status; required for update." })),
+  status: Type.Optional(StringEnum(["pending", "in_progress", "completed", "blocked"] as const, { description: "New informational task status; required for update. Multiple tasks may be in_progress." })),
   validationStatus: Type.Optional(StringEnum(["pending", "running", "passed", "failed"] as const, { description: "Validation status; required for validate." })),
   note: Type.Optional(Type.String({ description: "Short blocking or validation-failure reason; required when blocked or failed." })),
 });
@@ -46,13 +46,15 @@ export default function harnessPlanTracker(pi: ExtensionAPI) {
   pi.registerTool({
     name: "harness_plan",
     label: "Harness plan",
-    description: "Informational plan tracker for a LIGHT or FULL harness run. Record the plan after plan-reviewer approval for its exact current version and within the operator's delivery authorization, then update implementation and, when declared, validation for each task. This is not a scheduler, permission gate, or proof that repository work is complete.",
-    promptSnippet: "Track the active LIGHT or FULL plan with harness_plan after plan-reviewer approval; update implementation and applicable validation lanes as the pipeline advances.",
+    description: "Informational plan tracker for a LIGHT or FULL harness run. Record the approved plan, then reflect implementation and validation progress for each task, including parallel task runs and resumed completed tasks. harness_tasks remains the scheduler and source of task-run evidence.",
+    promptSnippet: "Reflect the approved LIGHT or FULL plan with harness_plan; keep every parallel implementation in_progress and reopen a completed task when harness_tasks resumes it.",
     promptGuidelines: [
       "Call action=record only after plan-reviewer approval for the exact current plan and within the operator's delivery authorization; the tracker records agent-reported progress and does not itself prove approval.",
       "For every update, use the exact planId and revision returned by the previous tracker result.",
+      "Do not serialize the display: independent tasks dispatched together may all remain in_progress. Updating one task must not reset a sibling.",
+      "When harness_tasks resumes a completed task, update it back to in_progress. Its validation lane returns to pending and must pass again after the correction.",
       "Declare validation: true for a task that needs its own validation lane. After implementation is completed, call action=validate when that validation starts, passes, or fails.",
-      "Only the parent session tracks the plan; do not ask subagents to call this tool.",
+      "Only the global parent tracks the plan. This tool is display state, not dispatch, dependency, integration, approval, or completion evidence.",
     ],
     parameters: PlanParams,
     executionMode: "sequential",

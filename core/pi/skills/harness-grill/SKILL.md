@@ -107,8 +107,10 @@ Every mockup must satisfy all of these constraints:
 
 Open/review locally with `npx -y lavish-axi docs/prd/<slug>-mockup.html`, then use
 foreground `poll` with `--agent-reply`. Apply feedback to the same artifact and
-poll again until ended. A poll timeout means poll again, not background it or
-restart the interview. Never `share` or `setup hooks`. If Lavish cannot start,
+poll again until ended. A timeout before feedback arrives means poll again, not
+background it or restart the interview. `browser_disconnected` pauses the loop:
+ask whether to resume or end. Final feedback with `session_ended: true` also stops
+polling; apply it and report in chat. Never `share` or `setup hooks`. If Lavish cannot start,
 offer the static file (`open`/`xdg-open` where available); failure does not block
 the interview. The reference gives the complete command loop and fallback.
 

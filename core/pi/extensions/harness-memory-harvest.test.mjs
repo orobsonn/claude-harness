@@ -20,6 +20,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 import harnessMemory from "./harness-memory.ts";
+import { capturePiReviewInput } from "../lib/pi-review-evidence.mjs";
 
 const SESSION = "ses-harvest-parent";
 const FEATURE = "pi-memory-harvest";
@@ -267,6 +268,9 @@ async function assertBlocked(decision) {
 }
 
 function seedFinalReviewState(root, reviewedHead = head(root)) {
+  const captured = capturePiReviewInput({ projectRoot: root, sessionId: SESSION, featureId: FEATURE, phase: "final" });
+  assert.equal(captured.ok, true, captured.reason);
+  const report = { issues: [] };
   const receipt = (role, suffix) => ({
     written_by: "host-subagent-completion",
     parent_session_id: SESSION,
@@ -277,6 +281,10 @@ function seedFinalReviewState(root, reviewedHead = head(root)) {
     agent_id: `agent-${suffix}`,
     status: "completed",
     reviewed_head_sha: reviewedHead,
+    accepted: true,
+    input_digest: captured.snapshot.input_digest,
+    report,
+    report_digest: createHash("sha256").update(JSON.stringify(report)).digest("hex"),
   });
   writeFileSync(
     join(root, ".pi", "harness", "state", SESSION, "gate-state.json"),

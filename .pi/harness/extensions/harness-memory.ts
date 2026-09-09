@@ -2,7 +2,7 @@ import { StringEnum, Type } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { isChildSession, piSessionId } from "../lib/pi-adapter-map.mjs";
 import { piResultText } from "../lib/obs.mjs";
-import { beginHarvest, checkHarvestReady, checkMemoryShipperReady, completeHarvest, completeMemoryShipment, finalizeMemory, invalidateMemoryAttempt, memoryBrief, memoryPaths, readMemory, updateSharedContext } from "../lib/memory-cycle.mjs";
+import { applyHarvest, beginHarvest, checkHarvestReady, checkMemoryShipperReady, completeHarvest, completeMemoryShipment, finalizationStarted, finalizeMemory, invalidateMemoryAttempt, memoryBrief, memoryPaths, readMemory, updateSharedContext } from "../lib/memory-cycle.mjs";
 
 /** Parent-only lifecycle. Native events bind harvest to the actual completed call. */
 export default function harnessMemory(pi: ExtensionAPI) {
@@ -26,10 +26,10 @@ export default function harnessMemory(pi: ExtensionAPI) {
       const sessionId = identity(ctx);
       // Pi supplies a deep copy here. This message is provider input only, never
       // appended to the session JSONL and never promoted into system instructions.
-      return { messages: [...event.messages.filter((message: any) => !(message.role === "custom" && message.customType === "harness-memory")), {
+      return { messages: [{
         role: "custom" as const, customType: "harness-memory", display: false, timestamp: 0,
         content: memoryBrief(ctx.cwd, sessionId),
-      }] };
+      }, ...event.messages.filter((message: any) => !(message.role === "custom" && message.customType === "harness-memory"))] };
     } catch { return; }
   });
   pi.on("tool_call", (event: any, ctx) => {
@@ -38,9 +38,11 @@ export default function harnessMemory(pi: ExtensionAPI) {
     const isFinal = (event.toolName === "subagent" && ["harness-adversary", "harness-compliance"].includes(input.subagent_type) && /^\[HARNESS_FINAL_REVIEW\]/.test(input.prompt ?? "")) || (event.toolName === "mark" && input.action === "final-review");
     const isHarvest = event.toolName === "subagent" && input.subagent_type === "harness-harvester";
     const isShipper = event.toolName === "subagent" && input.subagent_type === "harness-shipper";
-    if (!isFinal && !isHarvest && !isShipper) return;
+    const isLatePlanner = event.toolName === "subagent" && ["harness-planner", "harness-plan-reviewer"].includes(input.subagent_type);
+    if (!isFinal && !isHarvest && !isShipper && !isLatePlanner) return;
     try {
       const sessionId = identity(ctx);
+      if (isLatePlanner && finalizationStarted(ctx.cwd, sessionId)) throw new Error("Finalization cannot dispatch planner or plan-reviewer; reuse existing task IDs for reconciliation, or start a separate delivery for new scope");
       if (isFinal) checkHarvestReady(ctx.cwd, sessionId);
       if (isShipper) checkMemoryShipperReady(ctx.cwd, sessionId);
       if (isHarvest) {
@@ -79,16 +81,16 @@ export default function harnessMemory(pi: ExtensionAPI) {
   });
   pi.registerTool({
     name: "harness_memory", label: "Harness memory",
-    description: "Read project memory and this run's curated shared_context, update that ephemeral document, or finalize a fully reviewed delivery and remove its ephemeral context. Never writes durable project files.",
-    promptSnippet: "Keep useful run discoveries with harness_memory update; finalize after delivery to remove only this run's context.",
+    description: "Read project memory and this run's curated shared_context, update that ephemeral document, apply a validated harvest proposal, or finalize delivery and remove ephemeral context.",
+    promptSnippet: "Keep useful run discoveries with harness_memory update; apply a validated harvest proposal; finalize after delivery.",
     promptGuidelines: [
       "Keep shared_context under 8192 UTF-8 bytes: concise facts, assumptions and decisions with evidence and revalidation conditions. No secrets, transcripts or gate approvals.",
       "The parent receives the current shared_context automatically as ephemeral custom context. Do not reread unchanged memory; use read only for structured hashes, harvest receipts or explicit diagnostics.",
       "Use only this session's context. Reviewers never inherit the diary; relay relevant facts to hands selectively.",
-      "After functional work is committed, dispatch [HARNESS_HARVEST]. Persist real deltas via a reviewed canonical documentation task before final review. Zero delta needs no writing task.",
+      "After functional work is committed, dispatch [HARNESS_HARVEST], then use apply for a non-empty validated proposal and commit only its exact durable paths. Never create a plan task for harvest.",
       "Call finalize only when delivery is complete. Quit, abort or a pause is not completion; preserve the document for exact-session resume.",
     ],
-    parameters: Type.Object({ action: StringEnum(["read", "update", "finalize"] as const), content: Type.Optional(Type.String()) }),
+    parameters: Type.Object({ action: StringEnum(["read", "update", "apply", "finalize"] as const), content: Type.Optional(Type.String()) }),
     executionMode: "sequential",
     async execute(_callId, params, _signal, _update, ctx) {
       try {
@@ -96,6 +98,7 @@ export default function harnessMemory(pi: ExtensionAPI) {
         let result;
         if (params.action === "read") result = readMemory(ctx.cwd, sessionId);
         else if (params.action === "update") result = updateSharedContext(ctx.cwd, sessionId, params.content);
+        else if (params.action === "apply") result = applyHarvest(ctx.cwd, sessionId);
         else if (params.action === "finalize") result = finalizeMemory(ctx.cwd, sessionId);
         else throw new Error("Unknown memory action");
         return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }], details: result };

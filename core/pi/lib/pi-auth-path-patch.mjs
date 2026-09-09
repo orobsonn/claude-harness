@@ -163,6 +163,71 @@ function patchFile(path, spec) {
   renameSync(temporary, path);
 }
 
+
+// Pinned internal PromptOptions.preflightResult seam, not a stable public SDK API.
+const PI_REVIEW_PREFLIGHT_SHA = "e213e4094a3f176b2491e0470ac8ecd88aeab0030d35aabd9ba289ba7b74b923";
+const PI_SUBAGENTS_LIFECYCLE_MARKER = "CLAUDE_HARNESS_SUBAGENTS_LIFECYCLE_PATCH_v1";
+const SUBAGENTS_LIFECYCLE_PATCHES = [
+  {
+    rel: "src/lifecycle/create-subagent-session.ts",
+    marker: PI_SUBAGENTS_LIFECYCLE_MARKER,
+    sha256: "9892d8ccd699b54a72784921997da5d88bc965dd831d29287f86f7a250bc888f",
+    patchedSha256: "8b179272f3a2342191203a2465389f3cb7c7aa8808ec9d988d519c2779ddd0b0",
+    transform(content) {
+      let next = replaceExactly(content,
+        "  deps.lifecycle.sessionCreated({ sessionId, parentSessionId });\n\n  try {\n",
+        "  try {\n    deps.lifecycle.sessionCreated({ sessionId, parentSessionId });\n\n");
+      next = replaceExactly(next,
+        "  // Every child session_start handler has now run, so this is the first — and\n  // only — moment a parent can observe what the child's extensions installed.\n  // Deliberately outside the try above: a child whose binding threw never ran.\n  deps.lifecycle.bound({ sessionId, parentSessionId });\n\n", "");
+      next = replaceExactly(next,
+        "    await session.bindExtensions({});",
+        `    await session.bindExtensions({});
+
+    // Attest the loader's actual resources while still inside the disposal boundary.
+    // The parent validates this synchronously before the child's first prompt.
+    const extensionResources = (loader as any).getExtensions();
+    const skillResources = (loader as any).getSkills();
+    deps.lifecycle.bound({
+      sessionId,
+      parentSessionId,
+      extensions: {
+        resolvedPaths: extensionResources.extensions.map((extension: any) => extension.resolvedPath),
+        errors: extensionResources.errors,
+      },
+      skills: {
+        filePaths: skillResources.skills.map((skill: any) => skill.filePath),
+        diagnostics: skillResources.diagnostics,
+      },
+    } as any);`);
+      return `// ${PI_SUBAGENTS_LIFECYCLE_MARKER}\n${next}`;
+    },
+  },
+  {
+    rel: "src/lifecycle/subagent-session.ts",
+    marker: PI_SUBAGENTS_LIFECYCLE_MARKER,
+    sha256: "4811b4889987cc4ae7c443c03cd5917abffddbe8aca8655d10012a3ab652ca4b",
+    patchedSha256: "858d6550e83db1a387857d29c757466276de7bfa1a3759b7c488474f69ccaad5",
+    transform(content) {
+      const next = replaceExactly(content,
+        "      await session.prompt(effectivePrompt);",
+        "      opts.signal?.throwIfAborted();\n      await session.prompt(effectivePrompt, {\n        preflightResult: () => {\n          opts.signal?.throwIfAborted();\n        },\n      });");
+      return `// ${PI_SUBAGENTS_LIFECYCLE_MARKER}\n${next}`;
+    },
+  },
+];
+
+/** Applied only inside the existing staged and sealed runtime generation. */
+export function applyPiSubagentsLifecyclePatch(subagentsPackagePath) {
+  const stat = lstatSync(subagentsPackagePath);
+  if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("subagents lifecycle patch requires a regular package manifest");
+  const manifest = JSON.parse(readFileSync(subagentsPackagePath, "utf8"));
+  if (manifest.name !== "@gotgenes/pi-subagents" || manifest.version !== PINNED_SUBAGENTS_VERSION) {
+    throw new Error(`subagents lifecycle patch requires @gotgenes/pi-subagents@${PINNED_SUBAGENTS_VERSION}`);
+  }
+  for (const spec of SUBAGENTS_LIFECYCLE_PATCHES) patchFile(join(dirname(subagentsPackagePath), spec.rel), spec);
+  return { ok: true };
+}
+
 /**
  * pi-subagents constrói um ModelRuntime novo para cada filha. Essa chamada usava diretamente
  * `agentDir/auth.json`, desviando do overlay do pai. O patch preserva esse fallback apenas quando
@@ -203,8 +268,12 @@ export function applyPiAuthPathPatch(piPackagePath, subagentsPackagePath) {
   if (manifest?.name !== "@earendil-works/pi-coding-agent" || manifest?.version !== PINNED_PI_VERSION) {
     throw new Error(`Pi auth-path patch requires @earendil-works/pi-coding-agent@${PINNED_PI_VERSION}`);
   }
+  if (sha256(readFileSync(join(dirname(piPackagePath), "dist/core/agent-session.js"))) !== PI_REVIEW_PREFLIGHT_SHA) {
+    throw new Error("Pi review preflight compatibility refused unexpected SDK bytes");
+  }
   for (const spec of PATCHES) patchFile(join(dirname(piPackagePath), spec.rel), spec);
   applySubagentsAuthPathPatch(subagentsPackagePath);
+  if (subagentsPackagePath) applyPiSubagentsLifecyclePatch(subagentsPackagePath);
   return { ok: true, version: PINNED_PI_VERSION, marker: PI_AUTH_PATH_PATCH_MARKER };
 }
 
@@ -213,6 +282,7 @@ export function verifyPiAuthPathPatch(piPackagePath, subagentsPackagePath) {
   try {
     const manifest = JSON.parse(readFileSync(piPackagePath, "utf8"));
     if (manifest?.name !== "@earendil-works/pi-coding-agent" || manifest?.version !== PINNED_PI_VERSION) return { ok: false, reason: "runtime-version" };
+    if (sha256(readFileSync(join(dirname(piPackagePath), "dist/core/agent-session.js"))) !== PI_REVIEW_PREFLIGHT_SHA) return { ok: false, reason: "altered-review-preflight" };
     const missing = PATCHES.find((spec) => !readFileSync(join(dirname(piPackagePath), spec.rel), "utf8").includes(spec.marker ?? PI_AUTH_PATH_PATCH_MARKER));
     if (missing) return { ok: false, reason: `unpatched:${missing.rel}` };
     const altered = PATCHES.find((spec) => spec.patchedSha256 &&
@@ -223,6 +293,13 @@ export function verifyPiAuthPathPatch(piPackagePath, subagentsPackagePath) {
       if (manifest?.name !== "@gotgenes/pi-subagents" || manifest?.version !== PINNED_SUBAGENTS_VERSION) return { ok: false, reason: "subagents-version" };
       const index = readFileSync(join(dirname(subagentsPackagePath), "src/index.ts"), "utf8");
       if (!index.includes(PI_SUBAGENTS_AUTH_PATH_PATCH_MARKER)) return { ok: false, reason: "unpatched:pi-subagents/src/index.ts" };
+      for (const spec of SUBAGENTS_LIFECYCLE_PATCHES) {
+        const file = join(dirname(subagentsPackagePath), spec.rel);
+        const stat = lstatSync(file);
+        if (!stat.isFile() || stat.isSymbolicLink() || sha256(readFileSync(file)) !== spec.patchedSha256) {
+          return { ok: false, reason: `altered-lifecycle-patch:${spec.rel}` };
+        }
+      }
     }
     return { ok: true };
   } catch (error) {

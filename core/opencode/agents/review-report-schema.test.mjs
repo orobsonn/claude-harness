@@ -111,6 +111,34 @@ test("legacy family marker on a report is ignored, never required", () => {
   assert.equal(Object.hasOwn(adversary.report, "family"), false);
 });
 
+test("Pi completion eyes share one canonical issues report without parallel parser contracts", () => {
+  const accepted = { issues: [] };
+  for (const role of ["adversary", "compliance", "security"]) {
+    const result = validateReviewReport(role, accepted);
+    assert.equal(result.ok, true, `${role}: ${result.reason}`);
+    assert.deepEqual(result.report, accepted);
+    assert.deepEqual(result.findings, []);
+  }
+
+  const rejected = {
+    issues: [{
+      description: "The review receipt can overwrite a concurrent sibling.",
+      category: "race",
+      severity: "high",
+      scope: "core/pi/extensions/harness-entry-gate.ts",
+      evidence: "review completion reads the sibling map before taking the state lock",
+      fix_hint: "Reduce the complete receipt map under withGateStateLock.",
+    }],
+  };
+  for (const role of ["adversary", "compliance", "security"]) {
+    const result = validateReviewReport(role, rejected);
+    assert.equal(result.ok, true, `${role} uses the same canonical finding shape`);
+    assert.equal(result.findings.length, 1);
+    assert.equal(result.findings[0].suggested_sniper_tier, "sniper-high");
+  }
+  assert.equal(validateReviewReport("unknown-eye", accepted).ok, false);
+});
+
 test("build contract keeps optional eyes advisory and primary-authoritative", () => {
   const source = fs.readFileSync(new URL("./build.md", import.meta.url), "utf8");
   assert.match(source, /optional second eye/i);

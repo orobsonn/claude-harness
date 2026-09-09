@@ -5,6 +5,71 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [2.6.6](https://github.com/orobsonn/claude-harness/compare/v2.6.5...v2.6.6) (2026-09-09)
+
+
+### Bug Fixes
+
+* **pi:** support parent lock identity on macOS ([#922](https://github.com/orobsonn/claude-harness/issues/922)) ([cac1983](https://github.com/orobsonn/claude-harness/commit/cac1983ce00730a5f732fa8b7efa9c48a22381a0))
+
+## [2.6.5](https://github.com/orobsonn/claude-harness/compare/v2.6.4...v2.6.5) (2026-09-09)
+
+
+### Bug Fixes
+
+* **pi:** align parallel review guidance and dispatch error cards ([#920](https://github.com/orobsonn/claude-harness/issues/920)) ([d4b6df0](https://github.com/orobsonn/claude-harness/commit/d4b6df037537832926c6dfb67aeb941b17922985))
+* **pi:** carry stable ceremony mode to planner ([#914](https://github.com/orobsonn/claude-harness/issues/914)) ([26cad09](https://github.com/orobsonn/claude-harness/commit/26cad09e07faee0f266f9fac973ec91c2931dc8a))
+* **pi:** converge reviewer correction loops ([#918](https://github.com/orobsonn/claude-harness/issues/918)) ([ac94f19](https://github.com/orobsonn/claude-harness/commit/ac94f1990b8750f204ae904acd1a664e0c174e62))
+* **pi:** converge task fidelity reviews ([#916](https://github.com/orobsonn/claude-harness/issues/916)) ([c407b4f](https://github.com/orobsonn/claude-harness/commit/c407b4ff67c969654a7657946bbef75075d93948))
+* **pi:** recover blocked dependent tasks after upstream corrections ([#921](https://github.com/orobsonn/claude-harness/issues/921)) ([07d7fab](https://github.com/orobsonn/claude-harness/commit/07d7fabbba7ec6393223aa6320e9631379bc246e))
+
+## [2.6.4](https://github.com/orobsonn/claude-harness/compare/v2.6.3...v2.6.4) (2026-09-08)
+
+
+### Bug Fixes
+
+* corrige fechamento de tasks e atualiza Lavish e RTK ([#912](https://github.com/orobsonn/claude-harness/issues/912)) ([dd50111](https://github.com/orobsonn/claude-harness/commit/dd50111d89d6dabb8abb88bc3e1c941c65f2db7b))
+
+## [2.6.3](https://github.com/orobsonn/claude-harness/compare/v2.6.2...v2.6.3) (2026-09-08)
+
+
+### Bug Fixes
+
+* **pi:** confere testes afetados antes de fechar o plano ([#910](https://github.com/orobsonn/claude-harness/issues/910)) ([c79362c](https://github.com/orobsonn/claude-harness/commit/c79362c3cf804b1f94e48e7b61dc770e062e82fc))
+
+## [2.6.2](https://github.com/orobsonn/claude-harness/compare/v2.6.1...v2.6.2) (2026-09-08)
+
+
+### Bug Fixes
+
+* **pi:** completa evidência no primeiro brief de revisão ([#908](https://github.com/orobsonn/claude-harness/issues/908)) ([48ab919](https://github.com/orobsonn/claude-harness/commit/48ab919de817258c45efe50303c53ec713646d3d))
+
+## [2.6.1](https://github.com/orobsonn/claude-harness/compare/v2.6.0...v2.6.1) (2026-09-08)
+
+
+### Bug Fixes
+
+* **pi:** prepara commits antes dos revisores e orienta captura pendente ([#906](https://github.com/orobsonn/claude-harness/issues/906)) ([0f8384b](https://github.com/orobsonn/claude-harness/commit/0f8384bff63676734eb046c9fee83e2756c3deb7))
+
+## [2.6.0](https://github.com/orobsonn/claude-harness/compare/v2.5.0...v2.6.0) (2026-09-08)
+
+
+### Features
+
+* **pi:** despacha tarefas com pipeline própria e integração Orca ([6e20e85](https://github.com/orobsonn/claude-harness/commit/6e20e852a83e5de7b1f0f9027a5c26d2d71f89f5))
+
+## [2.5.0](https://github.com/orobsonn/claude-harness/compare/v2.4.2...v2.5.0) (2026-09-07)
+
+
+### Features
+
+* **pi:** execute até três revisores em paralelo ([#902](https://github.com/orobsonn/claude-harness/issues/902)) ([0cecaac](https://github.com/orobsonn/claude-harness/commit/0cecaac3fc7b02d3818ff14836aedde961f18677))
+
+
+### Bug Fixes
+
+* **pi:** keep finalization independent from planning ([#896](https://github.com/orobsonn/claude-harness/issues/896)) ([40281c2](https://github.com/orobsonn/claude-harness/commit/40281c23ec07e65ac43e93b4d95c9bf550d38be7))
+
 ## [2.4.2](https://github.com/orobsonn/claude-harness/compare/v2.4.1...v2.4.2) (2026-09-05)
 
 

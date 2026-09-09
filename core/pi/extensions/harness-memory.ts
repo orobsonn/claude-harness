@@ -26,10 +26,10 @@ export default function harnessMemory(pi: ExtensionAPI) {
       const sessionId = identity(ctx);
       // Pi supplies a deep copy here. This message is provider input only, never
       // appended to the session JSONL and never promoted into system instructions.
-      return { messages: [...event.messages.filter((message: any) => !(message.role === "custom" && message.customType === "harness-memory")), {
+      return { messages: [{
         role: "custom" as const, customType: "harness-memory", display: false, timestamp: 0,
         content: memoryBrief(ctx.cwd, sessionId),
-      }] };
+      }, ...event.messages.filter((message: any) => !(message.role === "custom" && message.customType === "harness-memory"))] };
     } catch { return; }
   });
   pi.on("tool_call", (event: any, ctx) => {

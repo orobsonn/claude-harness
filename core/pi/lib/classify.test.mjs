@@ -72,6 +72,7 @@ for (const mode of ["no-ceremony", "QUICK", "LIGHT", "FULL"]) {
         peak_mode: mode,
         classified: true,
         triaged: true,
+        ...(["LIGHT", "FULL"].includes(mode) ? { task_pipeline_version: 1 } : {}),
       });
       // classify NUNCA cria plano.
       assert.equal(fs.existsSync(path.join(root, ".pi/harness/plans")), false);
@@ -123,6 +124,7 @@ test("escalada QUICK → FULL é permitida e sobe o peak_mode", () => {
     const state = readState(root);
     assert.equal(state.mode, "FULL");
     assert.equal(state.peak_mode, "FULL");
+    assert.equal(state.task_pipeline_version, 1);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

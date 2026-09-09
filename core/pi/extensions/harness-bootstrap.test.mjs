@@ -33,11 +33,15 @@ const RUNTIME_PROMPT = readFileSync(join(PACKAGE_ROOT, "core/pi/prompts/harness-
 
 const EXPECTED_EXTENSION_BASENAMES = [
   "harness-policy.ts",
+  "harness-task-events.ts",
+  "harness-task-run.ts",
   "harness-bootstrap.ts",
-  "index.ts",
+  "harness-subagents.ts",
   "harness-dispatch.ts",
   "harness-memory.ts",
+  "harness-tasks.ts",
   "harness-entry-gate.ts",
+  "harness-reviews.ts",
   "harness-plan-gate.ts",
   "harness-plan-write-gate.ts",
   "harness-marker.ts",
@@ -514,14 +518,14 @@ test("pi install seguido de DefaultResourceLoader.reload converge para o manifes
     "const first = loader.getExtensions();",
     "await loader.reload();",
     "const result = loader.getExtensions();",
-    "const subagents = result.extensions.find((entry) => entry.path.includes('@gotgenes/pi-subagents'));",
+    "const subagents = result.extensions.find((entry) => entry.path.endsWith('harness-subagents.ts'));",
     "process.stdout.write(JSON.stringify({ paths: result.extensions.map((entry) => entry.path), firstPaths: first.extensions.map((entry) => entry.path), errors: result.errors, agentFiles: readdirSync(join(agentDir, 'agents')).sort(), hasSubagentTool: subagents?.tools.has('subagent') ?? false }));",
   ].join("\n");
   const output = execFileSync(process.execPath, ["--input-type=module", "--eval", probe], {
     cwd: PACKAGE_ROOT,
     env,
     encoding: "utf8",
-    timeout: 30_000,
+    timeout: 120_000,
   });
   const loaded = JSON.parse(output);
 

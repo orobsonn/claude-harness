@@ -4,6 +4,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { RUNTIME_ROLES } from "./roles.mjs";
+import { materializePiReviewConfig } from "./pi-review-config.mjs";
 
 export const NATIVE_BOOTSTRAP_MARKER = "claude-harness-native-bootstrap:v1";
 
@@ -105,6 +106,11 @@ export function installNativeHarnessAgents(options = {}) {
     }
   }
 
+  try {
+    materializePiReviewConfig(agentDir, join(assetsDir, "harness.json"));
+  } catch (error) {
+    return { ok: false, reason: `harness-config: ${error instanceof Error ? error.message : String(error)}` };
+  }
   try {
     mkdirSync(agentsDir, { recursive: true, mode: 0o700 });
     if (!safeExistingDirectory(agentsDir)) return { ok: false, reason: "native-agents-dir-unsafe" };

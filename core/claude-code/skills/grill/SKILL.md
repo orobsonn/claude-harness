@@ -192,9 +192,11 @@ authoritative source for this step, this section is only the summary:
 2. `npx -y lavish-axi docs/prd/<slug>-mockup.html` to open the review session — this is a normal
    Bash tool call, expect a permission prompt on the first call unless already allowlisted.
 3. `npx -y lavish-axi poll docs/prd/<slug>-mockup.html` to wait for the operator's feedback. Keep it
-   in the foreground; if the Bash tool call times out, that's expected — just re-run `poll`, nothing
-   is lost.
+   in the foreground. If the tool times out before feedback arrives, re-run `poll`; undelivered
+   feedback stays queued. Read a delivered response completely before filtering it.
 4. Apply feedback, `poll --agent-reply "..."` again, repeat until the operator ends the session.
+   `browser_disconnected` pauses this loop: ask whether to resume or end. Final feedback with
+   `session_ended: true` also stops polling; apply it and report in chat.
 
 **If `npx -y lavish-axi` fails outright** (no network, registry unreachable, broken release) — fall
 back to opening the static file for the operator: best-effort try `open` (macOS) / `xdg-open`

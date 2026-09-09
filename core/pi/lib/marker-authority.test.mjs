@@ -27,6 +27,18 @@ const FEATURE = "feature-authority";
 const TASK = "task-one";
 const PRODUCER_CALL = "task-call-one";
 const SHA = "0123456789abcdef0123456789abcdef01234567";
+const REVIEW_INPUT_DIGEST = "a".repeat(64);
+const EMPTY_REPORT = { issues: [] };
+const EMPTY_REPORT_DIGEST = crypto.createHash("sha256").update(JSON.stringify(EMPTY_REPORT)).digest("hex");
+
+function acceptedReviewFields(inputDigest = REVIEW_INPUT_DIGEST) {
+  return {
+    accepted: true,
+    input_digest: inputDigest,
+    report_digest: EMPTY_REPORT_DIGEST,
+    report: EMPTY_REPORT,
+  };
+}
 
 const roots = [];
 
@@ -158,6 +170,7 @@ function makeAuthority(root, overrides = {}) {
     },
     resolveHeadSha: () => SHA,
     isAncestorSha: () => true,
+    captureReviewInputFn: () => ({ ok: true, snapshot: { input_digest: REVIEW_INPUT_DIGEST } }),
     now: () => "2026-01-01T00:00:00.000Z",
     ...authorityOverrides,
   });
@@ -425,7 +438,7 @@ test("final-review exige capturas verificadas e recibos host-owned atuais dos do
     adversary: {
       written_by: "host-subagent-completion", role: "harness-adversary", parent_session_id: SESSION,
       feature_id: FEATURE, dispatch_call_id: "final-adversary", child_session_id: "child-adversary",
-      agent_id: "agent-adversary", status: "completed", reviewed_head_sha: SHA,
+      agent_id: "agent-adversary", status: "completed", reviewed_head_sha: SHA, ...acceptedReviewFields(),
     },
   };
   fs.writeFileSync(piGateStatePath({ projectRoot: root, sessionId: SESSION }).path, JSON.stringify(stateWithAdversary));
@@ -437,7 +450,7 @@ test("final-review exige capturas verificadas e recibos host-owned atuais dos do
   stateWithBothEyes.final_review_evidence.compliance = {
     written_by: "host-subagent-completion", role: "harness-compliance", parent_session_id: SESSION,
     feature_id: FEATURE, dispatch_call_id: "final-compliance", child_session_id: "child-compliance",
-    agent_id: "agent-compliance", status: "completed", reviewed_head_sha: SHA,
+    agent_id: "agent-compliance", status: "completed", reviewed_head_sha: SHA, ...acceptedReviewFields(),
   };
   fs.writeFileSync(piGateStatePath({ projectRoot: root, sessionId: SESSION }).path, JSON.stringify(stateWithBothEyes));
   assert.equal(call(authority, { action: "final-review" }, { toolCallId: "c4" }).result.ok, true);
@@ -445,6 +458,137 @@ test("final-review exige capturas verificadas e recibos host-owned atuais dos do
   const state = readGateState(root);
   assert.equal(state.final_review_done, true);
   assert.equal(state.demo_done, true);
+});
+
+test("final-review rejeita recibos que só dizem completed no HEAD sem relatório aceito e digests", () => {
+  const root = makeRoot();
+  seedGateState(root);
+  seedPlan(root);
+  seedHandRecord(root, { capturedVerifiedAt: "2025-12-31T00:00:00.000Z" });
+  seedGateState(root, {
+    hand_finished: [`${FEATURE}/${TASK}`],
+    capture_verified: [`${FEATURE}/${TASK}@${SHA}`],
+    final_review_evidence: {
+      adversary: {
+        written_by: "host-subagent-completion", role: "harness-adversary", parent_session_id: SESSION,
+        feature_id: FEATURE, dispatch_call_id: "legacy-adversary", child_session_id: "legacy-child-adversary",
+        agent_id: "legacy-agent-adversary", status: "completed", reviewed_head_sha: SHA,
+      },
+      compliance: {
+        written_by: "host-subagent-completion", role: "harness-compliance", parent_session_id: SESSION,
+        feature_id: FEATURE, dispatch_call_id: "legacy-compliance", child_session_id: "legacy-child-compliance",
+        agent_id: "legacy-agent-compliance", status: "completed", reviewed_head_sha: SHA,
+      },
+    },
+  });
+  const result = call(makeAuthority(root).authority, { action: "final-review" }, { toolCallId: "legacy-final" }).result;
+  assert.equal(reasonOf(result), "final-review requires current host-owned final adversary evidence");
+  assert.equal(readGateState(root).final_review_done, undefined);
+});
+
+test("final-review exige security saudável quando o plano canônico a torna obrigatória", () => {
+  const root = makeRoot();
+  seedPlan(root);
+  const planPath = piExecutionPlanPath({ projectRoot: root, featureId: FEATURE }).path;
+  const plan = JSON.parse(fs.readFileSync(planPath, "utf8"));
+  fs.writeFileSync(planPath, JSON.stringify({ ...plan, final_review: { adversary: true, compliance: true, security: true } }));
+  seedHandRecord(root, { capturedVerifiedAt: "2025-12-31T00:00:00.000Z" });
+  const final_review_evidence = Object.fromEntries(["adversary", "compliance"].map((name) => [name, {
+    written_by: "host-subagent-completion", role: `harness-${name}`, parent_session_id: SESSION,
+    feature_id: FEATURE, dispatch_call_id: `call-${name}`, child_session_id: `child-${name}`,
+    agent_id: `agent-${name}`, status: "completed", reviewed_head_sha: SHA, ...acceptedReviewFields(),
+  }]));
+  seedGateState(root, { hand_finished: [`${FEATURE}/${TASK}`], capture_verified: [`${FEATURE}/${TASK}@${SHA}`], final_review_evidence });
+  const { authority } = makeAuthority(root);
+  const missing = call(authority, { action: "final-review" }, { toolCallId: "missing-security" }).result;
+  assert.equal(missing.ok, false, "security required by the canonical plan cannot be omitted");
+  assert.match(reasonOf(missing), /security/i);
+  assert.equal(readGateState(root).final_review_done, undefined);
+  const state = readGateState(root);
+  state.final_review_evidence.security = { ...final_review_evidence.adversary,
+    role: "harness-security", dispatch_call_id: "call-security", child_session_id: "child-security", agent_id: "agent-security" };
+  fs.writeFileSync(piGateStatePath({ projectRoot: root, sessionId: SESSION }).path, JSON.stringify(state));
+  assert.equal(call(authority, { action: "final-review" }, { toolCallId: "healthy-security" }).result.ok, true);
+});
+
+test("final-review rejeita recibos aceitos quando o snapshot atual mudou sem trocar o HEAD", () => {
+  const root = makeRoot();
+  seedGateState(root);
+  seedPlan(root);
+  seedHandRecord(root, { capturedVerifiedAt: "2025-12-31T00:00:00.000Z" });
+  const receipt = (role, suffix) => ({
+    written_by: "host-subagent-completion", role, parent_session_id: SESSION, feature_id: FEATURE,
+    dispatch_call_id: `stale-${suffix}`, child_session_id: `stale-child-${suffix}`,
+    agent_id: `stale-agent-${suffix}`, status: "completed", reviewed_head_sha: SHA,
+    ...acceptedReviewFields(REVIEW_INPUT_DIGEST),
+  });
+  seedGateState(root, {
+    hand_finished: [`${FEATURE}/${TASK}`],
+    capture_verified: [`${FEATURE}/${TASK}@${SHA}`],
+    final_review_evidence: {
+      adversary: receipt("harness-adversary", "adversary"),
+      compliance: receipt("harness-compliance", "compliance"),
+    },
+  });
+  const authority = makeAuthority(root, {
+    captureReviewInputFn: () => ({ ok: true, snapshot: { input_digest: "b".repeat(64) } }),
+  }).authority;
+  const result = call(authority, { action: "final-review" }, { toolCallId: "stale-final" }).result;
+  assert.equal(reasonOf(result), "final-review requires current host-owned final adversary evidence");
+  assert.equal(readGateState(root).final_review_done, undefined);
+});
+
+test("final-review aceita recibos integrados de cada tarefa sem reescrever a sessão filha", () => {
+  const root = makeRoot();
+  seedPlan(root, [{ id: TASK }, { id: "task-two" }]);
+  const receipt = (role, suffix) => ({
+    written_by: "host-subagent-completion", role, parent_session_id: SESSION, feature_id: FEATURE,
+    dispatch_call_id: `integrated-${suffix}`, child_session_id: `review-child-${suffix}`,
+    agent_id: `review-agent-${suffix}`, status: "completed", reviewed_head_sha: SHA,
+    ...acceptedReviewFields(),
+  });
+  seedGateState(root, { final_review_evidence: {
+    adversary: receipt("harness-adversary", "adversary"),
+    compliance: receipt("harness-compliance", "compliance"),
+  } });
+  const seen = [];
+  const authority = makeAuthority(root, {
+    readIntegratedTaskEvidenceFn: (input) => {
+      seen.push(input);
+      return { ok: true, result: { session_id: `child-${input.taskId}` } };
+    },
+  }).authority;
+  const result = call(authority, { action: "final-review" }, { toolCallId: "integrated-final" }).result;
+  assert.equal(result.ok, true, reasonOf(result));
+  assert.deepEqual(seen.map((item) => item.taskId), [TASK, "task-two"]);
+  assert.ok(seen.every((item) => item.sessionId === SESSION && item.headSha === SHA));
+});
+
+test("final-review global task-pipeline não usa captura legada durante barreira de correção", () => {
+  const root = makeRoot();
+  seedPlan(root);
+  seedHandRecord(root, { capturedVerifiedAt: "2025-12-31T00:00:00.000Z" });
+  const receipt = (role, suffix) => ({
+    written_by: "host-subagent-completion", role, parent_session_id: SESSION, feature_id: FEATURE,
+    dispatch_call_id: `barrier-${suffix}`, child_session_id: `barrier-child-${suffix}`,
+    agent_id: `barrier-agent-${suffix}`, status: "completed", reviewed_head_sha: SHA,
+    ...acceptedReviewFields(),
+  });
+  seedGateState(root, {
+    task_pipeline_version: 1,
+    hand_finished: [`${FEATURE}/${TASK}`],
+    capture_verified: [`${FEATURE}/${TASK}@${SHA}`],
+    final_review_evidence: {
+      adversary: receipt("harness-adversary", "adversary"),
+      compliance: receipt("harness-compliance", "compliance"),
+    },
+  });
+  const authority = makeAuthority(root, {
+    readIntegratedTaskEvidenceFn: () => ({ ok: false, reason: "correction barrier active" }),
+  }).authority;
+  const result = call(authority, { action: "final-review" }, { toolCallId: "barrier-final" }).result;
+  assert.equal(result.ok, false);
+  assert.match(reasonOf(result), /missing current integrated task evidence/i);
 });
 
 test("task_id inseguro é rejeitado com a mensagem da ação", () => {
@@ -505,11 +649,51 @@ test("regate-passed exige recibo host-owned do adversary para a tarefa e SHA atu
       agent_id: "agent-adversary-task",
       status: "completed",
       reviewed_head_sha: SHA,
+      ...acceptedReviewFields(),
     },
   };
   seedGateState(root, state);
   assert.equal(call(authority, { action: "regate-passed", task_id: TASK }, { toolCallId: "c5" }).result.ok, true);
   assert.deepEqual(readGateState(root).regate_passed, [`${FEATURE}/${TASK}@${SHA}`]);
+});
+
+test("regate-passed rejeita recibo completed no HEAD sem relatório aceito e digests", () => {
+  const root = makeRoot();
+  seedGateState(root, {
+    regate_pending: [`${FEATURE}/${TASK}`],
+    task_adversary_evidence: {
+      [`${FEATURE}/${TASK}`]: {
+        written_by: "host-subagent-completion", role: "harness-adversary", parent_session_id: SESSION,
+        feature_id: FEATURE, task_id: TASK, dispatch_call_id: "legacy-task-review",
+        child_session_id: "legacy-task-child", agent_id: "legacy-task-agent", status: "completed",
+        reviewed_head_sha: SHA,
+      },
+    },
+  });
+  const result = call(makeAuthority(root).authority, { action: "regate-passed", task_id: TASK }, { toolCallId: "legacy-regate" }).result;
+  assert.equal(reasonOf(result), "regate-passed requires current host-owned task adversary evidence");
+  assert.equal(readGateState(root).regate_passed, undefined);
+});
+
+test("regate-passed rejeita recibo aceito quando o snapshot atual da task mudou no mesmo HEAD", () => {
+  const root = makeRoot();
+  seedGateState(root, {
+    regate_pending: [`${FEATURE}/${TASK}`],
+    task_adversary_evidence: {
+      [`${FEATURE}/${TASK}`]: {
+        written_by: "host-subagent-completion", role: "harness-adversary", parent_session_id: SESSION,
+        feature_id: FEATURE, task_id: TASK, dispatch_call_id: "stale-task-review",
+        child_session_id: "stale-task-child", agent_id: "stale-task-agent", status: "completed",
+        reviewed_head_sha: SHA, ...acceptedReviewFields(REVIEW_INPUT_DIGEST),
+      },
+    },
+  });
+  const authority = makeAuthority(root, {
+    captureReviewInputFn: () => ({ ok: true, snapshot: { input_digest: "b".repeat(64) } }),
+  }).authority;
+  const result = call(authority, { action: "regate-passed", task_id: TASK }, { toolCallId: "stale-regate" }).result;
+  assert.equal(reasonOf(result), "regate-passed requires current host-owned task adversary evidence");
+  assert.equal(readGateState(root).regate_passed, undefined);
 });
 
 test("hand-finished exige um hand-record legível, capture-eligible e do produtor exato", () => {
@@ -749,25 +933,37 @@ test("commits locais freeze e impl preservam a linhagem real de fidelity e captu
   execFileSync("git", ["commit", "-qm", "chore: seed"], { cwd: root });
   const handSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
 
-  seedGateState(root);
+  seedGateState(root, { task_run: {} });
   seedHandRecord(root, { agent: "test-author", freezeCommitSha: handSha });
-  const { authority } = makeAuthority(root, {
-    dispatchRole: "test-author",
-    resolveHeadSha: undefined,
-    isAncestorSha: undefined,
-  });
 
   fs.mkdirSync(path.join(root, "tests"), { recursive: true });
   fs.writeFileSync(path.join(root, "tests", "app.test.mjs"), "// expected-red locked test\n", "utf8");
   execFileSync("git", ["add", "--", "tests/app.test.mjs"], { cwd: root });
   execFileSync("git", ["commit", "-qm", "test(app): freeze locked test for task-one"], { cwd: root });
   const freezeCommit = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
+  let freezeValidations = 0;
+  const { authority } = makeAuthority(root, {
+    dispatchRole: "test-author",
+    resolveHeadSha: undefined,
+    isAncestorSha: undefined,
+    validateTaskFidelityFreezeFn: (input) => {
+      freezeValidations++;
+      assert.deepEqual(input, {
+        projectRoot: root,
+        sessionId: SESSION,
+        taskId: TASK,
+        testAuthorSha: handSha,
+      });
+      return { ok: true, freezeSha: freezeCommit };
+    },
+  });
 
   assert.equal(call(authority, { action: "hand-finished", task_id: TASK }, { toolCallId: "real-hf" }).result.ok, true);
   assert.equal(call(authority, { action: "fidelity", task_id: TASK }, { toolCallId: "real-fidelity" }).result.ok, true);
   assert.equal(call(authority, { action: "capture-verified", task_id: TASK }, { toolCallId: "real-capture" }).result.ok, true);
-  assert.deepEqual(readGateState(root).fidelity_pass, [`${FEATURE}/${TASK}@${handSha}`]);
+  assert.deepEqual(readGateState(root).fidelity_pass, [`${FEATURE}/${TASK}@${freezeCommit}`]);
   assert.deepEqual(readGateState(root).capture_verified, [`${FEATURE}/${TASK}@${handSha}`]);
+  assert.equal(freezeValidations, 1);
 
   fs.mkdirSync(path.join(root, "src"), { recursive: true });
   fs.writeFileSync(path.join(root, "src", "app.ts"), "export const ready = true;\n", "utf8");

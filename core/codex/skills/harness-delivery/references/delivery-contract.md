@@ -52,18 +52,64 @@ achado não refutado reabre o plano.
 
 ## Delegação e roteamento de modelo
 
-Antes de criar um subagente, obtenha a rota explícita:
+### Coordenação por tarefa no Pi
+
+Quando o host é o Pi e a sessão global aprovada registra
+`task_pipeline_version: 1`, o pai global não despacha diretamente test-author,
+executor, sniper ou os olhos de implementação. Ele usa `harness_tasks` para:
+
+1. despachar juntas as tasks independentes prontas;
+2. observar os handles duráveis sem transformar abort de observação em cancelamento;
+3. integrar somente o `expected_head` do resultado verificado;
+4. retomar a mesma task/tentativa quando houver feedback.
+
+Uma dependente só entra depois que os recibos das dependências foram integrados.
+Cada pai local executa o ciclo TDD nativo completo e devolve captura, freeze,
+re-gate e revisões identificados pela sua própria sessão. O pai global preserva
+essas identidades, integra os recibos e executa testes, harvest e olhos finais no
+HEAD agregado. Uma correção de dependência compartilhada aguarda os descendentes
+já admitidos estarem integrados e pausa novos dispatches/integrações até o novo
+recibo; depois dela, os testes e olhos finais do conjunto precisam rodar novamente.
+
+`harness_plan` só apresenta progresso e pode mostrar várias tasks `in_progress`.
+Ele não substitui o registry nem os recibos de `harness_tasks`. Fora desse modo Pi,
+continue usando o dispatch nativo descrito abaixo, sem alterar a coordenação dos
+demais hosts.
+
+No Pi, cada pai local copia `model`, `thinking` e a complexidade das mãos de
+`contract.dispatch_routes`, fornecido pelo runtime. O pai global usa as rotas Pi
+instaladas para planejamento e revisão global. Não consulte o routing Codex nem
+substitua `thinking` por `reasoning_effort` nesses dispatches.
+
+O comando e os parâmetros de roteamento deste bloco são exclusivos do Codex.
+Nesse host, antes de criar um subagente, obtenha a rota explícita:
 
 ```sh
 node .codex/model-routing.mjs --role <papel> --complexity <low|medium|high|critical>
 ```
 
-Passe `model`, `reasoning_effort`, escopo e evidência esperada ao dispatch nativo. O sandbox efetivo vem do perfil TOML e da sessão pai; não há campo de dispatch que o substitua. Use Luna/low para inventário mecânico; Terra/medium para execução delimitada; Sol/high para plano, segurança, ambiguidade, adversarial e caminho crítico. xhigh só após uma falha de gate ou incerteza material. Nunca envie segredo, contexto privado desnecessário ou autorização ampla a um filho.
+No Codex, passe `model`, `reasoning_effort`, escopo e evidência esperada ao dispatch nativo. O sandbox efetivo vem do perfil TOML e da sessão pai; não há campo de dispatch que o substitua. Use Luna/low para inventário mecânico; Terra/medium para execução delimitada; Sol/high para plano, segurança, ambiguidade, adversarial e caminho crítico. xhigh só após uma falha de gate ou incerteza material. Nunca envie segredo, contexto privado desnecessário ou autorização ampla a um filho.
 
 Olhos são somente leitura. Mãos só recebem escrita no workspace quando existe uma etapa aprovada e verificável. Um filho não pode ampliar escopo, aprovar a própria mudança nem substituir sandbox/aprovação da sessão pai.
 
 ## Evidência e handoff
 
 Todo resultado entrega: o que mudou, arquivos relevantes, testes/comandos executados e resultado, risco residual e próximo passo seguro. Para uma falha, entregue reprodução mínima e hipótese marcada como hipótese. Um relatório de agente é input; o artefato e a verificação são a autoridade.
+
+No primeiro despacho de revisão de testes, implementação ou final, declare a fase e
+nomeie os artefatos canônicos aplicáveis. Inclua cwd, base e HEAD observados, `git status`
+incluindo untracked, paths/diff relevantes e prova negativa dos arquivos que devem ficar
+intactos. Vincule saída real e exit status de cada teste aplicável aos arquivos que cobre.
+Antes do freeze, compare a baseline do test-author/tarefa com index, worktree e untracked;
+não exija freeze SHA inexistente. Depois dele, compare freeze com o HEAD revisado para
+testes/fixtures e a base de implementação com esse HEAD para produto. Informe SHAs/paths
+reais de freeze, implementação e correção quando houver. Mantenha o brief compacto: um
+olho avalia diff, status e saída de comando fornecidos inline ou em artefato regular
+nomeado e legível, e abre os caminhos/artefatos canônicos nomeados com as ferramentas
+disponíveis no host; no Pi elas são `read`, `grep`, `find` e `ls`, sem shell. Não procure
+um arquivo de diff que não foi fornecido. Nomeie e leia por inteiro cada path novo
+untracked relevante: diff vazio de tracked não prova nada sobre ele. Só bloqueie evidência
+necessária omitida inline que também não esteja em artefato nomeado acessível; nunca aprove
+apenas o resumo do pai nem colete/reexecute algo inaplicável.
 
 Antes de dizer “feito”, execute a verificação proporcional e uma revisão de completude: critérios de aceitação, regressões, diff, segurança, documentação, configuração e resíduos honestos. FULL requer adversarial independente e resposta concreta a cada achado.

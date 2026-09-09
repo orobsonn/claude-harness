@@ -7,7 +7,8 @@ const INDEPENDENT_REVIEW_ROUTES = Object.freeze({
   "harness-adversary": { model: "openai-codex/gpt-5.6-sol", thinking: "medium" },
   "harness-discussion-adversary": { model: "openai-codex/gpt-5.6-sol", thinking: "medium" },
   "harness-plan-reviewer": { model: "openai-codex/gpt-6-astra", thinking: "high" },
-  "harness-compliance": { model: "openai-codex/gpt-5.6-luna", thinking: "xhigh" },
+  "harness-test-reviewer": { model: "openai-codex/gpt-5.6-luna", thinking: "xhigh" },
+  "harness-compliance": { model: "openai-codex/gpt-5.6-terra", thinking: "high" },
   "harness-security": { model: "openai-codex/gpt-5.6-sol" },
 });
 
@@ -34,6 +35,13 @@ test("dispatch admits only canonical foreground roles within the finite 144-turn
   );
 });
 
+test("all three reviewers require a fresh dispatch and cannot resume or run in the background", () => {
+  for (const subagent_type of ["harness-adversary", "harness-compliance", "harness-security"]) {
+    assert.deepEqual(validateSubagentDispatch({ subagent_type, resume: "old-child" }), { ok: false, reason: "resume-disabled" });
+    assert.deepEqual(validateSubagentDispatch({ subagent_type, run_in_background: true }), { ok: false, reason: "background-disabled" });
+  }
+});
+
 test("rotas de modelo do Pi são fixas por papel e por complexidade da mão", () => {
   assert.deepEqual(piDispatchRoute("harness-discussion-adversary"), {
     ok: true, model: "openai-codex/gpt-5.6-sol", thinking: "medium",
@@ -47,7 +55,7 @@ test("rotas de modelo do Pi são fixas por papel e por complexidade da mão", ()
   assert.deepEqual(piDispatchRoute("harness-test-author"), {
     ok: true, model: "openai-codex/gpt-5.6-terra", thinking: "high",
   });
-  assert.deepEqual(piDispatchRoute("harness-compliance"), {
+  assert.deepEqual(piDispatchRoute("harness-test-reviewer"), {
     ok: true, model: "openai-codex/gpt-5.6-luna", thinking: "xhigh",
   });
   assert.deepEqual(piDispatchRoute("harness-executor", "low"), {
@@ -64,11 +72,19 @@ test("rotas de modelo do Pi são fixas por papel e por complexidade da mão", ()
   });
 
   assert.deepEqual(
-    validateSubagentDispatch({ subagent_type: "harness-compliance", model: "openai-codex/gpt-5.6-luna", thinking: "xhigh" }),
+    validateSubagentDispatch({ subagent_type: "harness-compliance", model: "openai-codex/gpt-5.6-terra", thinking: "high" }),
     { ok: true },
   );
   assert.deepEqual(
-    validateSubagentDispatch({ subagent_type: "harness-compliance", model: "openai-codex/gpt-5.6-terra", thinking: "high" }),
+    validateSubagentDispatch({ subagent_type: "harness-test-reviewer", model: "openai-codex/gpt-5.6-luna", thinking: "xhigh" }),
+    { ok: true },
+  );
+  assert.deepEqual(
+    validateSubagentDispatch({ subagent_type: "harness-test-reviewer", model: "openai-codex/gpt-5.6-terra", thinking: "high" }),
+    { ok: false, reason: "model-route" },
+  );
+  assert.deepEqual(
+    validateSubagentDispatch({ subagent_type: "harness-compliance", model: "openai-codex/gpt-5.6-luna", thinking: "xhigh" }),
     { ok: false, reason: "model-route" },
   );
   assert.deepEqual(
