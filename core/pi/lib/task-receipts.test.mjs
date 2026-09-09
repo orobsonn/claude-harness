@@ -240,6 +240,106 @@ test("pinned runtimes with the dedicated test reviewer cannot use compliance as 
   assert.equal(legacyCompatible.ok, true, legacyCompatible.reason);
 });
 
+test("reconciled dependencies keep original audit paths but require fresh reviews and exact host merge proof", () => {
+  const f = inspectionFixture();
+  // A correction outside the dependent task scope is supplied only by a host merge.
+  run(f.root, "git", "checkout", "-b", "parent-correction", f.base);
+  write(path.join(f.root, "upstream.mjs"), "export const corrected = true;\n");
+  run(f.root, "git", "add", "upstream.mjs");
+  run(f.root, "git", "commit", "-m", "upstream correction");
+  const parent = run(f.root, "git", "rev-parse", "HEAD");
+  run(f.root, "git", "checkout", "-b", "dependent-recovery", f.head);
+  run(f.root, "git", "merge", "--no-ff", "-m", "host dependency merge", parent);
+  const head = run(f.root, "git", "rev-parse", "HEAD");
+  const planPath = path.join(f.root, ".pi/harness/plans", FEATURE, "execution-plan.json");
+  write(planPath, { tasks: [{ id: "upstream", depends_on: [] }, { id: "unregistered", depends_on: [] }, { id: TASK, depends_on: ["upstream"] }] });
+  fs.appendFileSync(path.join(f.root, ".git/info/exclude"), "\n.pi/harness/plans/\n");
+  f.entry.plan_sha256 = crypto.createHash("sha256").update(fs.readFileSync(planPath)).digest("hex");
+  f.dependencies.readTaskRunBindingFn().grant.plan_sha256 = f.entry.plan_sha256;
+  const oldResult = { child_head: f.base };
+  const correctedResult = { child_head: parent };
+  const receipt = {
+    version: 1, written_by: "host-task-integration", task_id: "upstream", attempt_id: "upstream-attempt",
+    session_id: "upstream-session", result_sha256: hashTaskReceipt(correctedResult),
+    parent_session_id: PARENT, feature_id: FEATURE, parent_root: f.root,
+    plan_sha256: f.entry.plan_sha256, spec_sha256: f.entry.spec_sha256,
+    child_head: parent, integrated_head: parent,
+  };
+  const previous = { ...receipt, child_head: f.base, integrated_head: f.base, result_sha256: hashTaskReceipt(oldResult) };
+  const registryPath = path.join(f.root, ".pi/harness/state", PARENT, "task-runs/index.json");
+  const registry = { version: 1, parent_session_id: PARENT, feature_id: FEATURE,
+    plan_sha256: f.entry.plan_sha256, spec_sha256: f.entry.spec_sha256,
+    tasks: { upstream: { status: "integrated", attempt_id: "upstream-attempt", integration: receipt, integration_history: [previous],
+      result: correctedResult, result_history: { [previous.result_sha256]: oldResult } } } };
+  write(registryPath, registry);
+  f.entry.reconciliations = [{
+    written_by: "host-task-reconciliation", task_id: TASK, attempt_id: ATTEMPT,
+    scope_base_sha: f.base, pre_child_head: f.head, parent_head: parent,
+    merged_head: head, tree: run(f.root, "git", "rev-parse", "HEAD^{tree}"), launch_count: 1,
+    upstreams: [{ task_id: "upstream", attempt_id: "upstream-attempt", previous_receipt_sha256: hashTaskReceipt(previous), receipt }],
+  }];
+  f.dependencies.captureReviewInputFn = () => ({ ok: true, snapshot: { head_sha: head, input_digest: DIGEST } });
+  const stale = inspectTaskRun(f.entry, f.dependencies);
+  assert.equal(stale.ok, false);
+  assert.match(stale.reason, /capture after dependency reconciliation/);
+  const handPath = path.join(f.root, ".pi/harness/state/hand-records", FEATURE, CHILD, `${TASK}.json`);
+  const hand = JSON.parse(fs.readFileSync(handPath));
+  write(handPath, { ...hand, freezeCommitSha: head });
+  assert.match(inspectTaskRun(f.entry, f.dependencies).reason, /producer after dependency reconciliation/);
+  const oldLaunch = f.entry.launches[0];
+  const dir = path.join(f.entry.job_dir, "run-reconciled");
+  const launch = { ...oldLaunch, run_id: "run-reconciled", pid: 999993,
+    events_path: path.join(dir, "events.jsonl"), process_path: path.join(dir, "process.json"), result_path: path.join(dir, "result.json") };
+  for (const key of ["process_path", "result_path"]) {
+    const record = JSON.parse(fs.readFileSync(oldLaunch[key]));
+    write(launch[key], { ...record, run_id: launch.run_id, pid: launch.pid });
+  }
+  write(launch.events_path, [event("session", { id: CHILD }),
+    event("tool_execution_start", { toolCallId: "recovered-producer", toolName: "subagent", args: { subagent_type: "harness-executor", prompt: `[HARNESS_TASK_CONTEXT]{"task_id":"${TASK}"}[/HARNESS_TASK_CONTEXT]` } }),
+    event("tool_execution_end", { toolCallId: "recovered-producer", toolName: "subagent", isError: false, result: { details: { status: "completed" } } }), ""].join("\n"));
+  f.entry.launches.push(launch);
+  write(handPath, { ...hand, freezeCommitSha: head, producerCallId: "recovered-producer" });
+  const state = JSON.parse(fs.readFileSync(f.statePath));
+  const bare = `${FEATURE}/${TASK}`;
+  state.capture_verified = [`${bare}@${head}`];
+  write(f.statePath, state);
+  assert.match(inspectTaskRun(f.entry, f.dependencies).reason, /current accepted adversary task review/);
+  state.task_adversary_evidence[bare] = review("harness-adversary", head);
+  state.task_review_evidence[bare] = { compliance: review("harness-compliance", head), security: review("harness-security", head) };
+  write(f.statePath, state);
+  const current = inspectTaskRun(f.entry, f.dependencies);
+  assert.equal(current.ok, true, current.reason);
+  assert.equal(current.result.base_sha, f.base);
+  assert.equal(current.result.scope_base_sha, parent);
+  assert.match(current.result.reconciliation_sha256, /^[a-f0-9]{64}$/);
+  assert.ok(current.result.changed_paths.includes("upstream.mjs"), "audit retains inherited changes");
+  const unregistered = structuredClone(f.entry);
+  unregistered.reconciliations[0].upstreams[0].task_id = "unregistered";
+  unregistered.reconciliations[0].upstreams[0].receipt.task_id = "unregistered";
+  assert.equal(inspectTaskRun(unregistered, f.dependencies).ok, false, "an internally consistent but unregistered upstream receipt is not authority");
+  const siblingPrevious = { ...previous, task_id: "unregistered" };
+  unregistered.reconciliations[0].upstreams[0].previous_receipt_sha256 = hashTaskReceipt(siblingPrevious);
+  registry.tasks.unregistered = { ...registry.tasks.upstream,
+    integration: unregistered.reconciliations[0].upstreams[0].receipt,
+    integration_history: [siblingPrevious] };
+  write(registryPath, registry);
+  assert.match(inspectTaskRun(unregistered, f.dependencies).reason, /not a registered ancestor/, "a registered sibling is not dependency authority");
+  const results = registry.tasks.upstream.result_history;
+  registry.tasks.upstream.result_history = {};
+  write(registryPath, registry);
+  assert.match(inspectTaskRun(f.entry, f.dependencies).reason, /matching registry history and result/);
+  registry.tasks.upstream.result_history = results;
+  write(registryPath, registry);
+  f.entry.reconciliation_required = { pre_child_head: head };
+  assert.match(inspectTaskRun(f.entry, f.dependencies).reason, /requires reconciliation/);
+  delete f.entry.reconciliation_required;
+  f.entry.reconciliations[0].upstreams[0].receipt.task_id = "unrelated-task";
+  assert.match(inspectTaskRun(f.entry, f.dependencies).reason, /invalid corrected dependency/);
+  f.entry.reconciliations[0].upstreams[0].receipt.task_id = "upstream";
+  f.entry.reconciliations[0].tree = f.base;
+  assert.match(inspectTaskRun(f.entry, f.dependencies).reason, /reserved parents or tree/);
+});
+
 test("inspectTaskRun accepts cumulative locked tests and fixtures outside production scope", () => {
   const fixture = inspectionFixture({ frozenFixture: true });
   const binding = fixture.dependencies.readTaskRunBindingFn();
@@ -855,6 +955,31 @@ test("readIntegratedTaskEvidence rejects current canonical plan or spec drift wi
   });
   assert.equal(staleSpec.ok, false);
   assert.match(staleSpec.reason, /current canonical artifacts|current approved canonical spec/i);
+});
+
+test("integrated receipts reject pending recovery and an unbound reconciliation baseline", () => {
+  for (const variant of ["pending", "baseline", "digest"]) {
+    const f = integratedFixture();
+    if (variant === "pending") f.entry.reconciliation_required = { pre_child_head: f.base };
+    if (variant === "baseline") f.entry.result.scope_base_sha = "a".repeat(40);
+    if (variant === "digest") f.entry.result.reconciliation_sha256 = "a".repeat(64);
+    f.entry.integration.result_sha256 = hashTaskReceipt(f.entry.result);
+    write(f.registryPath, f.registry);
+    const inspected = readIntegratedTaskEvidence({ projectRoot: f.root, sessionId: PARENT,
+      featureId: FEATURE, taskId: TASK, headSha: f.base });
+    assert.equal(inspected.ok, false, variant);
+    assert.match(inspected.reason, /reconciliation/, variant);
+  }
+});
+
+test("integrated task entries cannot redirect authority to another parent root", () => {
+  const f = integratedFixture();
+  f.entry.parent_root = path.join(f.root, "foreign-owner");
+  write(f.registryPath, f.registry);
+  const inspected = readIntegratedTaskEvidence({ projectRoot: f.root, sessionId: PARENT,
+    featureId: FEATURE, taskId: TASK, headSha: f.base });
+  assert.equal(inspected.ok, false);
+  assert.match(inspected.reason, /parent root/);
 });
 
 test("readIntegratedTaskEvidence rejects a replaced plan approval for the same artifact hashes", () => {
