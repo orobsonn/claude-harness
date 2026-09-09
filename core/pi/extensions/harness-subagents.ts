@@ -9,6 +9,7 @@ import { readPiReviewConfig } from "../lib/pi-review-config.mjs";
 import { ensurePiRuntime, resolveVerifiedPiRuntime } from "../lib/pi-runtime-cache.mjs";
 import { isRuntimeRole } from "../lib/roles.mjs";
 import { parseReviewReportText, validateReviewReport } from "../../shared/lib/review-report-schema.mjs";
+import { parseTestReviewVerdict } from "../../shared/lib/test-review-verdict.mjs";
 
 type BridgeDeps = {
   root?: string;
@@ -97,28 +98,22 @@ function strictReviewSummary(role: string, text: string) {
 }
 
 function testReviewReason(lines: string[], verdictIndex: number) {
-  const beforeVerdict = lines.slice(0, verdictIndex);
-  const findingsHeading = beforeVerdict.findIndex((line) => /^#{0,3}\s*(?:material\s+)?findings?\s*:?\s*$/i.test(line));
+  const evidenceLines = lines.filter((_, index) => index !== verdictIndex);
+  const findingsHeading = evidenceLines.findIndex((line) => /^#{0,3}\s*(?:material\s+)?findings?\s*:?\s*$/i.test(line));
   if (findingsHeading !== -1) {
-    const finding = beforeVerdict.slice(findingsHeading + 1).find((line) =>
+    const finding = evidenceLines.slice(findingsHeading + 1).find((line) =>
       !/^[-*]?\s*(?:none|nenhum|sem achados)\.?$/i.test(line) && !/^\s*$/.test(line),
     );
     if (finding) return compactLine(finding.replace(/^[-*]\s*/, ""));
   }
-  const failedRow = beforeVerdict.find((line) => /\b(?:FAIL|BLOCKED)\b/i.test(line));
+  const failedRow = evidenceLines.find((line) => /\b(?:FAIL|BLOCKED)\b/i.test(line));
   return failedRow ? compactLine(failedRow.replace(/^[-*]\s*/, "")) : "ver parecer expandido";
 }
 
 function testReviewerSummary(text: string) {
-  const lines = publicOutcomeBody(text).split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-  const verdicts = lines.flatMap((line, index) => {
-    const match = line.match(/^Verdict:\s*(APPROVE|REVISE|BLOCKED)\s*$/i);
-    return match ? [{ verdict: match[1].toUpperCase(), index }] : [];
-  });
-  if (verdicts.length !== 1 || verdicts[0].index !== lines.length - 1) {
-    return "PARECER: INDISPONÍVEL · expanda para ver a saída";
-  }
-  const { verdict, index } = verdicts[0];
+  const parsed = parseTestReviewVerdict(text);
+  if (!parsed) return "PARECER: INDISPONÍVEL · expanda para ver a saída";
+  const { verdict, index, lines } = parsed;
   if (verdict === "APPROVE") return "PARECER: APROVADO · obrigações de teste atendidas";
   const label = verdict === "REVISE" ? "REVISAR" : "BLOQUEADO";
   return `PARECER: ${label} · ${testReviewReason(lines, index)}`;

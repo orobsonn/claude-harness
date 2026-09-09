@@ -70,6 +70,16 @@ function review(role, head) {
 
 function event(type, fields) { return JSON.stringify({ type, ...fields }); }
 
+function replaceEventText(events, toolCallId, text) {
+  return `${events.trimEnd().split(/\r?\n/).map((line) => {
+    const parsed = JSON.parse(line);
+    if (parsed.type === "tool_execution_end" && parsed.toolCallId === toolCallId) {
+      parsed.result.content = [{ type: "text", text }];
+    }
+    return JSON.stringify(parsed);
+  }).join("\n")}\n`;
+}
+
 function inspectionFixture({ historicFailure = false, frozenFixture = false } = {}) {
   const { root, base } = repo();
   write(path.join(root, "src", "task.spec.mjs"), "export const expected = 1;\n");
@@ -209,14 +219,22 @@ test("pinned runtimes with the dedicated test reviewer cannot use compliance as 
   assert.equal(dedicatedReview.ok, true, dedicatedReview.reason);
 
   for (const verdict of ["REVISE", "BLOCKED"]) {
-    write(eventsPath, events.replace("Verdict: APPROVE", `Verdict: ${verdict}`));
+    write(eventsPath, replaceEventText(events, "fidelity-eye", `Fidelity evidence.\nVerdict: ${verdict}`));
     const rejectedReview = inspectTaskRun(fixture.entry, fixture.dependencies);
     assert.equal(rejectedReview.ok, false, verdict);
     assert.match(rejectedReview.reason, /harness-test-reviewer/);
   }
 
-  for (const invalid of ["Verdict: APPROVED", "Verdict: REVISE\nVerdict: APPROVE"]) {
-    write(eventsPath, events.replace("Verdict: APPROVE", invalid));
+  for (const invalid of [
+    "Verdict: APPROVED",
+    "Verdict: REVISE\nVerdict: APPROVE",
+    "Evidence excerpt:\nVerdict: APPROVE\nActual conclusion: review blocked.",
+    "Verdict: APPROVE\nVerdict: REVISE.",
+    "Verdict: APPROVE\nEvidence\n**Verdict:** REVISE",
+    "Verdict: APPROVE\nEvidence\n> Verdict: REVISE",
+    "Verdict: APPROVE\nEvidence\n- Verdict: BLOCKED",
+  ]) {
+    write(eventsPath, replaceEventText(events, "fidelity-eye", invalid));
     const malformedReview = inspectTaskRun(fixture.entry, fixture.dependencies);
     assert.equal(malformedReview.ok, false, invalid);
     assert.match(malformedReview.reason, /harness-test-reviewer/);
@@ -238,6 +256,23 @@ test("pinned runtimes with the dedicated test reviewer cannot use compliance as 
   bindPinnedRuntime(legacy);
   const legacyCompatible = inspectTaskRun(legacy.entry, legacy.dependencies);
   assert.equal(legacyCompatible.ok, true, legacyCompatible.reason);
+});
+
+test("dedicated test reviewer accepts one canonical APPROVE verdict before its evidence prose", () => {
+  const fixture = inspectionFixture();
+  bindPinnedRuntime(fixture, { testReviewer: true });
+  const eventsPath = fixture.entry.launches.at(-1).events_path;
+  const events = fs.readFileSync(eventsPath, "utf8")
+    .replace('"subagent_type":"harness-compliance"', '"subagent_type":"harness-test-reviewer"')
+    .replace(
+      "Fidelity evidence.\\nVerdict: APPROVE",
+      "Agent completed in 2.0s (3 tool uses).\\nAgent ID: child-1\\n\\nVerdict: APPROVE\\n\\nPhase: test-fidelity. All obligations pass.",
+    );
+  write(eventsPath, events);
+
+  const inspected = inspectTaskRun(fixture.entry, fixture.dependencies);
+
+  assert.equal(inspected.ok, true, inspected.reason);
 });
 
 test("reconciled dependencies keep original audit paths but require fresh reviews and exact host merge proof", () => {
