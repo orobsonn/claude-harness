@@ -1,5 +1,16 @@
 # Guia do operador — Codex Delivery Harness
 
+## Papel no fluxo atual
+
+Codex é o harness local usado principalmente para a validação final do que foi
+criado e integrado no Pi. Ele revisa o conjunto contra a spec, executa testes,
+reproduz defeitos e, no Codex desktop, pode usar browser/computer use quando
+essas ferramentas estiverem disponíveis.
+
+Esse é um papel operacional, não uma limitação do shell: Codex também pode
+planejar e executar uma entrega completa. Não existe handoff automático do Pi;
+o contrato compartilhado é o estado real do repositório.
+
 ## O que é instalado
 
 O vendor instala agentes em `.codex/agents/`, hooks e regras em `.codex/`,
@@ -69,6 +80,20 @@ O policy hook é deliberadamente estreito: bloqueia variantes de Bash para
 segredos e operações remotas/destrutivas, mas não é um deny nativo para leitura
 direta de arquivo. Não trate essa prosa ou o hook como substituto do sandbox e
 das aprovações do Codex.
+
+## Roteiro de validação final
+
+1. Confirme a branch, o HEAD e o estado da worktree.
+2. Leia spec, critérios de aceite, plano e evidências das tasks.
+3. Revise o diff e a suficiência dos testes, sem confiar no parecer anterior.
+4. Rode a suíte afetada e as verificações do conjunto.
+5. Reproduza o caminho principal no produto; use browser, console e rede quando
+   essas superfícies estiverem disponíveis.
+6. Entregue cada achado com reprodução, impacto, severidade e evidência.
+7. Depois da correção, invalide a conclusão anterior e valide o novo HEAD.
+
+O resultado esperado é uma decisão auditável sobre o artefato atual. “O Pi
+disse que passou” ou “o Codex aprovou” não são evidência por si só.
 
 ## Atualização
 

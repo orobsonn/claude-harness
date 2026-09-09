@@ -1,6 +1,14 @@
 # Pi Harness
 
-Este pacote porta o harness para o Pi. No Orca, cada implementação usa uma worktree filha e um terminal próprio no ADE. O harness continua responsável pelo plano, TDD, revisões e integração. Também é possível executar a pipeline localmente fora do Orca.
+Este pacote porta o harness para o Pi. No fluxo operacional atual, esta é a lane
+principal de criação e entrega diária: ideia/issue → spec → plano → pipeline por
+task → integração → validação agregada → memória → revisões finais → shipping.
+
+No Orca, cada implementação usa uma worktree filha e um terminal próprio no ADE.
+Também é possível executar a pipeline localmente fora do Orca. O Codex entra
+depois como segunda superfície local de validação e debugging sobre o HEAD
+integrado. Não existe handoff automático; Git, plano, testes e recibos são o
+contrato compartilhado.
 
 ## Pré-flight
 

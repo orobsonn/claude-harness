@@ -1,38 +1,95 @@
-# Usage — instalar/atualizar o harness e ligar a entrega autônoma
+# Uso — Pi no dia a dia, Codex na validação final
 
-Guia prático. Para o desenho e as decisões, ver `design.md`, `cloud-routines.md`, `audit.md`.
+Guia prático do fluxo atual. Para as decisões e fronteiras técnicas, veja
+[`design.md`](design.md). Os detalhes de cada shell ficam nos respectivos guias
+de operador.
 
 > **ADE oficial: [Orca](https://onorca.dev)** — download em **https://onorca.dev**, releases em
 > **https://github.com/stablyai/orca/releases**. É o ambiente oficial para rodar e observar entregas
 > autônomas (desktop e celular). Instalação headless na VPS:
 > [`orca-headless-vps-playbook.md`](orca-headless-vps-playbook.md).
 
-## Os dois repositórios
+## Como o harness é usado hoje
 
-- **Fonte (este repo):** `https://github.com/orobsonn/claude-harness` — o núcleo distribuível vive em `core/`.
-- **Projeto vendorado:** cada projeto recebe uma cópia do `core/` no seu `.claude/` (committed), porque cloud routines só enxergam o `.claude/` do repo, nunca o `~/.claude`.
+- **Pi é o ambiente principal de criação e entrega:** ideia, spec, plano, tarefas,
+  TDD, implementação, integração, revisão e shipping.
+- **Codex é a validação local final:** revisão do conjunto integrado, reprodução
+  de defeitos, debugging e validação no browser quando essa superfície estiver
+  disponível no ambiente local.
+- **Claude Code e OpenCode continuam suportados:** são shells completos do mesmo
+  contrato, mas não representam o fluxo diário principal deste guia.
 
-`core/` → `.claude/` é feito pelo instalador `vendor-core.mjs`.
+Não existe troca automática Pi → Codex. O handoff é o estado real do projeto:
+branch, HEAD, diff, spec, plano, testes e recibos. Uma alegação textual de outro
+agente nunca substitui esses artefatos.
+
+## Antes de instalar: fonte não é projeto consumidor
+
+Este repositório é a **fonte** do harness; a implementação vive em `core/`. Não
+rode `init` contra a própria raiz. O [PR #927](https://github.com/orobsonn/claude-harness/pull/927)
+adicionou uma trava explícita contra auto-vendor.
+
+O vendor é usado somente dentro de um **projeto consumidor**. Sem `--target`, a
+instalação atual leva Pi, Codex, Claude Code e OpenCode na mesma release. Um alvo
+explícito limita a operação deliberadamente a um runtime.
+
+## Fluxo diário: construir no Pi, validar no Codex
+
+1. No Pi, explore a ideia e feche as decisões de produto.
+2. Deixe o harness produzir e revisar spec, plano e testes.
+3. Despache as tasks; independentes podem executar em paralelo, dependentes
+   aguardam a integração dos recibos.
+4. Integre somente o SHA esperado e rode a validação agregada.
+5. Abra o mesmo projeto no Codex e peça uma revisão read-only do HEAD final.
+6. Use as ferramentas locais do Codex para reproduzir o fluxo real, inclusive no
+   browser quando disponível.
+7. Achado material volta para correção e nova validação antes de PR, merge ou release.
+
+Prompt-base para a etapa Codex:
+
+```text
+Valide o HEAD atual contra a spec e os critérios de aceite. Revise diff e testes,
+execute as verificações afetadas e reproduza o fluxo principal no browser quando
+essa superfície estiver disponível. Procure falhas de integração, estado, console,
+rede, segurança e experiência. Não altere nada: entregue achados reproduzíveis,
+severidade e evidência.
+```
+
+Browser/computer use é uma capacidade do ambiente Codex, não uma garantia do
+vendor nem uma integração automática com o Pi.
+
+## Fonte e projetos consumidores
+
+- **Fonte (este repo):** `https://github.com/orobsonn/claude-harness` — os runtimes distribuíveis vivem em `core/`.
+- **Projeto consumidor:** recebe os runtimes selecionados e seus manifestos de ownership. Configuração e memória pertencentes ao projeto são preservadas.
+
+O instalador `vendor-core.mjs` faz a cópia versionada. O diretório de destino depende do runtime: Pi, Codex, Claude Code ou OpenCode.
 
 ---
 
-## 1. Instalar o harness num projeto (primeira vez)
+## 1. Instalar o harness num projeto consumidor
 
-Bootstrap (você ainda não tem o script no projeto): clone a fonte uma vez e rode o instalador apontando para ela.
+O canal de distribuição é a tag do GitHub. Rode dentro do produto, nunca dentro deste repositório-fonte:
 
 ```bash
-git clone --depth 1 https://github.com/orobsonn/claude-harness.git /tmp/claude-harness
-node /tmp/claude-harness/core/skills/initializing-projects/references/vendor-core.mjs \
-  --source https://github.com/orobsonn/claude-harness.git --target /caminho/do/projeto
+cd /caminho/do/projeto
+npx -y "github:orobsonn/claude-harness#v2.6.8" init
 ```
 
-`--source` aceita a **URL git** (clona sozinho) ou um **caminho local** com `core/`. O que ele faz (idempotente):
+Sem `--target`, o padrão atual instala os quatro runtimes. Para limitar deliberadamente:
 
-- **sobrescreve** (framework): `.claude/agents/`, `.claude/skills/`, `.claude/rules/`, `CLAUDE-HARNESS-MEMORY-MODEL.md`
-- **semeia se ausente** (nunca clobbera): `.claude/memory/MEMORY.md`, `.claude/kaizen.md`
-- **merge por marcador**: `.claude/CLAUDE.md` (preserva conteúdo do projeto fora dos marcadores)
-- **non-clobber**: `.claude/settings.json` (se já existe, grava `settings.harness.json` pra você mesclar)
-- **escreve**: `.claude/.gitignore`, `.claude/.harness-version`, `.github/ISSUE_TEMPLATE/harness-task.yml`
+```bash
+npx -y "github:orobsonn/claude-harness#v2.6.8" init --target pi
+npx -y "github:orobsonn/claude-harness#v2.6.8" init --target codex
+```
+
+O que o vendor faz de forma idempotente:
+
+- substitui somente arquivos registrados como pertencentes ao framework;
+- preserva configuração explícita, memória e conteúdo do projeto;
+- recusa um diretório estrangeiro sem manifesto de ownership;
+- grava o marcador de versão de cada runtime instalado;
+- instala o template de issue do harness quando ausente.
 
 Depois:
 
@@ -42,15 +99,17 @@ gh label create "harness:ready"       -c 0E8A16 -d "Pronta para a pipeline autô
 gh label create "harness:in-progress" -c FBCA04 -d "Routine processando" || true
 gh label create "harness:done"        -c 5319E7 -d "PR aberto pela routine" || true
 
-# commitar o .claude/ na main (cloud routine clona a default branch)
-git add .claude .github/ISSUE_TEMPLATE/harness-task.yml
-git commit -m "chore: instala Claude Harness"
+# revise e commite somente os runtimes que o projeto adotou
+git status --short
+git commit -m "chore: instala delivery harness"
 git push origin main
 ```
 
-**Pré-requisitos pra a pipeline funcionar de verdade no projeto:**
-- o `.claude/` precisa estar na **branch que a routine clona** (a default — normalmente `main`);
-- o projeto precisa de **runner de teste** (vitest/jest) — senão o gate (`locked_tests`) fica vazio;
+**Pré-requisitos para a pipeline funcionar de verdade no projeto:**
+- o runtime precisa estar na branch/worktree realmente executada;
+- o projeto precisa de runner de teste — sem teste observável não existe prova de entrega;
+- o Pi usa a autenticação do usuário do host em `~/.pi/agent/auth.json`;
+- o Codex usa o sandbox e a política de aprovação da sessão como fronteira de segurança;
 - **se o projeto usa release-please:** ligue **Settings → Actions → General → "Allow GitHub Actions
   to create and approve pull requests"** (na API de permissões do repo é
   `can_approve_pull_request_reviews: true`). **Sintoma quando falta:** a action roda, **cria o
@@ -74,16 +133,15 @@ git push origin main
 
 ---
 
-## 2. Atualizar o harness num projeto já instalado
+## 2. Atualizar um projeto consumidor
 
-O `vendor-core.mjs` já está vendorado no projeto. Rode-o apontando para a URL:
+Use a skill de lifecycle do runtime ou a release fixada:
 
 ```bash
-node .claude/skills/initializing-projects/references/vendor-core.mjs \
-  --source https://github.com/orobsonn/claude-harness.git --target .
+npx --yes --package=github:orobsonn/claude-harness#v2.6.8 claude-harness init
 ```
 
-Atualiza os arquivos do framework para a versão atual da fonte **sem destruir** a memória (`.claude/memory/`), o `kaizen.md`, o conteúdo do projeto no `CLAUDE.md` (fora dos marcadores) nem o `settings.json`. A versão fica em `.claude/.harness-version`.
+O update preserva escolhas explícitas do operador, memória e arquivos fora do ownership do framework. Reinicie a sessão para carregar novas definições de agentes, hooks, plugins e skills. Nunca rode essa atualização na raiz do repositório-fonte.
 
 ---
 
@@ -97,7 +155,7 @@ A pipeline transforma a issue em spec → plano → testes. Para issue **nova**,
 
 ---
 
-## 4. Alternativa: routine na nuvem (claude.ai/code)
+## 4. Alternativa Claude Code: routine na nuvem
 
 Uma alternativa à VPS (seção 6), com limites de volume bem menores. A routine roda na nuvem, autônoma. **Routine não dispara por issue** (triggers de GitHub só cobrem PR/Release) — o padrão é **agendada + poll** das issues `harness:ready`.
 
@@ -152,19 +210,19 @@ O modo headless de verdade deste operador não é a cloud routine: é uma VPS co
 cron do usuário `orca`  ──▶  core/orca/select-and-dispatch.mjs  ──▶  orca worktree create
    (1 linha por projeto)          (escolhe a issue + trava)                │
                                                                           ▼
-                                                     agente (claude) num worktree do Orca
+                                                     runtime configurado num worktree do Orca
                                                                           │
                                                                           ▼
-                                                     lê o .claude/ VENDORADO do repo
+                                                     lê o harness VENDORADO do repo
 ```
 
-**São duas camadas, não dois motores.** O agente lançado num worktree do Orca lê o `.claude/` do
+**São duas camadas, não dois motores.** O agente lançado num worktree do Orca lê o runtime do
 próprio repositório, então a pipeline de entrega já está lá — o selector não precisa de despachante
-próprio. Ligar tudo:
+próprio. No fluxo atual, o terminal pode lançar o Pi Harness; Claude Code continua suportado. Ligar tudo:
 
 ```bash
-npx @orobsonn/claude-harness setup-orca   # na VPS, como o usuário do Orca — nunca root
-                                          # (alias: setup-vps — mesmo wizard, nome antigo)
+npx -y "github:orobsonn/claude-harness#v2.6.8" setup-orca
+                                          # na VPS, como o usuário do Orca — nunca root
 ```
 
 O wizard escreve `~/.config/claude-harness/projects/<slug>.json` e uma linha de cron cercada. Formato
@@ -182,7 +240,7 @@ node .claude/skills/connecting-orca/references/orca-doctor.mjs --ssh-host <alias
 
 # em qualquer máquina, sem vendorar nada — precisa da release que traz o comando;
 # numa versão anterior o npx responde usage + exit 1
-npx @orobsonn/claude-harness orca-doctor --ssh-host <alias>
+npx -y "github:orobsonn/claude-harness#v2.6.8" orca-doctor --ssh-host <alias>
 ```
 
 Barreiras, causas e correções: [playbook §8](orca-headless-vps-playbook.md#8-operando-a-vps-a-partir-de-uma-sessão-de-agente).
@@ -220,16 +278,23 @@ as saídas medidas:
 
 ---
 
-## Modelo do orquestrador
+## Modelos
 
-Setar **Sonnet** como modelo da sessão (`/model` no Claude Code, ou o modelo padrão da routine). O orquestrador é o maior consumidor de tokens do harness — é onde está a economia real. Os modelos superiores (Opus, Fable) são chamados **só nos pontos certos**, automaticamente, pelos sub-agentes: `planner` (Opus), `plan-reviewer` e `adversary` do gate final (Fable), `security`/`adversary` por-task (Opus). A tabela autoritativa está em `core/skills/orchestrating-delivery/SKILL.md`.
+Não existe mais uma tabela única Claude para todo o projeto. Cada runtime tem sua rota autoritativa:
 
-Isso só é seguro porque as decisões críticas do orquestrador estão em **trilhos determinísticos** (hook de entrada + guard `<PLANNER-ONLY>` forçam o dispatch do `planner`; override de path sensível é check de glob; routing de modelo é tabela fixa) — o modelo barato coordena, não julga arquitetura.
+- Pi: `core/pi/README.md` e o rail de dispatch do runtime;
+- Codex: `core/codex/harness.routing.json`;
+- OpenCode: `core/opencode/harness.routing.json`;
+- Claude Code: contrato do `orchestrating-delivery` daquele shell.
+
+O princípio comum continua: modelos menores absorvem volume mecânico; modelos fortes ficam em planejamento, revisão, segurança e fronteiras de decisão. O rail valida a rota concreta antes do dispatch onde o runtime oferece essa superfície.
 
 ## Modos
 
-- **Local (interativo):** operador no loop; gates humanos reais (aprovar spec/plano, demo).
-- **Headless (cloud routine):** sem humano; gates viram validação multi-agente; entrega = **PR draft, nunca merge**; o gate humano real é a **revisão do PR**. Ativado por ser cloud (`$CLAUDE_CODE_REMOTE`) ou pelo prompt "rode autônomo".
+- **Pi local/TUI:** fluxo diário principal, com operador acompanhando decisões e execução.
+- **Pi headless:** mesma cerimônia e mesmos gates, executada pelo launcher em modo JSON/prompt.
+- **Codex local:** validação final e debugging sobre o HEAD integrado; também pode executar delivery quando escolhido.
+- **Claude Code/OpenCode:** modos próprios documentados nos respectivos guias.
 
 ## Add-ons opcionais
 `modules/rtk/` (economia de token, hook fail-open) e `modules/mv/` (Mind Vault, por-usuário) — opt-in, nunca dependência do core.

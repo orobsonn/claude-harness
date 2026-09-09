@@ -1,5 +1,16 @@
 # Guia do operador — Pi Harness
 
+## Papel no fluxo atual
+
+Pi é o harness principal de criação e entrega no uso diário. A conversa começa
+na ideia ou issue, passa por spec e plano, executa cada implementação na sua
+pipeline local, integra os resultados e fecha testes agregados, memória,
+revisões finais e shipping.
+
+Codex entra depois como uma segunda superfície local de validação e debugging.
+Isso não reduz os gates internos do Pi nem cria uma troca automática de sessão:
+o handoff é a branch/HEAD integrada, acompanhada da spec, plano, testes e recibos.
+
 ## Instalação e atualização
 
 No projeto, instale ou atualize o harness pelo lifecycle; não copie arquivos de
@@ -116,6 +127,19 @@ modifica uma execução que já esteja presa a um runtime imutável.
 registry e os recibos de `harness_tasks` são a autoridade operacional. Essa pipeline
 usa Git e o Pi Harness instalados na worktree atual; não exige um clone ou processo
 do Orca.
+
+## Passagem para validação no Codex
+
+Faça a passagem somente depois que o pai integrar as tasks e rodar a validação
+agregada. Abra o mesmo projeto/branch no Codex e peça uma inspeção read-only do
+HEAD atual contra a spec e os critérios de aceite. Quando o ambiente Codex
+oferecer browser/computer use, use essa superfície para reproduzir o fluxo real,
+inspecionar console/rede e procurar falhas que o diff e os testes não mostraram.
+
+Achado material volta para correção e nova validação. Não copie um resumo de
+sessão como se fosse autoridade: Git, testes, spec, plano e evidências atuais são
+o contrato compartilhado. Codex continua capaz de executar delivery próprio;
+este parágrafo descreve o uso diário recomendado, não uma limitação técnica.
 
 ## Memória e aprendizados
 
