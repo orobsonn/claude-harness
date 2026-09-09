@@ -252,7 +252,7 @@ test("reconciled dependencies keep original audit paths but require fresh review
   run(f.root, "git", "merge", "--no-ff", "-m", "host dependency merge", parent);
   const head = run(f.root, "git", "rev-parse", "HEAD");
   const planPath = path.join(f.root, ".pi/harness/plans", FEATURE, "execution-plan.json");
-  write(planPath, { tasks: [{ id: "upstream", depends_on: [] }, { id: TASK, depends_on: ["upstream"] }] });
+  write(planPath, { tasks: [{ id: "upstream", depends_on: [] }, { id: "unregistered", depends_on: [] }, { id: TASK, depends_on: ["upstream"] }] });
   fs.appendFileSync(path.join(f.root, ".git/info/exclude"), "\n.pi/harness/plans/\n");
   f.entry.plan_sha256 = crypto.createHash("sha256").update(fs.readFileSync(planPath)).digest("hex");
   f.dependencies.readTaskRunBindingFn().grant.plan_sha256 = f.entry.plan_sha256;
@@ -317,9 +317,11 @@ test("reconciled dependencies keep original audit paths but require fresh review
   unregistered.reconciliations[0].upstreams[0].task_id = "unregistered";
   unregistered.reconciliations[0].upstreams[0].receipt.task_id = "unregistered";
   assert.equal(inspectTaskRun(unregistered, f.dependencies).ok, false, "an internally consistent but unregistered upstream receipt is not authority");
+  const siblingPrevious = { ...previous, task_id: "unregistered" };
+  unregistered.reconciliations[0].upstreams[0].previous_receipt_sha256 = hashTaskReceipt(siblingPrevious);
   registry.tasks.unregistered = { ...registry.tasks.upstream,
     integration: unregistered.reconciliations[0].upstreams[0].receipt,
-    integration_history: [{ ...previous, task_id: "unregistered" }] };
+    integration_history: [siblingPrevious] };
   write(registryPath, registry);
   assert.match(inspectTaskRun(unregistered, f.dependencies).reason, /not a registered ancestor/, "a registered sibling is not dependency authority");
   const results = registry.tasks.upstream.result_history;
