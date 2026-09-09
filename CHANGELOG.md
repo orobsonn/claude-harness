@@ -5,6 +5,17 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [2.6.5](https://github.com/orobsonn/claude-harness/compare/v2.6.4...v2.6.5) (2026-09-09)
+
+
+### Bug Fixes
+
+* **pi:** align parallel review guidance and dispatch error cards ([#920](https://github.com/orobsonn/claude-harness/issues/920)) ([d4b6df0](https://github.com/orobsonn/claude-harness/commit/d4b6df037537832926c6dfb67aeb941b17922985))
+* **pi:** carry stable ceremony mode to planner ([#914](https://github.com/orobsonn/claude-harness/issues/914)) ([26cad09](https://github.com/orobsonn/claude-harness/commit/26cad09e07faee0f266f9fac973ec91c2931dc8a))
+* **pi:** converge reviewer correction loops ([#918](https://github.com/orobsonn/claude-harness/issues/918)) ([ac94f19](https://github.com/orobsonn/claude-harness/commit/ac94f1990b8750f204ae904acd1a664e0c174e62))
+* **pi:** converge task fidelity reviews ([#916](https://github.com/orobsonn/claude-harness/issues/916)) ([c407b4f](https://github.com/orobsonn/claude-harness/commit/c407b4ff67c969654a7657946bbef75075d93948))
+* **pi:** recover blocked dependent tasks after upstream corrections ([#921](https://github.com/orobsonn/claude-harness/issues/921)) ([07d7fab](https://github.com/orobsonn/claude-harness/commit/07d7fabbba7ec6393223aa6320e9631379bc246e))
+
 ## [2.6.4](https://github.com/orobsonn/claude-harness/compare/v2.6.3...v2.6.4) (2026-09-08)
 
 
