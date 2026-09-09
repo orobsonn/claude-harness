@@ -251,17 +251,32 @@ test("reconciled dependencies keep original audit paths but require fresh review
   run(f.root, "git", "checkout", "-b", "dependent-recovery", f.head);
   run(f.root, "git", "merge", "--no-ff", "-m", "host dependency merge", parent);
   const head = run(f.root, "git", "rev-parse", "HEAD");
+  const planPath = path.join(f.root, ".pi/harness/plans", FEATURE, "execution-plan.json");
+  write(planPath, { tasks: [{ id: "upstream", depends_on: [] }, { id: TASK, depends_on: ["upstream"] }] });
+  fs.appendFileSync(path.join(f.root, ".git/info/exclude"), "\n.pi/harness/plans/\n");
+  f.entry.plan_sha256 = crypto.createHash("sha256").update(fs.readFileSync(planPath)).digest("hex");
+  f.dependencies.readTaskRunBindingFn().grant.plan_sha256 = f.entry.plan_sha256;
+  const oldResult = { child_head: f.base };
+  const correctedResult = { child_head: parent };
+  const receipt = {
+    version: 1, written_by: "host-task-integration", task_id: "upstream", attempt_id: "upstream-attempt",
+    session_id: "upstream-session", result_sha256: hashTaskReceipt(correctedResult),
+    parent_session_id: PARENT, feature_id: FEATURE, parent_root: f.root,
+    plan_sha256: f.entry.plan_sha256, spec_sha256: f.entry.spec_sha256,
+    child_head: parent, integrated_head: parent,
+  };
+  const previous = { ...receipt, child_head: f.base, integrated_head: f.base, result_sha256: hashTaskReceipt(oldResult) };
+  const registryPath = path.join(f.root, ".pi/harness/state", PARENT, "task-runs/index.json");
+  const registry = { version: 1, parent_session_id: PARENT, feature_id: FEATURE,
+    plan_sha256: f.entry.plan_sha256, spec_sha256: f.entry.spec_sha256,
+    tasks: { upstream: { status: "integrated", attempt_id: "upstream-attempt", integration: receipt, integration_history: [previous],
+      result: correctedResult, result_history: { [previous.result_sha256]: oldResult } } } };
+  write(registryPath, registry);
   f.entry.reconciliations = [{
     written_by: "host-task-reconciliation", task_id: TASK, attempt_id: ATTEMPT,
     scope_base_sha: f.base, pre_child_head: f.head, parent_head: parent,
     merged_head: head, tree: run(f.root, "git", "rev-parse", "HEAD^{tree}"), launch_count: 1,
-    upstreams: [{ task_id: "upstream", attempt_id: "upstream-attempt", previous_receipt_sha256: "f".repeat(64), receipt: {
-      version: 1, written_by: "host-task-integration", task_id: "upstream", attempt_id: "upstream-attempt",
-      session_id: "upstream-session", result_sha256: "e".repeat(64),
-      parent_session_id: PARENT, feature_id: FEATURE, parent_root: f.root,
-      plan_sha256: f.entry.plan_sha256, spec_sha256: f.entry.spec_sha256,
-      child_head: parent, integrated_head: parent,
-    } }],
+    upstreams: [{ task_id: "upstream", attempt_id: "upstream-attempt", previous_receipt_sha256: hashTaskReceipt(previous), receipt }],
   }];
   f.dependencies.captureReviewInputFn = () => ({ ok: true, snapshot: { head_sha: head, input_digest: DIGEST } });
   const stale = inspectTaskRun(f.entry, f.dependencies);
@@ -298,6 +313,21 @@ test("reconciled dependencies keep original audit paths but require fresh review
   assert.equal(current.result.scope_base_sha, parent);
   assert.match(current.result.reconciliation_sha256, /^[a-f0-9]{64}$/);
   assert.ok(current.result.changed_paths.includes("upstream.mjs"), "audit retains inherited changes");
+  const unregistered = structuredClone(f.entry);
+  unregistered.reconciliations[0].upstreams[0].task_id = "unregistered";
+  unregistered.reconciliations[0].upstreams[0].receipt.task_id = "unregistered";
+  assert.equal(inspectTaskRun(unregistered, f.dependencies).ok, false, "an internally consistent but unregistered upstream receipt is not authority");
+  registry.tasks.unregistered = { ...registry.tasks.upstream,
+    integration: unregistered.reconciliations[0].upstreams[0].receipt,
+    integration_history: [{ ...previous, task_id: "unregistered" }] };
+  write(registryPath, registry);
+  assert.match(inspectTaskRun(unregistered, f.dependencies).reason, /not a registered ancestor/, "a registered sibling is not dependency authority");
+  const results = registry.tasks.upstream.result_history;
+  registry.tasks.upstream.result_history = {};
+  write(registryPath, registry);
+  assert.match(inspectTaskRun(f.entry, f.dependencies).reason, /matching registry history and result/);
+  registry.tasks.upstream.result_history = results;
+  write(registryPath, registry);
   f.entry.reconciliation_required = { pre_child_head: head };
   assert.match(inspectTaskRun(f.entry, f.dependencies).reason, /requires reconciliation/);
   delete f.entry.reconciliation_required;

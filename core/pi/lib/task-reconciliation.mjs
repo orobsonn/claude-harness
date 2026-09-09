@@ -1,8 +1,11 @@
 /** Verify host merges separately from a task's immutable admission base. */
 import { execFileSync } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
+import { createHash } from "node:crypto";
 import { checkScope } from "../../shared/lib/capture-oracle.mjs";
-import { hashTaskReceipt } from "./task-contract.mjs";
-import { isSafeSessionId, isSafeTaskId } from "../../shared/lib/feature-id.mjs";
+import { hashTaskReceipt, taskRegistryPath } from "./task-contract.mjs";
+import { isSafeFeatureId, isSafeSessionId, isSafeTaskId } from "../../shared/lib/feature-id.mjs";
 
 const sha = /^[a-f0-9]{40}$/;
 const git = (root, ...args) => execFileSync("git", args, {
@@ -18,6 +21,48 @@ export function taskReconciliationDigest(entry) {
   return entry.reconciliations?.length ? hashTaskReceipt(entry.reconciliations) : null;
 }
 
+function reconciliationAuthority(entry) {
+  if (!isSafeFeatureId(entry.feature_id) || !isSafeSessionId(entry.parent_session_id))
+    throw new Error("invalid reconciliation owner");
+  const registry = JSON.parse(fs.readFileSync(taskRegistryPath(entry.parent_root, entry.parent_session_id), "utf8"));
+  const bytes = fs.readFileSync(path.join(entry.parent_root, ".pi/harness/plans", entry.feature_id, "execution-plan.json"));
+  const plan = JSON.parse(bytes);
+  if (registry.version !== 1 || registry.parent_session_id !== entry.parent_session_id ||
+      registry.feature_id !== entry.feature_id || registry.plan_sha256 !== entry.plan_sha256 ||
+      registry.spec_sha256 !== entry.spec_sha256 ||
+      createHash("sha256").update(bytes).digest("hex") !== entry.plan_sha256)
+    throw new Error("reconciliation owner plan or registry changed");
+  const tasks = new Map(plan.tasks.map((task) => [task.id, task]));
+  const ancestors = new Set();
+  const pending = [...(tasks.get(entry.task_id)?.depends_on ?? [])];
+  while (pending.length) {
+    const id = pending.pop();
+    if (ancestors.has(id)) continue;
+    const task = tasks.get(id);
+    if (!task || id === entry.task_id) throw new Error("invalid reconciliation dependency graph");
+    ancestors.add(id);
+    pending.push(...task.depends_on);
+  }
+  return { registry, ancestors };
+}
+
+function registeredCorrection(upstream, authority, root) {
+  const current = authority.registry.tasks?.[upstream.task_id];
+  if (!authority.ancestors.has(upstream.task_id) || current?.attempt_id !== upstream.attempt_id || current.status !== "integrated")
+    throw new Error("corrected dependency is not a registered ancestor of this task");
+  const receipts = [current.integration, ...(current.integration_history ?? [])].filter(Boolean);
+  const results = [current.result, ...Object.values(current.result_history ?? {})].filter(Boolean);
+  for (const digest of [upstream.previous_receipt_sha256, hashTaskReceipt(upstream.receipt)]) {
+    const receipt = receipts.find((item) => hashTaskReceipt(item) === digest);
+    if (!receipt || receipt.task_id !== upstream.task_id || receipt.attempt_id !== upstream.attempt_id ||
+        !results.some((result) => hashTaskReceipt(result) === receipt.result_sha256))
+      throw new Error("corrected dependency receipt lacks matching registry history and result");
+  }
+  const previous = current.integration_history?.find((item) => hashTaskReceipt(item) === upstream.previous_receipt_sha256);
+  if (!previous) throw new Error("previous dependency receipt is missing from integration history");
+  ancestor(root, previous.integrated_head, upstream.receipt.integrated_head);
+}
+
 /** Throws before old or unproven content can be treated as a reviewed task result. */
 export function taskScopeBase(entry, root, head, scopes) {
   if (entry.reconciliation_required || entry.reconciliation_intent)
@@ -26,6 +71,7 @@ export function taskScopeBase(entry, root, head, scopes) {
     throw new Error("invalid task reconciliation history");
   let base = entry.base_sha;
   let priorHead = base;
+  const authority = entry.reconciliations?.length ? reconciliationAuthority(entry) : null;
   for (const proof of entry.reconciliations ?? []) {
     if (proof?.written_by !== "host-task-reconciliation" || proof.task_id !== entry.task_id ||
         proof.attempt_id !== entry.attempt_id || proof.scope_base_sha !== base ||
@@ -49,6 +95,7 @@ export function taskScopeBase(entry, root, head, scopes) {
           hashTaskReceipt(receipt) === upstream.previous_receipt_sha256)
         throw new Error("invalid corrected dependency receipt in task reconciliation");
       ids.add(upstream.task_id);
+      registeredCorrection(upstream, authority, root);
       ancestor(root, receipt.child_head, receipt.integrated_head);
       ancestor(root, receipt.integrated_head, proof.parent_head);
     }
