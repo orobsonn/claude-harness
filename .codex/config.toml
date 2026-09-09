@@ -13,6 +13,12 @@ max_concurrent_threads_per_session = 3
 hooks = true
 multi_agent = true
 
+[permissions.harness]
+extends = ":workspace"
+
+[permissions.harness.filesystem]
+glob_scan_max_depth = 8
+
 [permissions.harness.filesystem.":workspace_roots"]
 ".env" = "deny"
 ".env.*" = "deny"
