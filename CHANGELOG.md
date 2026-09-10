@@ -5,6 +5,13 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [2.6.12](https://github.com/orobsonn/claude-harness/compare/v2.6.11...v2.6.12) (2026-09-10)
+
+
+### Bug Fixes
+
+* **pi:** allow operator model preferences through native write ([#936](https://github.com/orobsonn/claude-harness/issues/936)) ([a4a3147](https://github.com/orobsonn/claude-harness/commit/a4a31476c40491db3a185c8fbfbcd2af8859072c))
+
 ## [2.6.11](https://github.com/orobsonn/claude-harness/compare/v2.6.10...v2.6.11) (2026-09-10)
 
 
