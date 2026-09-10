@@ -274,7 +274,6 @@ export function parsePiReviewCompletion({ role, result, isError, nativeRecord, s
   const logicalRole = role.replace("harness-", "");
   const validated = validateReviewReport(logicalRole, report);
   if (!validated.ok) return { ok: false, reason: validated.reason };
-  if (validated.report.issues.length !== 0) return { ok: false, reason: "review report contains issues" };
   const canonical = validated.report;
   return {
     ok: true,
@@ -291,7 +290,7 @@ export function parsePiReviewCompletion({ role, result, isError, nativeRecord, s
       input_digest: snapshotStart.input_digest,
       report: canonical,
       report_digest: digest(JSON.stringify(canonical)),
-      accepted: true,
+      accepted: canonical.issues.length === 0,
     },
   };
 }
@@ -299,7 +298,7 @@ export function parsePiReviewCompletion({ role, result, isError, nativeRecord, s
 function validCompletion(completion) {
   if (!completion || typeof completion !== "object" || Array.isArray(completion) ||
       completion.written_by !== "host-subagent-completion" || !isParallelReviewRole(completion.role) ||
-      completion.accepted !== true || completion.status !== "completed" ||
+      typeof completion.accepted !== "boolean" || completion.status !== "completed" ||
       !isSafeSessionId(completion.parent_session_id) || !isSafeFeatureId(completion.feature_id) ||
       !HEX_256.test(completion.input_digest ?? "") || !HEX_256.test(completion.report_digest ?? "") ||
       !HEX_256.test(completion.reviewed_head_sha ?? "") && !/^[0-9a-f]{40}$/.test(completion.reviewed_head_sha ?? "") ||
@@ -307,12 +306,38 @@ function validCompletion(completion) {
   if (completion.phase === "task" && !isSafeTaskId(completion.task_id)) return false;
   if (completion.phase !== "task" && completion.phase !== "final") return false;
   const validated = validateReviewReport(completion.role.replace("harness-", ""), completion.report);
-  return validated.ok && validated.report.issues.length === 0 &&
+  return validated.ok && completion.accepted === (validated.report.issues.length === 0) &&
     digest(JSON.stringify(validated.report)) === completion.report_digest;
 }
 
 function receiptKey(role) {
   return role.replace("harness-", "");
+}
+
+function replaceReviewReceipt(state, receipt) {
+  const key = receiptKey(receipt.role);
+  if (receipt.phase === "final") return { ...state, final_review_evidence: { ...state.final_review_evidence, [key]: receipt } };
+  const task = `${receipt.feature_id}/${receipt.task_id}`;
+  if (receipt.role === "harness-adversary") return { ...state, task_adversary_evidence: { ...state.task_adversary_evidence, [task]: receipt } };
+  return { ...state, task_review_evidence: { ...state.task_review_evidence,
+    [task]: { ...state.task_review_evidence?.[task], [key]: receipt } } };
+}
+
+/** A new native dispatch supersedes only that role, even if it later fails or aborts. */
+export function beginPiReviewReceipt({ projectRoot, sessionId, featureId, phase, taskId, role, dispatchCallId } = {}) {
+  if (!isSafeSessionId(sessionId) || !isSafeFeatureId(featureId) || !isParallelReviewRole(role) ||
+      !["task", "final"].includes(phase) || (phase === "task" && !isSafeTaskId(taskId)) ||
+      typeof dispatchCallId !== "string" || !dispatchCallId) return { ok: false, reason: "exact review dispatch identity required" };
+  const statePath = piGateStatePath({ projectRoot, sessionId });
+  if (!statePath.ok) return statePath;
+  return withGateStateLock(statePath.path, (state) => {
+    if (state.session_id !== sessionId || state.feature_id !== featureId) return { ok: false, reason: "gate-state review identity mismatch" };
+    const current = findPiReviewReceipt(state, { featureId, taskId, phase, role });
+    if (current?.active_dispatch_call_id === dispatchCallId) return state;
+    return replaceReviewReceipt(state, { written_by: "host-subagent-dispatch", parent_session_id: sessionId,
+      feature_id: featureId, phase, ...(phase === "task" ? { task_id: taskId } : {}), role,
+      active_dispatch_call_id: dispatchCallId, status: "running", accepted: false });
+  });
 }
 
 /** Read one persisted review receipt without deciding whether the role was required. */
@@ -336,10 +361,10 @@ function findDispatchReceipt(value, dispatchCallId) {
   return null;
 }
 
-/** Persist one accepted receipt with the complete sibling reduction under the shared state lock. */
+/** Persist the current verdict (including findings), preserving sibling verdicts atomically. */
 export function recordPiReviewReceipt({ projectRoot, sessionId, completion, binding } = {}) {
   if (!validCompletion(completion) || completion.parent_session_id !== sessionId) {
-    return { ok: false, reason: "accepted matching review completion required" };
+    return { ok: false, reason: "valid matching review completion required" };
   }
   if (!binding || typeof binding !== "object" || Array.isArray(binding) ||
       typeof binding.dispatchCallId !== "string" || !binding.dispatchCallId ||
@@ -358,34 +383,34 @@ export function recordPiReviewReceipt({ projectRoot, sessionId, completion, bind
     if (previous.session_id !== sessionId || previous.feature_id !== completion.feature_id) {
       return { ok: false, reason: "gate-state review identity mismatch" };
     }
+    const current = findPiReviewReceipt(previous, { featureId: completion.feature_id, taskId: completion.task_id,
+      role: completion.role, phase: completion.phase });
+    if (current?.active_dispatch_call_id) {
+      if (current.active_dispatch_call_id !== binding.dispatchCallId) return { ok: false, reason: "review completion superseded by a newer dispatch" };
+      receipt.active_dispatch_call_id = current.active_dispatch_call_id;
+    }
     const replay = findDispatchReceipt(previous, binding.dispatchCallId);
     if (replay) return stable(replay) === stable(receipt) ? previous : { ok: false, reason: "review dispatch replay binding mismatch" };
-    const roleKey = receiptKey(completion.role);
-    if (completion.phase === "final") {
-      const siblings = previous.final_review_evidence && typeof previous.final_review_evidence === "object" && !Array.isArray(previous.final_review_evidence)
-        ? previous.final_review_evidence : {};
-      return { ...previous, final_review_evidence: { ...siblings, [roleKey]: receipt } };
-    }
-    const featureTask = `${completion.feature_id}/${completion.task_id}`;
-    if (completion.role === "harness-adversary") {
-      const legacy = previous.task_adversary_evidence && typeof previous.task_adversary_evidence === "object" && !Array.isArray(previous.task_adversary_evidence)
-        ? previous.task_adversary_evidence : {};
-      return { ...previous, task_adversary_evidence: { ...legacy, [featureTask]: receipt } };
-    }
-    const tasks = previous.task_review_evidence && typeof previous.task_review_evidence === "object" && !Array.isArray(previous.task_review_evidence)
-      ? previous.task_review_evidence : {};
-    const siblings = tasks[featureTask] && typeof tasks[featureTask] === "object" && !Array.isArray(tasks[featureTask]) ? tasks[featureTask] : {};
-    return { ...previous, task_review_evidence: { ...tasks, [featureTask]: { ...siblings, [roleKey]: receipt } } };
+    return replaceReviewReceipt(previous, receipt);
   });
   return locked.ok ? { ok: true, receipt, state: locked.state } : locked;
 }
 
-export function isCurrentPiReviewReceipt(receipt, { sessionId, featureId, role, phase, taskId, snapshot } = {}) {
+function boundCurrentReceipt(receipt, { sessionId, featureId, role, phase, taskId, snapshot } = {}) {
   return validCompletion(receipt) && receipt.parent_session_id === sessionId && receipt.feature_id === featureId &&
     receipt.role === role && receipt.phase === phase && (phase !== "task" || receipt.task_id === taskId) &&
     receipt.reviewed_head_sha === snapshot?.head_sha && receipt.input_digest === snapshot?.input_digest &&
     typeof receipt.dispatch_call_id === "string" && receipt.dispatch_call_id.length > 0 &&
     typeof receipt.child_session_id === "string" && receipt.child_session_id.length > 0;
+}
+
+export function isCurrentPiReviewReceipt(receipt, identity) {
+  return receipt?.accepted === true && boundCurrentReceipt(receipt, identity);
+}
+
+/** Diagnostic only: exposing a current finding never accepts its review. */
+export function currentPiReviewIssues(receipt, identity) {
+  return boundCurrentReceipt(receipt, identity) ? receipt.report.issues : [];
 }
 
 /** Validate the accepted canonical report and bind it to a freshly captured input digest. */

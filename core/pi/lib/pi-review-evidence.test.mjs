@@ -376,7 +376,7 @@ test("parsePiReviewCompletion accepts only a completed canonical no-findings rep
   }
 });
 
-test("parsePiReviewCompletion rejects native error, abort/turn-limit, malformed prose and reported findings", (t) => {
+test("parsePiReviewCompletion rejects native error, abort/turn-limit and malformed prose", (t) => {
   const snapshot = capture(fixture(t));
   const finding = {
     description: "Sibling evidence can be overwritten.",
@@ -391,7 +391,6 @@ test("parsePiReviewCompletion rejects native error, abort/turn-limit, malformed 
     ["aborted native status despite positive prose", wrappedResult('{"issues":[]}', { status: "aborted" }), false, nativeRecord('{"issues":[]}', { status: "aborted" })],
     ["turn-limit native status despite positive prose", wrappedResult('{"issues":[]}', { status: "steered" }), false, nativeRecord('{"issues":[]}', { status: "steered" })],
     ["completed positive prose without canonical report", wrappedResult("Looks good, approved."), false, nativeRecord("Looks good, approved.")],
-    ["completed canonical negative report", wrappedResult(JSON.stringify({ issues: [finding] })), false, nativeRecord(JSON.stringify({ issues: [finding] }))],
     ["accepted JSON followed by contradictory failure", wrappedResult('{"issues":[]}\nStatus: FAIL'), false, nativeRecord('{"issues":[]}\nStatus: FAIL')],
     ["accepted JSON with unresolved native question", wrappedResult('{"issues":[]}'), false, nativeRecord('{"issues":[]}', { pendingQuestion: "Should I inspect the remaining file?" })],
     ["wrapper agent id differs from native record", wrappedResult('{"issues":[]}', { agentId: "agent-wrapper" }), false, nativeRecord('{"issues":[]}', { id: "agent-record" })],
@@ -408,6 +407,42 @@ test("parsePiReviewCompletion rejects native error, abort/turn-limit, malformed 
     });
     assert.equal(parsed?.ok, false, label);
     assert.equal(typeof parsed?.reason, "string", `${label} must explain why it cannot approve`);
+  }
+});
+
+test("new review revokes only its old approval, preserves findings and rejects a delayed old completion", (t) => {
+  const root = fixture(t);
+  const finding = { description: "SEC-001 wrong owner can mutate the row", category: "auth", severity: "high",
+    scope: "src/feature.ts", evidence: "update omits owner predicate", fix_hint: "keep owner predicate" };
+  for (const phase of ["task", "final"]) {
+    const snapshot = capture(root, { phase, ...(phase === "task" ? { taskId: TASK } : {}) });
+    const args = { projectRoot: root, sessionId: SESSION, featureId: FEATURE, phase, taskId: TASK };
+    for (const role of ROLES) {
+      const completion = parseAccepted(role, snapshot, { suffix: `${phase}-${role}` });
+      assert.equal(api("recordPiReviewReceipt", { ...args, completion, binding: binding(role, `${phase}-${role}`) }).ok, true);
+    }
+    assert.deepEqual(api("missingPiReviewRoles", { ...args, roles: ROLES }), []);
+    const role = "harness-security";
+    const next = binding(role, `${phase}-new-security`);
+    const body = JSON.stringify({ issues: [finding] });
+    const parsed = api("parsePiReviewCompletion", { role, result: wrappedResult(body, { agentId: next.agentId }),
+      nativeRecord: nativeRecord(body, { id: next.agentId, type: role }), snapshotStart: snapshot, snapshotEnd: snapshot });
+    assert.equal(parsed.ok, true, parsed.reason);
+    assert.equal(parsed.completion.accepted, false);
+    assert.equal(api("beginPiReviewReceipt", { ...args, role, dispatchCallId: next.dispatchCallId }).ok, true);
+    assert.deepEqual(api("missingPiReviewRoles", { ...args, roles: ROLES }), [role], "pending/failed review cannot reuse old approval");
+    assert.equal(api("recordPiReviewReceipt", { ...args, completion: parsed.completion, binding: next }).ok, true);
+    const saved = JSON.parse(readFileSync(join(root, ".pi/harness/state", SESSION, "gate-state.json"), "utf8"));
+    const receipt = phase === "final" ? saved.final_review_evidence.security : saved.task_review_evidence[`${FEATURE}/${TASK}`].security;
+    assert.deepEqual(receipt.report.issues, [finding]);
+    assert.deepEqual(api("missingPiReviewRoles", { ...args, roles: ROLES }), [role]);
+    const old = parseAccepted(role, snapshot, { suffix: `${phase}-${role}` });
+    assert.equal(api("recordPiReviewReceipt", { ...args, completion: old, binding: binding(role, `${phase}-${role}`) }).ok, false);
+    assert.deepEqual(api("missingPiReviewRoles", { ...args, roles: ROLES }), [role]);
+    const fixed = binding(role, `${phase}-fixed-security`);
+    assert.equal(api("beginPiReviewReceipt", { ...args, role, dispatchCallId: fixed.dispatchCallId }).ok, true);
+    assert.equal(api("recordPiReviewReceipt", { ...args, completion: parseAccepted(role, snapshot, { suffix: `${phase}-fixed-security` }), binding: fixed }).ok, true);
+    assert.deepEqual(api("missingPiReviewRoles", { ...args, roles: ROLES }), []);
   }
 });
 

@@ -8,9 +8,14 @@ import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { isPiBashTool, piSessionId } from "./pi-adapter-map.mjs";
 import { isSafeSessionId } from "../../shared/lib/feature-id.mjs";
+import { parseTaskDispatchIdentity } from "../../opencode/lib/task-dispatch-identity.mjs";
+import { classifyPiReviewDispatch } from "./pi-review-concurrency.mjs";
+import { readTaskRunBinding } from "./task-run.mjs";
 
 const INLINE_OUTPUT_MAX_BYTES = 128 * 1024;
 const COMMAND_MAX_BYTES = 32 * 1024;
+const REVIEW_DIFF_MAX_BYTES = 64 * 1024 * 1024;
+const FULL_GIT_SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 
 function hash(value) {
   return createHash("sha256").update(value).digest("hex");
@@ -109,8 +114,287 @@ function worktreeIdentity(cwd) {
   }
 }
 
+function splitZero(value) {
+  return Buffer.isBuffer(value) ? value.toString("utf8").split("\0").filter(Boolean) : [];
+}
+
+function gitBuffer(root, args) {
+  return execFileSync("git", args, {
+    cwd: root,
+    encoding: "buffer",
+    env: { ...process.env, GIT_LITERAL_PATHSPECS: "1", GIT_EXTERNAL_DIFF: "" },
+    stdio: ["ignore", "pipe", "ignore"],
+    timeout: 15000,
+    maxBuffer: REVIEW_DIFF_MAX_BYTES,
+  });
+}
+
+function reviewAudience(role, prompt) {
+  const classified = classifyPiReviewDispatch(role, prompt);
+  if (classified) return classified;
+  if (role !== "harness-test-reviewer") return null;
+  const task = parseTaskDispatchIdentity(prompt);
+  return task.ok ? { phase: "test-fidelity", taskId: task.taskId } : null;
+}
+
+function reviewBaseline(root, sessionId, audience, headSha) {
+  if (audience.phase === "test-fidelity") {
+    return { status: "available", sha: headSha, source: "current-head-before-freeze" };
+  }
+  if (audience.phase === "task") {
+    const binding = readTaskRunBinding(root, sessionId);
+    const sha = binding?.ok === true ? binding.grant?.base_sha : "";
+    if (FULL_GIT_SHA.test(sha ?? "")) {
+      try {
+        execFileSync("git", ["merge-base", "--is-ancestor", sha, headSha], {
+          cwd: root, stdio: "ignore", timeout: 10000,
+        });
+        return { status: "available", sha, source: "host-task-grant" };
+      } catch { /* report unavailable below */ }
+    }
+    return { status: "unavailable", reason: "host task baseline unavailable" };
+  }
+  for (const candidate of ["refs/remotes/origin/HEAD", "refs/remotes/origin/main"]) {
+    try {
+      const sha = execFileSync("git", ["merge-base", headSha, candidate], {
+        cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 10000,
+      }).trim();
+      if (FULL_GIT_SHA.test(sha)) return { status: "available", sha, source: candidate };
+    } catch { /* try the next explicit remote baseline */ }
+  }
+  return { status: "unavailable", reason: "remote review baseline unavailable" };
+}
+
+function sensitiveEvidencePath(value) {
+  if (typeof value !== "string") return true;
+  const normalized = value.replaceAll("\\", "/");
+  return normalized === "node_modules" || normalized.startsWith("node_modules/") ||
+    normalized === ".pi/harness" || normalized.startsWith(".pi/harness/") ||
+    sensitiveCommand(`git diff -- ${normalized}`);
+}
+
+function safeReviewPaths(root, args) {
+  return splitZero(gitBuffer(root, args)).filter((relative) => !sensitiveEvidencePath(relative));
+}
+
+function statusSnapshot(root) {
+  const records = splitZero(gitBuffer(root, [
+    "status", "--porcelain=v1", "-z", "--untracked-files=all", "--no-renames", "--", ".",
+  ])).map((record) => ({ code: record.slice(0, 2), path: record.slice(3) }))
+    .filter((record) => !sensitiveEvidencePath(record.path));
+  const indexPaths = safeReviewPaths(root, ["diff", "--cached", "--name-only", "-z", "--no-renames", "HEAD", "--"]);
+  const worktreePaths = safeReviewPaths(root, ["diff", "--name-only", "-z", "--no-renames", "--"]);
+  const untrackedPaths = safeReviewPaths(root, ["ls-files", "--others", "--exclude-standard", "-z"]);
+  return { records, indexPaths, worktreePaths, untrackedPaths };
+}
+
+function untrackedPatch(root, relativePath) {
+  const args = ["diff", "--no-index", "--binary", "--no-ext-diff", "--no-textconv", "--", "/dev/null"];
+  args.push(relativePath);
+  try {
+    return gitBuffer(root, args);
+  } catch (error) {
+    if (error?.status === 1 && Buffer.isBuffer(error.stdout)) return error.stdout;
+    throw error;
+  }
+}
+
+function exactReviewDiff(root, baseline, headSha, untrackedPaths) {
+  const baseSha = baseline.status === "available" ? baseline.sha : headSha;
+  const namesArgs = ["diff", "--name-only", "-z", "--no-renames"];
+  namesArgs.push(baseSha, "--");
+  const trackedPaths = safeReviewPaths(root, namesArgs);
+  const diffArgs = ["diff", "--binary", "--full-index", "--no-ext-diff", "--no-textconv", "--no-renames"];
+  diffArgs.push(baseSha, "--", ...trackedPaths);
+  const tracked = trackedPaths.length === 0 ? Buffer.alloc(0) : gitBuffer(root, diffArgs);
+  const header = Buffer.from(`# Harness review diff\n# identity: ${JSON.stringify({ baseline, head_sha: headSha })}\n`);
+  const chunks = [header, tracked];
+  const appendUntracked = untrackedPatch;
+  for (const item of untrackedPaths) chunks.push(appendUntracked(root, item));
+  const result = Buffer.concat(chunks);
+  if (result.length > REVIEW_DIFF_MAX_BYTES) throw new Error("review diff exceeds transport limit");
+  return result;
+}
+
+function regularFileDigest(file) {
+  const open = fs.openSync;
+  const fd = open(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+  try {
+    const info = fs.fstatSync(fd);
+    if (!info.isFile() || info.nlink !== 1) throw new Error("review evidence is not a regular file");
+    const digest = createHash("sha256");
+    const chunk = Buffer.alloc(64 * 1024);
+    let offset = 0;
+    for (;;) {
+      const size = fs.readSync(fd, chunk, 0, chunk.length, offset);
+      if (size === 0) break;
+      digest.update(chunk.subarray(0, size));
+      offset += size;
+    }
+    return { bytes: offset, sha256: digest.digest("hex") };
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+function readRegularJson(file) {
+  const open = fs.openSync;
+  const fd = open(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+  try {
+    const info = fs.fstatSync(fd);
+    if (!info.isFile() || info.nlink !== 1 || info.size > 1024 * 1024) throw new Error("review metadata is not bounded regular JSON");
+    return JSON.parse(fs.readFileSync(fd, "utf8"));
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+function evidenceRecord(evidenceRoot, metadataPath, currentIdentity, sessionId, verifyOutput = true) {
+  if (path.dirname(metadataPath) !== evidenceRoot || !/^[0-9a-f-]{36}\.json$/.test(path.basename(metadataPath))) {
+    throw new Error("review evidence metadata path invalid");
+  }
+  const metadata = readRegularJson(metadataPath);
+  const outputPath = metadata?.output_path;
+  if (typeof metadata?.command !== "string" || typeof outputPath !== "string" || path.dirname(outputPath) !== evidenceRoot ||
+      !/^[0-9a-f-]{36}\.log$/.test(path.basename(outputPath)) ||
+      path.basename(metadataPath, ".json") !== path.basename(outputPath, ".log") ||
+      metadata.session_id !== sessionId || metadata.worktree_root !== currentIdentity.worktree_root ||
+      sensitiveCommand(metadata?.command)) {
+    throw new Error("review evidence identity invalid");
+  }
+  if (verifyOutput) {
+    const inspectOutput = regularFileDigest;
+    const output = inspectOutput(outputPath);
+    if (output.bytes !== metadata.output_bytes || output.sha256 !== metadata.output_sha256) {
+      throw new Error("review evidence output changed");
+    }
+  }
+  const freshness = metadata.worktree_identity_status === "available" &&
+    metadata.worktree_root === currentIdentity.worktree_root &&
+    metadata.head_sha === currentIdentity.head_sha &&
+    metadata.worktree_status_sha256 === currentIdentity.worktree_status_sha256
+    ? "exact-current"
+    : "different-head-or-status";
+  return {
+    command: metadata.command,
+    original_status: metadata.original_status,
+    observed_head_sha: metadata.head_sha,
+    observed_worktree_status_sha256: metadata.worktree_status_sha256,
+    automatic: automaticReviewCommand(metadata.command),
+    freshness,
+    output_path: outputPath,
+    metadata_path: metadataPath,
+    output_bytes: metadata.output_bytes,
+    output_sha256: metadata.output_sha256,
+  };
+}
+
+function suppliedEvidencePaths(prompt, evidenceRoot) {
+  const escaped = evidenceRoot.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const separator = path.sep === "\\" ? "\\\\" : path.sep;
+  const expression = new RegExp(`${escaped}${separator}([0-9a-f-]{36})\\.(?:log|json)`, "g");
+  return [...String(prompt).matchAll(expression)].map((match) => path.join(evidenceRoot, `${match[1]}.json`));
+}
+
+function commandEvidenceManifest(evidenceRoot, prompt, currentIdentity, sessionId) {
+  const candidates = new Map();
+  const inspectRecord = evidenceRecord;
+  for (const entry of fs.readdirSync(evidenceRoot, { withFileTypes: true })) {
+    if (!entry.isFile() || !/^[0-9a-f-]{36}\.json$/.test(entry.name)) continue;
+    const metadataPath = path.join(evidenceRoot, entry.name);
+    try { candidates.set(metadataPath, inspectRecord(evidenceRoot, metadataPath, currentIdentity, sessionId, false)); }
+    catch { /* invalid or changed evidence is never transported */ }
+  }
+  const suppliedPaths = new Set(suppliedEvidencePaths(prompt, evidenceRoot));
+  const selectedPaths = [...candidates.entries()]
+    .filter(([metadataPath, record]) => suppliedPaths.has(metadataPath) ||
+      record.freshness === "exact-current" && record.automatic)
+    .map(([metadataPath]) => metadataPath);
+  const records = new Map();
+  for (const metadataPath of selectedPaths) {
+    try { records.set(metadataPath, inspectRecord(evidenceRoot, metadataPath, currentIdentity, sessionId)); }
+    catch { /* inaccessible or changed output is never transported */ }
+  }
+  const exactCurrent = [...records.values()]
+    .filter((record) => record.freshness === "exact-current" && record.automatic)
+    .sort((left, right) => left.metadata_path.localeCompare(right.metadata_path));
+  const supplied = [...suppliedPaths]
+    .map((metadataPath) => records.get(metadataPath))
+    .filter(Boolean)
+    .sort((left, right) => left.metadata_path.localeCompare(right.metadata_path));
+  const suppliedUnavailable = [...suppliedPaths]
+    .filter((metadataPath) => !records.has(metadataPath))
+    .sort()
+    .map((metadataPath) => ({
+      status: "unavailable",
+      metadata_path: metadataPath,
+      reason: "explicitly referenced command evidence is inaccessible or changed",
+    }));
+  return { exact_current: exactCurrent, supplied, supplied_unavailable: suppliedUnavailable };
+}
+
+function reviewPacketDirectory(evidenceRoot) {
+  const parent = path.join(evidenceRoot, "review-packets");
+  try { fs.mkdirSync(parent, { mode: 0o700 }); }
+  catch (error) { if (error.code !== "EEXIST") throw error; }
+  const info = fs.lstatSync(parent);
+  if (!info.isDirectory() || info.isSymbolicLink()) throw new Error("redirected review packet directory");
+  const directory = path.join(parent, randomUUID());
+  fs.mkdirSync(directory, { mode: 0o700 });
+  return directory;
+}
+
+function createReviewEvidencePacket({ projectRoot, sessionId, audience, prompt }) {
+  const root = fs.realpathSync(projectRoot);
+  const identity = worktreeIdentity(root);
+  if (identity.worktree_identity_status !== "available") throw new Error("git snapshot unavailable");
+  const status = statusSnapshot(root);
+  const baseline = reviewBaseline(root, sessionId, audience, identity.head_sha);
+  const diff = exactReviewDiff(root, baseline, identity.head_sha, status.untrackedPaths);
+  const evidenceRoot = evidenceDirectory(root, sessionId);
+  const commands = commandEvidenceManifest(evidenceRoot, prompt, identity, sessionId);
+  const directory = reviewPacketDirectory(evidenceRoot);
+  const snapshotPath = path.join(directory, "snapshot.json");
+  const diffPath = path.join(directory, "review.diff");
+  const commandEvidencePath = path.join(directory, "command-evidence.json");
+  const snapshot = {
+    version: 1,
+    session_id: sessionId,
+    audience,
+    worktree_root: root,
+    head_sha: identity.head_sha,
+    worktree_dirty: identity.worktree_dirty,
+    worktree_status_sha256: identity.worktree_status_sha256,
+    baseline,
+    status: status.records,
+    index_paths: status.indexPaths,
+    worktree_paths: status.worktreePaths,
+    untracked_paths: status.untrackedPaths,
+  };
+  fs.writeFileSync(snapshotPath, `${JSON.stringify(snapshot, null, 2)}\n`, { flag: "wx", mode: 0o600 });
+  fs.writeFileSync(diffPath, diff, { flag: "wx", mode: 0o600 });
+  fs.writeFileSync(commandEvidencePath, `${JSON.stringify({
+    version: 1,
+    session_id: sessionId,
+    worktree_root: root,
+    head_sha: identity.head_sha,
+    worktree_status_sha256: identity.worktree_status_sha256,
+    exact_current: commands.exact_current,
+    supplied: commands.supplied,
+    supplied_unavailable: commands.supplied_unavailable,
+    freshness_note: "exact_current matches this packet HEAD/status; supplied preserves only explicit brief references and may be stale",
+  }, null, 2)}\n`, { flag: "wx", mode: 0o600 });
+  return {
+    status: "available",
+    snapshot_path: snapshotPath,
+    diff_path: diffPath,
+    command_evidence_path: commandEvidencePath,
+    baseline_status: baseline.status,
+  };
+}
+
 function sensitiveCommand(command) {
-  return /(?:^|[\s/'"`])(?:\.env(?:\.[^\s/'"`]*)?|\.dev\.vars(?:\.[^\s/'"`]*)?|\.ssh|\.aws|\.git-credentials|auth\.json|credentials(?:\.json)?|shared_context\.md)(?:$|[\s/'"`])/i.test(command) ||
+  return /(?:^|[\s/'"`])(?:\.env(?:\.[^\s/'"`]*)?|\.dev\.vars(?:\.[^\s/'"`]*)?|\.ssh|\.aws|\.npmrc|\.netrc|\.pypirc|\.git-credentials|auth\.json|credentials(?:\.json)?|shared_context\.md)(?:$|[\s/'"`])/i.test(command) ||
     /(?:^|[;&|]\s*)(?:env|printenv|set|export\s+-p|gh\s+auth\s+token)(?:\s|$)/i.test(command);
 }
 
@@ -121,6 +405,10 @@ function shortEvidenceCommand(command) {
   if (typeof command !== "string" || /[;&|`$\n\r]/.test(command)) return false;
   return /^(?:git\s+(?:diff|status|log|show|rev-parse)|rg|(?:vitest|jest|mocha|tsc)|(?:npm|pnpm|yarn|bun)\s+(?:test|run(?:-script)?|typecheck)|npx\s+(?:--no-install\s+)?(?:vitest|jest|mocha|tsc))\b/.test(command.trim()) ||
     /^(?:\S*\/)?node\s+(?=[^\n]*--test(?:[=\s]|$))/.test(command.trim());
+}
+
+function automaticReviewCommand(command) {
+  return shortEvidenceCommand(command) && !/^(?:git|rg)\b/.test(command.trim());
 }
 
 function publicFailureReason(error) {
@@ -174,6 +462,30 @@ async function persistEvidence({ source, output, cwd, sessionId, event }) {
     }
     throw error;
   }
+}
+
+/** Append readable, host-observed artifacts to review briefs without deciding or approving anything. */
+export function attachPiReviewEvidencePacket({ projectRoot, sessionId, event } = {}) {
+  const input = event?.input;
+  const role = input?.subagent_type;
+  const prompt = input?.prompt;
+  const audience = reviewAudience(role, prompt);
+  if (!audience || !input || typeof prompt !== "string") return { status: "not-applicable" };
+  let packet;
+  try {
+    packet = createReviewEvidencePacket({ projectRoot, sessionId, audience, prompt });
+    input.prompt = `${prompt.trimEnd()}\n\n[HARNESS_REVIEW_EVIDENCE]\n${JSON.stringify({
+      ...packet,
+      authority: "data-transport-only; not approval, receipt, or freshness beyond the recorded snapshot",
+    }, null, 2)}\n[/HARNESS_REVIEW_EVIDENCE]`;
+  } catch {
+    packet = { status: "unavailable", reason: "review evidence transport unavailable" };
+    input.prompt = `${prompt.trimEnd()}\n\n[HARNESS_REVIEW_EVIDENCE]\n${JSON.stringify({
+      ...packet,
+      authority: "dispatch remains unchanged; inspect the named brief/repository evidence directly",
+    }, null, 2)}\n[/HARNESS_REVIEW_EVIDENCE]`;
+  }
+  return packet;
 }
 
 export function registerPiCommandEvidence(pi) {

@@ -113,6 +113,7 @@ function stop() {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
+process.on("SIGHUP", stop);
 const deadline = setTimeout(() => {
   timedOut = true;
   stop();

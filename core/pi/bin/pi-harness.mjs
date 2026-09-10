@@ -85,6 +85,7 @@ const REQUIRED_LIBS = [
   "core/pi/lib/pi-child-identity.mjs",
   "core/pi/lib/pi-child-extensions.mjs",
   "core/pi/lib/pi-command-evidence.mjs",
+  "core/pi/lib/reviewer-grep.mjs",
   "core/pi/lib/pi-gate-state.mjs",
   "core/pi/lib/pi-paths.mjs",
   "core/pi/lib/pi-review-config.mjs",

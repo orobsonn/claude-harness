@@ -26,11 +26,13 @@ import { isDiscussionRole, isRuntimeRole } from "../lib/roles.mjs";
 import { classifyPiReviewDispatch } from "../lib/pi-review-concurrency.mjs";
 import {
   capturePiReviewInput,
+  beginPiReviewReceipt,
   checkPiReviewPreparation,
   parsePiReviewCompletion,
   recordPiReviewReceipt,
 } from "../lib/pi-review-evidence.mjs";
 import { capturePlanReviewInput, parsePlanReviewCompletion } from "../lib/task-run.mjs";
+import { attachPiReviewEvidencePacket } from "../lib/pi-command-evidence.mjs";
 
 const SUBAGENTS_SERVICE_KEY = Symbol.for("@gotgenes/pi-subagents:service");
 
@@ -272,6 +274,9 @@ export default function harnessEntryGate(pi: ExtensionAPI) {
         ...(review.phase === "task" ? { taskId: review.taskId } : {}),
       });
       if (!captured.ok) return { block: true, reason: captured.reason };
+      const started = beginPiReviewReceipt({ projectRoot, sessionId, featureId,
+        phase: review.phase, taskId: review.taskId, role: args.subagent_type, dispatchCallId: event.toolCallId });
+      if (!started.ok) return { block: true, reason: started.reason };
       reviewInputs.set(event.toolCallId, { ...review, snapshot: captured.snapshot });
     }
     if (args.subagent_type === "harness-plan-reviewer" && typeof event?.toolCallId === "string") {
@@ -284,6 +289,8 @@ export default function harnessEntryGate(pi: ExtensionAPI) {
         if (statePath.ok) mergeGateState(statePath.path, { plan_review_evidence: null });
       }
     }
+    try { attachPiReviewEvidencePacket({ projectRoot, sessionId, event }); }
+    catch { /* evidence transport is advisory and never changes dispatch admission */ }
   });
 
   pi.on("tool_result", (event: any) => {

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { linkSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { linkSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -32,6 +32,18 @@ function handler() {
   harnessPolicy({ on: (name, fn) => registered.set(name, fn) });
   assert.equal(typeof registered.get("tool_call"), "function");
   return registered.get("tool_call");
+}
+
+function policyRuntime() {
+  const handlers = new Map();
+  const tools = new Map();
+  harnessPolicy({
+    on: (name, fn) => handlers.set(name, fn),
+    registerTool: (tool) => tools.set(tool.name, tool),
+  });
+  assert.equal(typeof handlers.get("tool_call"), "function");
+  assert.equal(typeof tools.get("grep")?.execute, "function");
+  return { onToolCall: handlers.get("tool_call"), grep: tools.get("grep") };
 }
 
 function parentCtx(cwd) {
@@ -366,6 +378,45 @@ test("reviewer identity confines every native read tool to the canonical project
   })));
 });
 
+test("reviewer missing project paths reach the native reader while a missing path below an escaping symlink is denied", async (t) => {
+  const f = reviewerFixture(t);
+  symlinkSync(f.outside, join(f.root, "linked-outside"), "dir");
+  const onToolCall = handler();
+  const missing = "src/not-created.txt";
+
+  const decision = onToolCall(
+    { toolName: "read", input: { path: missing } },
+    reviewerCtx(f.alias),
+  );
+  assert.equal(decision, undefined);
+  await assert.rejects(
+    createReadToolDefinition(f.root).execute(
+      "read-missing-project-path",
+      { path: missing },
+      undefined,
+      undefined,
+      {},
+    ),
+    /ENOENT|not found/i,
+  );
+
+  const runtime = policyRuntime();
+  const grepEvent = {
+    toolName: "grep",
+    input: { pattern: "needle", path: "missing-directory", glob: "*.txt" },
+  };
+  assert.equal(runtime.onToolCall(grepEvent, reviewerCtx(f.alias)), undefined);
+  await assert.rejects(
+    runtime.grep.execute("grep-missing-project-path", grepEvent.input, undefined, undefined, reviewerCtx(f.alias)),
+    /not found/i,
+  );
+
+  assert.equal(onToolCall(
+    { toolName: "read", input: { path: "linked-outside/not-created.txt" } },
+    reviewerCtx(f.alias),
+  )?.block, true);
+});
+
 test("reviewer identity denies synthetic credential paths inside and outside the project", (t) => {
   const f = reviewerFixture(t);
   const relativeSecrets = [
@@ -660,13 +711,114 @@ test("a valid writer child identity preserves ordinary project reads", (t) => {
   }
 });
 
-test("reviewer recursive grep with a model glob fails closed because the native tool accepts only one glob", (t) => {
+test("reviewer recursive grep preserves a model glob while retaining sensitive exclusions", async (t) => {
   const f = reviewerFixture(t);
+  const canary = "SYNTHETIC_FILTERED_REVIEW_CANARY";
+  const sensitiveDir = ["cred", "entials"].join("");
+  mkdirSync(join(f.root, sensitiveDir), { recursive: true });
+  writeFileSync(join(f.root, "public.txt"), canary + "\n");
+  writeFileSync(join(f.root, "public.md"), canary + "\n");
+  writeFileSync(join(f.root, sensitiveDir, "private.txt"), canary + "\n");
   const event = { toolName: "grep", input: { pattern: "needle", path: ".", glob: "**/*.txt" } };
-  const decision = handler()(event, reviewerCtx(f.alias));
+  event.input.pattern = canary;
+  event.input.literal = true;
+  const runtime = policyRuntime();
+  const decision = runtime.onToolCall(event, reviewerCtx(f.alias));
+  const result = await runtime.grep.execute("reviewer-filtered-grep", event.input, undefined, undefined, reviewerCtx(f.alias));
+  const output = result.content.filter((part) => part.type === "text").map((part) => part.text).join("\n");
 
-  assert.equal(decision?.block, true);
-  assert.equal(event.input.glob, "**/*.txt", "a denied call must not disguise the model-supplied glob");
+  assert.equal(decision, undefined);
+  assert.match(output, /public\.txt/);
+  assert.doesNotMatch(output, /public\.md|private\.txt/);
+});
+
+test("reviewer guarded grep preserves context and applies the match limit to matches rather than context text", async (t) => {
+  const f = reviewerFixture(t);
+  writeFileSync(join(f.root, "context.txt"), "metadata:42:value\nNeedle\nafter\nneedle\nlast\n");
+  const runtime = policyRuntime();
+  const event = {
+    toolName: "grep",
+    input: { pattern: "needle", path: ".", glob: "*.txt", ignoreCase: true, context: 1, limit: 1 },
+  };
+  assert.equal(runtime.onToolCall(event, reviewerCtx(f.alias)), undefined);
+  const result = await runtime.grep.execute("reviewer-context-grep", event.input, undefined, undefined, reviewerCtx(f.alias));
+  const output = result.content.filter((part) => part.type === "text").map((part) => part.text).join("\n");
+
+  assert.match(output, /metadata:42:value/);
+  assert.match(output, /Needle/);
+  assert.match(output, /after/);
+  assert.equal(result.details?.matchLimitReached, 1);
+});
+
+test("reviewer grep excludes project-relative sensitive files from a narrow search root with and without a model glob", async (t) => {
+  const f = reviewerFixture(t);
+  const canary = "SYNTHETIC_NARROW_GIT_CANARY";
+  const searchRoot = ".git";
+  mkdirSync(join(f.root, searchRoot), { recursive: true });
+  writeFileSync(join(f.root, searchRoot, ["con", "fig"].join("")), canary + "\n");
+  writeFileSync(join(f.root, searchRoot, "public.txt"), canary + "\n");
+
+  for (const glob of [undefined, ["**", "*"].join("/")]) {
+    const runtime = policyRuntime();
+    const event = {
+      toolName: "grep",
+      input: { pattern: canary, path: searchRoot, literal: true, ...(glob ? { glob } : {}) },
+    };
+    assert.equal(runtime.onToolCall(event, reviewerCtx(f.alias)), undefined);
+    const result = await runtime.grep.execute("reviewer-narrow-git", event.input, undefined, undefined, reviewerCtx(f.alias));
+    const output = result.content.filter((part) => part.type === "text").map((part) => part.text).join("\n");
+    assert.match(output, /public\.txt/);
+    assert.doesNotMatch(output, /config/);
+  }
+});
+
+test("reviewer grep keeps slash-containing glob semantics relative to the requested root", async (t) => {
+  const f = reviewerFixture(t);
+  const canary = "SYNTHETIC_SLASH_GLOB_CANARY";
+  for (const searchRoot of ["scan", "scan[id]"]) {
+    mkdirSync(join(f.root, searchRoot, "nested", "deeper"), { recursive: true });
+    writeFileSync(join(f.root, searchRoot, "nested", "deeper", "match.txt"), canary + "\n");
+    writeFileSync(join(f.root, searchRoot, "other.txt"), canary + "\n");
+    const runtime = policyRuntime();
+    const event = {
+      toolName: "grep",
+      input: { pattern: canary, path: searchRoot, glob: ["nested", "**", "*.txt"].join("/"), literal: true },
+    };
+    assert.equal(runtime.onToolCall(event, reviewerCtx(f.alias)), undefined);
+    const result = await runtime.grep.execute("reviewer-slash-glob", event.input, undefined, undefined, reviewerCtx(f.alias));
+    const output = result.content.filter((part) => part.type === "text").map((part) => part.text).join("\n");
+    assert.match(output, /^nested\/deeper\/match\.txt:/m);
+    assert.doesNotMatch(output, /other\.txt/);
+  }
+});
+
+test("reviewer grep revalidates a search directory replaced by an external symlink after policy approval", async (t) => {
+  const f = reviewerFixture(t);
+  mkdirSync(join(f.root, "scan"));
+  writeFileSync(join(f.outside, "ordinary.txt"), "SYNTHETIC_OUTSIDE_CANARY\n");
+  const runtime = policyRuntime();
+  const event = { toolName: "grep", input: { pattern: "SYNTHETIC_OUTSIDE_CANARY", path: "scan", glob: "*.txt" } };
+  assert.equal(runtime.onToolCall(event, reviewerCtx(f.alias)), undefined);
+  renameSync(join(f.root, "scan"), join(f.root, "scan-original"));
+  symlinkSync(f.outside, join(f.root, "scan"), "dir");
+
+  await assert.rejects(
+    runtime.grep.execute("reviewer-swapped-root", event.input, undefined, undefined, reviewerCtx(f.alias)),
+    /changed|outside|review/i,
+  );
+});
+
+test("reviewer grep observes aborts delivered while the rg binary is resolving", async (t) => {
+  const f = reviewerFixture(t);
+  writeFileSync(join(f.root, "public.txt"), "SYNTHETIC_ABORT_CANARY\n");
+  const runtime = policyRuntime();
+  const event = { toolName: "grep", input: { pattern: "SYNTHETIC_ABORT_CANARY", path: ".", glob: "*.txt" } };
+  assert.equal(runtime.onToolCall(event, reviewerCtx(f.alias)), undefined);
+  const controller = new AbortController();
+  const pending = runtime.grep.execute("reviewer-abort", event.input, controller.signal, undefined, reviewerCtx(f.alias));
+  controller.abort();
+
+  await assert.rejects(pending, /Operation aborted/);
 });
 
 test("reviewer recursive native grep cannot expose Pi auth when its search root is inside .pi", async (t) => {

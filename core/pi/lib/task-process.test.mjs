@@ -79,13 +79,18 @@ test("detached worker persists identity, output and completion across coordinato
     runId: "run-1",
     cwd: dir,
     command: process.execPath,
-    args: ["-e", 'setTimeout(()=>console.log("done"),200)'],
+    args: ["-e", 'const timer=setInterval(()=>{if(require("node:fs").existsSync("release-child")){clearInterval(timer);console.log("done")}},20)'],
+    timeoutMs: 10000,
   });
+  let finished = false;
+  t.after(() => { if (!finished) { try { process.kill(launch.pid, "SIGTERM"); } catch {} } });
   assert.equal(
     readTaskProcess(JSON.parse(JSON.stringify(launch))).running,
     true,
   );
+  fs.writeFileSync(path.join(dir, "release-child"), "release\n");
   const end = await terminal(launch);
+  finished = true;
   assert.equal(end.ok, true);
   assert.equal(end.result.exitCode, 0);
   assert.match(fs.readFileSync(launch.events_path, "utf8"), /done/);
@@ -95,6 +100,32 @@ test("detached worker persists identity, output and completion across coordinato
   record.run_id = "foreign-launch";
   fs.writeFileSync(launch.process_path, JSON.stringify(record));
   assert.equal(readTaskProcess(launch).ok, false);
+});
+
+test("terminal hangup stops the detached task group instead of leaving a paid run orphaned", async (t) => {
+  const dir = fixture(t);
+  const launch = await startTaskProcess({ jobDir: dir, runId: "hangup", cwd: dir, command: process.execPath,
+    args: ["-e", 'process.on("SIGTERM",()=>{}); console.log("ready"); setInterval(()=>{},1000)'] });
+  let group;
+  t.after(() => {
+    for (const member of Number.isInteger(group) ? taskGroupMembers(group) : []) {
+      try { process.kill(member.pid, "SIGKILL"); } catch {}
+    }
+    try { process.kill(launch.pid, "SIGKILL"); } catch {}
+  });
+  for (let i = 0; i < 150; i++) {
+    try {
+      group = JSON.parse(fs.readFileSync(launch.process_path, "utf8")).process_group;
+      if (Number.isInteger(group) && fs.readFileSync(launch.events_path, "utf8").includes("ready")) break;
+    } catch {}
+    await pause(20);
+  }
+  assert.ok(Number.isInteger(group));
+  process.kill(launch.pid, "SIGHUP");
+  const ended = await terminal(launch);
+  assert.equal(ended.terminal, true);
+  assert.equal(ended.running, false);
+  assert.equal(taskGroupMembers(group).filter((member) => member.state !== "Z").length, 0);
 });
 
 test("terminal launch persists its descriptor first and returns Orca identity", async (t) => {
@@ -430,7 +461,7 @@ test("the exact child shim survives a supervisor crash during registration", asy
     runId: "child-shim",
     cwd: dir,
     command: process.execPath,
-    args: ["-e", "setTimeout(()=>{},2000)"],
+    args: ["-e", "setTimeout(()=>{},10000)"],
   });
   let record;
   for (let index = 0; index < 50; index++) {

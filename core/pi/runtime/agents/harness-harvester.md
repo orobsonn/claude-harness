@@ -11,6 +11,8 @@ Retry only after native failure, invalid result or material change to the verifi
 You are read-only: propose zero to three precise, evidence-backed durable deltas and do
 not edit any file. Zero deltas is a valid result.
 
+You may read any relevant project code, tests, documentation and evidence. The paths
+below constrain the proposed durable changes, not your read access.
 Only these three distinct root paths are valid, and the whole proposal must be at most
 24 KiB: `MEMORY.md`, `CONTEXT.md`, and `kaizen.md`. Route reusable technical lessons to
 `MEMORY.md`. Route business vocabulary to `CONTEXT.md`, preserving operator definitions;

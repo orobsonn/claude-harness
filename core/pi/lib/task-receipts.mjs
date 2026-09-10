@@ -13,7 +13,7 @@ import { parseTestReviewVerdict } from "../../shared/lib/test-review-verdict.mjs
 import { validateOcCaptureEligibleHandRecord } from "../../opencode/lib/hand-records.mjs";
 import { hashTaskReceipt, unsupportedTaskScopePattern } from "./task-contract.mjs";
 import { readTaskContextReturn, validateTaskContextReturn } from "./task-context.mjs";
-import { capturePiReviewInput, findPiReviewReceipt, hasAcceptedPiReviewEvidence } from "./pi-review-evidence.mjs";
+import { capturePiReviewInput, currentPiReviewIssues, findPiReviewReceipt, hasAcceptedPiReviewEvidence, readPiReviewPlan } from "./pi-review-evidence.mjs";
 import { piGateStatePath, piHandRecordPath } from "./pi-paths.mjs";
 import { readTaskProcess } from "./task-process.mjs";
 import { capturePlanReviewInput, readTaskRunBinding } from "./task-run.mjs";
@@ -175,7 +175,7 @@ function readEvents(launches, jobRoot, interruptedIndexes = new Set()) {
         events.push(event);
       } else if (native?.type === "tool_execution_end" && typeof native.toolCallId === "string") {
         const start = calls.get(`${launchIndex}:${native.toolCallId}`);
-        if (start) start.end = native;
+        if (start) { start.end = native; start.endLine = line; }
       }
     }
   });
@@ -208,6 +208,11 @@ function validateCurrentReviews({ state, events, projectRoot, sessionId, feature
   const observed = observedImplementationReviewRoles(events, taskId);
   const roles = TASK_REVIEW_ROLES.filter((role) => REQUIRED_TASK_REVIEW_ROLES.includes(role) || observed.has(role) ||
     findPiReviewReceipt(state, { featureId, taskId, role, phase: "task" }) !== null);
+  const findings = roles.flatMap((role) => {
+    const receipt = findPiReviewReceipt(state, { featureId, taskId, role, phase: "task" });
+    const issues = currentPiReviewIssues(receipt, { sessionId, featureId, taskId, role, phase: "task", snapshot: captured.snapshot });
+    return issues.length ? [{ role, issues }] : [];
+  });
   for (const role of roles) {
     const receipt = findPiReviewReceipt(state, { featureId, taskId, role, phase: "task" });
     if (!hasAcceptedPiReviewEvidence(receipt, captured.snapshot) || receipt.written_by !== "host-subagent-completion" ||
@@ -216,7 +221,7 @@ function validateCurrentReviews({ state, events, projectRoot, sessionId, feature
         typeof receipt.dispatch_call_id !== "string" || !receipt.dispatch_call_id ||
         typeof receipt.child_session_id !== "string" || !receipt.child_session_id ||
         typeof receipt.agent_id !== "string" || !receipt.agent_id) {
-      return failure(`current accepted ${role.replace("harness-", "")} task review required`);
+      return failure("current accepted " + role.replace("harness-", "") + " task review required", { review_findings: findings });
     }
     receipts[role.replace("harness-", "")] = {
       agent_id: receipt.agent_id,
@@ -314,7 +319,12 @@ function validateFidelity({ events, task, taskId, worktree, head, reviewRole }) 
       blobs[file] = crypto.createHash("sha256").update(current).digest("hex");
     } catch { return failure(`canonical frozen file is absent from the fidelity chain: ${file}`); }
   }
-  return { ok: true, freezeSha: commitSha, frozenBlobs: blobs, markerIndex };
+  return { ok: true, freezeSha: commitSha, frozenBlobs: blobs, markerIndex, authorIndex };
+}
+
+function onlyFrozenChanges(root, baseline, head, paths) {
+  return ancestor(root, baseline, head) && splitZero(git(root, ["diff", "--no-renames", "--name-only", "-z", baseline, head, "--"]))
+    .every((file) => paths.includes(file));
 }
 
 /**
@@ -386,8 +396,10 @@ export function inspectTaskRun(entry, dependencies = {}) {
     const isImplementationForTask = (event) => event.tool === "subagent" &&
       ["harness-executor", "harness-sniper"].includes(event.args?.subagent_type) &&
       taskFromPrompt(event.args?.prompt) === entry.task_id && eventSucceeded(event);
+    const recovery = hand.agent === "harness-test-author";
     const producerIndex = native.events.findIndex((event) => event.callId === hand.producerCallId &&
-      event.args?.subagent_type === hand.agent && isImplementationForTask(event));
+      event.args?.subagent_type === hand.agent && taskFromPrompt(event.args?.prompt) === entry.task_id &&
+      eventSucceeded(event) && (recovery || isImplementationForTask(event)));
     if (producerIndex < 0) return failure("current hand producer is not bound to a successful native call by an implementation agent");
     if (reconciliation && native.events[producerIndex].launchIndex < reconciliation.launch_count)
       return failure("current hand requires an implementation producer after dependency reconciliation");
@@ -400,7 +412,38 @@ export function inspectTaskRun(entry, dependencies = {}) {
       reviewRole: fidelityReviewRole(entry.runtime),
     });
     if (!fidelity.ok) return fidelity;
-    if (fidelity.freezeSha !== null) {
+    let recoveryOrigin = null;
+    if (recovery) {
+      const isWriter = (event) => event.tool === "subagent" &&
+        ["harness-executor", "harness-sniper", "harness-test-author"].includes(event.args?.subagent_type);
+      const implementationIndex = native.events.findLastIndex((event, index) => index < producerIndex && isImplementationForTask(event));
+      const firstAuthorIndex = native.events.findIndex((event, index) => index > implementationIndex && isWriter(event) &&
+        event.args.subagent_type === "harness-test-author");
+      if (implementationIndex < 0 || reconciliation && native.events[implementationIndex].launchIndex < reconciliation.launch_count ||
+          native.events.some((event, index) => index > implementationIndex && index < producerIndex &&
+            isWriter(event) && event.args.subagent_type !== "harness-test-author"))
+        return failure("test-only recovery requires a prior captured implementation after dependency reconciliation");
+      for (const event of native.events.slice(implementationIndex + 1, firstAuthorIndex)) {
+        if (event.tool !== "mark" || event.args?.action !== "capture-verified" || event.args?.task_id !== entry.task_id || !markerSucceeded(event)) continue;
+        const firstAuthor = native.events[firstAuthorIndex];
+        if (event.launchIndex === firstAuthor.launchIndex && event.endLine >= firstAuthor.line) continue;
+        let metadata = event.end.result?.details;
+        if (!metadata?.capture_origin) { try { metadata = JSON.parse(eventText(event.end.result)); } catch { continue; } }
+        const origin = metadata?.capture_origin;
+        if (origin?.task_id !== entry.task_id || origin.producer_call_id !== native.events[implementationIndex].callId ||
+            origin.worktree_clean !== true || !COMMIT_SHA.test(origin.head_sha ?? "")) continue;
+        recoveryOrigin = { head_sha: origin.head_sha, producer_call_id: origin.producer_call_id,
+          producer_launch_index: native.events[implementationIndex].launchIndex };
+        break;
+      }
+      if (!recoveryOrigin) return failure("test-only recovery requires a clean captured implementation before the first test-author; commit then capture before correcting tests");
+      if (producerIndex !== fidelity.authorIndex || native.events.some((event, index) => index > producerIndex && isWriter(event)))
+        return failure("test-only recovery requires the latest fidelity author without a later writing hand");
+      if (!fidelity.freezeSha || !ancestor(worktree, hand.freezeCommitSha, fidelity.freezeSha) ||
+          !ancestor(worktree, recoveryOrigin.head_sha, hand.freezeCommitSha) ||
+          !onlyFrozenChanges(worktree, recoveryOrigin.head_sha, head, frozenPaths(binding.task)))
+        return failure("test-only recovery cannot change product after the captured implementation");
+    } else if (fidelity.freezeSha !== null) {
       if (!ancestor(worktree, fidelity.freezeSha, hand.freezeCommitSha)) {
         return failure("current hand capture is not descended from the event-proven latest freeze");
       }
@@ -418,17 +461,18 @@ export function inspectTaskRun(entry, dependencies = {}) {
     if (!Array.isArray(state.hand_finished) || !state.hand_finished.includes(bare) || !Array.isArray(state.capture_verified) || !state.capture_verified.includes(capturePayload)) return failure("current child capture markers are incomplete");
     const regatePending = (Array.isArray(state.regate_pending) ? state.regate_pending : []).filter((pending) =>
       typeof pending === "string" && (pending === bare || pending.startsWith(`${bare}@`)));
-    if (regatePending.some((pending) => !matchesAbsolution(pending, state.regate_passed, (sha) => ancestor(worktree, sha, head)))) return failure("task re-gate is still pending");
-    const regatePassed = (Array.isArray(state.regate_passed) ? state.regate_passed : []).filter((passed) =>
-      typeof passed === "string" && passed.startsWith(`${bare}@`) && ancestor(worktree, passed.slice(`${bare}@`.length), head));
-    const reviews = validateCurrentReviews({ state, events: native.events, projectRoot: worktree, sessionId: claim.session_id, featureId: entry.feature_id, taskId: entry.task_id, head, captureReviewInputFn: dependencies.captureReviewInputFn ?? capturePiReviewInput });
-    if (!reviews.ok) return reviews;
     const contextReturnFn = dependencies.readTaskContextReturnFn ?? readTaskContextReturn;
     const contextReturn = contextReturnFn({ projectRoot: worktree, sessionId: claim.session_id, taskId: entry.task_id, headSha: head });
     if (contextReturn !== null) {
       const checkedContext = validateTaskContextReturn(contextReturn, { sessionId: claim.session_id, taskId: entry.task_id, headSha: head });
-      if (!checkedContext.ok) return failure(`task context return is invalid: ${checkedContext.reason}`);
+      if (!checkedContext.ok) return failure("task context return is invalid: " + checkedContext.reason);
     }
+    const reviews = validateCurrentReviews({ state, events: native.events, projectRoot: worktree, sessionId: claim.session_id, featureId: entry.feature_id, taskId: entry.task_id, head, captureReviewInputFn: dependencies.captureReviewInputFn ?? capturePiReviewInput });
+    const diagnostics = { ...(contextReturn === null ? {} : { context_return: contextReturn }), review_findings: reviews.details?.review_findings ?? [] };
+    if (regatePending.some((pending) => !matchesAbsolution(pending, state.regate_passed, (sha) => ancestor(worktree, sha, head)))) return failure("task re-gate is still pending", diagnostics);
+    const regatePassed = (Array.isArray(state.regate_passed) ? state.regate_passed : []).filter((passed) =>
+      typeof passed === "string" && passed.startsWith(`${bare}@`) && ancestor(worktree, passed.slice(`${bare}@`.length), head));
+    if (!reviews.ok) return failure(reviews.reason, diagnostics);
     return {
       ok: true,
       result: {
@@ -457,6 +501,7 @@ export function inspectTaskRun(entry, dependencies = {}) {
           freeze_sha: hand.freezeCommitSha,
           captured_verified_at: hand.capturedVerifiedAt,
           capture_marker: capturePayload,
+          ...(recoveryOrigin ? { recovery_origin: recoveryOrigin } : {}),
         },
         review_input_digest: reviews.inputDigest,
         review_receipts: reviews.receipts,
@@ -495,7 +540,13 @@ function validateIntegration(entry, integration, { projectRoot, sessionId, featu
   const frozenReceiptValid = frozenBlobsValid && (result.freeze_sha === null
     ? Object.keys(result.frozen_blobs).length === 0
     : COMMIT_SHA.test(result.freeze_sha ?? "") && Object.keys(result.frozen_blobs).length > 0);
-  const handCaptureValid = object(result.hand_capture) && ["harness-executor", "harness-sniper"].includes(result.hand_capture.agent) &&
+  const recovery = result.hand_capture?.agent === "harness-test-author";
+  const recoveryOrigin = result.hand_capture?.recovery_origin;
+  const recoveryOriginValid = !recovery || object(recoveryOrigin) && COMMIT_SHA.test(recoveryOrigin.head_sha ?? "") &&
+    typeof recoveryOrigin.producer_call_id === "string" && recoveryOrigin.producer_call_id &&
+    Number.isInteger(recoveryOrigin.producer_launch_index) && recoveryOrigin.producer_launch_index >= 0 &&
+    recoveryOrigin.producer_launch_index < entry.launches.length;
+  const handCaptureValid = object(result.hand_capture) && ["harness-executor", "harness-sniper", "harness-test-author"].includes(result.hand_capture.agent) &&
     typeof result.hand_capture.producer_call_id === "string" && result.hand_capture.producer_call_id &&
     COMMIT_SHA.test(result.hand_capture.freeze_sha ?? "") && typeof result.hand_capture.captured_verified_at === "string" &&
     result.hand_capture.captured_verified_at && result.hand_capture.capture_marker === `${featureId}/${taskId}@${result.hand_capture.freeze_sha}`;
@@ -531,10 +582,16 @@ function validateIntegration(entry, integration, { projectRoot, sessionId, featu
     isSafeSessionId(result.session_id) && result.plan_sha256 === entry.plan_sha256 && result.spec_sha256 === entry.spec_sha256 &&
     result.base_sha === entry.base_sha && COMMIT_SHA.test(result.child_head ?? "") && typeof result.latest_run_id === "string" &&
     result.latest_run_id.length > 0 && entry.launches?.at?.(-1)?.run_id === result.latest_run_id && changedPathsValid && frozenReceiptValid &&
-    handCaptureValid && SHA256.test(result.review_input_digest ?? "") && reviewReceiptsValid && regateValid && contextReturnValid && launchesValid &&
+    handCaptureValid && recoveryOriginValid && SHA256.test(result.review_input_digest ?? "") && reviewReceiptsValid && regateValid && contextReturnValid && launchesValid &&
     (entry.runtime === undefined || validRuntime(entry.runtime) && validRuntime(result.runtime) && result.runtime.sha256 === entry.runtime.sha256 &&
       result.runtime.launcher_path === entry.runtime.launcher_path);
   if (!resultValid) return failure("task inspection receipt is incomplete or does not match the registry entry");
+  if (recovery) {
+    const canonical = readPiReviewPlan({ projectRoot, featureId, expectedSha256: result.plan_sha256 });
+    const task = canonical.ok && canonical.plan.tasks.find((item) => item.id === taskId);
+    if (!task || JSON.stringify(frozenPaths(task).sort()) !== JSON.stringify(Object.keys(result.frozen_blobs).sort()))
+      return failure("test-only recovery frozen paths must match the canonical task");
+  }
   const exact = integration.version === 1 && integration.written_by === "host-task-integration" &&
     integration.parent_session_id === sessionId && integration.feature_id === featureId && integration.task_id === taskId &&
     integration.attempt_id === entry.attempt_id && integration.parent_root === projectRoot && integration.worktree === entry.worktree &&
@@ -551,14 +608,18 @@ function validateIntegration(entry, integration, { projectRoot, sessionId, featu
   if (reconciliation && (!ancestor(projectRoot, reconciliation.merged_head, result.hand_capture.freeze_sha) ||
       !Number.isInteger(result.hand_capture.producer_launch_index) ||
       result.hand_capture.producer_launch_index < reconciliation.launch_count ||
-      result.hand_capture.producer_launch_index >= entry.launches.length))
+      result.hand_capture.producer_launch_index >= entry.launches.length ||
+      recovery && recoveryOrigin.producer_launch_index < reconciliation.launch_count))
     return failure("integrated hand capture must follow dependency reconciliation");
   if (!COMMIT_SHA.test(headSha ?? "") || !ancestor(projectRoot, result.base_sha, result.child_head) ||
       !ancestor(projectRoot, result.child_head, integration.integrated_head) || !ancestor(projectRoot, integration.integrated_head, headSha)) {
     return failure("task integration is not ancestral to the requested HEAD");
   }
   if (!ancestor(projectRoot, result.hand_capture.freeze_sha, result.child_head) ||
-      result.freeze_sha !== null && !ancestor(projectRoot, result.freeze_sha, result.hand_capture.freeze_sha)) {
+      (recovery ? !result.freeze_sha || !ancestor(projectRoot, result.hand_capture.freeze_sha, result.freeze_sha) ||
+        !ancestor(projectRoot, recoveryOrigin.head_sha, result.hand_capture.freeze_sha) ||
+        !onlyFrozenChanges(projectRoot, recoveryOrigin.head_sha, result.child_head, Object.keys(result.frozen_blobs)) :
+        result.freeze_sha !== null && !ancestor(projectRoot, result.freeze_sha, result.hand_capture.freeze_sha))) {
     return failure("task receipt freeze and hand capture are not ancestral to the child HEAD");
   }
   const actualChanged = splitZero(git(projectRoot, ["diff", "--name-only", "-z", result.base_sha, result.child_head]));

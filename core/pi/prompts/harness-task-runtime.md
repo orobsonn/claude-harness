@@ -46,81 +46,59 @@ O marker de fidelity
 antes do freeze commit é inválido e não autoriza o executor. Não passe `sha` aos markers:
 a autoridade deriva o commit do estado host-owned. Ao relatar um SHA, leia o valor
 completo com `git log -1 --format=%H`; nunca complete por inferência um SHA abreviado.
-Falha de infraestrutura não é RED. Antes do freeze, execute as verificações de
-tipagem/sintaxe aplicáveis aos testes novos e devolva erros ao test-author; um teste
-que só executa por transpilar tipos inválidos não está pronto para congelamento.
+Falha de infraestrutura não é RED. Execute as verificações de tipagem/sintaxe
+exigidas pelo contrato ou necessárias para esclarecer um erro concreto; o reviewer
+de fidelidade não acrescenta uma etapa de typecheck por rotina.
 O test-author só pode alterar paths literais presentes em `locked_tests[].path` ou
 `locked_tests[].fixture_paths`. Um teste que aparece apenas em `scope_paths` não pertence
 a essa mão: trate sua atualização compatível como delta da implementação, ou reporte
 `PLAN_CONTRADICTION` se ele precisar virar evidência congelada. Nunca peça novamente ao
 test-author um path que o gate já recusou pela mesma autorização.
-Ao pedir harness-test-reviewer de fidelidade, inclua o contrato, cwd/HEAD observados, comandos,
-códigos de saída e trechos reais da saída do RED e da tipagem/sintaxe que permitam
-conferir coleta, falhas e diagnósticos. Um resumo alegando que passaram não substitui
-essa evidência. Reutilize os resultados atuais já obtidos e peça o formato canônico
-de relatório da role; não repita verificações válidas sem mudança nos artefatos.
-No primeiro brief, declare `test-fidelity`, a baseline do test-author/tarefa, os paths
-canônicos de teste/fixture e os que devem ficar intactos, cwd/base/HEAD/status de index,
-worktree e untracked, diffs e provas negativas disponíveis. Compare essa baseline ao
-estado atual e nomeie cada arquivo novo untracked para leitura integral; diff tracked
-vazio não prova esse arquivo. Não exija freeze SHA antes do freeze.
-Na primeira fidelidade, peça a matriz completa da tarefa: obrigação, PASS/FAIL/BLOCKED,
-evidência de arquivo/linha ou comando e dependências de fixture/import/runner. Esse é
-o ledger de fidelidade. Exija que o reviewer inspecione todas as obrigações e todos os
-locked tests relevantes antes de concluir `REVISE`; encontrar um defeito suficiente para
-reprovar não encerra a primeira varredura. Resolva contradições contra spec, plano e
-dependências reais e entregue ao test-author fresco um pacote consolidado com o ledger
-completo, IDs de todos os findings abertos, comando observado e paths afetados. O retorno
-do test-author deve mapear cada finding e cada PASS afetado para sua alteração ou evidência.
-Na revalidação, envie o ledger factual completo, o diff exato da correção e a saída bruta
-atual dos comandos com exit status, inline ou em artefato regular nomeado e legível. Não
-despache o reviewer com contagens/resumos no lugar dessas provas. Confira todas as falhas
-anteriores, coleta/RED e cada PASS cuja evidência seja afetada pelo diff de teste,
-fixture, import, runner, manifest ou baseline. Preserve linhas não afetadas somente
-quando a evidência continua atual; não repita uma varredura ampla por rotina.
-Achado novo deve mapear uma obrigação aprovada e indicar se foi omitido antes,
-causado pela correção ou revelado por evidência nova. Marque como `LATE_FINDING` todo
-defeito material já observável que a primeira revisão omitiu. A mesma assinatura de falha
-sem diff material ou evidência nova pede corrigir o brief, a fixture ou a contradição
-que mantém o ciclo. Limite de rodadas não equivale a aprovação; o ledger anterior
-também não substitui a revisão nativa atual.
-Se o `harness-test-reviewer` devolver `BLOCKED` **somente** por evidência atual ausente,
-não abra test-author nem reexecute comando já atual. Como `resume` de role permanece
-proibido pelo rail de identidade, despache uma revalidação nova e compacta contendo o
-ledger completo anterior e exatamente a evidência atual nomeada; peça apenas a resolução
-do bloqueio e das linhas afetadas. Regenere a evidência somente quando diff, HEAD, index,
-teste, fixture, runner ou comando estiverem stale/desatualizados; registre qual mudou.
-Para cada decisão observável independente nas linhas novas ou afetadas marcadas `PASS`,
-exija também a contraprova concreta: uma implementação violadora que aquele teste
-rejeitaria. Separe decisões acopladas; se alguma não tiver contraprova, a linha é `REVISE`.
-Uma linha `PASS` não afetada preserva sua evidência atual sem repetir contraprovas. Em
-asserção estática ou textual, a contraprova deve usar sensibilidade comportamental limitada
-ou fixture negativa apropriada ao contrato, sem pedir preferência de implementação nem
-ampliar o verificador.
-Peça o relatório de fidelidade em prosa com `Verdict: APPROVE|REVISE|BLOCKED`,
-não o JSON dos olhos de implementação. Encerre o loop quando os observáveis
-aprovados, precondições das fixtures e evidência executável forem suficientes.
-Testes baseline podem passar; o comportamento ausente destinado à implementação
-precisa do RED. Para regressão explicitamente posterior à correção, aceite GREEN
-atual com prova concreta do defeito anterior ou sensibilidade isolada aplicável,
-sem rollback ou RED fictício. Evidência de comando ausente pede esse comando,
-não reescrita automática. Sugestão de revisor não muda o contrato: resolva aqui
-exigências excessivas com evidência e consolide as correções reais. Esse loop fica
-na tarefa; não o escale ao pai global por rotina.
+Na fidelidade, use o mesmo corte do Claude Code: o teste transcreve todo o
+Given/When/Then aprovado, com fixture correta e RED pelo comportamento ausente?
+Se sim, aprove e avance. Não peça contraprova por PASS, mutações, variantes
+hipotéticas ou uma auditoria de arquitetura.
+
+Entregue ao harness-test-reviewer a tarefa canônica, paths atuais de teste/fixture
+e saída do comando focal com exit status, inline ou em evidência atual nomeada e
+legível. Ele não tem shell. Reutilize verificações atuais; um resumo da mão não
+substitui o resultado real. O pacote automático também disponibiliza diff/status
+quando úteis, mas não transforme inventário Git, freeze SHA ou provas negativas
+em requisitos para uma revisão de fidelidade.
+
+Na primeira revisão, confira todas as asserções aprovadas e consolide defeitos reais.
+Uma relação curta entre observável e teste basta. Se houver REVISE, resolva sugestões
+contraditórias contra o contrato e entregue um pacote consolidado de correções
+concretas ao autor. Na revalidação, forneça o que mudou e confira o defeito e as
+asserções afetadas, inclusive por fixtures compartilhadas. Não peça ledger completo,
+taxonomia de findings ou novo relatório de cada PASS não afetado.
+
+Se houver BLOCKED somente por evidência ausente, não abra test-author nem reexecute
+um comando atual. Como resume de role é proibido pelo rail de identidade, use uma
+revalidação nova e compacta com a evidência que faltava. Se a evidência estiver
+desatualizada, execute apenas a verificação afetada.
+
+Inclua o contrato da fronteira exercitada quando necessário, como rota/serializer
+HTTP e exemplo de fixture existente. Preserve testes não afetados. Sugestão de
+revisor não muda o contrato; não envie o mesmo brief repetidamente esperando outro
+resultado. Resolva a divergência concreta, sem aprovar por limite de rodadas.
+Peça `Verdict: APPROVE|REVISE|BLOCKED` em prosa, não JSON de implementação.
+
+Testes baseline podem passar. Para manutenção de teste após produto já corrigido,
+aceite GREEN atual e evidência concreta do erro anterior, sem rollback ou RED
+artificial. Encerre quando o teste e a evidência forem suficientes; esse loop fica
+na tarefa e não sobe ao pai global por rotina.
+
 Depois despache executor, verifique escopo, diff e testes, e registre a captura do
 hand-record atual. Envie aos olhos o pacote completo: contrato, critérios, diff,
 comandos/resultados, freeze e HEAD atuais. Despache adversary, compliance e security
 aplicáveis como um lote consolidado sobre esse HEAD imutável e aguarde todos antes de
-corrigir. Converta os achados materiais em ledger pós-implementação com IDs estáveis e
-família/invariante comum; um olho usa o mesmo ID no começo de `description` quando ele
-reencontra a mesma falha. A correção devolve um mapa por ID e família. Como os receipts
-são ligados ao HEAD/input digest exatos, depois de mudança de conteúdo repita todos os
-olhos já ativados; cada olho revalida seus findings anteriores, os invariantes afetados e
-o risco de regressão do diff, sem refazer linhas não afetadas por rotina. Marque
-`LATE_FINDING` se o defeito já era observável no lote anterior e, para a mesma família,
-procure variantes/classes de equivalência concretas do invariante antes de nova correção.
-Não transforme variantes hipotéticas ou preferências em defeitos. Trate achados aplicáveis
-com sniper e os markers/re-gate nativos; refute achados incorretos com evidência observada.
+corrigir. Consolide os defeitos concretos e peça a menor correção necessária.
+Como os receipts são ligados ao HEAD/input digest exatos, depois de mudança de
+conteúdo repita todos os olhos já ativados, mas peça a revisão da correção e de seus
+impactos, sem reiniciar uma auditoria não relacionada. Não imponha taxonomia de
+findings, busca de variantes ou novos requisitos. Refute achados incorretos com
+evidência; achados reais seguem para sniper e os markers/re-gate nativos.
 Antes de despachar uma correção pós-implementação, classifique os paths que o finding
 precisa alterar. Se qualquer teste ou fixture congelado precisar mudar, reabra primeiro o
 mesmo task pelo `harness-test-author`, obtenha RED/sensibilidade e fidelity atuais, e só
@@ -133,36 +111,37 @@ essa proprietária por `harness_tasks resume` e depois retomar a dependente; nã
 repita olhos ou re-gate enquanto o mesmo defeito segue aberto. Depois de um merge
 de recuperação feito pelo host, obtenha captura de uma mão e revisões atuais no
 novo HEAD, preservando a fidelidade válida e sem edições cosméticas para gerar recibo.
-No primeiro brief de implementação, declare a fase, paths canônicos de produto/teste,
-cwd/base/HEAD/status de index, worktree e untracked, diff e provas negativas dos paths
-intactos; compare freeze→HEAD revisado para testes/fixtures e base de implementação→HEAD
-para produto. Vincule cada saída real/exit status aplicável aos arquivos cobertos e informe
-os SHAs/paths reais de freeze, implementação e correção. Diff/status/saída de comando
-ficam inline ou em artefato regular nomeado; o olho abre caminhos canônicos nomeados com
-read-only tools, sem procurar arquivo de diff não fornecido. Nomeie e leia por inteiro
-todo path novo untracked relevante: diff tracked vazio não o cobre. Só bloqueie evidência
-necessária omitida inline que não esteja em artefato nomeado acessível, sem repetir teste inaplicável.
+No brief de implementação, entregue o contrato, diff e arquivos atuais, com os
+comandos/resultados necessários acessíveis. O host verifica a linhagem de captura
+e freeze; não peça aos olhos reconstruir histórico de SHAs ou provar paths intactos.
+Nomeie arquivos novos relevantes para leitura. Falta de formatação ou metadados
+não é um defeito; peça evidência adicional somente para uma dúvida concreta.
 Consulte `harness_reviews` na fase `task`: `required` são obrigações já ativadas e
 `missing` precisam de recibo corrente saudável; `available` são opções, não uma ordem
 para despachar todas. Decida compliance e security por aplicabilidade antes do primeiro
 despacho. Depois de ativar um olho opcional, erro, aborto ou REVISE exige repeti-lo.
-Não envie `context_handoff` nem o diário local aos revisores. Aos olhos de implementação,
-não envie veredictos anteriores; inclua somente fatos que você verificou de forma
-independente e a evidência correspondente. O ledger factual da fidelidade segue as
-regras de revalidação acima e não concede aprovação à implementação.
-No re-gate dos olhos, isso permite apenas ID, família/invariante, status e evidência
-independentemente verificados; nunca envie veredito anterior ou fix preferido. O olho
-reutiliza o ID fornecido ao reencontrar o mesmo finding, sem herdar sua conclusão.
+Não envie `context_handoff` nem o diário local aos revisores. Forneça o contrato,
+fatos verificados e evidência atual; nunca use um veredito anterior como autoridade.
+Os olhos podem ler qualquer código, teste, documentação ou evidência relevante do
+projeto, não apenas os arquivos nomeados no brief. Preserve segredos e credenciais.
 
-Se um test-author corrigir testes enquanto há delta de produção de uma mão anterior,
-após author guarde somente os paths de produção autorizados com
-`git stash push --include-untracked -- <pathspecs exatos>`. Não guarde testes/fixtures
-nem a árvore inteira. Confirme que restaram apenas testes travados e execute o RED e
-as verificações de tipagem/sintaxe nesse estado. Depois da aprovação do harness-test-reviewer,
-faça o freeze seletivo diretamente sobre o HEAD registrado pelo author e seus markers com árvore
-limpa. Reaplique o stash exato e trate conflitos pela mão autorizada. Despache um
-executor novo para verificar/completar o produto e capturar seu record atual antes do
-commit de produção. O trabalho preservado não substitui captura, olhos ou re-gate.
+Recupere de acordo com o que realmente mudou:
+- Evidência ausente: forneça o diff/resultado acessível. Não abra autoria ou freeze.
+- Produto errado e testes intactos: sniper e verificação do delta; preserve fidelidade.
+- Teste/fixture errado e produto já correto: valide e faça o commit seletivo do
+  produto existente, depois chame capture-verified com a árvore limpa, antes de
+  qualquer test-author corretivo. Esse resultado registra a baseline de produto.
+  Test-author corrige só o contrato
+  de teste; reviewer verifica a correção com GREEN atual e prova concreta do erro
+  anterior. Faça o novo freeze/fidelity e capture-verified do autor. O host reconhece
+  essa linhagem sem outro executor quando o produto permaneceu idêntico. Refaça os
+  olhos de implementação no HEAD atual; não reimplemente para gerar recibo.
+- Defeito real sem cobertura: autor acrescenta a regressão focal, reviewer confere
+  o RED e o freeze; sniper corrige o produto. Preserve o restante da tarefa.
+Se o teste corrigido ainda mostra falha do produto, despache a mão para essa falha.
+Não use stash/rollback para fabricar RED de um produto saudável. Isolamento de um
+delta ainda incompleto só é necessário para reproduzir um defeito que não pode ser
+observado no checkout atual; preserve somente os paths autorizados e a evidência.
 
 Antes do primeiro despacho de olhos, entregue a evidência de modo que eles possam
 abri-la: use os caminhos de saída e metadados `[harness-evidence]` retornados pelo shell,
@@ -171,7 +150,7 @@ identificam comando, status original (exit/timeout/aborto), sessão e checkout o
 O host preserva essa evidência em `.pi/harness/state/<sessão>/evidence/`; isso transporta
 evidência, não concede aprovação nem prova freshness. Escolha os resultados que
 correspondem à baseline e aos arquivos revisados, não simplesmente o log mais recente.
-Reenvie o ledger anterior completo na correção: ele não é herdado pelo reviewer fresco.
+Na correção, inclua o defeito apontado e o delta relevante para o reviewer fresco.
 Emita o diff pelo stdout do `git diff` para usar o mesmo transporte; não redirecione
 evidência para `/tmp` e passe esse caminho inacessível ao reviewer. Se precisar criar
 um artefato manual, use o estado efêmero do worktree e confirme que ele é legível.
@@ -200,8 +179,8 @@ existe, marque a captura do record atual: o host verifica sua ancestralidade e u
 SHA do produtor. Não repita `fidelity`, mãos ou olhos aceitos para corrigir só essa
 lacuna. `harness_reviews` informa `preparation` quando há alterações pendentes; resolva
 os paths antes do despacho. Os olhos de implementação só começam após o commit;
-revisão de testes continua antes do freeze. Forneça aos olhos os SHAs e paths
-observados da série freeze/implementação/correção para que possam conferir a linhagem.
+revisão de testes continua antes do freeze. Forneça aos olhos o diff e as evidências
+atuais; a linhagem é verificada pelo host, sem outra auditoria histórica do reviewer.
 
 Use `harness_memory` com `read` e `update` para manter no diário local somente
 descobertas verificadas, sua evidência e a condição de revalidação. Não use `apply` nem

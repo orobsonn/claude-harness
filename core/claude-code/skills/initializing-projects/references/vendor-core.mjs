@@ -262,6 +262,8 @@ const REQUIRED_PI_SOURCE = [
   { rel: "lib/pi-auth-path-patch.mjs", kind: "file" },
   { rel: "lib/pi-child-identity.mjs", kind: "file" },
   { rel: "lib/pi-child-extensions.mjs", kind: "file" },
+  { rel: "lib/pi-command-evidence.mjs", kind: "file" },
+  { rel: "lib/reviewer-grep.mjs", kind: "file" },
   { rel: "lib/pi-gate-state.mjs", kind: "file" },
   { rel: "lib/pi-paths.mjs", kind: "file" },
   { rel: "lib/pi-review-config.mjs", kind: "file" },

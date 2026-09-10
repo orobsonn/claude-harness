@@ -880,6 +880,93 @@ test("replay do capture-verified é decidido pelo record já carimbado, não pel
   assert.deepEqual(removals, [{ sessionId: SESSION, callId: PRODUCER_CALL }]);
 });
 
+test("capture-verified observa HEAD real e limpeza de produto sem persistir um novo recibo", () => {
+  const root = makeRoot();
+  execFileSync("git", ["init", "-q", "-b", "feat/capture-origin"], { cwd: root });
+  execFileSync("git", ["config", "user.email", "harness@example.com"], { cwd: root });
+  execFileSync("git", ["config", "user.name", "harness"], { cwd: root });
+  fs.writeFileSync(path.join(root, "product.txt"), "base\n", "utf8");
+  execFileSync("git", ["add", "--", "product.txt"], { cwd: root });
+  execFileSync("git", ["commit", "-qm", "base"], { cwd: root });
+  const freezeSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
+
+  seedGateState(root, { hand_finished: [`${FEATURE}/${TASK}`] });
+  seedHandRecord(root, { freezeCommitSha: freezeSha });
+  fs.writeFileSync(path.join(root, "implementation.txt"), "product\n", "utf8");
+  execFileSync("git", ["add", "--", "implementation.txt"], { cwd: root });
+  execFileSync("git", ["commit", "-qm", "implement product"], { cwd: root });
+  const productHead = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
+  const { authority } = makeAuthority(root, { isAncestorSha: () => true });
+
+  const clean = call(authority, {
+    action: "capture-verified",
+    task_id: TASK,
+    sha: "f".repeat(40),
+  }, { toolCallId: "origin-clean" }).result;
+  assert.deepEqual(clean.metadata.capture_origin, {
+    task_id: TASK,
+    producer_call_id: PRODUCER_CALL,
+    head_sha: productHead,
+    worktree_clean: true,
+  });
+  assert.deepEqual(JSON.parse(clean.output).capture_origin, clean.metadata.capture_origin);
+
+  fs.writeFileSync(path.join(root, "product.txt"), "staged change\n", "utf8");
+  execFileSync("git", ["add", "--", "product.txt"], { cwd: root });
+  const staged = call(authority, { action: "capture-verified", task_id: TASK }, { toolCallId: "origin-staged" }).result;
+  assert.equal(staged.metadata.capture_origin.worktree_clean, false);
+  fs.writeFileSync(path.join(root, "product.txt"), "base\n", "utf8");
+  execFileSync("git", ["add", "--", "product.txt"], { cwd: root });
+
+  fs.writeFileSync(path.join(root, "untracked-product.txt"), "dirty\n", "utf8");
+  const untracked = call(authority, { action: "capture-verified", task_id: TASK }, { toolCallId: "origin-untracked" }).result;
+  assert.equal(untracked.metadata.capture_origin.worktree_clean, false);
+  execFileSync("git", ["add", "--", "untracked-product.txt"], { cwd: root });
+  execFileSync("git", ["commit", "-qm", "commit recovered product"], { cwd: root });
+  const recoveredHead = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
+  const recovered = call(authority, { action: "capture-verified", task_id: TASK }, { toolCallId: "origin-recovered" }).result;
+  assert.deepEqual(recovered.metadata.capture_origin, {
+    task_id: TASK,
+    producer_call_id: PRODUCER_CALL,
+    head_sha: recoveredHead,
+    worktree_clean: true,
+  });
+
+  fs.mkdirSync(path.join(root, ".pi/harness/runtime"), { recursive: true });
+  fs.writeFileSync(path.join(root, ".pi/harness/runtime/observation.json"), "{}", "utf8");
+  fs.mkdirSync(path.join(root, "node_modules/example"), { recursive: true });
+  fs.writeFileSync(path.join(root, "node_modules/example/cache"), "ephemeral", "utf8");
+  const ephemeral = call(authority, { action: "capture-verified", task_id: TASK }, { toolCallId: "origin-ephemeral" }).result;
+  assert.equal(ephemeral.metadata.capture_origin.worktree_clean, true);
+  assert.equal(ephemeral.metadata.capture_origin.head_sha, recoveredHead);
+});
+
+test("capture_origin nunca declara clean quando HEAD muda durante a mutação", () => {
+  const root = makeRoot();
+  execFileSync("git", ["init", "-q", "-b", "feat/capture-race"], { cwd: root });
+  execFileSync("git", ["config", "user.email", "harness@example.com"], { cwd: root });
+  execFileSync("git", ["config", "user.name", "harness"], { cwd: root });
+  fs.writeFileSync(path.join(root, "product.txt"), "base\n", "utf8");
+  execFileSync("git", ["add", "--", "product.txt"], { cwd: root });
+  execFileSync("git", ["commit", "-qm", "base"], { cwd: root });
+  const before = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
+  seedGateState(root, { hand_finished: [`${FEATURE}/${TASK}`] });
+  seedHandRecord(root, { freezeCommitSha: before });
+  const { authority } = makeAuthority(root, {
+    removeDispatchRecord: () => {
+      fs.writeFileSync(path.join(root, "racing-product.txt"), "committed concurrently\n", "utf8");
+      execFileSync("git", ["add", "--", "racing-product.txt"], { cwd: root });
+      execFileSync("git", ["commit", "-qm", "concurrent product commit"], { cwd: root });
+      return { ok: true, removed: true };
+    },
+  });
+
+  const result = call(authority, { action: "capture-verified", task_id: TASK }, { toolCallId: "origin-race" }).result;
+  assert.equal(result.ok, true, result.output);
+  assert.equal(result.metadata.capture_origin.head_sha, before);
+  assert.equal(result.metadata.capture_origin.worktree_clean, false);
+});
+
 test("a identidade do gate-state trocada entre hook e tool nega a mutação", () => {
   const root = makeRoot();
   seedGateState(root);

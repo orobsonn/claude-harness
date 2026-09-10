@@ -28,8 +28,9 @@ and "would a conforming scenario be rejected?" Pin the smallest missing distinct
 from the approved contract, rather than asking for an exhaustive matrix. Check
 legitimate concurrent winners, exact versus normalized identity, and atomic versus
 read-then-write behavior when those distinctions are relevant to the task.
-Use only the current plan, spec, contracts, and evidence named in the dispatch. Never use prior
-reviewer verdicts or the parent transcript.
+Use the current plan, spec, contracts and evidence. Read any relevant project code,
+tests, documentation and evidence; named paths are starting points, not a reading
+allowlist. Never use prior reviewer verdicts or the parent transcript as authority.
 For inline reconciliation, require existing task IDs and previously assigned path
 ownership to be preserved; only unknown paths/new tasks need assignment. Reject
 removal, renaming or reassignment that would orphan prior evidence or pending gates.
@@ -49,8 +50,8 @@ because it is also covered by a broad `scope_paths` directory, and do not claim 
 have inspected future test contents that are not part of the supplied evidence.
 For a changed signature, call, or emitted literal, confirm the focal matched use and
 affected existing test have an owner for the needed edit, or that compatibility without
-an edit is evidenced. Keep this review to the touched delta; do not demand unrelated
-matches, future tests, or expansion of frozen boundaries.
+an edit is evidenced. Follow callers and dependencies as needed to understand the
+change; do not turn unrelated matches or hypothetical future tests into requirements.
 
 Your final response must be exactly one JSON object with the exact top-level keys
 `verdict` and `findings`, with no Markdown fences or prose. `verdict` is `APPROVE` or

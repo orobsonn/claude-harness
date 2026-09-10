@@ -369,6 +369,69 @@ test("batch preflight is atomic; dispatch is durable and idempotent; dependencie
   assert.equal(observed.ok, true);
   assert.equal(f.registry().tasks.a.status, "ready");
 });
+test("blocked status returns fresh diagnostics without persisting or replaying them", async (t) => {
+  const f = fixture(t);
+  await executeTaskAction(
+    { action: "dispatch", task_ids: ["a"] },
+    f.context,
+    f.deps,
+  );
+  const contextReturn = {
+    summary: "The implementation review found one current blocker.",
+    files: ["src/a.mjs"],
+  };
+  f.deps.inspectRun = () => ({
+    ok: false,
+    reason: "implementation review rejected the current HEAD",
+    details: {
+      context_return: contextReturn,
+      review_findings: [{ severity: "high", finding: "Missing boundary check" }],
+    },
+  });
+
+  const blocked = await executeTaskAction(
+    { action: "status", task_id: "a" },
+    f.context,
+    f.deps,
+  );
+  assert.deepEqual(blocked.diagnostics, {
+    a: {
+      context_return: contextReturn,
+      review_findings: [{ severity: "high", finding: "Missing boundary check" }],
+    },
+  });
+  assert.equal(blocked.tasks[0].context_return, undefined);
+  assert.equal(f.registry().tasks.a.result, null);
+  assert.equal(f.registry().tasks.a.diagnostics, undefined);
+
+  f.deps.inspectRun = () => ({ ok: false, reason: "receipt still incomplete" });
+  const next = await executeTaskAction(
+    { action: "status", task_id: "a" },
+    f.context,
+    f.deps,
+  );
+  assert.equal(next.diagnostics, undefined);
+  assert.equal(next.tasks[0].context_return, undefined);
+});
+test("summary exposes durable context only for ready or integrated tasks", async (t) => {
+  const f = fixture(t);
+  const originalInspect = f.deps.inspectRun;
+  f.deps.inspectRun = (entry) => {
+    const inspected = originalInspect(entry);
+    return {
+      ...inspected,
+      result: { ...inspected.result, context_return: { summary: "Current result" } },
+    };
+  };
+  await executeTaskAction({ action: "dispatch", task_ids: ["a"] }, f.context, f.deps);
+  const ready = await executeTaskAction({ action: "status", task_id: "a" }, f.context, f.deps);
+  assert.deepEqual(ready.tasks[0].context_return, { summary: "Current result" });
+
+  f.deps.readProcess = () => ({ ok: true, running: true, terminal: false });
+  const running = await executeTaskAction({ action: "status", task_id: "a" }, f.context, f.deps);
+  assert.equal(running.tasks[0].status, "running");
+  assert.equal(running.tasks[0].context_return, undefined);
+});
 test("integration rejects wrong HEAD and preserves ancestry using a merge journal", async (t) => {
   const f = fixture(t);
   await executeTaskAction(
@@ -455,15 +518,15 @@ test("same-attempt resume requires terminal groups and invalidates old return be
     ...f.deps,
     readProcess: () => ({ ok: true, running: true, terminal: false }),
   };
-  assert.equal(
+  assert.match(
     (
       await executeTaskAction(
         { action: "resume", task_id: "a", attempt_id: entry.attempt_id },
         f.context,
         busy,
       )
-    ).ok,
-    false,
+    ).reason,
+    /task is still running; use status or wait to observe it before resume/,
   );
   const resumed = await executeTaskAction(
     {

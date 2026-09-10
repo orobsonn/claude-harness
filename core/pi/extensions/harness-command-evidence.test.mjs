@@ -9,6 +9,7 @@ import { createAgentSession, createBashToolDefinition, createReadToolDefinition,
 import { fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai";
 import harnessPolicy from "./harness-policy.ts";
 import { writePiChildIdentity } from "../lib/pi-child-identity.mjs";
+import { attachPiReviewEvidencePacket } from "../lib/pi-command-evidence.mjs";
 
 function fixture(t) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "pi-command-evidence-")));
@@ -336,4 +337,109 @@ test("native Pi agent event pipeline preserves a long RED through tool_result", 
   assert.match(result.content[0].text, /Command exited with code 1$/);
   assert.equal(result.details?.command_evidence?.status, "available");
   assert.equal(readFileSync(result.details.command_evidence.path, "utf8"), f.raw);
+});
+
+test("review packet carries the current git snapshot, exact diff and matching command evidence", async (t) => {
+  const f = fixture(t);
+  const privateName = String.fromCharCode(46, 101, 110, 118) + ".private";
+  writeFileSync(join(f.root, "tracked.txt"), "changed\n");
+  execFileSync("git", ["add", "tracked.txt"], { cwd: f.root });
+  writeFileSync(join(f.root, ":odd[review].test.mjs"), "export const observed = true;\n");
+  writeFileSync(join(f.root, privateName), "TOP_SECRET=must-not-travel\n");
+  const { final } = await f.run(0, { command: "node --test command.mjs", callId: "test-before-review" });
+  const event = {
+    toolName: "subagent",
+    toolCallId: "review-packet-1",
+    input: {
+      subagent_type: "harness-test-reviewer",
+      prompt: '[HARNESS_TASK_CONTEXT]{"task_id":"task-1"}[/HARNESS_TASK_CONTEXT]\nReview test fidelity.',
+    },
+  };
+  const packet = attachPiReviewEvidencePacket({ projectRoot: f.root, sessionId: "task-session", event });
+  assert.equal(packet.status, "available");
+  assert.match(event.input.prompt, /\[HARNESS_REVIEW_EVIDENCE\]/);
+  assert.equal(event.input.prompt.startsWith("[HARNESS_TASK_CONTEXT]"), true);
+  const snapshot = JSON.parse(readFileSync(packet.snapshot_path, "utf8"));
+  assert.equal(snapshot.head_sha, f.head);
+  assert.equal(snapshot.status.some((record) => record.path.startsWith(".pi/harness/")), false);
+  assert.deepEqual(snapshot.index_paths, ["tracked.txt"]);
+  assert.ok(snapshot.untracked_paths.includes(":odd[review].test.mjs"));
+  assert.equal(JSON.stringify(snapshot).includes(privateName), false);
+  const diff = readFileSync(packet.diff_path, "utf8");
+  assert.match(diff, /\+changed/);
+  assert.match(diff, /odd\[review\]\.test\.mjs/);
+  assert.match(diff, /observed = true/);
+  assert.doesNotMatch(diff, /TOP_SECRET/);
+  assert.equal(diff.includes(privateName), false);
+  const commands = JSON.parse(readFileSync(packet.command_evidence_path, "utf8"));
+  assert.equal(commands.exact_current.length, 1);
+  assert.equal(commands.exact_current[0].output_path, final.details.command_evidence.path);
+});
+
+test("review packet keeps explicitly supplied old evidence but marks freshness after a delta", async (t) => {
+  const f = fixture(t);
+  const { final } = await f.run(0, { command: "node --test command.mjs", callId: "old-test" });
+  const missing = join(f.root, ".pi", "harness", "state", "task-session", "evidence", "00000000-0000-4000-8000-000000000000.log");
+  writeFileSync(join(f.root, "tracked.txt"), "new delta\n");
+  const event = {
+    toolName: "subagent",
+    toolCallId: "review-packet-2",
+    input: {
+      subagent_type: "harness-test-reviewer",
+      prompt: '[HARNESS_TASK_CONTEXT]{"task_id":"task-1"}[/HARNESS_TASK_CONTEXT]\nPrior exact output: ' + final.details.command_evidence.path + "\nMissing output: " + missing,
+    },
+  };
+  const packet = attachPiReviewEvidencePacket({ projectRoot: f.root, sessionId: "task-session", event });
+  assert.equal(packet.status, "available");
+  const commands = JSON.parse(readFileSync(packet.command_evidence_path, "utf8"));
+  assert.equal(commands.exact_current.length, 0);
+  assert.equal(commands.supplied.length, 1);
+  assert.equal(commands.supplied[0].output_path, final.details.command_evidence.path);
+  assert.equal(commands.supplied[0].freshness, "different-head-or-status");
+  assert.equal(commands.supplied_unavailable.length, 1);
+  assert.equal(commands.supplied_unavailable[0].metadata_path.endsWith("00000000-0000-4000-8000-000000000000.json"), true);
+  assert.match(commands.supplied_unavailable[0].reason, /inaccessible or changed/);
+  assert.match(readFileSync(packet.diff_path, "utf8"), /\+new delta/);
+});
+
+test("final review packet uses origin/main when origin HEAD is absent and carries committed diff", (t) => {
+  const f = fixture(t);
+  execFileSync("git", ["remote", "add", "origin", f.root], { cwd: f.root });
+  execFileSync("git", ["update-ref", "refs/remotes/origin/main", f.head], { cwd: f.root });
+  writeFileSync(join(f.root, "tracked.txt"), "committed review delta\n");
+  execFileSync("git", ["add", "tracked.txt"], { cwd: f.root });
+  execFileSync("git", ["commit", "-q", "-m", "feat: review delta"], { cwd: f.root });
+  const event = {
+    toolName: "subagent",
+    toolCallId: "review-packet-final",
+    input: {
+      subagent_type: "harness-compliance",
+      prompt: "[HARNESS_FINAL_REVIEW]\nReview the aggregate delivery.",
+    },
+  };
+  const packet = attachPiReviewEvidencePacket({ projectRoot: f.root, sessionId: "task-session", event });
+  assert.equal(packet.status, "available");
+  const snapshot = JSON.parse(readFileSync(packet.snapshot_path, "utf8"));
+  assert.equal(snapshot.baseline.status, "available");
+  assert.equal(snapshot.baseline.sha, f.head);
+  assert.equal(snapshot.baseline.source, "refs/remotes/origin/main");
+  assert.match(readFileSync(packet.diff_path, "utf8"), /committed review delta/);
+});
+
+test("review packet transport failure is explanatory and never blocks", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "pi-review-packet-broken-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const event = {
+    toolName: "subagent",
+    toolCallId: "review-packet-broken",
+    input: {
+      subagent_type: "harness-test-reviewer",
+      prompt: '[HARNESS_TASK_CONTEXT]{"task_id":"task-1"}[/HARNESS_TASK_CONTEXT]\nReview.',
+    },
+  };
+  const packet = attachPiReviewEvidencePacket({ projectRoot: root, sessionId: "task-session", event });
+  assert.equal(packet.status, "unavailable");
+  assert.equal(event.input.prompt.startsWith("[HARNESS_TASK_CONTEXT]"), true);
+  assert.match(event.input.prompt, /transport unavailable/i);
+  assert.equal(packet.block, undefined);
 });

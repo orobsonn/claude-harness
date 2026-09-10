@@ -400,6 +400,37 @@ test('cwd da opção resolve caminho relativo que sobe para a home', () => {
   assert.deepEqual(decidePiPolicy(call, { home: HOME, cwd: '/srv/repo/pkg' }), { block: false })
 })
 
+test('todos os olhos restantes usam a mesma leitura ampla com exclusão de segredos', () => {
+  const secretPath = ['.', 'pi', 'agent', ['au', 'th.json'].join('')].join('/')
+  const evidencePath = ['.', 'pi', 'harness', 'state', 'review', 'evidence.txt'].join('/')
+  for (const reviewerRole of ['harness-plan-reviewer', 'harness-harvester', 'harness-discussion-adversary']) {
+    const options = { reviewerRole, cwd: process.cwd(), projectRoot: process.cwd() }
+
+    assert.equal(decidePiPolicy({ toolName: 'read', input: { path: secretPath } }, options).block, true, reviewerRole)
+    assert.deepEqual(
+      decidePiPolicy({ toolName: 'read', input: { path: 'package.json' } }, options),
+      { block: false },
+      reviewerRole,
+    )
+    assert.deepEqual(
+      decidePiPolicy({ toolName: 'read', input: { path: evidencePath } }, options),
+      { block: false },
+      reviewerRole,
+    )
+    const broadGrep = decidePiPolicy(
+      { toolName: 'grep', input: { path: '.', pattern: 'synthetic', glob: '**/*' } },
+      options,
+    )
+    assert.equal(broadGrep.block, false, reviewerRole)
+    assert.equal(Boolean(broadGrep.reviewerGrepGuard), true, reviewerRole)
+    assert.equal(
+      decidePiPolicy({ toolName: 'write', input: { path: 'src/app.ts' } }, options).block,
+      true,
+      reviewerRole,
+    )
+  }
+})
+
 test('falha de auditoria é silenciosa e nunca vira contexto do modelo', (t) => {
   assert.deepEqual(recordPiPolicyAudit({ sessionId: 'ses-1', toolCallId: 'c1', toolName: 'bash', auditDir: null }), {})
   const auditDir = mkdtempSync(join(tmpdir(), 'pi-policy-audit-'))

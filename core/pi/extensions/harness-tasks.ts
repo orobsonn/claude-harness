@@ -151,9 +151,15 @@ export default function harnessTasks(pi: ExtensionAPI, injected: Parameters<type
           ),
         ),
         task_ids: Type.Optional(
-          Type.Array(Type.String(), { minItems: 1, maxItems: 3 }),
+          Type.Array(Type.String(), {
+            minItems: 1,
+            maxItems: 3,
+            description: "Plural task identifiers for dispatch only.",
+          }),
         ),
-        task_id: Type.Optional(Type.String()),
+        task_id: Type.Optional(Type.String({
+          description: "Singular task identifier for status, wait, integrate, or resume; not dispatch.",
+        })),
         task_contexts: Type.Optional(Type.Array(Type.Object({
           task_id: Type.String(),
           content: Type.String({ description: "Optional curated reference brief for this task only, up to 2 KiB UTF-8. No approvals, credentials or full shared_context diary." }),
@@ -183,6 +189,20 @@ export default function harnessTasks(pi: ExtensionAPI, injected: Parameters<type
           requestedWait > 30)
       ) {
         const result = { ok: false, reason: `[harness-tasks:${String(action.action ?? "unknown")}] wait_seconds is only valid for status, from 0 to 30.` };
+        return { content: [{ type: "text" as const, text: JSON.stringify(result) }], details: result, isError: true };
+      }
+      if (action.action !== "dispatch" && action.task_ids !== undefined) {
+        const result = {
+          ok: false,
+          reason: `[harness-tasks:${String(action.action ?? "unknown")}] task_ids is only valid for dispatch; use task_id for ${String(action.action ?? "this action")}.`,
+        };
+        return { content: [{ type: "text" as const, text: JSON.stringify(result) }], details: result, isError: true };
+      }
+      if (action.action === "dispatch" && action.task_id !== undefined) {
+        const result = {
+          ok: false,
+          reason: "[harness-tasks:dispatch] task_id is not valid for dispatch; use task_ids.",
+        };
         return { content: [{ type: "text" as const, text: JSON.stringify(result) }], details: result, isError: true };
       }
       const context = {

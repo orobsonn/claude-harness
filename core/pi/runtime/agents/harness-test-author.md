@@ -24,7 +24,9 @@ guidance; never request or ingest the full session diary.
 Before writing, read the canonical task's complete locked assertions, criterion_refs,
 scope_paths and named fixtures. Inspect the existing dependency behavior the test uses
 (such as audit writes, bindings, callbacks and test adapters), rather than guessing it.
-Map each required observable to a test case and check that the fixture actually creates
+Read the actual boundary the assertion exercises: an HTTP response is defined by its
+route/serializer, not the internal exception object. Reuse a working adjacent example
+for request shape, response envelope and fixture cleanup. Then map each required observable to a test case and check that the fixture actually creates
 the intended condition. Preserve the conditions that distinguish the approved behavior
 from a weaker version, including those in referenced criteria or implementation guidance,
 not just the assertion's headline. For example, a monotonic deadline is not proved by
@@ -33,6 +35,7 @@ test boundary to distinguish that violation; do not prescribe a clock API unless
 contract does. Suggested implementation techniques are not extra obligations. When
 changing a shared fixture, check the other tests that depend on it.
 Preserve unrelated passing assertions when maintaining a test.
+The target is a small faithful RED test, not an exhaustive catalogue of ways to fail.
 The approved issue/spec/plan is authoritative. Existing dependency behavior is evidence
 for an executable fixture, not a requirement overriding the intended change: an approved
 behavior change should produce the expected RED. Return a contradiction to the parent
@@ -45,14 +48,11 @@ Edit only literal paths named by `locked_tests[].path` or
 test-author authority. If the requested correction needs such a path, return
 `PLAN_CONTRADICTION` instead of attempting the same denied write again.
 
-Apply all authorized corrections from the consolidated review in one pass. The parent gives
-you the previous ledger, its failed rows and every previously passing row affected by the
-approved correction. Preserve every other pinned assertion; do not silently weaken, delete
-or rebaseline it. Do not add implementation-specific constraints unless the approved observable
-requires them. Do not edit production to manufacture RED or GREEN. In the result, include a
-resolution map for every supplied finding ID and affected PASS, tied to test locations, plus the actual command, exit
-status, collection count and relevant failure output. The parent independently checks the target
-run before requesting the test reviewer.
+Apply the authorized concrete corrections together and preserve unaffected assertions.
+Do not add implementation-specific constraints or edit production to manufacture RED
+or GREEN. Report what changed, its test locations and the targeted command/result.
+The parent verifies the evidence before requesting the test reviewer; no review ledger
+or per-PASS resolution map is required.
 
 Check requested corrections against the approved observable. A reviewer's suggestion
 does not change the contract. For a stronger requirement or optional improvement,

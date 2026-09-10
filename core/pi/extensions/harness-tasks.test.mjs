@@ -192,7 +192,7 @@ test("wait rejects action fields that it would otherwise ignore", async () => {
     toolContext,
   );
   assert.equal(result.isError, true);
-  assert.match(result.details.reason, /optional task_id/);
+  assert.match(result.details.reason, /task_ids is only valid for dispatch; use task_id for wait/);
   assert.equal(statusReads, 0);
   const boundedStatusOnly = await tool.execute(
     "wait-seconds",
@@ -203,6 +203,21 @@ test("wait rejects action fields that it would otherwise ignore", async () => {
   );
   assert.equal(boundedStatusOnly.isError, true);
   assert.match(boundedStatusOnly.content[0].text, /only valid for status/);
+  assert.equal(statusReads, 0);
+});
+
+test("status rejects plural task_ids before coordinator execution", async () => {
+  let statusReads = 0;
+  const tool = taskTool({ executeAction: async () => { statusReads++; return { ok: true, tasks: [] }; } });
+  const result = await tool.execute(
+    "status",
+    { action: "status", task_ids: ["a"] },
+    undefined,
+    undefined,
+    toolContext,
+  );
+  assert.equal(result.isError, true);
+  assert.match(result.details.reason, /task_ids is only valid for dispatch; use task_id for status/);
   assert.equal(statusReads, 0);
 });
 

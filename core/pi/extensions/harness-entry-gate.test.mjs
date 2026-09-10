@@ -654,7 +654,7 @@ test("só a conclusão host-confirmada do adversary de spec cria a evidência qu
   }
 });
 
-test("task review completed com prosa ambígua ou achado canônico não grava recibo de adversary", async (t) => {
+test("task review com prosa ambígua ou achado canônico substitui aprovação antiga sem aprovar", async (t) => {
   const finding = {
     description: "A revisão encontrou perda de recibo concorrente.", category: "race", severity: "high",
     scope: "core/pi/extensions/harness-entry-gate.ts", evidence: "o mapa é lido antes do lock",
@@ -680,6 +680,11 @@ test("task review completed com prosa ambígua ou achado canônico não grava re
         description: "task adversary",
       };
       h.get("session_start")({}, ctxOf(f.root));
+      const priorPath = join(f.root, ".pi/harness/state", SESSION, "gate-state.json");
+      const prior = JSON.parse(readFileSync(priorPath, "utf8"));
+      writeFileSync(priorPath, JSON.stringify({ ...prior, task_adversary_evidence: {
+        [FEATURE + "/task-1"]: { accepted: true, dispatch_call_id: "old-approved-review" },
+      } }));
       h.get("tool_execution_start")({ toolName: "subagent", toolCallId: callId, args });
       assert.equal(await h.get("tool_call")({ toolName: "subagent", toolCallId: callId, input: args }, ctxOf(f.root)), undefined);
       events.emit("subagents:child:session-created", { sessionId: `${CHILD_SESSION}-${callId}`, parentSessionId: SESSION });
@@ -692,7 +697,8 @@ test("task review completed com prosa ambígua ou achado canônico não grava re
       }, ctxOf(f.root));
       unpublish();
       const state = JSON.parse(readFileSync(join(f.root, ".pi", "harness", "state", SESSION, "gate-state.json"), "utf8"));
-      assert.equal(state.task_adversary_evidence, undefined, `${label} cannot approve a task gate`);
+      assert.equal(state.task_adversary_evidence[FEATURE + "/task-1"].accepted, false, `${label} cannot reuse the old approval`);
+      if (slug === "negative-report") assert.deepEqual(state.task_adversary_evidence[FEATURE + "/task-1"].report.issues, [finding]);
       assert.equal(state.adversary_completion_evidence, undefined, `${label} cannot be misclassified as an accepted spec review`);
     });
   }
@@ -877,7 +883,7 @@ test("mudança unstaged durante o olho final invalida o recibo mesmo quando o HE
     }, ctxOf(f.root));
     unpublish();
     const saved = JSON.parse(readFileSync(statePath, "utf8"));
-    assert.equal(saved.final_review_evidence, undefined, "the adapter must compare the full review input, not HEAD alone");
+    assert.equal(saved.final_review_evidence.adversary.accepted, false, "the adapter must compare the full review input, not HEAD alone");
   } finally { f.close(); }
 });
 
