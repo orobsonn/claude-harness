@@ -5,6 +5,13 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [2.6.10](https://github.com/orobsonn/claude-harness/compare/v2.6.9...v2.6.10) (2026-09-10)
+
+
+### Bug Fixes
+
+* **pi:** reject cross-task frozen paths ([#932](https://github.com/orobsonn/claude-harness/issues/932)) ([8745b89](https://github.com/orobsonn/claude-harness/commit/8745b890f193688629c679b4acf37568c85b5217))
+
 ## [2.6.9](https://github.com/orobsonn/claude-harness/compare/v2.6.8...v2.6.9) (2026-09-09)
 
 
