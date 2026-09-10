@@ -42,6 +42,14 @@ test("planner Pi recebe contexto de revisão sem depender de resposta posterior 
   assert.match(prompt, /do\s+not\s+request or use `resume`/i);
 });
 
+test("planner Pi não divide a mesma closure congelável entre tasks", () => {
+  const prompt = readFileSync(plannerPath, "utf8");
+
+  assert.match(prompt, /production files.*sequential tasks/is);
+  assert.match(prompt, /`locked_tests\[\]\.path`.*`fixture_paths`.*exactly one task/is);
+  assert.match(prompt, /multiple assertions.*same.*task/is);
+});
+
 test("planner Pi copia o modo estável da cerimônia sem reclassificar por risco", () => {
   const prompt = readFileSync(plannerPath, "utf8");
 

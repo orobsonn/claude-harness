@@ -346,6 +346,13 @@ test("REVISE do plano replaneja com evidência do pai, sem retomar filho", () =>
   assert.match(prompt, /novo.*harness-planner.*nunca `resume`/i);
 });
 
+test("erro estrutural do plano volta ao planner antes de qualquer reviewer", () => {
+  const prompt = readFileSync(promptPath, "utf8");
+
+  assert.match(prompt, /plano.*inválido.*lista exata.*erros.*novo.*harness-planner/is);
+  assert.match(prompt, /não despache.*plan-reviewer.*plano.*validar/is);
+});
+
 test("retomada do pai só aceita envelope validado e não revive filhos", () => {
   const prompt = readFileSync(promptPath, "utf8");
   assert.match(prompt, /HARNESS_PARENT_RECOVERY/);

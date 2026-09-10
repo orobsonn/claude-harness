@@ -1,6 +1,6 @@
 /** @description Pure validate-plan module — never throws; returns ValidationResult. Ported per 03 contract. Reuses isSafeFeatureId. Single source for OC + CC. Canonical locked_tests shape: {id, path, assertion, fixture_paths?}. Complexity allowlist: low|medium|high|max. Optional per-task audit marker: resolved_judgments_model_resolved (array of that task's resolved_judgments keys) — OpenCode lane only; the claude-code copy under skills/creating-plans/references does not implement it. */
 import { existsSync, readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { posix, resolve } from "node:path";
 import { isSafeFeatureId } from "./feature-id.mjs";
 import { HAND_LADDERS, HAND_FAMILIES, formatAllApprovedLadders } from "./hand-model-ladder.mjs";
 import { validateRouting } from "./routing-validate.mjs";
@@ -110,13 +110,25 @@ function runtimeExpectedModelStrategy(root) {
   }
 }
 
-/**
- * @description Repo-relative path hygiene: no absolute, no drive letter, no `..`.
- * @param {string} p
- * @returns {boolean}
- */
+/** @description Canonical path identity shared by validation and frozen-closure ownership. */
+function canonicalRepoRelativePath(p) {
+  if (
+    typeof p !== "string" ||
+    p.length === 0 ||
+    p !== p.trim() ||
+    p.startsWith("/") ||
+    p.includes("\\") ||
+    p.includes("\0") ||
+    p.split("/").includes("..") ||
+    /^[A-Za-z]:/.test(p)
+  ) return null;
+  const normalized = posix.normalize(p).replace(/\/+$/, "");
+  return normalized && normalized !== "." && normalized === p ? normalized : null;
+}
+
+/** @description Repo-relative frozen paths must already be in their canonical form. */
 function isRepoRelativePath(p) {
-  return typeof p === "string" && p.length > 0 && !p.startsWith("/") && !p.includes("..") && !/^[A-Za-z]:/.test(p);
+  return canonicalRepoRelativePath(p) !== null;
 }
 
 /**
@@ -269,12 +281,34 @@ export function validatePlan(plan, opts = {}) {
   // tasks checks (only if present)
   if (Array.isArray(p.tasks)) {
     const taskIds = new Set();
+    const frozenPathClaims = [];
+    const frozenPathConflicts = new Set();
+    const claimFrozenPath = (value, taskId) => {
+      const normalized = canonicalRepoRelativePath(value);
+      if (!normalized) return;
+      for (const claim of frozenPathClaims) {
+        if (claim.taskId === taskId) continue;
+        const overlaps =
+          claim.path === normalized ||
+          claim.path.startsWith(`${normalized}/`) ||
+          normalized.startsWith(`${claim.path}/`);
+        if (!overlaps) continue;
+        const conflict = `${claim.taskId}\0${taskId}\0${claim.path}\0${normalized}`;
+        if (frozenPathConflicts.has(conflict)) continue;
+        frozenPathConflicts.add(conflict);
+        errors.push(
+          `frozen path "${normalized}" overlaps "${claim.path}" across tasks "${claim.taskId}" and "${taskId}"; keep the responsibility in one task or use separate frozen test and fixture paths`,
+        );
+      }
+      frozenPathClaims.push({ path: normalized, taskId });
+    };
     for (const [idx, task] of p.tasks.entries()) {
       if (!task || typeof task !== "object") {
         errors.push(`task[${idx}] must be object`);
         continue;
       }
       const t = /** @type {any} */ (task);
+      const frozenPathTaskId = typeof t.id === "string" && t.id ? t.id : `task[${idx}]`;
       if (typeof t.id !== "string" || !t.id) errors.push(`task[${idx}].id required`);
       else if (!isSafeFeatureId(t.id)) errors.push(`task[${idx}].id must be safe kebab-case`);
       else if (taskIds.has(t.id)) errors.push(`task[${idx}].id duplicate`);
@@ -323,10 +357,11 @@ export function validatePlan(plan, opts = {}) {
               errors.push(`${ltBase}.path required`);
             }
           } else if (!isRepoRelativePath(lt.path)) {
-            errors.push(`${ltBase}.path must be repo-relative, no .. or absolute`);
+            errors.push(`${ltBase}.path must be canonical repo-relative (no ., .., backslash, NUL, trailing slash, or absolute)`);
           } else if (!isAllowedTestPath(lt.path)) {
             errors.push(`${ltBase}.path must be allowed test file or tests directory`);
           }
+          claimFrozenPath(lt.path, frozenPathTaskId);
 
           if (typeof lt.assertion !== "string" || lt.assertion.trim().length === 0) {
             errors.push(`${ltBase}.assertion required (non-empty Given/When/Then string)`);
@@ -340,8 +375,9 @@ export function validatePlan(plan, opts = {}) {
                 if (typeof fp !== "string" || !fp) {
                   errors.push(`${ltBase}.fixture_paths[${fpIdx}] must be a non-empty string`);
                 } else if (!isRepoRelativePath(fp)) {
-                  errors.push(`${ltBase}.fixture_paths[${fpIdx}] must be repo-relative, no .. or absolute`);
+                  errors.push(`${ltBase}.fixture_paths[${fpIdx}] must be canonical repo-relative (no ., .., backslash, NUL, trailing slash, or absolute)`);
                 }
+                claimFrozenPath(fp, frozenPathTaskId);
               }
             }
           }

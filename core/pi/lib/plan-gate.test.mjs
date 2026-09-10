@@ -87,6 +87,30 @@ test("plano estável válido permite o dispatch guardado e não muta o prompt", 
   } finally { f.close(); }
 });
 
+test("plan-gate bloqueia antes do reviewer quando duas tasks congelariam o mesmo path", () => {
+  const plan = validPlan();
+  plan.tasks.push({
+    ...structuredClone(plan.tasks[0]),
+    id: "task-2",
+    depends_on: ["task-1"],
+    locked_tests: [{
+      id: "lt-2",
+      path: "tests/a.test.mjs",
+      assertion: "Given the dependency, When planned, Then the frozen path has one owner",
+    }],
+  });
+  const f = fixture(plan);
+  try {
+    const decision = dispatch(f.root, {
+      role: "harness-plan-reviewer",
+      prompt: "Review exactly this.",
+    }).decision;
+
+    assert.equal(decision.block, true);
+    assert.match(decision.reason, /frozen path.*tests\/a\.test\.mjs.*task-1.*task-2/i);
+  } finally { f.close(); }
+});
+
 test("dispatch de executor sem plano estável é negado", () => {
   const f = fixture(null);
   try {
