@@ -83,7 +83,7 @@ function fixtureGit(root, args) {
   }).trim();
 }
 
-function postMergeGateFixture() {
+function postMergeGateFixture({ functional = false } = {}) {
   const root = mkdtempSync(join(tmpdir(), "pi-entry-release-finish-"));
   const remoteRoot = mkdtempSync(join(tmpdir(), "pi-entry-release-remote-"));
   fixtureGit(remoteRoot, ["init", "--bare", "-q"]);
@@ -98,6 +98,18 @@ function postMergeGateFixture() {
   writeFileSync(join(root, "CHANGELOG.md"), "# Changelog\n\n## [1.2.3]\n\n- Old.\n");
   fixtureGit(root, ["add", "."]);
   fixtureGit(root, ["commit", "-q", "-m", "feat: milestone"]);
+  const initialSha = fixtureGit(root, ["rev-parse", "HEAD"]);
+  let functionalHeadSha = null;
+  if (functional) {
+    fixtureGit(root, ["switch", "-q", "-c", "feature/product"]);
+    writeFileSync(join(root, "product.txt"), "verified product\n");
+    fixtureGit(root, ["add", "product.txt"]);
+    fixtureGit(root, ["commit", "-q", "-m", "feat: verified product"]);
+    functionalHeadSha = fixtureGit(root, ["rev-parse", "HEAD"]);
+    fixtureGit(root, ["switch", "-q", "main"]);
+    fixtureGit(root, ["merge", "-q", "--squash", "feature/product"]);
+    fixtureGit(root, ["commit", "-q", "-m", "feat: verified product (#41)"]);
+  }
   const baseSha = fixtureGit(root, ["rev-parse", "HEAD"]);
   fixtureGit(root, ["remote", "add", "origin", remoteRoot]);
   fixtureGit(root, ["push", "-q", "-u", "origin", "main"]);
@@ -118,6 +130,17 @@ function postMergeGateFixture() {
   return {
     root,
     baseSha,
+    releaseHeadSha,
+    functionalHeadSha,
+    functionalEvidence(remoteHead = baseSha) {
+      return {
+        number: 41, url: "https://github.com/fixture/release/pull/41", state: "MERGED", isDraft: false,
+        mergedAt: "2026-09-05T11:00:00Z", mergeCommit: { oid: baseSha },
+        headRefOid: functionalHeadSha, headRefName: "feature/product", baseRefName: "main", baseRefOid: initialSha,
+        statusCheckRollup: [{ conclusion: "SUCCESS" }],
+        repository: { nameWithOwner: "fixture/release", url: "https://github.com/fixture/release", defaultBranch: "main", defaultBranchOid: remoteHead, defaultBranchContainsMerge: true },
+      };
+    },
     merge() {
       fixtureGit(root, ["switch", "-q", "main"]);
       fixtureGit(root, ["merge", "-q", "--squash", "chore/release-1.2.4"]);
@@ -128,13 +151,17 @@ function postMergeGateFixture() {
         headSha,
         evidence: {
           number: 42,
+          url: "https://github.com/fixture/release/pull/42",
           title: "chore: release v1.2.4",
           state: "MERGED",
+          isDraft: false,
           mergedAt: "2026-09-05T12:00:00Z",
           mergeCommit: { oid: headSha },
           headRefOid: releaseHeadSha,
           headRefName: "chore/release-1.2.4",
           baseRefName: "main",
+          baseRefOid: baseSha,
+          repository: { nameWithOwner: "fixture/release", url: "https://github.com/fixture/release", defaultBranch: "main", defaultBranchOid: headSha, defaultBranchContainsMerge: true },
           statusCheckRollup: [{ conclusion: "SUCCESS" }],
         },
       };
@@ -788,6 +815,48 @@ test("fluxo pós-merge libera shipper, tag exata e publicação presa ao commit 
     rmSync(notesPath, { force: true });
     f.close();
   }
+});
+
+test("release no WT original reutiliza integrações do produto squashado sem markers globais e prende a tag ao merge", async () => {
+  const f = postMergeGateFixture({ functional: true });
+  try {
+    const merged = f.merge();
+    fixtureGit(f.root, ["switch", "-q", "chore/release-1.2.4"]);
+    const seenHeads = [];
+    const deps = {
+      projectRoot: f.root, sessionId: SESSION, env: {},
+      loadGateStateFn: stateOf({ classified: true, mode: "FULL", feature_id: FEATURE, task_pipeline_version: 1 }),
+      readReviewPlanFn: () => ({ ok: true, plan: { tasks: [{ id: "task-1" }] } }),
+      readMergedReleaseEvidenceFn: (sha) => sha === f.baseSha ? f.functionalEvidence(merged.headSha) : merged.evidence,
+      readAllIntegratedTaskEvidenceFn: ({ headSha }) => {
+        seenHeads.push(headSha);
+        return { ok: headSha === f.functionalHeadSha };
+      },
+    };
+    const implicit = await decidePiBashGate({ ...deps, command: "git tag v1.2.4" });
+    assert.equal(implicit.decision, "deny", "implicit tag must not target the pre-squash release commit");
+    const explicit = await decidePiBashGate({ ...deps, command: `git tag v1.2.4 ${merged.headSha}` });
+    assert.equal(explicit.decision, "allow", explicit.reason);
+    fixtureGit(f.root, ["tag", "v1.2.4", merged.headSha]);
+    const push = await decidePiBashGate({ ...deps, command: "git push origin v1.2.4" });
+    assert.equal(push.decision, "allow", push.reason);
+    assert.ok(seenHeads.includes(f.functionalHeadSha), "must still validate current registry at exact functional PR input");
+    const suspended = await decidePiBashGate({ ...deps, command: "git push origin v1.2.4",
+      readAllIntegratedTaskEvidenceFn: () => ({ ok: false, reason: "correction barrier active" }) });
+    assert.equal(suspended.decision, "deny", "release does not absolve an unresolved task correction");
+    fixtureGit(f.root, ["push", "-q", "origin", "v1.2.4"]);
+    const notesPath = join(f.root, "release-notes-1.2.4.md");
+    writeFileSync(notesPath, "## [1.2.4]\n\n- New.\n\n");
+    const publishCommand = `gh release create v1.2.4 --target ${merged.headSha} --title v1.2.4 --notes-file ${notesPath} --verify-tag --latest`;
+    const publish = await decidePiBashGate({ ...deps, command: publishCommand });
+    assert.equal(publish.decision, "allow", publish.reason);
+    const suspendedPublish = await decidePiBashGate({ ...deps, command: publishCommand,
+      readAllIntegratedTaskEvidenceFn: () => ({ ok: false, reason: "correction barrier active" }) });
+    assert.equal(suspendedPublish.decision, "deny", "an existing remote tag cannot bypass an unresolved correction at publish");
+    fixtureGit(f.root, ["checkout", "-q", "--detach", merged.headSha]);
+    const detached = await decidePiBashGate({ ...deps, command: "git tag v1.2.4" });
+    assert.equal(detached.decision, "allow", detached.reason);
+  } finally { f.close(); }
 });
 
 test("notas acima do limite são recusadas antes de abrir ou ler o arquivo", async () => {

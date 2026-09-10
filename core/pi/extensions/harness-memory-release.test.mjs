@@ -11,6 +11,7 @@ import { delimiter, join } from "node:path";
 import test from "node:test";
 
 import harnessMemory from "./harness-memory.ts";
+import { capturePiReviewInput } from "../lib/pi-review-evidence.mjs";
 
 const SESSION = "ses-release-memory";
 const FEATURE = "release-memory-cycle";
@@ -70,6 +71,8 @@ function releaseFixture(t, { mutation = "none", finalState = true } = {}) {
   git(root, ["init", "-q", "-b", "main"]);
   git(root, ["config", "user.name", "Memory Release"]);
   git(root, ["config", "user.email", "memory-release@example.test"]);
+  git(root, ["remote", "add", "origin", "https://github.com/example/release-fixture.git"]);
+  git(root, ["commit", "-q", "--allow-empty", "-m", "chore: initialize fixture"]);
   writeFileSync(join(root, ".gitignore"), ".pi/harness/\nnode_modules/\n", "utf8");
   writeJson(root, "package.json", BASE_PACKAGE);
   writeJson(root, "package-lock.json", BASE_LOCK);
@@ -143,6 +146,38 @@ function seedPlan(root) {
     JSON.stringify({ feature_id: FEATURE, tasks: [{ id: "release-task", scope_paths: ["package.json", "package-lock.json", "CHANGELOG.md"] }] }),
     "utf8",
   );
+  writeFileSync(join(directory, "spec.md"), "# Verified release fixture\n", "utf8");
+}
+
+function seedAcceptedFinalReviewState(root, head) {
+  const captured = capturePiReviewInput({ projectRoot: root, sessionId: SESSION, featureId: FEATURE, phase: "final" });
+  assert.equal(captured.ok, true, captured.reason);
+  const report = { issues: [] };
+  const reportDigest = createHash("sha256").update(JSON.stringify(report)).digest("hex");
+  const receipt = (role) => ({
+    written_by: "host-subagent-completion",
+    parent_session_id: SESSION,
+    feature_id: FEATURE,
+    role,
+    dispatch_call_id: "call-" + role,
+    child_session_id: "child-" + role,
+    agent_id: "agent-" + role,
+    status: "completed",
+    reviewed_head_sha: head,
+    accepted: true,
+    input_digest: captured.snapshot.input_digest,
+    report_digest: reportDigest,
+    report,
+  });
+  writeFileSync(statePath(root), JSON.stringify({
+    session_id: SESSION,
+    feature_id: FEATURE,
+    final_review_done: true,
+    final_review_evidence: {
+      adversary: receipt("harness-adversary"),
+      compliance: receipt("harness-compliance"),
+    },
+  }), "utf8");
 }
 
 function runtime(root) {
@@ -157,7 +192,7 @@ function register() {
     registerTool(definition) { tool = definition; },
   }));
   assert.equal(tool?.name, "harness_memory");
-  for (const name of ["tool_call", "tool_execution_start", "tool_execution_end"]) {
+  for (const name of ["tool_call", "tool_execution_start", "tool_result"]) {
     assert.equal(typeof handlers.get(name), "function");
   }
   return {
@@ -183,14 +218,13 @@ function completeShipper(api, root, during = () => {}) {
     runtime(root),
   );
   during();
-  api.handlers.get("tool_execution_end")(
+  api.handlers.get("tool_result")(
     {
       toolName: "subagent",
       toolCallId: "shipper-release",
-      result: {
-        content: [{ type: "text", text: "Release published.\nStatus: DONE" }],
-        details: { status: "completed", agentId: "agent-release-shipper" },
-      },
+      input: args,
+      content: [{ type: "text", text: "Release published.\nStatus: DONE" }],
+      details: { status: "completed", agentId: "agent-release-shipper" },
       isError: false,
     },
     runtime(root),
@@ -211,14 +245,13 @@ function completeHarvest(api, root, changes = []) {
     { toolName: "subagent", toolCallId: "harvest-release", args },
     runtime(root),
   );
-  api.handlers.get("tool_execution_end")(
+  api.handlers.get("tool_result")(
     {
       toolName: "subagent",
       toolCallId: "harvest-release",
-      result: {
-        content: [{ type: "text", text: harvestEnvelope(changes) }],
-        details: { status: "completed", agentId: "agent-release-harvester" },
-      },
+      input: args,
+      content: [{ type: "text", text: harvestEnvelope(changes) }],
+      details: { status: "completed", agentId: "agent-release-harvester" },
       isError: false,
     },
     runtime(root),
@@ -238,7 +271,7 @@ function mergeRelease(root, number = 42) {
   return headSha;
 }
 
-function installFakeGh(t, root, headSha, number = 42, releaseHeadSha = git(root, ["rev-parse", "chore/release-1.2.4"])) {
+function installFakeGh(t, root, headSha, number = 42, releaseHeadSha = git(root, ["rev-parse", "chore/release-1.2.4"]), additionalEvidence = []) {
   const bin = mkdtempSync(join(tmpdir(), "pi-memory-gh-"));
   t.after(() => rmSync(bin, { recursive: true, force: true }));
   const evidence = [{
@@ -250,10 +283,54 @@ function installFakeGh(t, root, headSha, number = 42, releaseHeadSha = git(root,
     headRefName: "chore/release-1.2.4",
     headRefOid: releaseHeadSha,
     baseRefName: "main",
+    baseRefOid: git(root, ["rev-parse", `${headSha}^`]),
+    isDraft: false,
+    url: `https://github.com/example/release-fixture/pull/${number}`,
     statusCheckRollup: [{ conclusion: "SUCCESS" }],
-  }];
+  }, ...additionalEvidence];
+  const remoteCommits = Object.fromEntries(evidence.map((row) => {
+    const oid = row.mergeCommit.oid;
+    return [oid, {
+      sha: oid,
+      tree: { sha: git(root, ["rev-parse", `${oid}^{tree}`]) },
+      parents: [{ sha: row.baseRefOid }],
+      message: git(root, ["log", "-1", "--format=%s", oid]),
+    }];
+  }));
+  const repository = { nameWithOwner: "example/release-fixture", url: "https://github.com/example/release-fixture", defaultBranchRef: { name: "main" } };
+  const remoteRef = { object: { sha: headSha } };
+  const publishedMarker = join(bin, "published");
+  const release = {
+    tagName: "v1.2.4",
+    targetCommitish: "main",
+    name: "Release 1.2.4",
+    body: "presentation may be edited",
+    isDraft: false,
+    isPrerelease: false,
+    publishedAt: "2026-09-05T12:30:00Z",
+    url: "https://github.com/example/release-fixture/releases/tag/v1.2.4",
+  };
   const executable = join(bin, "gh");
-  writeFileSync(executable, `#!/bin/sh\nprintf '%s\\n' '${JSON.stringify(evidence)}'\n`, "utf8");
+  writeFileSync(executable, `#!/usr/bin/env node
+const fs = require("node:fs");
+const args = process.argv.slice(2);
+if (args[0] === "repo" && args[1] === "view") console.log(${JSON.stringify(JSON.stringify(repository))});
+else if (args[0] === "pr" && args[1] === "list") console.log(${JSON.stringify(JSON.stringify(evidence))});
+else if (args[0] === "api" && args[1].includes("/git/ref/heads/main")) console.log(${JSON.stringify(JSON.stringify(remoteRef))});
+else if (args[0] === "api" && args[1].includes("/compare/")) {
+  const base = args[1].split("/compare/")[1].split("...")[0];
+  console.log(JSON.stringify({ status: base === ${JSON.stringify(headSha)} ? "identical" : "ahead", merge_base_commit: { sha: base } }));
+}
+else if (args[0] === "api" && args[1].includes("/git/commits/")) {
+  const oid = args[1].split("/git/commits/")[1];
+  const commit = ${JSON.stringify(remoteCommits)}[oid];
+  if (!commit) process.exit(1);
+  console.log(JSON.stringify(commit));
+}
+else if (args[0] === "api" && args[1].includes("/commits/v1.2.4")) console.log(${JSON.stringify(JSON.stringify({ sha: headSha }))});
+else if (args[0] === "release" && args[1] === "view" && fs.existsSync(${JSON.stringify(publishedMarker)})) console.log(${JSON.stringify(JSON.stringify(release))});
+else process.exit(1);
+`, "utf8");
   chmodSync(executable, 0o755);
   const previous = process.env.PATH;
   process.env.PATH = `${bin}${delimiter}${previous ?? ""}`;
@@ -261,6 +338,7 @@ function installFakeGh(t, root, headSha, number = 42, releaseHeadSha = git(root,
     if (previous === undefined) delete process.env.PATH;
     else process.env.PATH = previous;
   });
+  return { publish: () => writeFileSync(publishedMarker, "published\n", "utf8") };
 }
 
 test("harness-memory release: prova pre-merge libera shipper apesar das revisões pertencerem ao HEAD anterior", async (t) => {
@@ -325,7 +403,7 @@ test("harness-memory release: finalize preserva proposta durável ainda não per
   assert.equal(readFileSync(join(f.root, "MEMORY.md"), "utf8"), before);
 });
 
-test("harness-memory release: harvest zero delta persistido permite limpar o runtime pre-merge", async (t) => {
+test("harness-memory release: preparo pre-merge não se confunde com publicação finalizável", async (t) => {
   const f = releaseFixture(t);
   const api = register();
   seedPlan(f.root);
@@ -334,25 +412,92 @@ test("harness-memory release: harvest zero delta persistido permite limpar o run
   assert.equal(existsSync(harvestPath(f.root)), true);
   assert.equal(await api.handlers.get("tool_call")(shipperEvent(), runtime(f.root)), undefined);
   completeShipper(api, f.root);
+  assert.equal(JSON.parse(readFileSync(shipmentPath(f.root), "utf8")).shipment_phase, "release-prepared");
 
   const finalized = await api.execute({ action: "finalize" }, runtime(f.root));
-  assert.equal(finalized.details.ok, true);
-  assert.equal(existsSync(sharedPath(f.root)), false);
-  assert.equal(existsSync(harvestPath(f.root)), false);
-  assert.equal(existsSync(shipmentPath(f.root)), false);
+  assert.equal(finalized.details.ok, false);
+  assert.equal(existsSync(sharedPath(f.root)), true);
+  assert.equal(existsSync(harvestPath(f.root)), true);
+  assert.equal(existsSync(shipmentPath(f.root)), true);
 });
 
-test("harness-memory release: prova pós-merge usa somente o PR exato fornecido pelo gh local", async (t) => {
+test("same-WT faz squash funcional, release e publicação em um dispatch sem reutilizar main", async (t) => {
+  const f = releaseFixture(t);
+  const initialBase = git(f.root, ["rev-parse", f.baseSha + "^"]);
+  const releasePackage = readFileSync(join(f.root, "package.json"), "utf8");
+  const releaseLock = readFileSync(join(f.root, "package-lock.json"), "utf8");
+  const releaseChangelog = readFileSync(join(f.root, "CHANGELOG.md"), "utf8");
+  git(f.root, ["branch", "-f", "main", initialBase]);
+  git(f.root, ["update-ref", "refs/remotes/origin/main", initialBase]);
+  git(f.root, ["switch", "-q", "-c", "feat/reviewed", f.baseSha]);
+  seedPlan(f.root);
+  seedAcceptedFinalReviewState(f.root, f.baseSha);
+  const api = register();
+  await api.execute({ action: "update", content: "same-WT release context" }, runtime(f.root));
+  completeHarvest(api, f.root);
+  const mainWorktree = mkdtempSync(join(tmpdir(), "pi-release-main-occupied-"));
+  let functionalMerge;
+  completeShipper(api, f.root, () => {
+    git(f.root, ["worktree", "add", "-q", mainWorktree, "main"]);
+    git(mainWorktree, ["merge", "-q", "--squash", "feat/reviewed"]);
+    functionalMerge = commit(mainWorktree, "feat: reviewed functional squash (#41)");
+    git(f.root, ["update-ref", "refs/remotes/origin/main", functionalMerge]);
+    git(f.root, ["branch", "-f", "chore/release-1.2.4", functionalMerge]);
+    git(f.root, ["switch", "-q", "chore/release-1.2.4"]);
+    writeFileSync(join(f.root, "package.json"), releasePackage, "utf8");
+    writeFileSync(join(f.root, "package-lock.json"), releaseLock, "utf8");
+    writeFileSync(join(f.root, "CHANGELOG.md"), releaseChangelog, "utf8");
+    const preparedHead = commit(f.root, "chore: release v1.2.4");
+    git(mainWorktree, ["merge", "-q", "--squash", "chore/release-1.2.4"]);
+    const releaseMerge = commit(mainWorktree, "chore: release v1.2.4 (#42)");
+    git(f.root, ["update-ref", "refs/remotes/origin/main", releaseMerge]);
+    const remote = installFakeGh(t, f.root, releaseMerge, 42, preparedHead, [{
+      number: 41,
+      title: "feat: reviewed functional change",
+      state: "MERGED",
+      isDraft: false,
+      mergedAt: "2026-09-05T11:00:00Z",
+      mergeCommit: { oid: functionalMerge },
+      headRefOid: f.baseSha,
+      headRefName: "feat/reviewed",
+      baseRefName: "main",
+      baseRefOid: initialBase,
+      url: "https://github.com/example/release-fixture/pull/41",
+      statusCheckRollup: [{ conclusion: "SUCCESS" }],
+    }]);
+    remote.publish();
+  });
+  t.after(() => {
+    try { git(f.root, ["worktree", "remove", "--force", mainWorktree]); } catch {}
+    rmSync(mainWorktree, { recursive: true, force: true });
+  });
+  assert.equal(git(f.root, ["branch", "--show-current"]), "chore/release-1.2.4");
+  assert.equal(git(mainWorktree, ["branch", "--show-current"]), "main");
+  const receipt = JSON.parse(readFileSync(shipmentPath(f.root), "utf8"));
+  assert.equal(receipt.shipment_phase, "published");
+  assert.notEqual(receipt.head, git(f.root, ["rev-parse", "HEAD"]));
+  const finalized = await api.execute({ action: "finalize" }, runtime(f.root));
+  assert.equal(finalized.details.ok, true);
+});
+
+test("harness-memory release: merge e publicação são recibos distintos antes do finalize", async (t) => {
   const f = releaseFixture(t);
   const mergedHead = mergeRelease(f.root);
-  installFakeGh(t, f.root, mergedHead);
+  const remote = installFakeGh(t, f.root, mergedHead);
   const api = register();
   seedPlan(f.root);
   await api.execute({ action: "update", content: "contexto pós-merge absorvido" }, runtime(f.root));
   completeHarvest(api, f.root);
   assert.equal(await api.handlers.get("tool_call")(shipperEvent(), runtime(f.root)), undefined);
   completeShipper(api, f.root);
-  assert.equal(JSON.parse(readFileSync(shipmentPath(f.root), "utf8")).release_phase, "post-merge");
+  assert.equal(JSON.parse(readFileSync(shipmentPath(f.root), "utf8")).shipment_phase, "merged");
+
+  const premature = await api.execute({ action: "finalize" }, runtime(f.root));
+  assert.equal(premature.details.ok, false);
+  assert.equal(existsSync(sharedPath(f.root)), true);
+
+  remote.publish();
+  assert.equal(JSON.parse(readFileSync(shipmentPath(f.root), "utf8")).shipment_phase, "merged");
 
   const finalized = await api.execute({ action: "finalize" }, runtime(f.root));
   assert.equal(finalized.details.ok, true);
@@ -384,10 +529,14 @@ test("native shipper can complete only the exact proven release pre-to-post merg
         }
       });
       assert.equal(existsSync(shipmentPath(f.root)), outcome === "exact");
-      if (outcome === "exact") assert.equal(JSON.parse(readFileSync(shipmentPath(f.root), "utf8")).head, mergedHead);
+      if (outcome === "exact") {
+        const receipt = JSON.parse(readFileSync(shipmentPath(f.root), "utf8"));
+        assert.equal(receipt.head, mergedHead);
+        assert.equal(receipt.shipment_phase, "merged");
+      }
       const finalized = await api.execute({ action: "finalize" }, runtime(f.root));
-      assert.equal(finalized.details.ok, outcome === "exact");
-      assert.equal(existsSync(sharedPath(f.root)), outcome !== "exact");
+      assert.equal(finalized.details.ok, false);
+      assert.equal(existsSync(sharedPath(f.root)), true);
     });
   }
 });

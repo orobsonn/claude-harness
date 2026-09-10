@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import harnessTasks from "./harness-tasks.ts";
+import { runNativeToolCall } from "./pi-native-tool.test.mjs";
 
 test("native tool exposes sequential durable actions and derives the global identity from the host", async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-tasks-tool-"));
@@ -72,10 +73,12 @@ test("native tool exposes sequential durable actions and derives the global iden
 
 function taskTool(injected) {
   let tool;
+  const hooks = new Map();
   harnessTasks({
     registerTool: (item) => { tool = item; },
-    on: () => {},
+    on: (name, handler) => hooks.set(name, handler),
   }, injected);
+  tool.testHooks = hooks;
   return tool;
 }
 
@@ -201,6 +204,43 @@ test("wait rejects action fields that it would otherwise ignore", async () => {
   assert.equal(boundedStatusOnly.isError, true);
   assert.match(boundedStatusOnly.content[0].text, /only valid for status/);
   assert.equal(statusReads, 0);
+});
+
+test("task rejection reaches the model as a native Pi error with operation identity", async () => {
+  const tool = taskTool({ executeAction: async () => ({ ok: true, tasks: [] }) });
+  const { result } = await runNativeToolCall({
+    tool,
+    input: { action: "wait", wait_seconds: 1 },
+    hooks: tool.testHooks,
+    ctx: toolContext,
+  });
+  assert.equal(result.isError, true);
+  assert.match(result.content[0].text, /harness-tasks:wait/i);
+  assert.match(result.content[0].text, /only valid for status/i);
+});
+
+test("native task error preserves recovery identity and uncertain external effect fields", async () => {
+  const failure = {
+    ok: false,
+    reason: "receipt timed out after dispatch",
+    task_id: "task-a",
+    attempt_id: "attempt-7",
+    terminal_handle: "terminal-9",
+    effect: "dispatch may already have started",
+  };
+  const tool = taskTool({ executeAction: async () => failure });
+  const { result } = await runNativeToolCall({
+    tool,
+    input: { action: "dispatch", task_ids: ["task-a"], attempt_id: "attempt-7" },
+    hooks: tool.testHooks,
+    ctx: toolContext,
+  });
+  assert.equal(result.isError, true);
+  assert.deepEqual(result.details, {
+    ...failure,
+    reason: "[harness-tasks:dispatch] receipt timed out after dispatch",
+  });
+  assert.deepEqual(JSON.parse(result.content[0].text), result.details);
 });
 
 test("a stale Orca handle falls back to status observation without deciding completion", async () => {

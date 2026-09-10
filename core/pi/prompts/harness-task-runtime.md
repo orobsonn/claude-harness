@@ -40,7 +40,9 @@ foreground; a rejeição não exige serializar. Aguarde todos antes de corrigir 
 Em tentativa nova, não presuma fidelity, freeze, captura, revisão ou re-gate. Siga esta
 ordem exata: (1) test-author; (2) RED comportamental executável; (3) aprovação de
 fidelidade pelo harness-test-reviewer; (4) freeze commit seletivo contendo somente testes/fixtures travados;
-(5) marker `fidelity`; (6) marker `capture-verified`; (7) executor. O marker de fidelity
+(5) marker `fidelity`; (6) marker `capture-verified`; (7) executor. O pai faz o freeze
+seletivo diretamente; não despache outro test-author apenas para commitar testes aprovados.
+O marker de fidelity
 antes do freeze commit é inválido e não autoriza o executor. Não passe `sha` aos markers:
 a autoridade deriva o commit do estado host-owned. Ao relatar um SHA, leia o valor
 completo com `git log -1 --format=%H`; nunca complete por inferência um SHA abreviado.
@@ -163,16 +165,21 @@ executor novo para verificar/completar o produto e capturar seu record atual ant
 commit de produção. O trabalho preservado não substitui captura, olhos ou re-gate.
 
 Antes do primeiro despacho de olhos, entregue a evidência de modo que eles possam
-abri-la: saída curta inline; saída longa pelo caminho `[harness-evidence]` retornado
-pelo shell, junto do comando, status original (exit/timeout/aborto) e baseline/HEAD
-observados. O host preserva o spool completo em `.pi/harness/state/<sessão>/evidence/`,
-inclusive em RED; isso transporta evidência, não concede aprovação nem prova freshness.
+abri-la: use os caminhos de saída e metadados `[harness-evidence]` retornados pelo shell,
+inclusive para saídas curtas e RED; saída curta também pode ir inline. Os metadados
+identificam comando, status original (exit/timeout/aborto), sessão e checkout observado.
+O host preserva essa evidência em `.pi/harness/state/<sessão>/evidence/`; isso transporta
+evidência, não concede aprovação nem prova freshness. Escolha os resultados que
+correspondem à baseline e aos arquivos revisados, não simplesmente o log mais recente.
+Reenvie o ledger anterior completo na correção: ele não é herdado pelo reviewer fresco.
 Emita o diff pelo stdout do `git diff` para usar o mesmo transporte; não redirecione
 evidência para `/tmp` e passe esse caminho inacessível ao reviewer. Se precisar criar
 um artefato manual, use o estado efêmero do worktree e confirme que ele é legível.
-Se o transporte informar indisponibilidade, resolva esse problema antes do despacho,
-preservando o resultado observado; não reescreva testes nem repita execução atual
-somente para mover um arquivo. Não commite logs nem imprima segredos nos comandos.
+Se o transporte não arquivar a saída, use a saída completa e segura já disponível
+inline, com comando/status, quando ela for suficiente. Repare a localização somente
+se a evidência necessária estiver realmente inacessível; não reescreva testes nem
+repita execução atual somente para mover um arquivo. Não envie conteúdo privado que
+foi excluído do arquivo de evidência, não commite logs nem imprima segredos nos comandos.
 
 Não repita mão, teste ou revisão válida quando não houve delta de produto, teste,
 índice, plano ou spec. Em retomada, reconcilie o estado existente da mesma sessão e

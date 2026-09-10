@@ -81,7 +81,9 @@ import {
 import { loadPiGateStateFromDisk } from "./pi-gate-state.mjs";
 import { piGateStatePath, piHandRecordPath } from "./pi-paths.mjs";
 import {
+  classifyPiFunctionalMergeTransition,
   piReleaseMergeMatchesProof,
+  readPiMergedReleaseEvidence,
   resolvePiReleaseProof,
   scopePiReleaseOnlyTaskState,
 } from "./release-only.mjs";
@@ -244,11 +246,14 @@ function releaseOnlyScope({ gateState, isAncestorFn, proof }) {
 }
 
 function deliveryMayUseReleaseScope(command, proof) {
-  if (proof?.ok !== true || proof.phase !== "pre-merge" || typeof command !== "string") {
+  if (proof?.ok !== true || typeof command !== "string") {
     return false;
   }
   const trimmed = command.trim();
-  return trimmed === `git push origin ${proof.branch}` || isGhPrMergeCommand(trimmed);
+  if (proof.phase === "pre-merge") {
+    return trimmed === `git push origin ${proof.branch}` || isGhPrMergeCommand(trimmed);
+  }
+  return proof.phase === "post-merge" && (isGitTagMutation(trimmed) || isTagPushAttempt(trimmed) || isGhReleaseCreate(trimmed));
 }
 
 function isGitTagMutation(command) {
@@ -301,8 +306,10 @@ function remoteTagPointsAtHead(projectRoot, proof) {
   }
 }
 
-function exactPostMergeTagCommand(command, proof) {
-  return proof?.ok === true && proof.phase === "post-merge" && command.trim() === `git tag ${proof.tag}`;
+function exactPostMergeTagCommand(command, proof, projectRoot) {
+  if (proof?.ok !== true || proof.phase !== "post-merge") return false;
+  return command.trim() === `git tag ${proof.tag} ${proof.headSha}` ||
+    command.trim() === `git tag ${proof.tag}` && resolvePiHeadSha(projectRoot) === proof.headSha;
 }
 
 function exactPostMergeTagPush(command, proof, projectRoot) {
@@ -604,7 +611,7 @@ export async function decidePiBashGate(input = {}) {
   // worktree filha. Quando todo o plano está integrado no HEAD atual, retire somente feature_id
   // da cópia efêmera entregue ao real-file rail legado. Nenhum record sintético é criado.
   let deliveryGateState = releaseScope.gateState;
-  if (isDeliveryCommand(command) && gateState.task_pipeline_version === 1 && !gateState.task_run &&
+  if ((isDeliveryCommand(command) || releaseMutation) && gateState.task_pipeline_version === 1 && !gateState.task_run &&
       sessionId && typeof gateState.feature_id === "string") {
     const readPlan = typeof input.readReviewPlanFn === "function" ? input.readReviewPlanFn : readPiReviewPlan;
     const readAll = typeof input.readAllIntegratedTaskEvidenceFn === "function"
@@ -612,9 +619,21 @@ export async function decidePiBashGate(input = {}) {
       : readAllIntegratedTaskEvidence;
     const loadedPlan = readPlan({ projectRoot, featureId: gateState.feature_id });
     const headSha = resolvePiHeadSha(projectRoot);
-    const integrated = loadedPlan?.ok && headSha
+    let integrated = loadedPlan?.ok && headSha
       ? readAll({ projectRoot, sessionId, featureId: gateState.feature_id, headSha, tasks: loadedPlan.plan.tasks })
       : { ok: false };
+    // Squash changes ancestry, not the reviewed product. Reuse the existing registry at
+    // the exact functional PR input only when its content matches the release's base.
+    // readAll still checks current plan authority and any suspended correction.
+    if (!integrated?.ok && loadedPlan?.ok && deliveryMayUseReleaseScope(command, releaseProof)) {
+      try {
+        const readEvidence = input.readMergedReleaseEvidenceFn ?? ((sha) => readPiMergedReleaseEvidence(projectRoot, sha));
+        const evidence = readEvidence(releaseProof.baseSha);
+        const functional = classifyPiFunctionalMergeTransition(projectRoot, evidence?.headRefOid, releaseProof, evidence);
+        if (functional.ok) integrated = readAll({ projectRoot, sessionId, featureId: gateState.feature_id,
+          headSha: functional.headSha, tasks: loadedPlan.plan.tasks });
+      } catch { /* unavailable proof retains the original denial */ }
+    }
     if (!integrated?.ok) {
       return {
         ok: false,
@@ -630,7 +649,7 @@ export async function decidePiBashGate(input = {}) {
   }
 
   if (isGitTagMutation(command)) {
-    return exactPostMergeTagCommand(commandText, releaseProof)
+    return exactPostMergeTagCommand(commandText, releaseProof, projectRoot)
       ? { ...ALLOW, ...advisory }
       : {
           ok: false,

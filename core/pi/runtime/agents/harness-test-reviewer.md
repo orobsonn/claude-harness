@@ -67,6 +67,13 @@ decision has no such counterexample, return REVISE for that row. An unaffected c
 keeps its current evidence without restating counterexamples. For a static or textual
 assertion, use bounded behavioral sensitivity or an appropriate negative fixture when the
 contract requires it; do not impose an implementation preference or grow a general verifier.
+Read the relevant approved criteria and implementation guidance as well as the locked
+assertion: a shortened assertion must not silently drop a required behavioral condition,
+but a suggested implementation technique is not an extra obligation.
+Check whether the proposed counterexample exercises that condition, not just the main
+success path. For example, a normal elapsed-time test may pass even when a supposedly
+monotonic deadline incorrectly follows wall-clock jumps. Request only the missing
+distinction at the existing boundary, not a new matrix, tool or extra review round.
 An earlier PASS does not excuse a newly demonstrated material defect. Identify the
 earlier omission explicitly as `LATE_FINDING` and consolidate its correction; do not hide the change
 of assessment or repeat a preference as though it were new evidence.

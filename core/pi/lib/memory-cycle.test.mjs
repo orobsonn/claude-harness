@@ -7,7 +7,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { checkCurrentMemoryReviews } from "./memory-cycle.mjs";
+import { checkCurrentMemoryReviews, classifyMemoryShipmentTransition } from "./memory-cycle.mjs";
 
 let capturePiReviewInput;
 try {
@@ -141,4 +141,63 @@ test("checkCurrentMemoryReviews rejects ignored canonical plan/spec drift on the
       );
     });
   }
+});
+
+test("shipment distingue preparação, merge e publicação da release", () => {
+  const reviewed = "a".repeat(40);
+  const functionalMerge = "b".repeat(40);
+  const releaseHead = "c".repeat(40);
+  const releaseMerge = "d".repeat(40);
+  const prepared = {
+    head: releaseHead,
+    release: { ok: true, phase: "pre-merge", version: "1.2.4", branch: "chore/release-1.2.4", baseSha: functionalMerge },
+  };
+  assert.deepEqual(
+    classifyMemoryShipmentTransition(
+      { head: reviewed },
+      prepared,
+      { ok: true, headSha: reviewed, mergeSha: functionalMerge },
+    ),
+    { ok: true, phase: "release-prepared" },
+  );
+
+  const merged = {
+    head: releaseMerge,
+    release: {
+      ok: true,
+      phase: "post-merge",
+      version: "1.2.4",
+      releaseBranch: "chore/release-1.2.4",
+      releaseHeadSha: releaseHead,
+      baseSha: functionalMerge,
+      publication: { ok: false },
+    },
+  };
+  assert.deepEqual(classifyMemoryShipmentTransition({ head: releaseHead, release: prepared.release }, merged), { ok: true, phase: "merged" });
+  assert.deepEqual(
+    classifyMemoryShipmentTransition(
+      { head: releaseMerge, release: merged.release },
+      { ...merged, release: { ...merged.release, publication: { ok: true } } },
+    ),
+    { ok: true, phase: "published" },
+  );
+  assert.deepEqual(
+    classifyMemoryShipmentTransition(
+      { head: reviewed },
+      { ...merged, release: { ...merged.release, baseSha: functionalMerge, publication: { ok: true } } },
+      { ok: true, headSha: reviewed, mergeSha: functionalMerge },
+    ),
+    { ok: true, phase: "published" },
+  );
+});
+
+test("shipment rejeita preparo sem squash funcional exato e troca de release", () => {
+  const reviewed = "a".repeat(40);
+  const prepared = { head: "c".repeat(40), release: { ok: true, phase: "pre-merge", version: "1.2.4", branch: "chore/release-1.2.4", baseSha: "b".repeat(40) } };
+  assert.equal(classifyMemoryShipmentTransition({ head: reviewed }, prepared, null).ok, false);
+  assert.equal(classifyMemoryShipmentTransition({ head: reviewed }, prepared, { ok: true, headSha: reviewed, mergeSha: "f".repeat(40) }).ok, false);
+  assert.equal(classifyMemoryShipmentTransition(
+    { head: prepared.head, release: prepared.release },
+    { head: "d".repeat(40), release: { ok: true, phase: "post-merge", version: "1.2.5", releaseBranch: prepared.release.branch, releaseHeadSha: prepared.head, baseSha: prepared.release.baseSha } },
+  ).ok, false);
 });

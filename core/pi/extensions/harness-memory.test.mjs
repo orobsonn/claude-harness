@@ -20,9 +20,18 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { convertToLlm } from "@earendil-works/pi-coding-agent";
+import {
+  convertToLlm,
+  createAgentSession,
+  DefaultResourceLoader,
+  ModelRuntime,
+  SessionManager,
+  SettingsManager,
+} from "@earendil-works/pi-coding-agent";
+import { fauxAssistantMessage, fauxProvider, fauxToolCall, Type } from "@earendil-works/pi-ai";
 import harnessMemory from "./harness-memory.ts";
 import { capturePiReviewInput } from "../lib/pi-review-evidence.mjs";
+import { runNativeToolCall } from "./pi-native-tool.test.mjs";
 
 const SESSION = "ses-memory-parent";
 const FEATURE = "pi-memory-cycle";
@@ -69,14 +78,13 @@ function recordZeroDeltaHarvest(api, root) {
     { toolName: "subagent", toolCallId: "harvest-zero", args },
     runtime,
   );
-  api.handlers.get("tool_execution_end")(
+  api.handlers.get("tool_result")(
     {
       toolName: "subagent",
       toolCallId: "harvest-zero",
-      result: {
-        content: [{ type: "text", text: "Harvest complete.\n[HARNESS_HARVEST_RESULT]{\"changes\":[]}[/HARNESS_HARVEST_RESULT]" }],
-        details: { status: "completed", agentId: "agent-harvester" },
-      },
+      input: args,
+      content: [{ type: "text", text: "Harvest complete.\n[HARNESS_HARVEST_RESULT]{\"changes\":[]}[/HARNESS_HARVEST_RESULT]" }],
+      details: { status: "completed", agentId: "agent-harvester" },
       isError: false,
     },
     runtime,
@@ -94,14 +102,13 @@ function recordSuccessfulShipper(api, root) {
     { toolName: "subagent", toolCallId: "shipper-success", args },
     runtime,
   );
-  api.handlers.get("tool_execution_end")(
+  api.handlers.get("tool_result")(
     {
       toolName: "subagent",
       toolCallId: "shipper-success",
-      result: {
-        content: [{ type: "text", text: "Delivery published.\nStatus: DONE" }],
-        details: { status: "completed", agentId: "agent-shipper" },
-      },
+      input: args,
+      content: [{ type: "text", text: "Delivery published.\nStatus: DONE" }],
+      details: { status: "completed", agentId: "agent-shipper" },
       isError: false,
     },
     runtime,
@@ -138,6 +145,21 @@ function resultText(result) {
     .filter((part) => part?.type === "text" && typeof part.text === "string")
     .map((part) => part.text)
     .join("\n");
+}
+
+function syntheticSubagent(text, { status = "completed", agentId = "agent-native" } = {}) {
+  return {
+    name: "subagent",
+    label: "Synthetic subagent",
+    description: "Synthetic subagent used only at the native SDK boundary.",
+    parameters: Type.Any(),
+    async execute() {
+      return {
+        content: [{ type: "text", text }],
+        details: { status, agentId },
+      };
+    },
+  };
 }
 
 function assertSuccess(result) {
@@ -270,6 +292,177 @@ test("harness-memory: sessão filha não recebe injeção nem consegue ler ou al
   assertFailure(await api.execute({ action: "update", content: "filha tentou sobrescrever" }, child));
   assert.equal(readFileSync(sharedPath(root), "utf8"), "somente o pai");
   assert.equal(existsSync(sharedPath(root, "ses-memory-child")), false);
+});
+
+test("harness-memory: falha chega ao modelo como erro nativo do Pi com ação e motivo", async (t) => {
+  const root = makeRoot(t);
+  const api = register();
+  const child = ctx(root, { sessionId: "ses-memory-child", child: true });
+  const { result } = await runNativeToolCall({
+    tool: api.tool,
+    input: { action: "finalize" },
+    hooks: api.handlers,
+    ctx: child,
+  });
+  assert.equal(result.isError, true);
+  assert.match(resultText(result), /harness-memory:finalize/i);
+  assert.match(resultText(result), /parent-only/i);
+});
+
+test("harness-memory: tool_result nativo confirma harvest sem apagar a saída do agente", async (t) => {
+  const root = makeRoot(t);
+  const head = initGit(root);
+  seedFinalState(root, head);
+  const api = register();
+  const original = 'Harvest complete.\n[HARNESS_HARVEST_RESULT]{"changes":[]}[/HARNESS_HARVEST_RESULT]';
+  const { result, events } = await runNativeToolCall({
+    tool: syntheticSubagent(original),
+    input: {
+      subagent_type: "harness-harvester",
+      description: "collect durable learnings",
+      prompt: "[HARNESS_HARVEST]\nReview verified run evidence.",
+    },
+    hooks: api.handlers,
+    ctx: ctx(root),
+  });
+  assert.equal(result.isError, false);
+  assert.equal(result.content[0].text, original);
+  assert.deepEqual(result.details.harness_memory_receipt, { ok: true, phase: "harvest" });
+  assert.match(resultText(result), /harvest receipt recorded/i);
+  const end = events.find((event) => event.type === "tool_execution_end" && event.toolCallId === "native-tool-call");
+  assert.deepEqual(end.result.details.harness_memory_receipt, { ok: true, phase: "harvest" });
+});
+
+test("harness-memory: falha de shipment preserva efeito remoto e exige reconciliação antes de retry", async (t) => {
+  const root = makeRoot(t);
+  const head = initGit(root);
+  seedFinalState(root, head);
+  const api = register();
+  recordZeroDeltaHarvest(api, root);
+  const original = "Delivery merged on the remote, but the local completion format was malformed.";
+  const { result } = await runNativeToolCall({
+    tool: syntheticSubagent(original, { agentId: "agent-shipper" }),
+    input: {
+      subagent_type: "harness-shipper",
+      description: "publish reviewed delivery",
+      prompt: "Publish the already reviewed delivery.",
+    },
+    hooks: api.handlers,
+    ctx: ctx(root),
+  });
+  assert.equal(result.isError, true);
+  assert.equal(result.content[0].text, original);
+  assert.equal(result.details.status, "completed");
+  assert.equal(result.details.agentId, "agent-shipper");
+  assert.equal(result.details.harness_memory_receipt.ok, false);
+  assert.equal(result.details.harness_memory_receipt.phase, "shipment");
+  assert.match(resultText(result), /shipment receipt not recorded/i);
+  assert.match(resultText(result), /remote effect may already have happened/i);
+  assert.match(resultText(result), /reconcile the remote before retrying/i);
+  assert.match(resultText(result), /do not repeat.*merge|do not repeat.*publish/i);
+});
+
+test("harness-memory: runner real do Pi propaga falha de shipment ao modelo e ao evento final", { timeout: 15000 }, async (t) => {
+  const root = makeRoot(t);
+  const head = initGit(root);
+  seedFinalState(root, head);
+  recordZeroDeltaHarvest(register(), root);
+
+  const agentDir = realpathSync(mkdtempSync(join(tmpdir(), "pi-harness-memory-agent-")));
+  t.after(() => rmSync(agentDir, { recursive: true, force: true }));
+  const original = "Delivery merged on the remote, but the local completion format was malformed.";
+  const loader = new DefaultResourceLoader({
+    cwd: root,
+    agentDir,
+    noExtensions: true,
+    noSkills: true,
+    noPromptTemplates: true,
+    noThemes: true,
+    extensionFactories: [
+      harnessMemory,
+      (pi) => pi.registerTool(syntheticSubagent(original, { agentId: "agent-real-runner" })),
+    ],
+  });
+  await loader.reload();
+  assert.deepEqual(loader.getExtensions().errors, []);
+
+  const runtime = await ModelRuntime.create({
+    authPath: join(agentDir, "auth.json"),
+    modelsPath: null,
+    modelsStorePath: join(agentDir, "models-store.json"),
+    refreshOnCreate: false,
+    allowModelNetwork: false,
+  });
+  const faux = fauxProvider();
+  faux.setResponses([
+    fauxAssistantMessage([
+      fauxToolCall("subagent", {
+        subagent_type: "harness-shipper",
+        description: "publish reviewed delivery",
+        prompt: "Publish the already reviewed delivery.",
+      }, { id: "real-memory-callback" }),
+    ], { stopReason: "toolUse" }),
+    fauxAssistantMessage("done"),
+  ]);
+  runtime.registerNativeProvider(faux.provider);
+
+  const { session } = await createAgentSession({
+    cwd: root,
+    agentDir,
+    resourceLoader: loader,
+    modelRuntime: runtime,
+    model: faux.getModel(),
+    sessionManager: SessionManager.inMemory(root, { id: SESSION }),
+    settingsManager: SettingsManager.inMemory(),
+  });
+  t.after(() => session.dispose());
+  await session.bindExtensions({});
+  const executionEnds = [];
+  const unsubscribe = session.subscribe((event) => {
+    if (event.type === "tool_execution_end") executionEnds.push(event);
+  });
+  t.after(unsubscribe);
+
+  await session.prompt("Run the synthetic shipper.", { expandPromptTemplates: false });
+
+  const result = session.messages.find(
+    (message) => message.role === "toolResult" && message.toolCallId === "real-memory-callback",
+  );
+  assert.equal(result?.isError, true);
+  assert.equal(result.content[0].text, original);
+  assert.equal(result.details.status, "completed");
+  assert.equal(result.details.agentId, "agent-real-runner");
+  assert.equal(result.details.harness_memory_receipt.ok, false);
+  assert.equal(result.details.harness_memory_receipt.phase, "shipment");
+  assert.match(resultText(result), /reconcile the remote before retrying/i);
+
+  const end = executionEnds.find((event) => event.toolCallId === "real-memory-callback");
+  assert.equal(end?.isError, true);
+  assert.equal(end.result.content[0].text, original);
+  assert.equal(end.result.details.agentId, "agent-real-runner");
+  assert.deepEqual(end.result.details.harness_memory_receipt, result.details.harness_memory_receipt);
+});
+
+test("harness-memory: resultado concluído sem snapshot falha de forma explícita", async (t) => {
+  const root = makeRoot(t);
+  const api = register();
+  const hooks = new Map([["tool_result", api.handlers.get("tool_result")]]);
+  const original = "Delivery published.\nStatus: DONE";
+  const { result } = await runNativeToolCall({
+    tool: syntheticSubagent(original, { agentId: "agent-shipper" }),
+    input: {
+      subagent_type: "harness-shipper",
+      description: "publish reviewed delivery",
+      prompt: "Publish the already reviewed delivery.",
+    },
+    hooks,
+    ctx: ctx(root),
+  });
+  assert.equal(result.isError, true);
+  assert.equal(result.content[0].text, original);
+  assert.equal(result.details.harness_memory_receipt.phase, "shipment");
+  assert.match(resultText(result), /snapshot.*unavailable/i);
+  assert.match(resultText(result), /reconcile the remote before retrying/i);
 });
 
 test("harness-memory: identidade de sessão vazia, não textual ou com travessia é recusada", async (t) => {

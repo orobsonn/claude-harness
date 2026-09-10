@@ -37,7 +37,7 @@ function register() {
       tool = definition;
     },
   }));
-  for (const eventName of ["tool_execution_start", "tool_execution_end", "tool_call"]) {
+  for (const eventName of ["tool_execution_start", "tool_result", "tool_call"]) {
     assert.equal(typeof handlers.get(eventName), "function", `faltou registrar ${eventName}`);
   }
   assert.equal(tool?.name, "harness_memory");
@@ -158,14 +158,13 @@ function emitHarvest(api, root, {
     { toolName: "subagent", toolCallId: callId, args },
     runtime,
   );
-  api.handlers.get("tool_execution_end")(
+  api.handlers.get("tool_result")(
     {
       toolName: "subagent",
       toolCallId: callId,
-      result: {
-        content: [{ type: "text", text }],
-        details: { status, agentId },
-      },
+      input: args,
+      content: [{ type: "text", text }],
+      details: { status, agentId },
       isError,
     },
     runtime,
@@ -189,11 +188,13 @@ function emitShipper(api, root, {
     { toolName: "subagent", toolCallId: callId, args },
     runtime,
   );
-  api.handlers.get("tool_execution_end")(
+  api.handlers.get("tool_result")(
     {
       toolName: "subagent",
       toolCallId: callId,
-      result: { content: [{ type: "text", text }], details: { status, agentId } },
+      input: args,
+      content: [{ type: "text", text }],
+      details: { status, agentId },
       isError,
     },
     runtime,
@@ -716,14 +717,13 @@ test("harness-memory harvest: snapshot do HEAD vem do início do dispatch, antes
   writeFileSync(join(root, "src", "app.ts"), "export const value = 4;\n", "utf8");
   execFileSync("git", ["add", "src/app.ts"], { cwd: root });
   commit(root, "feat: concurrent code change");
-  api.handlers.get("tool_execution_end")(
+  api.handlers.get("tool_result")(
     {
       toolName: "subagent",
       toolCallId: "harvest-race",
-      result: {
-        content: [{ type: "text", text: resultEnvelope([]) }],
-        details: { status: "completed", agentId: "agent-harvester" },
-      },
+      input: args,
+      content: [{ type: "text", text: resultEnvelope([]) }],
+      details: { status: "completed", agentId: "agent-harvester" },
       isError: false,
     },
     runtime,
@@ -770,7 +770,7 @@ test("harness-memory shipment: HEAD alterado ou worktree suja bloqueiam antes do
   });
 });
 
-test("harness-memory shipment: start/end direto sem revisão final não cria recibo válido", async (t) => {
+test("harness-memory shipment: start/result direto sem revisão final não cria recibo válido", async (t) => {
   const root = fixture(t);
   const api = register();
   emitHarvest(api, root);

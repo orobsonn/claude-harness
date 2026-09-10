@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { capturePiReviewInput, parsePiReviewCompletion, recordPiReviewReceipt } from "../lib/pi-review-evidence.mjs";
 import { PARALLEL_REVIEW_ROLES } from "../lib/roles.mjs";
+import { runNativeToolCall } from "./pi-native-tool.test.mjs";
 
 const SESSION = "review-status-session";
 const FEATURE = "review-status-feature";
@@ -13,10 +14,16 @@ const TASK = "task-one";
 
 async function tool() {
   const tools = new Map();
+  const hooks = new Map();
   const file = new URL("./harness-reviews.ts", import.meta.url);
-  if (existsSync(file)) (await import(file.href)).default({ registerTool: (item) => tools.set(item.name, item) });
+  if (existsSync(file)) (await import(file.href)).default({
+    registerTool: (item) => tools.set(item.name, item),
+    on: (name, handler) => hooks.set(name, handler),
+  });
   assert.ok(tools.has("harness_reviews"), "the parent needs an actual read-only status tool to resume only missing reviews");
-  return tools.get("harness_reviews");
+  const definition = tools.get("harness_reviews");
+  definition.testHooks = hooks;
+  return definition;
 }
 
 function fixture(t) {
@@ -167,6 +174,20 @@ test("status derives identity from the parent and rejects child calls or malform
   assert.equal((await status.execute("child", { phase: "final" }, undefined, undefined, child)).isError, true);
   writeFileSync(f.statePath, JSON.stringify({ session_id: "other-session", feature_id: FEATURE }));
   assert.equal((await status.execute("mismatch", { phase: "final" }, undefined, undefined, f.ctx)).isError, true);
+});
+
+test("review denial reaches the model as a native Pi error with operation identity", async (t) => {
+  const f = fixture(t);
+  const status = await tool();
+  const { result } = await runNativeToolCall({
+    tool: status,
+    input: { phase: "task", task_id: "../escape" },
+    hooks: status.testHooks,
+    ctx: f.ctx,
+  });
+  assert.equal(result.isError, true);
+  assert.match(result.content[0].text, /harness-reviews:task/i);
+  assert.match(result.content[0].text, /safe task_id/i);
 });
 
 test("final status lists only reviewers required by the canonical plan", async (t) => {
