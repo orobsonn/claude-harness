@@ -8,8 +8,9 @@
  * As mensagens de negação são IDÊNTICAS às da lane OC/Codex — sem prefixo novo. */
 
 import { homedir } from 'node:os'
-import { realpathSync, statSync } from 'node:fs'
+import { lstatSync, readFileSync, realpathSync, statSync } from 'node:fs'
 import { basename, isAbsolute, relative, resolve, sep } from 'node:path'
+import { isDeepStrictEqual } from 'node:util'
 
 import { evaluateHook, protectablePath } from '../../codex/hooks/policy.mjs'
 import { isSafeFeatureId } from '../../shared/lib/feature-id.mjs'
@@ -45,6 +46,46 @@ function mutationCommand(command) {
 }
 
 const ALLOW = { block: false }
+const MODEL_PREFERENCES = new Set(['defaultProvider', 'defaultModel', 'defaultThinkingLevel', 'modelThinkingLevels'])
+const THINKING_LEVELS = new Set(['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'])
+const SETTINGS_REASON = 'Project model preferences: use native write with complete valid JSON in .pi/settings.json, preserving all non-model settings. Only the interactive parent may change these preferences; harness runtime files remain protected.'
+
+// Operator preferences are not harness implementation. Check only this narrow native
+// write delta, not shell programs or edit transformations. Other settings can execute code.
+function decideModelPreferences(toolName, input, options) {
+  if (!isPiWriteTool(toolName) || typeof input.path !== 'string') return null
+  const cwd = options.cwd ?? process.cwd()
+  const root = resolve(options.projectRoot ?? cwd)
+  const target = resolve(cwd, input.path)
+  if (target !== resolve(root, '.pi/settings.json')) return null
+  const deny = { block: true, reason: SETTINGS_REASON }
+  if (toolName !== 'write' || options.isChild === true || options.isHeadless === true) return deny
+  try {
+    if (/^@|^~|[\u00A0\u2000-\u200A\u202F\u205F\u3000]/.test(input.path)) return deny
+    const canonicalRoot = realpathSync(root)
+    if (realpathSync(resolve(root, '.pi')) !== resolve(canonicalRoot, '.pi')) return deny
+    let previous = {}
+    try {
+      const stat = lstatSync(target)
+      if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) return deny
+      previous = JSON.parse(readFileSync(target, 'utf8'))
+    } catch (error) {
+      if (error.code !== 'ENOENT') return deny
+    }
+    const next = JSON.parse(input.content)
+    const object = value => value !== null && typeof value === 'object' && !Array.isArray(value)
+    if (!object(previous) || !object(next)) return deny
+    const otherSettings = value => Object.fromEntries(Object.entries(value).filter(([key]) => !MODEL_PREFERENCES.has(key)))
+    if (!isDeepStrictEqual(otherSettings(previous), otherSettings(next))) return deny
+    for (const key of ['defaultProvider', 'defaultModel']) {
+      if (key in next && (typeof next[key] !== 'string' || !next[key].trim())) return deny
+    }
+    if ('defaultThinkingLevel' in next && !THINKING_LEVELS.has(next.defaultThinkingLevel)) return deny
+    if ('modelThinkingLevels' in next && (!object(next.modelThinkingLevels) ||
+      Object.values(next.modelThinkingLevels).some(level => !THINKING_LEVELS.has(level)))) return deny
+    return ALLOW
+  } catch { return deny }
+}
 const PARENT_ORCHESTRATOR_REASON =
   "Parent orchestrator uses the Claude Code Bash allowlist for verification and selective commits during an active LIGHT/FULL ceremony; delegate product file mutations to a designated writing hand."
 const REVIEWER_READ_REASON = 'Read-only reviewers are confined to the canonical project root.'
@@ -257,6 +298,9 @@ export function decidePiPolicy(call = {}, options = {}) {
   if (isPiReadOnlyReviewerRole(options.reviewerRole) && !isPiReadTool(toolName)) {
     return { block: true, reason: 'Read-only reviewers may use only read, grep, find and ls.' }
   }
+
+  const modelPreferences = decideModelPreferences(toolName, input, options)
+  if (modelPreferences) return modelPreferences
 
   const parentAuthority = decidePiParentOrchestratorPolicy({ toolName, input }, options)
   if (parentAuthority.block) return parentAuthority

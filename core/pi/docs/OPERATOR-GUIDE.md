@@ -173,6 +173,18 @@ que chegou à branch mergeada.
 
 ## Papéis e modelo
 
+Para trocar o modelo/esforço do orquestrador, peça diretamente ao Pi na sessão
+interativa. O pai pode usar `write` em `.pi/settings.json` para mudar somente
+`defaultProvider`, `defaultModel`, `defaultThinkingLevel` e `modelThinkingLevels`,
+preservando o restante do JSON. Ao escolher esforço, atualize também a entrada
+`<provider>/<model>` do mapa, pois ela prevalece sobre o esforço default.
+Não há ferramenta de lifecycle nem cerimônia adicional para essa preferência.
+Filhos/revisores não podem alterá-la; arquivos internos de `.pi/harness/` continuam
+protegidos. `edit` e alterações de pacotes/comandos não fazem parte dessa exceção.
+Reinicie em uma sessão **nova** para adotar os defaults; retomar uma sessão antiga
+pode restaurar o modelo/esforço anterior, e opções explícitas de lançamento prevalecem.
+Isso não altera o roteamento dos subagentes.
+
 O fluxo separa os dez papéis de entrega (`planner`, revisão de plano,
 adversarial, segurança, compliance, harvester, autor de testes, revisor exclusivo de testes, executor,
 sniper e shipper) do olho opcional `harness-discussion-adversary`, usado só na
