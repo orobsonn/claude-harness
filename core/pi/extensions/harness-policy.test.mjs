@@ -1,15 +1,16 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { linkSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import test from "node:test";
 
-import { createGrepToolDefinition, createReadToolDefinition, createFindToolDefinition, createLsToolDefinition } from "@earendil-works/pi-coding-agent";
+import { createGrepToolDefinition, createReadToolDefinition, createFindToolDefinition, createLsToolDefinition, createWriteToolDefinition, SettingsManager } from "@earendil-works/pi-coding-agent";
 
 import harnessPolicy from "./harness-policy.ts";
 import harnessEntryGate from "./harness-entry-gate.ts";
+import harnessPlanWriteGate from "./harness-plan-write-gate.ts";
 import { piChildIdentityPath, writePiChildIdentity } from "../lib/pi-child-identity.mjs";
 
 const SESSION = "ses-policy-parent";
@@ -84,6 +85,96 @@ async function executeNativeGrep(root, input) {
   const result = await createGrepToolDefinition(root).execute("grep-reviewer-policy", input, undefined, undefined, {});
   return result.content.map((part) => part.type === "text" ? part.text : "").join("\n");
 }
+
+test("parent can configure its project orchestrator using native write without modifying harness defaults", async (t) => {
+  const f = fixture();
+  t.after(f.close);
+  const runtime = join(f.root, ".pi/harness/runtime");
+  mkdirSync(runtime, { recursive: true });
+  const defaults = JSON.stringify({ defaultProvider: "openai-codex", defaultModel: "gpt-5.6-sol", defaultThinkingLevel: "xhigh" });
+  writeFileSync(join(runtime, "settings.json"), defaults);
+  writeFileSync(join(f.root, ".pi/settings.json"), JSON.stringify({ theme: "retained" }));
+  const callbacks = [];
+  const api = { on: (name, fn) => { if (name === "tool_call") callbacks.push(fn); } };
+  harnessPolicy(api);
+  harnessPlanWriteGate(api);
+  const invoke = async (tool, input) => {
+    for (const callback of callbacks) {
+      const decision = await callback({ toolName: tool.name, input }, parentCtx(f.root));
+      assert.notEqual(decision?.block, true, decision?.reason);
+    }
+    await tool.execute("operator-settings", input, undefined, undefined, {});
+  };
+  await invoke(createWriteToolDefinition(f.root), { path: ".pi/settings.json", content: JSON.stringify({
+    defaultProvider: "openai-codex", defaultModel: "gpt-5.6-terra", defaultThinkingLevel: "medium", theme: "retained",
+  }, null, 2) });
+  await invoke(createWriteToolDefinition(f.root), { path: join(f.root, ".pi/settings.json"), content: JSON.stringify({
+    defaultProvider: "openai-codex", defaultModel: "gpt-5.6-terra", defaultThinkingLevel: "high", theme: "retained",
+    modelThinkingLevels: { "openai-codex/gpt-5.6-terra": "high" },
+  }) });
+  const nextSession = SettingsManager.create(f.root, runtime);
+  assert.equal(nextSession.getDefaultProvider(), "openai-codex");
+  assert.equal(nextSession.getDefaultModel(), "gpt-5.6-terra");
+  assert.equal(nextSession.getDefaultThinkingLevel(), "high");
+  assert.equal(nextSession.getModelThinkingLevel("openai-codex", "gpt-5.6-terra"), "high");
+  assert.equal(JSON.parse(readFileSync(join(f.root, ".pi/settings.json"), "utf8")).theme, "retained");
+  assert.equal(readFileSync(join(runtime, "settings.json"), "utf8"), defaults);
+});
+
+test("operator settings only allow valid model preferences, preserving unrelated settings", (t) => {
+  const f = fixture("QUICK");
+  t.after(f.close);
+  const check = handler();
+  const call = content => ({ toolName: "write", input: { path: ".pi/settings.json", content } });
+  assert.equal(check(call('{"defaultThinkingLevel":"high"}'), parentCtx(f.root)), undefined);
+  writeFileSync(join(f.root, ".pi/settings.json"), '{"theme":"retained"}');
+  for (const value of [null, [], { theme: "changed" }, {}, { theme: "retained", defaultModel: 42 },
+    { theme: "retained", defaultThinkingLevel: "bogus" }, { theme: "retained", modelThinkingLevels: [] },
+    { theme: "retained", modelThinkingLevels: { "provider/model": "bogus" } },
+    ...["packages", "shellCommandPrefix", "shellPath", "extensions", "defaultTools"].map(key => ({ theme: "retained", [key]: "changed" })),
+  ]) assert.equal(check(call(JSON.stringify(value)), parentCtx(f.root))?.block, true, JSON.stringify(value));
+  assert.equal(check(call("{invalid"), parentCtx(f.root))?.block, true);
+  assert.equal(check({ toolName: "edit", input: { path: ".pi/settings.json", edits: [] } }, parentCtx(f.root))?.block, true);
+  assert.equal(check(call('{"theme":"retained","defaultThinkingLevel":"high"}'), { ...parentCtx(f.root), hasUI: false })?.block, true);
+});
+
+test("operator settings exception does not grant child agents writes or follow links to protected runtime", (t) => {
+  const f = fixture("QUICK");
+  t.after(f.close);
+  const check = handler();
+  const file = join(f.root, ".pi/settings.json");
+  const write = path => ({ toolName: "write", input: { path, content: "{}" } });
+  assert.equal(check(write(".pi/settings.json"), childCtx(f.root))?.block, true);
+  for (const path of [".pi/harness/runtime/settings.json", ".pi/harness/lib/policy.mjs", ".pi/agent/auth.json"]) {
+    assert.equal(check(write(path), parentCtx(f.root))?.block, true, path);
+  }
+  const target = join(f.root, ".pi/harness/protected.json");
+  writeFileSync(target, "{}");
+  symlinkSync(target, file);
+  assert.equal(check(write(file), parentCtx(f.root))?.block, true);
+  rmSync(file);
+  linkSync(target, file);
+  assert.equal(check(write(file), parentCtx(f.root))?.block, true);
+});
+
+test("operator settings reject a symlinked project settings directory", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "pi-settings-alias-"));
+  const outside = mkdtempSync(join(tmpdir(), "pi-settings-outside-"));
+  t.after(() => { rmSync(root, { recursive: true, force: true }); rmSync(outside, { recursive: true, force: true }); });
+  symlinkSync(outside, join(root, ".pi"), "dir");
+  writeFileSync(join(outside, "settings.json"), "{}");
+  assert.equal(handler()({ toolName: "write", input: { path: ".pi/settings.json", content: '{"defaultThinkingLevel":"high"}' } }, parentCtx(root))?.block, true);
+});
+
+test("operator settings preserve existing max effort while selecting another model", (t) => {
+  const f = fixture("QUICK");
+  t.after(f.close);
+  const previous = { modelThinkingLevels: { "openai-codex/gpt-5.6-sol": "max" } };
+  writeFileSync(join(f.root, ".pi/settings.json"), JSON.stringify(previous));
+  const next = { ...previous, defaultProvider: "openai-codex", defaultModel: "gpt-5.6-terra", defaultThinkingLevel: "high",
+    modelThinkingLevels: { ...previous.modelThinkingLevels, "openai-codex/gpt-5.6-terra": "high" } };
+  assert.equal(handler()({ toolName: "write", input: { path: ".pi/settings.json", content: JSON.stringify(next) } }, parentCtx(f.root)), undefined);
+});
 
 test("read-only reviewers cannot use extra mutation or dispatch tools even if exposed by the runtime", (t) => {
   const f = fixture();

@@ -30,6 +30,20 @@ explicitamente para curar somente o que for útil ao pai global.
 
 ## Escolha do operador
 
+Configurar o modelo/esforço do orquestrador é uma preferência do operador, não uma
+alteração do runtime nem do código de produto. Quando solicitado na sessão interativa,
+leia `.pi/settings.json` se existir e use `write` nativo com o JSON completo, preservando
+todas as outras preferências. Podem mudar `defaultProvider`, `defaultModel`,
+`defaultThinkingLevel` e `modelThinkingLevels`; mantenha entradas de outros modelos e,
+ao escolher esforço, defina também `modelThinkingLevels["<provider>/<model>"]`, pois
+o esforço lembrado por modelo prevalece sobre o default. Não use `edit` ou Bash para
+essa operação. Não exige nova cerimônia nem delegação, inclusive durante LIGHT/FULL.
+Não existe ferramenta Pi `configure-routing` nem comando `pi config` para esse caso;
+a skill de routing dos subagentes e ferramentas do OpenCode não configuram o pai Pi.
+Não altere `.pi/harness/`. Verifique relendo o arquivo e explique que os defaults valem
+para a próxima sessão nova: sessão retomada e argumentos explícitos podem prevalecer.
+Não prometa mudar o modelo já carregado nesta sessão. PR somente quando solicitado.
+
 Em sessão interativa, respeite um pedido explícito de trabalho inline/sem cerimônia.
 Sem cerimônia ativa, faça a alteração diretamente e verifique o resultado de forma
 proporcional; não force spec, plano, subagentes ou PR. Não transforme a triagem em
