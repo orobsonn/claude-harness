@@ -21,6 +21,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
+import { execFileSync } from "node:child_process";
 
 import { withGateStateLock } from "../../opencode/lib/gate-state.mjs";
 import { mergeGateStatePatch } from "../../shared/lib/gate-state-shape.mjs";
@@ -54,6 +55,42 @@ export const MARKER_ACTIONS = new Set([
 export const MARKER_TOOL_NAME = "mark";
 
 const DENY_PREFIX = "[marker-authority]";
+const FULL_GIT_SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+
+/** Advisory observation only: failure never changes marker authorization or persistence. */
+function observeCaptureOrigin(projectRoot, taskId, producerCallId) {
+  let headSha;
+  try {
+    headSha = execFileSync("git", ["rev-parse", "--verify", "HEAD"], {
+      cwd: projectRoot,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 10_000,
+    }).trim();
+  } catch {
+    return null;
+  }
+  if (!FULL_GIT_SHA.test(headSha)) return null;
+  let worktreeClean = false;
+  try {
+    const status = execFileSync("git", [
+      "status", "--porcelain=v1", "-z", "--untracked-files=all", "--", ".",
+      ":(exclude).pi/harness/", ":(exclude)node_modules/",
+    ], {
+      cwd: projectRoot,
+      encoding: "buffer",
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 10_000,
+    });
+    worktreeClean = status.length === 0;
+  } catch { /* advisory observation remains dirty/unavailable */ }
+  return {
+    task_id: taskId,
+    producer_call_id: producerCallId,
+    head_sha: headSha,
+    worktree_clean: worktreeClean,
+  };
+}
 
 /**
  * @description O selo de revisão final é a fronteira entre executar tarefas e liberar entrega.
@@ -325,6 +362,7 @@ export function createPiMarkerAuthority(options = {}) {
     const statePath = piGateStatePath({ projectRoot, sessionId: authorization.sessionId });
     if (!statePath.ok) return { ok: false, reason: statePath.reason };
     let capturedProducerCallId = "";
+    let captureOriginBefore = null;
     const locked = withGateStateLock(statePath.path, (previous) => {
       if (previous.session_id !== authorization.sessionId || previous.feature_id !== authorization.featureId) {
         return { ok: false, reason: "gate-state identity changed before marker mutation" };
@@ -479,6 +517,7 @@ export function createPiMarkerAuthority(options = {}) {
               return { ok: false, reason: "capture-verified requires the matching record SHA to be ancestral to HEAD" };
             }
             capturedProducerCallId = String(record.producerCallId);
+            captureOriginBefore = observeCaptureOrigin(projectRoot, taskId, capturedProducerCallId);
             return previous;
           }
           const identity = validateExactProducer(record, authorization, taskId, sha);
@@ -486,6 +525,7 @@ export function createPiMarkerAuthority(options = {}) {
           if (isAncestorSha(projectRoot, sha) !== true) {
             return { ok: false, reason: "capture-verified requires the matching record SHA to be ancestral to HEAD" };
           }
+          captureOriginBefore = observeCaptureOrigin(projectRoot, taskId, String(record.producerCallId));
           if (!atomicJsonWrite(recordPath.path, { ...record, capturedVerifiedAt: now() })) {
             return { ok: false, reason: "hand-record persistence failed" };
           }
@@ -509,7 +549,18 @@ export function createPiMarkerAuthority(options = {}) {
       removed = { ok: false, reason: "dispatch record removal failed" };
     }
     if (!removed?.ok) return { ok: false, reason: removed?.reason ?? "dispatch record removal failed" };
-    return locked;
+    const captureOriginAfter = captureOriginBefore
+      ? observeCaptureOrigin(projectRoot, captureOriginBefore.task_id, capturedProducerCallId)
+      : null;
+    const captureOrigin = captureOriginBefore
+      ? {
+          ...captureOriginBefore,
+          worktree_clean: captureOriginBefore.worktree_clean === true &&
+            captureOriginAfter?.worktree_clean === true &&
+            captureOriginAfter.head_sha === captureOriginBefore.head_sha,
+        }
+      : null;
+    return { ...locked, ...(captureOrigin ? { capture_origin: captureOrigin } : {}) };
   }
 
   return {
@@ -594,6 +645,7 @@ export function createPiMarkerAuthority(options = {}) {
         action: authorization.action,
         session_id: authorization.sessionId,
         feature_id: authorization.featureId,
+        ...(result.capture_origin ? { capture_origin: result.capture_origin } : {}),
       });
     },
 

@@ -196,6 +196,7 @@ function approvedPlan(owner) {
   return { plan, directory, ...captured.snapshot, receipt };
 }
 function summary(entry) {
+  const exposesResultContext = ["ready", "integrated"].includes(entry.status);
   return {
     task_id: entry.task_id,
     attempt_id: entry.attempt_id,
@@ -204,7 +205,9 @@ function summary(entry) {
     session_id: entry.result?.session_id,
     child_head: entry.result?.child_head,
     ...(entry.orca ? { orca: entry.orca } : {}),
-    ...(entry.result?.context_return ? { context_return: entry.result.context_return } : {}),
+    ...(exposesResultContext && entry.result?.context_return
+      ? { context_return: entry.result.context_return }
+      : {}),
     ...(entry.reason ? { reason: entry.reason } : {}),
     launches: entry.launches.map((launch) => ({
       run_id: launch.run_id,
@@ -595,6 +598,10 @@ export async function executeTaskAction(params, context = {}, injected = {}) {
       !["dispatch", "status", "integrate", "resume"].includes(params.action)
     )
       throw new Error("unknown task action");
+    if (params.action !== "dispatch" && params.task_ids !== undefined)
+      throw new Error(`task_ids is only valid for dispatch; use task_id for ${params.action}`);
+    if (params.action === "dispatch" && params.task_id !== undefined)
+      throw new Error("task_id is not valid for dispatch; use task_ids");
     const allowed = {
       dispatch: ["action", "task_ids", "task_contexts"],
       status: ["action", "task_id"],
@@ -660,6 +667,7 @@ export async function executeTaskAction(params, context = {}, injected = {}) {
         ? [registry.tasks[params.task_id]]
         : Object.values(registry.tasks);
       if (entries.some((entry) => !entry)) throw new Error("unknown task");
+      const diagnostics = {};
       for (const entry of entries) {
         if (entry.status === "integrated") continue;
         if (entry.reconciliation_required) {
@@ -686,12 +694,22 @@ export async function executeTaskAction(params, context = {}, injected = {}) {
         } else {
           entry.status = "blocked";
           entry.reason = inspected.reason;
+          if (inspected.details && typeof inspected.details === "object") {
+            const current = {};
+            if (inspected.details.context_return !== undefined)
+              current.context_return = inspected.details.context_return;
+            if (inspected.details.review_findings !== undefined)
+              current.review_findings = inspected.details.review_findings;
+            if (Object.keys(current).length > 0)
+              diagnostics[entry.task_id] = current;
+          }
         }
       }
       persist();
       return {
         ok: true,
         tasks: entries.map(summary),
+        ...(Object.keys(diagnostics).length > 0 ? { diagnostics } : {}),
         max_parallel_tasks: MAX_PARALLEL_TASKS,
       };
     }
@@ -901,7 +919,7 @@ export async function executeTaskAction(params, context = {}, injected = {}) {
           "resume instruction must contain at most 16000 characters",
         );
       if (entry.launches.some((launch) => !deps.readProcess(launch).terminal))
-        throw new Error("task process group must terminate before resume");
+        throw new Error("task is still running; use status or wait to observe it before resume");
       const affected = descendants(artifacts.plan, entry.task_id).filter(
         (id) => registry.tasks[id],
       );

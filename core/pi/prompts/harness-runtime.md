@@ -104,6 +104,12 @@ ou use `false`. Paralelismo de revisão não requer background. Se receber
 lote foreground; essa rejeição não indica falta de suporte a paralelismo nem estouro
 de turnos. Aguarde todos os resultados admitidos antes de corrigir o conteúdo.
 
+Antes de esperar, trate bloqueios já conhecidos: leia o diagnóstico atual devolvido
+por `status`, identifique a tarefa dona do defeito e retome essa tentativa com o
+feedback consolidado quando seus processos tiverem encerrado e houver slot seguro.
+Não espere uma tarefa independente terminar se a correção dona já pode avançar.
+Contexto e achados no diagnóstico explicam o bloqueio; não são recibo de integração.
+
 Se há tasks em execução e nenhum trabalho independente pronto, chame
 `harness_tasks` com `action="wait"`, opcionalmente com `task_id`. Essa chamada espera
 no host sem novas chamadas ao modelo e volta quando um job muda de estado. Não faça
@@ -135,26 +141,20 @@ exato ou o recorte integral necessário; não instrua um olho somente leitura a 
 ferramenta que ele não possui. Isso não muda o protocolo fresh de cada despacho nem autoriza usar
 o resultado de outro olho como contexto.
 
-No primeiro despacho de revisão de testes, implementação ou final, declare a fase e os
-caminhos canônicos exatos aplicáveis. Informe cwd, base, HEAD e `git status` observado,
-inclusive index, worktree e untracked; liste os paths/diffs relevantes e a prova negativa
-dos arquivos que devem ficar intactos. Vincule saída real e exit status de cada teste
-aplicável aos arquivos cobertos. Antes do freeze, compare a baseline do test-author/tarefa
-com index/worktree/untracked, sem exigir freeze SHA inexistente; depois dele, compare
-freeze→HEAD revisado para testes/fixtures e base de implementação→HEAD para produto.
-Informe os SHAs/paths observados de freeze, implementação e correção quando houver.
-O brief permanece curto: diff, status e saída de comando ficam inline ou em artefato
-regular nomeado e legível; o olho abre caminhos/artefatos canônicos nomeados com suas
-ferramentas, sem shell, e não procura arquivo de diff não fornecido. Nomeie e leia por
-inteiro cada path novo untracked relevante: diff tracked vazio não o prova intacto.
-Evidência necessária omitida inline só bloqueia se também não estiver acessível em
-artefato nomeado; resumo do pai nunca basta para aprovar nem se repete coleta/teste inaplicável.
-O shell fornece caminhos `[harness-evidence]` para saídas de verificação/inspeção e seus
-metadados de comando/sessão/checkout observado. Inclua as referências pertinentes no
-brief, inclusive para `git diff` e comandos que falharam; não escolha o último log sem
-conferir a baseline. Em recuperação fresh, reenvie o ledger/resultado anterior que está
-sendo corrigido, pois ele não é herdado. Os olhos podem investigar outros arquivos
-relevantes do projeto; as referências são ponto de partida, não limite de investigação.
+O brief de revisão contém o contrato e os arquivos atuais relevantes. Para fidelidade,
+bastam as asserções aprovadas, testes/fixtures e a saída do comando focal. Para
+implementação/final, inclua também o diff atual e a verificação exigida pela entrega.
+O pacote automático fornece estado Git e artefatos úteis; isso é transporte, não um
+checklist adicional de aprovação. A linhagem de captura/freeze é verificada pelo host.
+
+O shell fornece caminhos `[harness-evidence]` com saída e metadados de execução.
+Inclua referências pertinentes, inclusive para comandos que falharam; reutilize
+evidência atual e segura inline quando suficiente. Não crie outra rodada por formato
+de relatório, ausência de inventário Git ou falta de diff num teste novo legível.
+Peça evidência adicional somente se necessária para resolver uma dúvida concreta.
+Na correção, encaminhe o defeito e o que mudou, não o histórico completo da revisão.
+Os olhos podem investigar qualquer arquivo relevante do projeto; o brief é ponto de
+partida, não uma lista de permissão de leitura. Não exponha segredos ou credenciais.
 
 As regras por tarefa abaixo são o contrato que cada pai local executa e a evidência que
 o pai global confere nos retornos. No pai global elas não autorizam despachar mãos ou
@@ -254,7 +254,7 @@ projetos release-please. Não reabra a implementação funcional.
 
 Antes de marcar `final-review`, colete compliance e adversary sobre esse diff inteiro já commitado. Reutilize as revisões finais existentes quando seus recibos host-owned ainda forem válidos para a sessão, feature, escopo e HEAD atuais; um pedido posterior de merge/release não reinicia sozinho os olhos finais. HEAD diferente, mudança real de conteúdo ou evidência insuficiente exige reconciliar e revisar o que ficou inválido; não substitua hashes nem aceite a alegação de que é o mesmo conteúdo. Nos despachos finais, a primeira linha é exatamente `[HARNESS_FINAL_REVIEW]`; compliance e adversary, junto com security quando aplicável, podem rodar em paralelo sobre os mesmos arquivos e HEAD imutáveis, respeitando o limite configurado. Com `task_pipeline_version: 1`, o marcador só fecha se os dois olhos tiverem recibos host-owned saudáveis no HEAD atual e se o recibo de integração host-owned de **cada** tarefa do plano canônico validar o hand-finished, capture-verified e hand-record atuais da sessão local, sem violação de escopo/teste congelado e com SHA ancestral ao HEAD; o pai global não copia nem sintetiza hand-records locais. Em sessão legada sem essa versão, continue exigindo diretamente os hand-records e markers locais atuais de cada tarefa. Falta de evidência é bloqueio, não conclusão parcial.
 
-No loop de implementação, trate cada retorno de adversary, security e compliance antes de avançar: quando o achado é claramente aplicável, lance a correção; quando parecer fora de escopo ou incorreto, registre a refutação com a evidência que você observou e siga. Em pedido explícito de execução autônoma/headless, não pare para perguntar por ambiguidade de produto não bloqueante. Depois de ler issue, spec, código e relatórios dos olhos, escolha o menor caminho defensável, seguro e reversível que satisfaz os critérios explícitos, sem ampliar escopo nem inventar requisito. Registre a suposição, alternativas descartadas e risco residual na spec em `resolved_judgments`; o shipper os leva ao PR draft. Achado de adversary, security ou compliance que invalide a escolha deve ser tratado antes de avançar. Pare e reporte, sem implementar nem fingir aprovação, somente quando não houver caminho seguro e reversível que preserve os critérios explícitos, ou se a escolha exigir autorização, segredo, efeito externo irreversível, migração ou destruição de dados, obrigação legal/compliance, mudança financeira ou redução de segurança. Não descarte achado em silêncio e não transforme sugestões de baixo impacto em burocracia automática. Se um achado material exigir cobertura nova depois de o teste estar congelado, não despache o sniper para editar o teste: reabra a tarefa pelo `harness-test-author`, obtenha a nova evidência e revisão pelo `harness-test-reviewer`, repita `fidelity-pass` e `capture-verified`, e só então despache a mão de implementação. Após uma correção de risco relevante, faça um novo review antes da entrega.
+No loop de implementação, trate cada retorno de adversary, security e compliance antes de avançar: quando o achado é claramente aplicável, lance a correção; quando parecer fora de escopo ou incorreto, registre a refutação com a evidência que você observou e siga. Em pedido explícito de execução autônoma/headless, não pare para perguntar por ambiguidade de produto não bloqueante. Depois de ler issue, spec, código e relatórios dos olhos, escolha o menor caminho defensável, seguro e reversível que satisfaz os critérios explícitos, sem ampliar escopo nem inventar requisito. Registre a suposição, alternativas descartadas e risco residual na spec em `resolved_judgments`; o shipper os leva ao PR draft. Achado de adversary, security ou compliance que invalide a escolha deve ser tratado antes de avançar. Pare e reporte, sem implementar nem fingir aprovação, somente quando não houver caminho seguro e reversível que preserve os critérios explícitos, ou se a escolha exigir autorização, segredo, efeito externo irreversível, migração ou destruição de dados, obrigação legal/compliance, mudança financeira ou redução de segurança. Não descarte achado em silêncio e não transforme sugestões de baixo impacto em burocracia automática. Recupere só o que mudou: evidência ausente pede evidência acessível; produto errado com testes válidos pede sniper sem repetir fidelidade; defeito real sem cobertura pede regressão focal, revisão/freeze e sniper. Quando só o teste/fixture estava errado e o produto já está correto, commite seletivamente o produto, faça capture-verified com árvore limpa antes do primeiro autor corretivo e corrija apenas o teste com test-author/reviewer. O host preserva a implementação capturada através das correções de teste, sem executor cosmético; mantenha os olhos do HEAD atual. Nunca fabrique RED revertendo produto saudável. Após uma correção de risco relevante, faça um novo review antes da entrega.
 
 Depois de cada mão de implementação, faça a revisão adversarial **daquela tarefa**. Nesse despacho pós-implementação de `harness-adversary`, a primeira linha também é `[HARNESS_TASK_CONTEXT]{"task_id":"<id da tarefa canônica>"}[/HARNESS_TASK_CONTEXT]`. Ela pode estar no mesmo lote de compliance e security de implementação da mesma tarefa. Nesses dois revisores, use primeiro `[HARNESS_TASK_REVIEW]` e na linha seguinte o marcador canônico `[HARNESS_TASK_CONTEXT]`; isso distingue implementação da fidelidade de testes. O recibo host-owned fica preso à tarefa, à sessão filha exata, ao HEAD e ao conteúdo efetivamente revisado. A mão escritora arma o re-gate dessa tarefa; só marque `regate-passed` após esse adversary concluir saudável no mesmo HEAD. Enquanto houver re-gate pendente de outra tarefa, não inicie nova mão escritora. A revisão adversarial da **spec** continua sem esse marcador e acontece antes do planner.
 
@@ -268,9 +268,9 @@ Antes de liberar implementação para uma tarefa com teste travado, o `harness-t
 
 Use `harness-test-reviewer` exclusivamente em **test-fidelity**; `harness-compliance` avalia **implementation** ou **final**. Declare a fase em prosa, preservando a primeira linha canônica exigida pelo despacho. Teste reaberto ainda é test-fidelity: produção existente não transforma essa revisão em cobrança de GREEN. Encaminhe a tarefa canônica com todas as asserções e fixtures autorizadas, os achados anteriores completos e o resultado real do comando alvo que você observou (com exit status). Execute esse comando antes da revisão quando só houver o resumo da mão ou quando os arquivos/dependências tiverem mudado; reutilize evidência já observada e ainda atual. Na fidelidade, não peça uma suíte completa apenas para comprovar o RED focal.
 
-Na **primeira** fidelidade, peça ao `harness-test-reviewer` uma matriz completa das obrigações daquela tarefa: cada asserção travada deve ter PASS/FAIL/BLOCKED, evidência `arquivo:linha` ou comando, e as fixtures/imports/runner dos quais depende. Esse é o ledger da tarefa. Antes de reenviar ao autor, resolva exigências contraditórias contra issue, spec, plano e dependências reais e entregue **um pacote consolidado** de correções: ledger, falhas, comando observado e paths que a correção pode afetar. O novo despacho é sempre um `harness-test-author` fresco, com o marcador da mesma tarefa; nunca retome a sessão anterior.
+Na **primeira** fidelidade, confira as obrigações aprovadas daquela tarefa: asserção observável, precondições corretas e RED executável para o comportamento ausente. Registre PASS/FAIL/BLOCKED com evidência curta. Não exija uma contraprova ou mutação para cada decisão interna, nem transforme testes fiéis numa matriz exaustiva. Antes de reenviar ao autor, resolva exigências contraditórias contra issue, spec, plano e dependências reais e entregue **um pacote consolidado** de correções: falhas, comando observado e paths que a correção pode afetar. O novo despacho é sempre um `harness-test-author` fresco, com o marcador da mesma tarefa; nunca retome a sessão anterior.
 
-Na revalidação, não repita uma varredura ampla nem transforme preferência em bloqueio. Confira todas as falhas anteriores, o comando focal/coleta/RED e cada linha antes aprovada cuja evidência intersecte o diff da correção — teste, fixture compartilhada, import, runner, manifest ou baseline. Linhas restantes podem carregar o ledger anterior somente se sua evidência continua atual e o delta não as alcança. Um achado novo só bloqueia se mapear uma obrigação já aprovada; diga se ele foi omitido na primeira revisão, causado pela correção ou revelado por evidência nova. Para a mesma assinatura de falha (tarefa, asserção, caminho de teste, classe, revisão do plano e hashes de teste/produção), não redespache sem diff material ou evidência nova: corrija o brief, a fixture ou a contradição de plano que mantém o ciclo. Limite de rodadas nunca equivale a aprovação, mas uma linha já provada e não afetada não reabre por rotina.
+Na revalidação, não repita uma varredura ampla nem transforme preferência em bloqueio. Entregue o defeito apontado, a correção e a evidência focal atual; confira esse defeito e as asserções realmente afetadas, inclusive por fixtures compartilhadas. Preserve o restante sem exigir ledger completo, taxonomia de achados ou um relatório por PASS. Se o mesmo bloqueio se repetir sem mudança relevante, resolva a divergência de contrato, fixture ou evidência em vez de repetir o despacho. Limite de rodadas nunca equivale a aprovação.
 
 A aprovação de testes fecha quando os observáveis aprovados estão representados, as fixtures estabelecem suas precondições e a evidência executável exigida está atual. Testes baseline podem passar; RED é exigido para o comportamento ausente que orienta a implementação. Peça o relatório de fidelidade em prosa com `Verdict: APPROVE|REVISE|BLOCKED`, não o JSON dos olhos de implementação. Sugestão de revisor não altera o contrato: o pai local resolve exigências excessivas com evidência, consolida os defeitos reais e encerra o loop ao aprovar. Não escale esse trabalho de revisão rotineira ao pai global nem adicione cenários ou verificadores gerais para satisfazer preferências.
 

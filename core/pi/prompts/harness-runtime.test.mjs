@@ -228,32 +228,20 @@ test("o pai recupera uma única vez dependência declarada com npm ci antes de b
   assert.match(prompt, /marque `BLOCKED`/i);
 });
 
-test("a fidelidade reaberta revalida o ledger afetado sem transformar cada correção em nova varredura", () => {
+test("a fidelidade segue o contrato aprovado sem burocracia por rodada", () => {
   const prompt = readFileSync(promptPath, "utf8");
   const taskPrompt = readFileSync(taskPromptPath, "utf8");
   const testReviewer = readFileSync(testReviewerPath, "utf8");
   const testAuthor = readFileSync(testAuthorPath, "utf8");
 
-  assert.match(prompt, /primeira.*fidelidade.*matriz completa/is);
-  assert.match(prompt, /ledger da tarefa/i);
   assert.match(prompt, /pacote consolidado/i);
   assert.match(prompt, /`harness-test-author` fresco/i);
   assert.match(prompt, /não repita uma varredura ampla/i);
-  assert.match(prompt, /cada linha antes aprovada.*intersecte o diff/is);
-  assert.match(prompt, /mesma assinatura de falha/i);
-  assert.match(testReviewer, /all pinned obligations together on the first pass/i);
-  assert.match(testReviewer, /On correction, recheck prior failures/is);
-  assert.match(testReviewer, /previously passing rows\s+affected by the diff/i);
-  assert.match(testReviewer, /Do not reopen the\s+whole suite merely because another review was requested/i);
-  assert.match(taskPrompt, /todas as obrigações.*locked tests.*antes de concluir `REVISE`/is);
-  assert.match(taskPrompt, /ledger factual completo.*diff exato.*saída bruta.*exit status/is);
-  assert.match(taskPrompt, /não\s+despache o reviewer com contagens\/resumos/i);
-  assert.match(taskPrompt, /`LATE_FINDING`/);
-  assert.match(testReviewer, /do not\s+stop merely because one finding already justifies `REVISE`/is);
-  assert.match(testReviewer, /complete prior ledger, exact correction diff and raw current command evidence/i);
-  assert.match(testReviewer, /stable finding IDs/i);
-  assert.match(testAuthor, /previous ledger/i);
-  assert.match(testAuthor, /resolution map for every supplied finding ID and affected PASS/i);
+  assert.match(testReviewer, /Given\/When\/Then/);
+  assert.match(testReviewer, /On correction, recheck.*affected/is);
+  assert.doesNotMatch(testReviewer, /require the\s+complete prior ledger|preserve every prior row|separate counterexample.*every internal decision/is);
+  assert.doesNotMatch(testAuthor, /resolution map for every supplied finding ID and affected PASS/i);
+  assert.doesNotMatch(taskPrompt, /ledger factual completo|ledger completo anterior|retorno\s+do test-author deve mapear cada finding e cada PASS/is);
   assert.match(testAuthor, /TRANSCRIPTION.*TEST_INFRA.*PLAN_CONTRADICTION/is);
 });
 
@@ -274,46 +262,21 @@ test("fidelidade resolve bloqueio de evidência sem repetir mão ou comando vál
 
   assert.match(taskPrompt, /BLOCKED.*somente.*evidência.*não abra test-author.*reexecute/is);
   assert.match(taskPrompt, /resume.*proibido.*revalidação nova e compacta/is);
-  assert.match(taskPrompt, /ledger completo anterior.*exatamente a evidência atual nomeada/is);
-  assert.match(taskPrompt, /stale\/desatualizados/i);
+  assert.match(taskPrompt, /evidência atual nomeada/is);
   assert.match(testReviewer, /BLOCKED.*missing current evidence/i);
 });
 
-test("fidelidade exige contraprova concreta para cada PASS", () => {
-  const taskPrompt = readFileSync(taskPromptPath, "utf8");
-  const testReviewer = readFileSync(testReviewerPath, "utf8");
-
-  assert.match(taskPrompt, /decisão observável independente.*linhas novas ou afetadas.*implementação violadora/is);
-  assert.match(taskPrompt, /Separe decisões acopladas/i);
-  assert.match(taskPrompt, /linha `PASS` não afetada.*sem repetir contraprovas/is);
-  assert.match(taskPrompt, /asserção estática ou textual.*fixture negativa/is);
-  assert.match(testReviewer, /independent observable decision.*new or affected PASS.*violating implementation/is);
-  assert.match(testReviewer, /Split coupled decisions/i);
-  assert.match(testReviewer, /static or textual\s+assertion.*bounded behavioral sensitivity.*negative fixture/is);
-  assert.match(testReviewer, /no such counterexample.*REVISE/is);
-});
-
-test("olhos pós-implementação convergem findings com ledger estável", () => {
+test("olhos pós-implementação revalidam a correção sem rituais de findings", () => {
   const taskPrompt = readFileSync(taskPromptPath, "utf8");
 
   assert.match(taskPrompt, /adversary.*compliance.*security.*lote consolidado/is);
-  assert.match(taskPrompt, /ledger.*pós-implementação.*IDs estáveis.*família.*invariante/is);
-  assert.match(taskPrompt, /mapa por ID e família/i);
   assert.match(taskPrompt, /repita todos os\s+olhos já ativados/is);
-  assert.match(taskPrompt, /findings anteriores, os invariantes afetados/is);
   assert.match(taskPrompt, /receipts.*HEAD\/input digest exatos.*repita todos os\s+olhos já ativados/is);
-  assert.match(taskPrompt, /LATE_FINDING.*variantes.*classes de equivalência/is);
   for (const role of ["adversary", "compliance", "security"]) {
     const instructions = readFileSync(new URL(`../runtime/agents/harness-${role}.md`, import.meta.url), "utf8");
-    assert.match(instructions, /stable finding ID/i, role);
-    assert.match(instructions, /LATE_FINDING/, role);
-    assert.match(instructions, /equivalence class|variant/i, role);
-    assert.match(instructions, /independently verified factual/i, role);
-    assert.match(instructions, /never.*prior.*verdict.*preferred fix/i, role);
-    assert.match(instructions, /reuse.*supplied ID/i, role);
+    assert.doesNotMatch(instructions, /stable finding ID|LATE_FINDING|equivalence class|incomplete inspection, or an unresolved concern/i, role);
+    assert.match(instructions, /re-gate.*correction.*affected/is, role);
   }
-  assert.match(taskPrompt, /ID.*família.*status.*evidência.*independentemente verificados/is);
-  assert.match(taskPrompt, /nunca.*veredito anterior.*fix preferido/is);
 });
 
 test("o prompt exige vermelho executável antes do fidelity-pass", () => {
@@ -397,7 +360,7 @@ test("os três revisores retornam relatório estruturado somente em task ou fina
     assert.match(instructions, /HARNESS_FINAL_REVIEW/);
     assert.match(instructions, /HARNESS_TASK_REVIEW/);
     assert.match(instructions, /\{"issues":\[\]\}/);
-    assert.match(instructions, /missing evidence/i);
+    assert.match(instructions, /specifically required evidence.*unavailable/i);
     assert.match(instructions, /fix_hint/);
     assert.match(instructions, /exactly six keys.*no additional issue keys/i);
   }

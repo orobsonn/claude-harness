@@ -103,9 +103,34 @@ Autoridade do plano canônico: no OpenCode ela vem do SDK (`session.agent === 'p
 
 `harness-test-reviewer` avalia somente se os testes representam a tarefa aprovada,
 as fixtures estabelecem as precondições e a evidência executável exigida é suficiente.
-Retorna matriz e achados consolidados em prosa, com `Verdict: APPROVE|REVISE|BLOCKED`.
+Retorna parecer curto e achados concretos, com `Verdict: APPROVE|REVISE|BLOCKED`.
 O pai local corrige o necessário, revalida as linhas afetadas e encerra ao aprovar.
 Compliance continua responsável pela implementação e pela entrega final.
+
+O corte é o pré-freeze do Claude Code: não há ledger obrigatório por rodada,
+taxonomia de achados ou reconstrução histórica de Git pelo reviewer. Os olhos podem
+ler qualquer código, teste, documentação ou evidência relevante do projeto; os paths
+do brief são ponto de partida, não limite de leitura. Segredos e credenciais ficam protegidos.
+
+O objetivo é o RED fiel ao comportamento aprovado, não uma contraprova por decisão
+interna nem uma matriz exaustiva de alternativas. Verifique o contrato real no ponto
+observável (por exemplo, o JSON da rota, não o código de uma exceção interna).
+Correções reabrem apenas falhas e evidências afetadas. Uma evidência ausente pede
+o artefato legível, não outro autor de testes.
+
+Os briefs recebem automaticamente paths absolutos de snapshot Git, diff e índice
+de saídas de testes/tipagem. O pacote é transporte, não novo gate: indisponibilidade
+é informada e a evidência original continua utilizável. Saídas anteriores explicitamente
+citadas mantêm seus metadados; commit ou mudança de arquivos não as transforma
+silenciosamente em evidência atual.
+
+Se só o teste estava errado e o produto já está correto, faça o commit seletivo do
+produto e `capture-verified` com árvore limpa **antes do primeiro autor corretivo**.
+A saída desse marker registra a baseline observada pelo host. Autor/reviewer podem
+corrigir os testes em várias rodadas, seguidas de freeze/capture e olhos atuais,
+sem executor cosmético. A integração verifica que desde aquela baseline só mudaram
+os testes/fixtures travados. Sessões antigas sem essa observação não ganham a prova
+retroativamente; o fluxo tradicional de execução continua disponível.
 
 ## Revisores em paralelo
 

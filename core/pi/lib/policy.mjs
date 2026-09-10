@@ -9,7 +9,7 @@
 
 import { homedir } from 'node:os'
 import { lstatSync, readFileSync, realpathSync, statSync } from 'node:fs'
-import { basename, isAbsolute, relative, resolve, sep } from 'node:path'
+import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
 
 import { evaluateHook, protectablePath } from '../../codex/hooks/policy.mjs'
@@ -25,7 +25,11 @@ import { isPiCanonicalPlanPath } from './plan-write-decide.mjs'
 import { isParallelReviewRole } from './roles.mjs'
 
 export function isPiReadOnlyReviewerRole(role) {
-  return role === 'harness-test-reviewer' || isParallelReviewRole(role)
+  return role === 'harness-test-reviewer' ||
+    role === 'harness-plan-reviewer' ||
+    role === 'harness-harvester' ||
+    role === 'harness-discussion-adversary' ||
+    isParallelReviewRole(role)
 }
 
 /** Mesma frase de policy.mjs (denyForCommand) — não inventar prefixo novo. */
@@ -211,6 +215,25 @@ function pathIsInside(root, candidate) {
   return rel === '' || (rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel))
 }
 
+function canonicalReviewPath(candidate) {
+  const suffix = []
+  let cursor = candidate
+  while (true) {
+    try { return resolve(realpathSync(cursor), ...suffix.reverse()) } catch (error) {
+      if (error?.code !== 'ENOENT' && error?.code !== 'ENOTDIR') return null
+      try {
+        if (lstatSync(cursor).isSymbolicLink()) return null
+      } catch (lstatError) {
+        if (lstatError?.code !== 'ENOENT' && lstatError?.code !== 'ENOTDIR') return null
+      }
+      const parent = dirname(cursor)
+      if (parent === cursor) return null
+      suffix.push(basename(cursor))
+      cursor = parent
+    }
+  }
+}
+
 export function isPiReviewSecretPath(path) {
   if (typeof path !== 'string' || path.length === 0) return false
   const segments = resolve(path).split(sep).filter(Boolean).map((segment) => segment.toLowerCase())
@@ -235,8 +258,8 @@ export function isPiReviewSecretPath(path) {
 }
 
 /** @description Restringe revisores de implementação e fidelidade a leituras canônicas do projeto.
- * Para grep recursivo sem glob, devolve o patch fixo que o adaptador injeta antes da execução
- * da tool nativa. Um glob do modelo não pode ser composto com essa exclusão única e é negado. */
+ * Para grep recursivo sem glob, devolve a exclusão fixa aceita pela tool nativa. Quando há
+ * filtro do modelo, sinaliza o adaptador que executa o rg com ambos os globs como argv separados. */
 function decideReviewerReadPolicy(toolName, input, options) {
   if (!isPiReadOnlyReviewerRole(options?.reviewerRole)) return ALLOW
 
@@ -250,8 +273,8 @@ function decideReviewerReadPolicy(toolName, input, options) {
     return { block: true, reason: REVIEWER_READ_REASON }
   }
   const candidate = isAbsolute(requested) ? resolve(requested) : resolve(root, requested)
-  let target
-  try { target = realpathSync(candidate) } catch { return { block: true, reason: REVIEWER_READ_REASON } }
+  const target = canonicalReviewPath(candidate)
+  if (!target) return { block: true, reason: REVIEWER_READ_REASON }
   if (!pathIsInside(root, target)) return { block: true, reason: REVIEWER_READ_REASON }
   if (isPiReviewSecretPath(candidate) || isPiReviewSecretPath(target)) {
     return { block: true, reason: SECRET_REASON }
@@ -259,9 +282,12 @@ function decideReviewerReadPolicy(toolName, input, options) {
 
   if (String(toolName).toLowerCase() !== 'grep') return ALLOW
   let recursive
-  try { recursive = statSync(target).isDirectory() } catch { return { block: true, reason: REVIEWER_READ_REASON } }
+  try { recursive = statSync(target).isDirectory() } catch { return ALLOW }
   if (!recursive) return ALLOW
-  if (typeof input.glob === 'string') return { block: true, reason: REVIEWER_READ_REASON }
+  if (typeof input.glob === 'string') {
+    if (/[\r\n]/.test(input.glob)) return { block: true, reason: REVIEWER_READ_REASON }
+    return { block: false, reviewerGrepGuard: { projectRoot: root, target } }
+  }
   return { block: false, inputPatch: { glob: REVIEWER_GREP_GUARD } }
 }
 
@@ -307,7 +333,7 @@ export function decidePiPolicy(call = {}, options = {}) {
 
   if (isPiReadTool(toolName)) {
     const reviewerRead = decideReviewerReadPolicy(toolName, input, options)
-    if (reviewerRead.block || reviewerRead.inputPatch) return reviewerRead
+    if (reviewerRead.block || reviewerRead.inputPatch || reviewerRead.reviewerGrepGuard) return reviewerRead
     return isSecretReadPath(input.path, options) ? { block: true, reason: SECRET_REASON } : ALLOW
   }
 

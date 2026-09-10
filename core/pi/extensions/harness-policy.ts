@@ -5,6 +5,7 @@ import { isPiHeadlessContext, isPiReadTool, piSessionId } from "../lib/pi-adapte
 import { readPiChildIdentity } from "../lib/pi-child-identity.mjs";
 import { loadPiGateStateFromDisk } from "../lib/pi-gate-state.mjs";
 import { registerPiCommandEvidence } from "../lib/pi-command-evidence.mjs";
+import { markReviewerGrepInput, registerReviewerGrepTool } from "../lib/reviewer-grep.mjs";
 
 const CHILD_READ_IDENTITY_REASON = "Child read tools require an exact valid dispatch identity.";
 
@@ -21,6 +22,7 @@ function parentSessionId(ctx: any) {
  * contra ele, não contra o process.cwd() de quem lançou o binário. */
 export default function harnessPolicy(pi: ExtensionAPI) {
   registerPiCommandEvidence(pi);
+  registerReviewerGrepTool(pi);
   pi.on("tool_call", (event: any, ctx: any) => {
     const cwd = typeof ctx?.cwd === "string" && ctx.cwd.length > 0 ? ctx.cwd : process.cwd();
     const loaded = loadPiGateStateFromDisk(cwd, { sessionId: piSessionId(ctx) || null });
@@ -44,6 +46,7 @@ export default function harnessPolicy(pi: ExtensionAPI) {
       { cwd, projectRoot: cwd, reviewerRole, isChild: child, isHeadless: isPiHeadlessContext(ctx), gateState: loaded.ok ? loaded.state : {} },
     );
     if (decision.block) return { block: true, reason: decision.reason };
+    if (decision.reviewerGrepGuard) markReviewerGrepInput(event.input, decision.reviewerGrepGuard);
     if (decision.inputPatch && event?.input && typeof event.input === "object") {
       Object.assign(event.input, decision.inputPatch);
     }

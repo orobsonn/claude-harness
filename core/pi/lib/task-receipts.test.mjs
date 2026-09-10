@@ -189,6 +189,92 @@ function bindPinnedRuntime(fixture, { testReviewer = false } = {}) {
   return runtime;
 }
 
+function testOnlyRecovery({ capturedImplementation = true, productDelta = false, laterWriter = false,
+  extraAuthor = false, earlierAuthorProductDrift = false, lateCapture = false, failedWriter = false,
+  overlappingCapture = false, dirtyCaptureFirst = false, originOverride = {} } = {}) {
+  const f = inspectionFixture();
+  let baseline = f.head;
+  const eventsPath = f.entry.launches.at(-1).events_path;
+  const extra = [];
+  const add = (id, tool, args, result = { details: { ok: true } }) => {
+    extra.push(event("tool_execution_start", { toolCallId: id, toolName: tool, args }));
+    extra.push(event("tool_execution_end", { toolCallId: id, toolName: tool, isError: false, result }));
+  };
+  const prompt = '[HARNESS_TASK_CONTEXT]{"task_id":"' + TASK + '"}[/HARNESS_TASK_CONTEXT]';
+  const capture = () => add("prior-capture", "mark", { action: "capture-verified", task_id: TASK },
+    { details: { ok: true, capture_origin: { task_id: TASK, producer_call_id: "producer", head_sha: f.head,
+      worktree_clean: true, ...originOverride } } });
+  if (dirtyCaptureFirst) add("dirty-capture", "mark", { action: "capture-verified", task_id: TASK },
+    { details: { ok: true, capture_origin: { task_id: TASK, producer_call_id: "producer", head_sha: f.freeze, worktree_clean: false } } });
+  if (capturedImplementation && !lateCapture) capture();
+  if (extraAuthor || earlierAuthorProductDrift || lateCapture) {
+    add("earlier-author", "subagent", { subagent_type: "harness-test-author", prompt }, { details: { status: "completed" } });
+    if (earlierAuthorProductDrift) {
+      write(path.join(f.root, "src/task.mjs"), "export const actual = 'unverified earlier writer';\n");
+      baseline = commit(f.root, "bad earlier author product");
+    }
+    add("earlier-eye", "subagent", { subagent_type: "harness-compliance" },
+      { content: [{ type: "text", text: "Verdict: REVISE" }], details: { status: "completed" } });
+  }
+  if (capturedImplementation && lateCapture) capture();
+  if (failedWriter) add("failed-sniper", "subagent", { subagent_type: "harness-sniper", prompt }, { details: { status: "failed" } });
+  add("correct-author", "subagent", { subagent_type: "harness-test-author", prompt }, { details: { status: "completed" } });
+  write(path.join(f.root, "src/task.spec.mjs"), "export const expected = { error: 'invalid_state' };\n");
+  if (productDelta) {
+    write(path.join(f.root, "src/task.mjs"), "export const actual = 'unauthorized drift';\n");
+    run(f.root, "git", "add", "src/task.mjs");
+    run(f.root, "git", "commit", "-m", "unverified product");
+  }
+  add("correct-eye", "subagent", { subagent_type: "harness-compliance" }, {
+    content: [{ type: "text", text: "Verdict: APPROVE" }], details: { status: "completed" } });
+  run(f.root, "git", "add", "src/task.spec.mjs");
+  run(f.root, "git", "commit", "-m", "correct oracle only");
+  const freeze = run(f.root, "git", "rev-parse", "HEAD");
+  add("correct-freeze", "bash", { command: "git commit -m correct" }, { content: [{ type: "text", text: "[task " + freeze.slice(0, 7) + "] correct" }] });
+  add("correct-fidelity", "mark", { action: "fidelity", task_id: TASK });
+  add("correct-capture", "mark", { action: "capture-verified", task_id: TASK });
+  if (laterWriter) add("later-writer", "subagent", { subagent_type: "harness-sniper", prompt }, { details: { status: "completed" } });
+  if (overlappingCapture) {
+    const captureEnd = extra.findIndex((line) => { const e = JSON.parse(line); return e.type === "tool_execution_end" && e.toolCallId === "prior-capture"; });
+    const [end] = extra.splice(captureEnd, 1);
+    const authorStart = extra.findIndex((line) => { const e = JSON.parse(line); return e.type === "tool_execution_start" && e.args?.subagent_type === "harness-test-author"; });
+    extra.splice(authorStart + 1, 0, end);
+  }
+  write(eventsPath, fs.readFileSync(eventsPath, "utf8") + extra.join("\n") + "\n");
+  const recordPath = path.join(f.root, ".pi/harness/state/hand-records", FEATURE, CHILD, TASK + ".json");
+  const record = JSON.parse(fs.readFileSync(recordPath, "utf8"));
+  write(recordPath, { ...record, agent: "harness-test-author", producerCallId: "correct-author", freezeCommitSha: baseline });
+  const state = JSON.parse(fs.readFileSync(f.statePath, "utf8"));
+  const bare = FEATURE + "/" + TASK;
+  state.fidelity_pass.push(bare + "@" + freeze);
+  state.capture_verified.push(bare + "@" + baseline);
+  for (const receipt of [state.task_adversary_evidence[bare], ...Object.values(state.task_review_evidence[bare])]) receipt.reviewed_head_sha = freeze;
+  write(f.statePath, state);
+  f.dependencies.captureReviewInputFn = () => ({ ok: true, snapshot: { head_sha: freeze, input_digest: DIGEST } });
+  return { ...f, head: freeze, recoveryBaseline: baseline };
+}
+
+test("a captured implementation survives a reviewed test-only correction without another executor", () => {
+  const f = testOnlyRecovery({ extraAuthor: true, dirtyCaptureFirst: true });
+  const inspected = inspectTaskRun(f.entry, f.dependencies);
+  assert.equal(inspected.ok, true, inspected.reason);
+  assert.equal(inspected.result.hand_capture.agent, "harness-test-author");
+  assert.equal(inspected.result.freeze_sha, f.head);
+  assert.equal(inspected.result.hand_capture.freeze_sha, f.recoveryBaseline);
+  assert.equal(inspected.result.hand_capture.recovery_origin.head_sha, f.recoveryBaseline);
+});
+
+test("test-only recovery cannot cover an uncaptured implementation, product drift or later writer", () => {
+  for (const options of [{ capturedImplementation: false }, { productDelta: true }, { laterWriter: true },
+    { earlierAuthorProductDrift: true }, { lateCapture: true }, { failedWriter: true },
+    { overlappingCapture: true }, { originOverride: { head_sha: undefined } },
+    { originOverride: { worktree_clean: false } }, { originOverride: { producer_call_id: "foreign" } },
+    { originOverride: { head_sha: "0".repeat(40) } }]) {
+    const f = testOnlyRecovery(options);
+    assert.equal(inspectTaskRun(f.entry, f.dependencies).ok, false, JSON.stringify(options));
+  }
+});
+
 test("inspectTaskRun issues a child-bound receipt from native lifecycle, fidelity, capture and strong reviews", () => {
   const fixture = inspectionFixture({ historicFailure: true });
   const inspected = inspectTaskRun(fixture.entry, fixture.dependencies);
@@ -812,6 +898,38 @@ test("inspectTaskRun binds a validated child context return to task identity and
   assert.match(foreign.reason, /context return.*identity/i);
 });
 
+test("blocked re-gate exposes current task context and review findings without a ready receipt", () => {
+  const fixture = inspectionFixture();
+  const content = "Fix the task-1 signer before resuming task-4; task-4 cannot fix its dependency.";
+  const context = { version: 1, kind: "task-context-return", session_id: CHILD, task_id: TASK,
+    head_sha: fixture.head, content, sha256: crypto.createHash("sha256").update(content).digest("hex") };
+  fixture.dependencies.readTaskContextReturnFn = () => context;
+  const state = JSON.parse(fs.readFileSync(fixture.statePath, "utf8"));
+  state.regate_pending = [FEATURE + "/" + TASK];
+  const security = state.task_review_evidence[FEATURE + "/" + TASK].security;
+  security.accepted = false;
+  security.report = { issues: [{ description: "Signing precedes the ownership check", category: "auth",
+    severity: "high", scope: "task-1", evidence: "src/task.mjs:1", fix_hint: "Validate before signing" }] };
+  security.report_digest = crypto.createHash("sha256").update(JSON.stringify(security.report)).digest("hex");
+  write(fixture.statePath, state);
+  const blocked = inspectTaskRun(fixture.entry, fixture.dependencies);
+  assert.equal(blocked.ok, false);
+  assert.match(blocked.reason, /re-gate.*pending/);
+  assert.equal(blocked.result, undefined);
+  assert.deepEqual(blocked.details.context_return, context);
+  assert.deepEqual(blocked.details.review_findings, [{ role: "harness-security", issues: security.report.issues }]);
+
+  security.input_digest = "0".repeat(64);
+  write(fixture.statePath, state);
+  const staleReview = inspectTaskRun(fixture.entry, fixture.dependencies);
+  assert.equal(staleReview.ok, false);
+  assert.deepEqual(staleReview.details.review_findings, []);
+  fixture.dependencies.readTaskContextReturnFn = () => ({ ...context, head_sha: fixture.base });
+  const staleContext = inspectTaskRun(fixture.entry, fixture.dependencies);
+  assert.equal(staleContext.ok, false);
+  assert.equal(staleContext.details?.context_return, undefined);
+});
+
 test("inspectTaskRun rejects an unstamped current capture and a foreign native producer", () => {
   const unstamped = inspectionFixture();
   const handPath = path.join(unstamped.root, ".pi", "harness", "state", "hand-records", FEATURE, CHILD, `${TASK}.json`);
@@ -884,11 +1002,12 @@ test("inspectTaskRun rejects a frozen test modified after the event-proven freez
   assert.match(inspected.reason, /frozen file changed/i);
 });
 
-function integratedFixture() {
+function integratedFixture({ lockedPaths = [] } = {}) {
   const { root, base } = repo();
   const planPath = path.join(root, ".pi", "harness", "plans", FEATURE, "execution-plan.json");
   const specPath = path.join(root, ".pi", "harness", "plans", FEATURE, "spec.md");
-  write(planPath, { feature_id: FEATURE, tasks: [{ id: TASK }] });
+  write(planPath, { feature_id: FEATURE, tasks: [{ id: TASK,
+    locked_tests: lockedPaths.map((file, index) => ({ id: "locked-" + index, path: file })) }] });
   write(specPath, "approved task spec\n");
   const planSha = crypto.createHash("sha256").update(fs.readFileSync(planPath)).digest("hex");
   const specSha = crypto.createHash("sha256").update(fs.readFileSync(specPath)).digest("hex");
@@ -964,6 +1083,36 @@ test("readIntegratedTaskEvidence preserves the child session and accepts ancestr
   assert.equal(evidence.ok, true, evidence.reason);
   assert.equal(evidence.result.session_id, CHILD);
   assert.equal(evidence.result.integrated_head, fixture.base);
+});
+
+test("integration accepts the inspected test-author recovery lineage but not product drift", () => {
+  for (const scenario of ["valid", "product-drift", "forged-frozen-product"]) {
+    const productDrift = scenario !== "valid";
+    const f = integratedFixture({ lockedPaths: ["acceptance.test.mjs"] });
+    write(path.join(f.root, "acceptance.test.mjs"), "export const expected = 1;\n");
+    run(f.root, "git", "add", "acceptance.test.mjs");
+    if (productDrift) {
+      write(path.join(f.root, "README.md"), "changed product baseline\n");
+      run(f.root, "git", "add", "README.md");
+    }
+    run(f.root, "git", "commit", "-m", "reviewed test correction");
+    const head = run(f.root, "git", "rev-parse", "HEAD");
+    const result = f.entry.result;
+    result.child_head = head;
+    result.freeze_sha = head;
+    result.frozen_blobs = { "acceptance.test.mjs": crypto.createHash("sha256").update("export const expected = 1;\n").digest("hex") };
+    result.changed_paths = run(f.root, "git", "diff", "--name-only", f.base, head).split("\n");
+    result.hand_capture.agent = "harness-test-author";
+    result.hand_capture.recovery_origin = { head_sha: f.base, producer_call_id: "captured-executor", producer_launch_index: 0 };
+    if (scenario === "forged-frozen-product") result.frozen_blobs["README.md"] =
+      crypto.createHash("sha256").update(fs.readFileSync(path.join(f.root, "README.md"))).digest("hex");
+    f.integration.child_head = head;
+    f.integration.integrated_head = head;
+    f.integration.result_sha256 = hashTaskReceipt(result);
+    write(f.registryPath, f.registry);
+    const checked = readIntegratedTaskEvidence({ projectRoot: f.root, sessionId: PARENT, featureId: FEATURE, taskId: TASK, headSha: head });
+    assert.equal(checked.ok, !productDrift, checked.reason);
+  }
 });
 
 test("readIntegratedTaskEvidence rejects current canonical plan or spec drift with unchanged task ids", () => {
