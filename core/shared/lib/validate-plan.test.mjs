@@ -106,6 +106,177 @@ test("t3-full-ok: golden valid full plan returns ok true", () => {
   assert.deepEqual(res.errors, []);
 });
 
+test("cross-task freeze: dependent tasks cannot own the same locked test file", () => {
+  const plan = structuredClone(goldenFull);
+  plan.tasks = [
+    {
+      ...structuredClone(goldenFull.tasks[0]),
+      id: "task-one",
+      locked_tests: [
+        { id: "first-proof", path: "test/unit/meta-ads/api-write.test.ts", assertion: "Given A, When B, Then C" },
+      ],
+    },
+    {
+      ...structuredClone(goldenFull.tasks[0]),
+      id: "task-two",
+      depends_on: ["task-one"],
+      locked_tests: [
+        { id: "second-proof", path: "test/unit/meta-ads/api-write.test.ts", assertion: "Given D, When E, Then F" },
+      ],
+    },
+  ];
+
+  const result = validatePlan(plan, { expect: "full" });
+
+  assert.equal(result.ok, false);
+  assert.ok(
+    result.errors.some((error) =>
+      error.includes("test/unit/meta-ads/api-write.test.ts") &&
+      error.includes("task-one") &&
+      error.includes("task-two") &&
+      error.includes("frozen path")),
+    result.errors.join("; "),
+  );
+});
+
+test("cross-task freeze: test and fixture cannot cross task ownership", () => {
+  const plan = structuredClone(goldenFull);
+  plan.tasks = [
+    {
+      ...structuredClone(goldenFull.tasks[0]),
+      id: "task-one",
+      locked_tests: [
+        { id: "first-proof", path: "test/shared.test.ts", assertion: "Given A, When B, Then C" },
+      ],
+    },
+    {
+      ...structuredClone(goldenFull.tasks[0]),
+      id: "task-two",
+      depends_on: ["task-one"],
+      locked_tests: [
+        {
+          id: "second-proof",
+          path: "test/other.test.ts",
+          assertion: "Given D, When E, Then F",
+          fixture_paths: ["test/shared.test.ts"],
+        },
+      ],
+    },
+  ];
+
+  const result = validatePlan(plan, { expect: "full" });
+
+  assert.equal(result.ok, false);
+  assert.ok(
+    result.errors.some((error) =>
+      error.includes("test/shared.test.ts") &&
+      error.includes("task-one") &&
+      error.includes("task-two") &&
+      error.includes("frozen path")),
+    result.errors.join("; "),
+  );
+});
+
+test("cross-task freeze: parent and child fixture paths are one frozen closure", () => {
+  const plan = structuredClone(goldenFull);
+  plan.tasks = [
+    {
+      ...structuredClone(goldenFull.tasks[0]),
+      id: "task-one",
+      locked_tests: [{
+        id: "first-proof",
+        path: "test/first.test.ts",
+        assertion: "Given A, When B, Then C",
+        fixture_paths: ["test/fixtures"],
+      }],
+    },
+    {
+      ...structuredClone(goldenFull.tasks[0]),
+      id: "task-two",
+      depends_on: ["task-one"],
+      locked_tests: [{
+        id: "second-proof",
+        path: "test/second.test.ts",
+        assertion: "Given D, When E, Then F",
+        fixture_paths: ["test/fixtures/a.json"],
+      }],
+    },
+  ];
+
+  const result = validatePlan(plan, { expect: "full" });
+
+  assert.equal(result.ok, false);
+  assert.ok(
+    result.errors.some((error) =>
+      error.includes("test/fixtures") &&
+      error.includes("test/fixtures/a.json") &&
+      error.includes("task-one") &&
+      error.includes("task-two")),
+    result.errors.join("; "),
+  );
+});
+
+test("frozen paths reject separators and control bytes the Pi coordinator cannot consume", () => {
+  for (const unsafePath of [
+    "test\\shared.test.ts",
+    "test/shared.test.ts\0suffix",
+    "./test/shared.test.ts",
+    "test/./shared.test.ts",
+    "test/shared.test.ts/",
+    ".",
+  ]) {
+    const plan = structuredClone(goldenFull);
+    plan.tasks[0].locked_tests[0].path = unsafePath;
+
+    const result = validatePlan(plan, { expect: "full" });
+
+    assert.equal(result.ok, false, JSON.stringify(unsafePath));
+    assert.ok(result.errors.some((error) => error.includes("repo-relative")), result.errors.join("; "));
+  }
+});
+
+test("cross-task freeze: component prefixes do not collide", () => {
+  const plan = structuredClone(goldenFull);
+  plan.tasks = [
+    {
+      ...structuredClone(goldenFull.tasks[0]),
+      id: "task-one",
+      locked_tests: [{
+        id: "first-proof",
+        path: "test/first.test.ts",
+        assertion: "Given A, When B, Then C",
+        fixture_paths: ["test/fixtures"],
+      }],
+    },
+    {
+      ...structuredClone(goldenFull.tasks[0]),
+      id: "task-two",
+      locked_tests: [{
+        id: "second-proof",
+        path: "test/second.test.ts",
+        assertion: "Given D, When E, Then F",
+        fixture_paths: ["test/fixtures-old/a.json"],
+      }],
+    },
+  ];
+
+  const result = validatePlan(plan, { expect: "full" });
+
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+
+test("same-task freeze: multiple assertions may share one locked test file", () => {
+  const plan = structuredClone(goldenFull);
+  plan.tasks[0].locked_tests = [
+    { id: "first-proof", path: "test/shared.test.ts", assertion: "Given A, When B, Then C" },
+    { id: "second-proof", path: "test/shared.test.ts", assertion: "Given D, When E, Then F" },
+  ];
+
+  const result = validatePlan(plan, { expect: "full" });
+
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+
 test("t3-cycle: cycle in depends_on returns ok false", () => {
   const cyclic = {
     feature_id: "cyclic",

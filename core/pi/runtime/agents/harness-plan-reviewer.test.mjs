@@ -31,3 +31,8 @@ test("plan-reviewer names every canonical area and severity and requires JSON-on
   assert.match(role, /exactly one JSON object/i);
   assert.match(role, /no Markdown fences or prose/i);
 });
+
+test("plan-reviewer rejects cross-task ownership of frozen tests and fixtures", () => {
+  assert.match(role, /locked test.*fixture.*more than one task/is);
+  assert.match(role, /sequential.*immutable.*freeze/is);
+});

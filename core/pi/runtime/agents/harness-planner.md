@@ -82,7 +82,14 @@ read locally, reply `BLOCKED` with the missing fact and do not write a plan.
    future tasks. Keep changes together when splitting would break a shared
    transaction/invariant, require artificial scaffolding, or add handoffs without
    reducing reasoning or rework. A shared file alone does not force one giant task:
-   sequential tasks can own distinct changes there; never overlap concurrent writes.
+   production files may belong to sequential tasks with distinct changes; never
+   overlap concurrent writes. This allowance does not apply to the frozen test
+   closure. Write every `locked_tests[].path` and `fixture_paths` entry in canonical
+   repo-relative form; each canonical path must
+   belong to exactly one task across the plan because it remains immutable after
+   that task's freeze, including for sequential dependents. Multiple assertions
+   may share a path only inside the same owning task. If two responsibilities need
+   to edit one test or fixture, keep them in one task or use genuinely separate files.
    For the same inspected context, use these same outcome/dependency boundaries;
    do not target a fixed task count, risk score, test count or exhaustive matrix.
 2. Set a precise `scope_paths` write boundary from inspected literal file or
@@ -243,7 +250,8 @@ dispatch; do not create an alternate plan path. Confirm all of the following:
    locked tests, and model strategy conform to the schema above.
 4. Each locked test is satisfiable at its own task boundary and its test path
    is inside that task's writable scope or the project test directory.
-5. Concurrent tasks do not overlap writable scope.
+5. Concurrent tasks do not overlap writable scope, and no locked test or fixture
+   path belongs to more than one task.
 6. High-risk tasks have an enabled adversarial review with explicit focus;
    low-risk tasks do not manufacture adversarial scope.
 7. `final_review.compliance === true` and

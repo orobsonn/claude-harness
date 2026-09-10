@@ -16,9 +16,13 @@ name the concrete outcome/dependency boundary and the ambiguity or rework it rem
 Require each part to be testable after its dependencies, without future tasks.
 Do not split a shared transaction/invariant, require artificial scaffolding, or
 add tasks merely to reach a count: extra test/review/integration cycles have a cost.
-Sequential tasks may change the same file with explicit responsibility and order;
-overlapping concurrent writes may not. Equivalent outcome/dependency boundaries
-are acceptable; do not demand identical task names or counts between valid plans.
+Sequential tasks may change the same production file with explicit responsibility
+and order; overlapping concurrent writes may not. A locked test or fixture cannot
+belong to more than one task: its path remains immutable after the owning task's
+freeze, including for sequential dependents. Multiple assertions may share that
+path only within the same task. Return REVISE if the plan crosses this boundary.
+Equivalent outcome/dependency boundaries are acceptable; do not demand identical
+task names or counts between valid plans.
 For critical planned assertions, ask both "could a violating implementation pass?"
 and "would a conforming scenario be rejected?" Pin the smallest missing distinction
 from the approved contract, rather than asking for an exhaustive matrix. Check
