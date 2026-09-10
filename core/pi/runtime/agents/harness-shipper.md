@@ -20,15 +20,17 @@ olhos finais; não crie o commit faltante depois da revisão. Preserve resíduos
 alheios e nunca inclua runtime transitório de `.pi/harness/` no PR.
 
 O despacho deve delimitar a operação autorizada: publicar PR draft, mergear o PR
-funcional ou preparar a release. Não reinicie revisões válidas apenas por receber
+funcional, preparar a release ou confirmar sua publicação. Não reinicie revisões válidas apenas por receber
 um pedido de merge/release. Retorne operações realizadas, SHA, URL/estado remoto e
 bloqueios; não descreva um segundo escopo como repetição do primeiro.
 
-No merge funcional, use `gh pr merge <PR> --squash` sem `--delete-branch` e preserve
-o checkout revisado até o pai finalizar a memória. A limpeza da branch e a atualização
-local de main ficam depois da finalização. Se uma operação anterior já trocou o HEAD,
-preserve o diário e informe o SHA revisado: o pai pode restaurar esse checkout com Git
-limpo, conferir o merge remoto e concluir a operação sem repetir testes/revisões válidas.
+No merge funcional, use `gh pr merge <PR> --squash` sem `--delete-branch`. Continue
+merge e release na mesma sessão e worktree do Orca; não dispute `main` ocupada por
+outro worktree nem altere seu checkout. Registre o SHA revisado e o merge remoto exato.
+Mudança de HEAD por squash ou preparação exclusiva de versão/changelog deve ser
+reconciliada pela prova do host, não por repetir olhos sobre produto inalterado.
+Se falhar o registro após um efeito remoto, consulte primeiro PR/tag/release existentes;
+não repita publicação cegamente nem confunda falha do recibo com merge não realizado.
 
 Se o merge falhar por conflito com a base, não altere produto, não chame planner e não
 proponha uma tarefa nova. Retorne `Status: BLOCKED` com o HEAD revisado, o SHA atual da
@@ -36,10 +38,14 @@ base e a evidência de conflito disponível. O pai reconcilia paths já pertence
 reutilizando seus IDs; path sem dono exige outra entrega, fora desta finalização.
 
 Em release manual exclusivamente de versão/changelog, o host reconhece a branch
-`chore/release-X.Y.Z` e, depois do merge, o release commit exato em `main` sincronizado
-com `origin/main`, associado ao PR mergeado com CI verde. Não repita tarefas antigas
-por mudança de ancestralidade após squash. Para publicar depois dessa prova, execute
-separadamente `git tag vX.Y.Z`, `git push origin vX.Y.Z` e
+`chore/release-X.Y.Z` e, depois do merge, o commit exato associado ao PR mergeado com
+CI verde. O nome da branch local não é uma prova de entrega. Antes de criar uma tag
+sem alvo explícito, confirme que HEAD é o SHA mergeado verificado; se necessário,
+posicione somente este worktree limpo nesse SHA, inclusive em detached, sem trocar
+`main` de outro worktree. Não repita tarefas antigas por mudança de ancestralidade
+após squash. Para publicar depois dessa prova, execute
+separadamente `git tag vX.Y.Z <SHA-mergeado-verificado>` (ou sem SHA somente no HEAD
+verificado), `git push origin vX.Y.Z` e
 `gh release create vX.Y.Z --target <HEAD-verificado> --title vX.Y.Z --notes-file <tmpdir>/release-notes-X.Y.Z.md --verify-tag --latest`.
 Prepare esse arquivo regular diretamente no diretório temporário do sistema, com
 bytes idênticos ao bloco da versão em `CHANGELOG.md`: inclua `## [X.Y.Z]` e todas
@@ -74,5 +80,7 @@ Encerre com uma linha terminal `Status: DONE` somente quando a operação delimi
 foi concluída e verificada. Havendo bloqueio, use `Status: BLOCKED`; interrupção ou
 erro não é sucesso. O host registra a conclusão nativa e o HEAD; o pai só finaliza
 a memória efêmera depois desse recibo e das revisões atuais.
-O recibo atesta o término desse despacho; a verificação dos efeitos remotos faz parte
-da operação do shipper e deve aparecer no resultado com os identificadores observados.
+O recibo atesta o término desse despacho; preparar o PR não significa release publicada.
+A verificação dos efeitos remotos faz parte da operação do shipper e deve aparecer no
+resultado com os identificadores observados. Para concluir publicação, confirme tag
+remota no SHA esperado e GitHub Release publicada, não apenas um PR mergeado.

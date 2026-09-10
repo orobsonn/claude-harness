@@ -135,6 +135,12 @@ ferramentas, sem shell, e não procura arquivo de diff não fornecido. Nomeie e 
 inteiro cada path novo untracked relevante: diff tracked vazio não o prova intacto.
 Evidência necessária omitida inline só bloqueia se também não estiver acessível em
 artefato nomeado; resumo do pai nunca basta para aprovar nem se repete coleta/teste inaplicável.
+O shell fornece caminhos `[harness-evidence]` para saídas de verificação/inspeção e seus
+metadados de comando/sessão/checkout observado. Inclua as referências pertinentes no
+brief, inclusive para `git diff` e comandos que falharam; não escolha o último log sem
+conferir a baseline. Em recuperação fresh, reenvie o ledger/resultado anterior que está
+sendo corrigido, pois ele não é herdado. Os olhos podem investigar outros arquivos
+relevantes do projeto; as referências são ponto de partida, não limite de investigação.
 
 As regras por tarefa abaixo são o contrato que cada pai local executa e a evidência que
 o pai global confere nos retornos. No pai global elas não autorizam despachar mãos ou
@@ -194,6 +200,13 @@ o acréscimo: o host calcula o resultado a partir do arquivo completo e seu hash
 extensão registra o resultado como recibo host-owned. Leia esse recibo com novo
 `harness_memory action="read"`. Zero deltas é válido e não cria tarefa.
 
+Se o resultado for rejeitado por formato, envie ao novo despacho a proposta anterior
+completa e o erro exato de validação; o harvester não herda a conversa anterior.
+Peça a correção do formato preservando os deltas ainda sustentados pelas evidências,
+não uma nova colheita do zero. Se os arquivos mudaram, atualize seus hashes e conteúdo
+relevante antes da correção. Um delta pode ser descartado por duplicação, perda de
+validade ou conteúdo inadequado, com justificativa; não para contornar o erro de formato.
+
 Com delta não vazio, chame `harness_memory` com `action="apply"`. O host aplica a
 proposta validada de forma idempotente, somente nos paths e hashes do recibo. Inspecione
 o diff, faça commit seletivo dos paths exatos do recibo e só então colete os olhos finais
@@ -212,8 +225,11 @@ operação de release normalmente. Não reexecute tarefas funcionais só porque 
 tirou seus commits antigos da ancestralidade. O host dispensa somente as obrigações
 antigas comprovadas quando verifica uma alteração exclusiva de versões e changelog.
 Código, scripts, dependências, árvore suja ou prova ambígua mantêm os gates. CI e
-identidade do PR continuam obrigatórios. Para finalizar a release, atualize `main` e
-confira o PR mergeado, o HEAD em `origin/main` e CI verde. Só então use `git tag vX.Y.Z`,
+identidade do PR continuam obrigatórios. Continue na mesma sessão e worktree do Orca,
+sem exigir checkout em `main` nem alterar outra worktree. Confira o PR mergeado, seu
+SHA exato e CI verde. Para criar tag sem alvo explícito, HEAD deve ser esse SHA;
+se necessário, posicione somente este worktree limpo nele, inclusive em detached.
+Ou use `git tag vX.Y.Z <SHA-mergeado-verificado>` sem mudar o checkout. Depois execute
 `git push origin vX.Y.Z` e `gh release create vX.Y.Z --target <HEAD-verificado>
 --title vX.Y.Z --notes-file <tmpdir>/release-notes-X.Y.Z.md --verify-tag --latest`, em chamadas
 separadas. Extraia para esse arquivo regular o bloco exato de `CHANGELOG.md`, incluindo
@@ -257,10 +273,12 @@ não acrescente tarefa ao plano que já chegou ao shipping.
 
 Antes da publicação, confira se existe **freeze-commit órfão** (orphan freeze-commit), sem impl-commit correspondente. Como no Claude Code, exponha o risco explícito no PR e ao operador; nunca apresente a tarefa como concluída nem ignore CI/checks ou use bypass para mergear teste vermelho.
 
-No merge funcional, preserve o checkout revisado até finalizar a memória e use merge
-remoto sem `--delete-branch`. Se o CLI já trocou o HEAD, preserve
-o diário, restaure o checkout do SHA revisado somente com Git limpo e confirme o
-efeito remoto antes de concluir o despacho; não repita revisões ainda válidas.
+No merge funcional, use merge remoto sem `--delete-branch`. Se o CLI trocou o HEAD,
+preserve o diário e reconcilie os SHAs e efeitos remotos pela prova do host; não repita
+revisões ainda válidas nem restaure outro worktree para satisfazer um nome de branch.
+Falha de registro posterior ao shipping pode coexistir com merge/publicação concluídos:
+consulte PR/tag/release antes de tentar novamente. Preparar uma release não é publicá-la;
+confirme a tag remota no commit esperado e a GitHub Release publicada ao fechar essa operação.
 Na conclusão entregue, depois da operação autorizada do shipper, chame `harness_memory`
 com `action="finalize"`. A ferramenta exige recibo host-owned do shipper, revisões finais
 no HEAD atual e git limpo. Na continuação estritamente documental da release, a prova

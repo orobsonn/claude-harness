@@ -29,6 +29,9 @@ function observedTaskReviewRoles(sessionManager: any, taskId: string) {
 
 /** Read durable, current receipts; the parent decides which applicable reviewers to dispatch. */
 export default function harnessReviews(pi: ExtensionAPI) {
+  pi.on("tool_result", (event: any) => {
+    if (event.toolName === "harness_reviews" && typeof event.details?.reason === "string") return { isError: true };
+  });
   pi.registerTool({
     name: "harness_reviews",
     label: "Review status",
@@ -38,7 +41,10 @@ export default function harnessReviews(pi: ExtensionAPI) {
       task_id: Type.Optional(Type.String()),
     }, { additionalProperties: false }),
     async execute(_toolCallId, params: any, _signal, _onUpdate, ctx: any) {
-      const denied = (reason: string) => ({ content: [{ type: "text" as const, text: reason }], details: { reason }, isError: true });
+      const denied = (reason: string) => {
+        const identified = `[harness-reviews:${String(params?.phase ?? "unknown")}] ${reason}`;
+        return { content: [{ type: "text" as const, text: identified }], details: { reason: identified }, isError: true };
+      };
       if (isChildSession(ctx)) return denied("Review status is restricted to the parent orchestrator.");
       if (!params || Object.keys(params).some((key) => key !== "phase" && key !== "task_id") ||
           (params.phase !== "task" && params.phase !== "final") ||

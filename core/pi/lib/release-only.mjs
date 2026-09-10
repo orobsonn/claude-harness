@@ -71,6 +71,41 @@ function git(root, args) {
   }).trim();
 }
 
+function commitMetadata(root, sha, field) {
+  if (!FULL_GIT_SHA.test(sha)) throw new Error("invalid commit identity");
+  const args = field === "parent"
+    ? ["rev-parse", sha + "^"]
+    : field === "tree"
+      ? ["rev-parse", sha + "^{tree}"]
+      : ["log", "-1", "--format=%s", sha];
+  return execFileSync("git", args, {
+    cwd: root,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+  }).trim();
+}
+
+function mergedCommitMetadata(projectRoot, mergeOid, evidence) {
+  try {
+    return {
+      local: true,
+      subject: commitMetadata(projectRoot, mergeOid, "subject"),
+      parentSha: commitMetadata(projectRoot, mergeOid, "parent"),
+      treeSha: commitMetadata(projectRoot, mergeOid, "tree"),
+    };
+  } catch {
+    const remote = evidence?.remoteMerge;
+    if (
+      !remote || typeof remote !== "object" || Array.isArray(remote) ||
+      remote.sha !== mergeOid || !FULL_GIT_SHA.test(remote.treeSha) ||
+      !FULL_GIT_SHA.test(remote.parentSha) || typeof remote.subject !== "string"
+    ) {
+      throw new Error("remote merge commit metadata unavailable");
+    }
+    return { local: false, subject: remote.subject, parentSha: remote.parentSha, treeSha: remote.treeSha };
+  }
+}
+
 function gitBlob(root, revision, path) {
   return execFileSync("git", ["show", `${revision}:${path}`], {
     cwd: root,
@@ -298,33 +333,13 @@ function classifyPiPostMergeCandidate(projectRoot) {
     if (git(projectRoot, ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]) !== "origin/main") {
       return { ok: false, reason: "origin/main is not the known default base" };
     }
-    if (git(projectRoot, ["branch", "--show-current"]) !== "main") {
-      return { ok: false, reason: "post-merge release is not checked out on main" };
+    const checkoutSha = git(projectRoot, ["rev-parse", "HEAD"]);
+    const branch = git(projectRoot, ["branch", "--show-current"]);
+    const subject = git(projectRoot, ["log", "-1", "--format=%s"]);
+    if (!RELEASE_SUBJECT.test(subject) && !RELEASE_BRANCH.test(branch)) {
+      return { ok: false, reason: "checkout is not a release merge candidate" };
     }
-    const headSha = git(projectRoot, ["rev-parse", "HEAD"]);
-    if (headSha !== git(projectRoot, ["rev-parse", "origin/main"])) {
-      return { ok: false, reason: "post-merge HEAD does not equal origin/main" };
-    }
-    const subjectMatch = RELEASE_SUBJECT.exec(git(projectRoot, ["log", "-1", "--format=%s"]));
-    if (!subjectMatch) {
-      return { ok: false, reason: "post-merge commit subject is not an exact release subject" };
-    }
-    const version = `${subjectMatch[1]}.${subjectMatch[2]}.${subjectMatch[3]}`;
-    const baseSha = git(projectRoot, ["rev-parse", "HEAD^"]);
-    const files = verifyReleaseFiles(projectRoot, baseSha, headSha, version);
-    if (!files.ok) return files;
-    return {
-      ok: true,
-      phase: "post-merge",
-      branch: "main",
-      version,
-      tag: `v${version}`,
-      headSha,
-      baseSha,
-      baseBranch: "main",
-      releaseNotes: files.releaseNotes,
-      subjectPrNumber: subjectMatch[4] ? Number(subjectMatch[4]) : null,
-    };
+    return { ok: true, checkoutSha };
   } catch (error) {
     return {
       ok: false,
@@ -360,23 +375,72 @@ export function classifyPiPostMergeRelease(projectRoot, evidence) {
         ? /** @type {Record<string, unknown>} */ (pr.mergeCommit).oid
         : null;
     const mergedAt = typeof pr.mergedAt === "string" ? Date.parse(pr.mergedAt) : Number.NaN;
+    const repository = pr.repository && typeof pr.repository === "object" && !Array.isArray(pr.repository)
+      ? /** @type {Record<string, unknown>} */ (pr.repository)
+      : null;
+    const repositoryUrl = typeof repository?.url === "string" ? repository.url.replace(/\/$/, "") : "";
+    const repositoryName = typeof repository?.nameWithOwner === "string" ? repository.nameWithOwner : "";
     if (
       pr.state !== "MERGED" ||
+      pr.isDraft !== false ||
       !Number.isFinite(mergedAt) ||
-      mergeOid !== candidate.headSha ||
+      typeof mergeOid !== "string" ||
+      !FULL_GIT_SHA.test(mergeOid) ||
       pr.baseRefName !== "main" ||
-      version !== candidate.version ||
       pr.title !== `chore: release v${version}` ||
       !decideMergeChecks(pr.statusCheckRollup).ok ||
-      (candidate.subjectPrNumber !== null && candidate.subjectPrNumber !== number)
+      typeof pr.baseRefOid !== "string" ||
+      !FULL_GIT_SHA.test(pr.baseRefOid) ||
+      repositoryName.length === 0 ||
+      repositoryUrl !== `https://github.com/${repositoryName}` ||
+      repository?.defaultBranch !== "main" ||
+      repository?.defaultBranchContainsMerge !== true ||
+      pr.url !== `${repositoryUrl}/pull/${number}`
     ) {
-      return { ok: false, reason: "merged release PR does not match HEAD, base, title, or green CI" };
+      return { ok: false, reason: "merged release PR does not match repository, HEAD, base, title, or green CI" };
     }
-    const { subjectPrNumber: _subjectPrNumber, ...proof } = candidate;
+    const mergedCommit = mergedCommitMetadata(projectRoot, mergeOid, pr);
+    const mergeSubject = RELEASE_SUBJECT.exec(mergedCommit.subject.split(/\r?\n/, 1)[0]);
+    if (!mergeSubject || `${mergeSubject[1]}.${mergeSubject[2]}.${mergeSubject[3]}` !== version) {
+      return { ok: false, reason: "remote merge commit subject does not match release PR" };
+    }
+    const baseSha = mergedCommit.parentSha;
+    if (baseSha !== pr.baseRefOid) {
+      return { ok: false, reason: "merged release PR base advanced or is not immutable" };
+    }
+    const headFiles = verifyReleaseFiles(projectRoot, baseSha, releaseHeadSha, version);
+    if (!headFiles.ok) return headFiles;
+    let releaseNotes = headFiles.releaseNotes;
+    if (mergedCommit.local) {
+      const mergeFiles = verifyReleaseFiles(projectRoot, baseSha, mergeOid, version);
+      if (!mergeFiles.ok) return mergeFiles;
+      releaseNotes = mergeFiles.releaseNotes;
+    }
+    const contentTreeSha = mergedCommit.treeSha;
+    if (commitMetadata(projectRoot, releaseHeadSha, "tree") !== contentTreeSha) {
+      return { ok: false, reason: "release PR head and squash merge do not have identical content" };
+    }
+    if (![releaseHeadSha, mergeOid].includes(candidate.checkoutSha)) {
+      return { ok: false, reason: "checkout is neither the prepared release HEAD nor its squash merge" };
+    }
+    if (mergeSubject[4] && Number(mergeSubject[4]) !== number) {
+      return { ok: false, reason: "release merge subject references a different PR" };
+    }
     return {
-      ...proof,
+      ok: true,
+      phase: "post-merge",
+      branch: git(projectRoot, ["branch", "--show-current"]),
       releaseBranch,
       releaseHeadSha,
+      version,
+      tag: `v${version}`,
+      headSha: mergeOid,
+      checkoutSha: candidate.checkoutSha,
+      contentTreeSha,
+      baseSha,
+      baseBranch: "main",
+      releaseNotes,
+      repository: { nameWithOwner: repositoryName, url: repositoryUrl },
       prNumber: number,
     };
   } catch (error) {
@@ -387,13 +451,94 @@ export function classifyPiPostMergeRelease(projectRoot, evidence) {
   }
 }
 
+function ghJson(projectRoot, args) {
+  return JSON.parse(execFileSync("gh", args, {
+    cwd: projectRoot,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+    timeout: 15000,
+  }));
+}
+
+function originGitHubRepository(projectRoot) {
+  const remote = git(projectRoot, ["remote", "get-url", "origin"]);
+  const match = /^(?:https:\/\/github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+?)(?:\.git)?$/.exec(remote);
+  if (!match) throw new Error("supported GitHub origin identity unavailable");
+  return match[1];
+}
+
+function readPiRepositoryEvidence(projectRoot) {
+  const expectedRepository = originGitHubRepository(projectRoot);
+  const repository = ghJson(projectRoot, ["repo", "view", expectedRepository, "--json", "nameWithOwner,url,defaultBranchRef"]);
+  const nameWithOwner = typeof repository?.nameWithOwner === "string" ? repository.nameWithOwner : "";
+  const url = typeof repository?.url === "string" ? repository.url.replace(/\/$/, "") : "";
+  const defaultBranch = repository?.defaultBranchRef?.name;
+  if (nameWithOwner !== expectedRepository || url !== `https://github.com/${expectedRepository}` || defaultBranch !== "main") {
+    throw new Error("repository identity unavailable");
+  }
+  const ref = ghJson(projectRoot, ["api", `repos/${nameWithOwner}/git/ref/heads/main`]);
+  const defaultBranchOid = ref?.object?.sha;
+  if (typeof defaultBranchOid !== "string" || !FULL_GIT_SHA.test(defaultBranchOid)) {
+    throw new Error("remote default branch identity unavailable");
+  }
+  return { nameWithOwner, url, defaultBranch, defaultBranchOid };
+}
+
+export function classifyPiReleasePublication(proof, evidence) {
+  try {
+    if (proof?.ok !== true || proof.phase !== "post-merge" || !evidence || typeof evidence !== "object" || Array.isArray(evidence)) {
+      return { ok: false, reason: "published release evidence unavailable" };
+    }
+    const publication = /** @type {Record<string, unknown>} */ (evidence);
+    const repository = publication.repository;
+    const release = publication.release;
+    if (!repository || typeof repository !== "object" || Array.isArray(repository) ||
+        !release || typeof release !== "object" || Array.isArray(release)) {
+      return { ok: false, reason: "published release identity invalid" };
+    }
+    const repo = /** @type {Record<string, unknown>} */ (repository);
+    const item = /** @type {Record<string, unknown>} */ (release);
+    const publishedAt = typeof item.publishedAt === "string" ? Date.parse(item.publishedAt) : Number.NaN;
+    if (
+      repo.nameWithOwner !== proof.repository?.nameWithOwner ||
+      repo.url !== proof.repository?.url ||
+      publication.tagName !== proof.tag ||
+      publication.tagCommitOid !== proof.headSha ||
+      item.tagName !== proof.tag ||
+      item.isDraft !== false ||
+      item.isPrerelease !== false ||
+      !Number.isFinite(publishedAt) ||
+      item.url !== `${proof.repository.url}/releases/tag/${proof.tag}`
+    ) {
+      return { ok: false, reason: "tag or GitHub Release does not match the verified release content" };
+    }
+    return { ok: true, publishedAt: item.publishedAt, url: item.url, tagCommitOid: publication.tagCommitOid };
+  } catch {
+    return { ok: false, reason: "published release proof unavailable" };
+  }
+}
+
+export function readPiReleasePublicationEvidence(projectRoot, proof) {
+  try {
+    if (proof?.ok !== true || proof.phase !== "post-merge") return null;
+    const repository = readPiRepositoryEvidence(projectRoot);
+    const tag = ghJson(projectRoot, ["api", `repos/${repository.nameWithOwner}/commits/${proof.tag}`]);
+    const release = ghJson(projectRoot, [
+      "release", "view", proof.tag,
+      "--json", "tagName,isDraft,isPrerelease,publishedAt,url",
+    ]);
+    return { repository: { nameWithOwner: repository.nameWithOwner, url: repository.url }, tagName: proof.tag, tagCommitOid: tag?.sha, release };
+  } catch {
+    return null;
+  }
+}
+
 /** @description Resolve o PR mergeado associado exatamente ao HEAD. Leitura host-only, fail-closed. */
 export function readPiMergedReleaseEvidence(projectRoot, headSha) {
   try {
     if (!GIT_SHA.test(headSha)) return null;
-    const output = execFileSync(
-      "gh",
-      [
+    const repository = readPiRepositoryEvidence(projectRoot);
+    const rows = ghJson(projectRoot, [
         "pr",
         "list",
         "--state",
@@ -403,33 +548,110 @@ export function readPiMergedReleaseEvidence(projectRoot, headSha) {
         "--limit",
         "20",
         "--json",
-        "number,title,state,mergedAt,mergeCommit,headRefOid,headRefName,baseRefName,statusCheckRollup",
-      ],
-      { cwd: projectRoot, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 15000 },
-    );
-    const rows = JSON.parse(output);
+        "number,title,state,isDraft,url,mergedAt,mergeCommit,headRefOid,headRefName,baseRefOid,baseRefName,statusCheckRollup",
+      ]);
     if (!Array.isArray(rows)) return null;
-    const exact = rows.filter((row) => row?.mergeCommit?.oid === headSha);
-    return exact.length === 1 ? exact[0] : null;
+    const exact = rows.filter((row) => row?.mergeCommit?.oid === headSha || row?.headRefOid === headSha);
+    if (exact.length !== 1) return null;
+    const mergeOid = exact[0]?.mergeCommit?.oid;
+    if (typeof mergeOid !== "string" || !FULL_GIT_SHA.test(mergeOid)) return null;
+    const comparison = ghJson(projectRoot, [
+      "api", `repos/${repository.nameWithOwner}/compare/${mergeOid}...${repository.defaultBranchOid}`,
+    ]);
+    const remoteCommit = ghJson(projectRoot, [
+      "api", `repos/${repository.nameWithOwner}/git/commits/${mergeOid}`,
+    ]);
+    const remoteMerge = {
+      sha: remoteCommit?.sha,
+      treeSha: remoteCommit?.tree?.sha,
+      parentSha: Array.isArray(remoteCommit?.parents) && remoteCommit.parents.length === 1
+        ? remoteCommit.parents[0]?.sha
+        : "",
+      subject: typeof remoteCommit?.message === "string" ? remoteCommit.message.split(/\r?\n/, 1)[0] : "",
+    };
+    const defaultBranchContainsMerge = ["ahead", "identical"].includes(comparison?.status) &&
+      comparison?.merge_base_commit?.sha === mergeOid;
+    return { ...exact[0], remoteMerge, repository: { ...repository, defaultBranchContainsMerge } };
   } catch {
     return null;
   }
 }
 
+export function classifyPiFunctionalMergeTransition(projectRoot, reviewedHeadSha, preparedRelease, evidence) {
+  try {
+    if (!FULL_GIT_SHA.test(reviewedHeadSha) || preparedRelease?.ok !== true || !["pre-merge", "post-merge"].includes(preparedRelease.phase)) {
+      return { ok: false, reason: "functional-to-release transition identity invalid" };
+    }
+    if (!evidence || typeof evidence !== "object" || Array.isArray(evidence)) {
+      return { ok: false, reason: "merged functional PR evidence unavailable" };
+    }
+    const pr = /** @type {Record<string, unknown>} */ (evidence);
+    const repository = pr.repository && typeof pr.repository === "object" && !Array.isArray(pr.repository)
+      ? /** @type {Record<string, unknown>} */ (pr.repository)
+      : null;
+    const mergeOid = pr.mergeCommit && typeof pr.mergeCommit === "object" && !Array.isArray(pr.mergeCommit)
+      ? /** @type {Record<string, unknown>} */ (pr.mergeCommit).oid
+      : null;
+    const number = pr.number;
+    const repositoryUrl = typeof repository?.url === "string" ? repository.url.replace(/\/$/, "") : "";
+    const mergedAt = typeof pr.mergedAt === "string" ? Date.parse(pr.mergedAt) : Number.NaN;
+    const defaultBranchIsCurrent = preparedRelease.phase === "pre-merge"
+      ? repository?.defaultBranchOid === mergeOid
+      : repository?.defaultBranchContainsMerge === true;
+    if (
+      !Number.isSafeInteger(number) || number <= 0 ||
+      pr.state !== "MERGED" || pr.isDraft !== false || !Number.isFinite(mergedAt) ||
+      pr.headRefOid !== reviewedHeadSha || mergeOid !== preparedRelease.baseSha ||
+      pr.baseRefName !== "main" || typeof pr.baseRefOid !== "string" || !FULL_GIT_SHA.test(pr.baseRefOid) ||
+      !decideMergeChecks(pr.statusCheckRollup).ok ||
+      typeof repository?.nameWithOwner !== "string" ||
+      repositoryUrl !== `https://github.com/${repository.nameWithOwner}` || repository?.defaultBranch !== "main" ||
+      !defaultBranchIsCurrent ||
+      pr.url !== `${repositoryUrl}/pull/${number}`
+    ) {
+      return { ok: false, reason: "functional PR does not match repository, reviewed HEAD, immutable base, merge SHA, or green CI" };
+    }
+    if (commitMetadata(projectRoot, mergeOid, "parent") !== pr.baseRefOid ||
+        commitMetadata(projectRoot, mergeOid, "tree") !== commitMetadata(projectRoot, reviewedHeadSha, "tree")) {
+      return { ok: false, reason: "functional squash does not preserve the reviewed content on its immutable base" };
+    }
+    return {
+      ok: true,
+      repository: { nameWithOwner: repository.nameWithOwner, url: repositoryUrl },
+      prNumber: number,
+      headSha: reviewedHeadSha,
+      mergeSha: mergeOid,
+      baseSha: pr.baseRefOid,
+      contentTreeSha: commitMetadata(projectRoot, mergeOid, "tree"),
+    };
+  } catch {
+    return { ok: false, reason: "functional merge proof unavailable" };
+  }
+}
+
 /** @description Prova compartilhada para consumidores host-owned (entry gate, memory e shipper). */
-export function resolvePiReleaseProof(projectRoot, { readMergedReleaseEvidenceFn } = {}) {
+export function resolvePiReleaseProof(projectRoot, { readMergedReleaseEvidenceFn, readPublicationEvidenceFn } = {}) {
   try {
     const pre = classifyPiReleaseOnly(projectRoot);
-    if (pre.ok) {
-      return { ...pre, phase: "pre-merge", tag: `v${pre.version}` };
-    }
-    const candidate = classifyPiPostMergeCandidate(projectRoot);
-    if (!candidate.ok) return candidate;
     const readEvidence =
       typeof readMergedReleaseEvidenceFn === "function"
         ? readMergedReleaseEvidenceFn
         : (sha) => readPiMergedReleaseEvidence(projectRoot, sha);
-    return classifyPiPostMergeRelease(projectRoot, readEvidence(candidate.headSha));
+    const readPublication = typeof readPublicationEvidenceFn === "function"
+      ? readPublicationEvidenceFn
+      : (proof) => readPiReleasePublicationEvidence(projectRoot, proof);
+    if (pre.ok) {
+      const post = classifyPiPostMergeRelease(projectRoot, readEvidence(pre.headSha));
+      if (post.ok) {
+        return { ...post, publication: classifyPiReleasePublication(post, readPublication(post)) };
+      }
+      return { ...pre, phase: "pre-merge", tag: `v${pre.version}` };
+    }
+    const candidate = classifyPiPostMergeCandidate(projectRoot);
+    if (!candidate.ok) return candidate;
+    const post = classifyPiPostMergeRelease(projectRoot, readEvidence(candidate.checkoutSha));
+    if (!post.ok) return post;
+    return { ...post, publication: classifyPiReleasePublication(post, readPublication(post)) };
   } catch (error) {
     return { ok: false, reason: error instanceof Error ? error.message : "release proof unavailable" };
   }
@@ -523,7 +745,10 @@ export function piReleaseMergeMatchesProof(proof, evidence) {
 export default {
   classifyPiReleaseOnly,
   classifyPiPostMergeRelease,
+  classifyPiFunctionalMergeTransition,
+  classifyPiReleasePublication,
   readPiMergedReleaseEvidence,
+  readPiReleasePublicationEvidence,
   resolvePiReleaseProof,
   scopePiReleaseOnlyTaskState,
   piReleaseMergeMatchesProof,

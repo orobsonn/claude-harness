@@ -44,7 +44,41 @@ function mergeReleaseFixture(f, { number = 42, ci = [{ conclusion: "SUCCESS" }] 
       headRefOid: f.headSha,
       headRefName: "chore/release-1.2.4",
       baseRefName: "main",
+      baseRefOid: f.baseSha,
+      isDraft: false,
+      url: "https://github.com/example/release-fixture/pull/42",
       statusCheckRollup: ci,
+      repository: {
+        nameWithOwner: "example/release-fixture",
+        url: "https://github.com/example/release-fixture",
+        defaultBranch: "main",
+        defaultBranchOid: headSha,
+        defaultBranchContainsMerge: true,
+      },
+    },
+  };
+}
+
+function mergeReleaseFixtureEvidence(f, headSha, { number = 42, ci = [{ conclusion: "SUCCESS" }] } = {}) {
+  return {
+    number,
+    title: "chore: release v1.2.4",
+    state: "MERGED",
+    mergedAt: "2026-09-05T12:00:00Z",
+    mergeCommit: { oid: headSha },
+    headRefOid: f.headSha,
+    headRefName: "chore/release-1.2.4",
+    baseRefName: "main",
+    baseRefOid: f.baseSha,
+    isDraft: false,
+    url: `https://github.com/example/release-fixture/pull/${number}`,
+    statusCheckRollup: ci,
+    repository: {
+      nameWithOwner: "example/release-fixture",
+      url: "https://github.com/example/release-fixture",
+      defaultBranch: "main",
+      defaultBranchOid: headSha,
+      defaultBranchContainsMerge: true,
     },
   };
 }
@@ -107,6 +141,8 @@ function releaseFixture({
   git(root, ["init", "-q", "-b", "main"]);
   git(root, ["config", "user.name", "Release Test"]);
   git(root, ["config", "user.email", "release@example.test"]);
+  git(root, ["remote", "add", "origin", "https://github.com/example/release-fixture.git"]);
+  git(root, ["commit", "-q", "--allow-empty", "-m", "chore: initialize fixture"]);
   writeJson(root, "package.json", BASE_PACKAGE);
   if (withLock) writeJson(root, "package-lock.json", BASE_LOCK);
   writeFileSync(join(root, "CHANGELOG.md"), baseChangelog);
@@ -192,6 +228,8 @@ test("classifica o commit release-only já mergeado em main pelo PR e CI exatos"
       version: "1.2.4",
       tag: "v1.2.4",
       headSha: merged.headSha,
+      checkoutSha: merged.headSha,
+      contentTreeSha: git(f.root, ["rev-parse", `${merged.headSha}^{tree}`]),
       baseSha: f.baseSha,
       baseBranch: "main",
       releaseNotes: `## [1.2.4] - 2026-09-05
@@ -201,8 +239,141 @@ test("classifica o commit release-only já mergeado em main pelo PR e CI exatos"
 - New fix.
 
 `,
+      repository: {
+        nameWithOwner: "example/release-fixture",
+        url: "https://github.com/example/release-fixture",
+      },
       prNumber: 42,
     });
+    assert.equal(classifyPiPostMergeRelease(f.root, {
+      ...merged.evidence,
+      repository: { ...merged.evidence.repository, defaultBranchOid: "f".repeat(40), defaultBranchContainsMerge: true },
+    }).ok, true, "remote main may advance while retaining the release merge");
+    assert.equal(classifyPiPostMergeRelease(f.root, {
+      ...merged.evidence,
+      repository: { ...merged.evidence.repository, defaultBranchOid: "f".repeat(40), defaultBranchContainsMerge: false },
+    }).ok, false, "a force-pushed remote main must not orphan the release merge");
+  } finally {
+    f.close();
+  }
+});
+
+test("prova o squash remoto no mesmo WT mesmo quando main está ocupada em outro worktree", async (t) => {
+  const f = releaseFixture();
+  const other = mkdtempSync(join(tmpdir(), "pi-release-main-wt-"));
+  t.after(() => rmSync(other, { recursive: true, force: true }));
+  try {
+    git(f.root, ["worktree", "add", "-q", other, "main"]);
+    git(other, ["merge", "-q", "--squash", "chore/release-1.2.4"]);
+    git(other, ["commit", "-q", "-m", "chore: release v1.2.4 (#42)"]);
+    const mergedHead = git(other, ["rev-parse", "HEAD"]);
+    git(f.root, ["update-ref", "refs/remotes/origin/main", mergedHead]);
+    const evidence = mergeReleaseFixtureEvidence(f, mergedHead);
+    const { classifyPiPostMergeRelease } = await subject();
+    const proof = classifyPiPostMergeRelease(f.root, evidence);
+    assert.equal(git(f.root, ["branch", "--show-current"]), "chore/release-1.2.4");
+    assert.equal(git(f.root, ["rev-parse", "HEAD"]), f.headSha);
+    assert.equal(proof.ok, true, proof.reason);
+    assert.equal(proof.headSha, mergedHead);
+    assert.equal(proof.checkoutSha, f.headSha);
+    assert.equal(proof.contentTreeSha, git(f.root, ["rev-parse", `${f.headSha}^{tree}`]));
+  } finally {
+    try { git(f.root, ["worktree", "remove", "--force", other]); } catch {}
+    f.close();
+  }
+});
+
+test("aceita checkout pós-squash detached sem exigir branch main", async () => {
+  const f = releaseFixture();
+  try {
+    const merged = mergeReleaseFixture(f);
+    git(f.root, ["switch", "-q", "--detach", merged.headSha]);
+    const { classifyPiPostMergeRelease } = await subject();
+    const proof = classifyPiPostMergeRelease(f.root, merged.evidence);
+    assert.equal(proof.ok, true, proof.reason);
+    assert.equal(proof.checkoutSha, merged.headSha);
+  } finally {
+    f.close();
+  }
+});
+
+test("publicação exige tag e GitHub Release remotos no merge provado", async () => {
+  const f = releaseFixture();
+  try {
+    const merged = mergeReleaseFixture(f);
+    const { classifyPiPostMergeRelease, classifyPiReleasePublication } = await subject();
+    const proof = classifyPiPostMergeRelease(f.root, merged.evidence);
+    assert.equal(proof.ok, true, proof.reason);
+    const published = {
+      repository: proof.repository,
+      tagName: proof.tag,
+      tagCommitOid: proof.headSha,
+      release: {
+        tagName: proof.tag,
+        targetCommitish: "main",
+        name: "Release 1.2.4",
+        body: "Edited presentation is not tag identity.",
+        isDraft: false,
+        isPrerelease: false,
+        publishedAt: "2026-09-05T12:30:00Z",
+        url: `${proof.repository.url}/releases/tag/${proof.tag}`,
+      },
+    };
+    assert.equal(classifyPiReleasePublication(proof, published).ok, true);
+    for (const mutate of [
+      (value) => ({ ...value, repository: { ...value.repository, nameWithOwner: "other/repo" } }),
+      (value) => ({ ...value, tagCommitOid: "f".repeat(40) }),
+      (value) => ({ ...value, release: { ...value.release, isDraft: true } }),
+      (value) => ({ ...value, release: { ...value.release, publishedAt: null } }),
+    ]) {
+      assert.equal(classifyPiReleasePublication(proof, mutate(published)).ok, false);
+    }
+  } finally {
+    f.close();
+  }
+});
+
+test("preparação aceita somente squash funcional remoto com conteúdo revisado idêntico", async () => {
+  const f = releaseFixture();
+  try {
+    const reviewedHead = f.baseSha;
+    const functionalBase = git(f.root, ["rev-parse", `${reviewedHead}^`]);
+    const evidence = {
+      number: 41,
+      state: "MERGED",
+      isDraft: false,
+      mergedAt: "2026-09-05T11:00:00Z",
+      mergeCommit: { oid: reviewedHead },
+      headRefOid: reviewedHead,
+      headRefName: "feat/reviewed",
+      baseRefName: "main",
+      baseRefOid: functionalBase,
+      url: "https://github.com/example/release-fixture/pull/41",
+      statusCheckRollup: [{ conclusion: "SUCCESS" }],
+      repository: {
+        nameWithOwner: "example/release-fixture",
+        url: "https://github.com/example/release-fixture",
+        defaultBranch: "main",
+        defaultBranchOid: reviewedHead,
+      },
+    };
+    const prepared = { ...(await subject()).classifyPiReleaseOnly(f.root), phase: "pre-merge" };
+    const { classifyPiFunctionalMergeTransition } = await subject();
+    assert.equal(classifyPiFunctionalMergeTransition(f.root, reviewedHead, prepared, evidence).ok, true);
+    const published = { ...prepared, phase: "post-merge", headSha: "d".repeat(40) };
+    assert.equal(classifyPiFunctionalMergeTransition(f.root, reviewedHead, published, {
+      ...evidence,
+      repository: { ...evidence.repository, defaultBranchOid: "d".repeat(40), defaultBranchContainsMerge: true },
+    }).ok, true);
+    assert.equal(classifyPiFunctionalMergeTransition(f.root, reviewedHead, published, {
+      ...evidence,
+      repository: { ...evidence.repository, defaultBranchOid: "d".repeat(40), defaultBranchContainsMerge: false },
+    }).ok, false);
+    assert.equal(classifyPiFunctionalMergeTransition(f.root, "f".repeat(40), prepared, evidence).ok, false);
+    assert.equal(classifyPiFunctionalMergeTransition(f.root, reviewedHead, prepared, {
+      ...evidence,
+      repository: { ...evidence.repository, defaultBranchOid: "f".repeat(40) },
+    }).ok, false);
   } finally {
     f.close();
   }
@@ -222,6 +393,34 @@ test("resolver falha localmente sem consultar o host para commit comum em main",
     });
     assert.equal(result.ok, false);
     assert.equal(reads, 0);
+  } finally {
+    f.close();
+  }
+});
+
+test("resolver prefere merge remoto publicado com origin/main local stale e sem fetch", async () => {
+  const f = releaseFixture();
+  try {
+    const mergeOid = "f".repeat(40);
+    const evidence = mergeReleaseFixtureEvidence(f, mergeOid);
+    evidence.repository.defaultBranchOid = mergeOid;
+    evidence.remoteMerge = {
+      sha: mergeOid,
+      treeSha: git(f.root, ["rev-parse", "HEAD^{tree}"]),
+      parentSha: f.baseSha,
+      subject: "chore: release v1.2.4 (#42)",
+    };
+    assert.equal(git(f.root, ["rev-parse", "origin/main"]), f.baseSha);
+    const { resolvePiReleaseProof } = await subject();
+    const proof = resolvePiReleaseProof(f.root, {
+      readMergedReleaseEvidenceFn: () => evidence,
+      readPublicationEvidenceFn: () => null,
+    });
+    assert.equal(proof.ok, true, proof.reason);
+    assert.equal(proof.phase, "post-merge");
+    assert.equal(proof.headSha, mergeOid);
+    assert.equal(proof.checkoutSha, f.headSha);
+    assert.equal(proof.publication.ok, false);
   } finally {
     f.close();
   }
@@ -297,6 +496,8 @@ test("pós-merge nega produto misturado, PR divergente e CI ausente ou vermelho"
 
   for (const mutate of [
     (evidence) => ({ ...evidence, number: 99 }),
+    (evidence) => ({ ...evidence, repository: { ...evidence.repository, nameWithOwner: "other/repo" } }),
+    (evidence) => ({ ...evidence, baseRefOid: "e".repeat(40) }),
     (evidence) => ({ ...evidence, headRefName: "chore/release-1.2.5" }),
     (evidence) => ({ ...evidence, headRefOid: "abcdef0" }),
     (evidence) => {
@@ -306,6 +507,7 @@ test("pós-merge nega produto misturado, PR divergente e CI ausente ou vermelho"
     (evidence) => ({ ...evidence, mergeCommit: { oid: "f".repeat(40) } }),
     (evidence) => ({ ...evidence, statusCheckRollup: [] }),
     (evidence) => ({ ...evidence, statusCheckRollup: [{ conclusion: "FAILURE" }] }),
+    (evidence) => ({ ...evidence, isDraft: true }),
   ]) {
     const f = releaseFixture();
     try {

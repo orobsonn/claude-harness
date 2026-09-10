@@ -25,7 +25,14 @@ Before writing, read the canonical task's complete locked assertions, criterion_
 scope_paths and named fixtures. Inspect the existing dependency behavior the test uses
 (such as audit writes, bindings, callbacks and test adapters), rather than guessing it.
 Map each required observable to a test case and check that the fixture actually creates
-the intended condition. Preserve unrelated passing assertions when maintaining a test.
+the intended condition. Preserve the conditions that distinguish the approved behavior
+from a weaker version, including those in referenced criteria or implementation guidance,
+not just the assertion's headline. For example, a monotonic deadline is not proved by
+elapsed-time checks that would also pass with a wall clock that can jump. Use the existing
+test boundary to distinguish that violation; do not prescribe a clock API unless the
+contract does. Suggested implementation techniques are not extra obligations. When
+changing a shared fixture, check the other tests that depend on it.
+Preserve unrelated passing assertions when maintaining a test.
 The approved issue/spec/plan is authoritative. Existing dependency behavior is evidence
 for an executable fixture, not a requirement overriding the intended change: an approved
 behavior change should produce the expected RED. Return a contradiction to the parent

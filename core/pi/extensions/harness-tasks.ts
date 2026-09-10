@@ -135,6 +135,9 @@ export default function harnessTasks(pi: ExtensionAPI, injected: Parameters<type
         isChild: isChildSession(ctx),
       }) ?? undefined,
   );
+  pi.on("tool_result", (event: any) => {
+    if (event.toolName === "harness_tasks" && event.details?.ok === false) return { isError: true };
+  });
   pi.registerTool({
     name: "harness_tasks",
     label: "Task runs",
@@ -179,16 +182,8 @@ export default function harnessTasks(pi: ExtensionAPI, injected: Parameters<type
           requestedWait < 0 ||
           requestedWait > 30)
       ) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: "wait_seconds is only valid for status, from 0 to 30.",
-            },
-          ],
-          details: { ok: false },
-          isError: true,
-        };
+        const result = { ok: false, reason: `[harness-tasks:${String(action.action ?? "unknown")}] wait_seconds is only valid for status, from 0 to 30.` };
+        return { content: [{ type: "text" as const, text: JSON.stringify(result) }], details: result, isError: true };
       }
       const context = {
         projectRoot: ctx.cwd,
@@ -229,6 +224,7 @@ export default function harnessTasks(pi: ExtensionAPI, injected: Parameters<type
         });
         result = await (injected.executeAction ?? executeTaskAction)(action, context);
       }
+      if (!result.ok) result = { ...result, reason: `[harness-tasks:${String(action.action ?? "unknown")}] ${result.reason ?? "Task action failed"}` };
       return {
         content: [{ type: "text" as const, text: JSON.stringify(result) }],
         details: result,

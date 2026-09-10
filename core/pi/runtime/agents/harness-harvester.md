@@ -26,6 +26,16 @@ with read/grep and use `append`; the host computes the resulting hash from the f
 preimage, so no truncation or lost old content is possible. Each delta has evidence and an
 invalidation condition that says when the lesson must be rechecked.
 
+For a format-only retry, use the complete previous proposal and exact validation error
+supplied by the parent. Repair the JSON while preserving every still-supported delta;
+`evidence` and `invalidation` must be fields of each change, not merely headings inside
+its text. Do not return an empty proposal just to avoid the validation error. If a delta
+is now duplicate, unsupported or unsafe, explain its removal before the final envelope.
+If the previous proposal is missing, request it rather than inventing an empty recovery.
+Use the current parent-supplied hashes; if a file changed, reassess the affected delta
+against its current contents before proposing it again. Ordinary zero-delta results
+remain valid when there is no durable lesson to record.
+
 The first prompt line is `[HARNESS_HARVEST]`. End with exactly one tagged JSON result and no
 text after it. `changes` may be empty; otherwise it contains at most three distinct allowed paths:
 

@@ -4,7 +4,7 @@ import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { isSafeSessionId, isSafeFeatureId } from "../../shared/lib/feature-id.mjs";
-import { resolvePiReleaseProof } from "./release-only.mjs";
+import { classifyPiFunctionalMergeTransition, readPiMergedReleaseEvidence, resolvePiReleaseProof } from "./release-only.mjs";
 import { capturePiReviewInput, hasAcceptedPiReviewEvidence, readPiReviewPlan } from "./pi-review-evidence.mjs";
 import { requiredPiFinalReviewRoles } from "./roles.mjs";
 
@@ -288,6 +288,9 @@ export function finalizeMemory(projectRoot, sessionId) {
   const shipment = JSON.parse(readSmall(paths.shipment, 8192) ?? "null");
   if (shipment?.session_id !== sessionId || shipment?.feature_id !== featureId || shipment?.head !== head || shipment?.status !== "completed" || shipment?.written_by !== "host-subagent-completion") throw new Error("Finalize requires successful shipper completion on the current HEAD");
   if (reviewed.release) {
+    if (reviewed.release.phase !== "post-merge" || reviewed.release.publication?.ok !== true) {
+      throw new Error("Finalize requires the exact remote tag and published GitHub Release for the verified merge");
+    }
     // A metadata follow-up may have changed ancestry through squash. Do not lose
     // unresolved durable proposals while closing that independently verified phase.
     const { sharedContext, harvestReceipt } = readMemory(paths.root, sessionId);
@@ -302,18 +305,47 @@ export function finalizeMemory(projectRoot, sessionId) {
   return { ok: true, path: paths.shared, finalized: true, head };
 }
 
+export function classifyMemoryShipmentTransition(snapshot, ready, functionalMergeProof = null) {
+  const before = snapshot.release;
+  const after = ready.release;
+  if (ready.head === snapshot.head) {
+    if (after?.phase === "post-merge") {
+      return { ok: true, phase: after.publication?.ok === true ? "published" : "merged" };
+    }
+    if (after?.phase === "pre-merge") return { ok: true, phase: "release-prepared" };
+    return { ok: true, phase: "delivered" };
+  }
+  if (!before && ["pre-merge", "post-merge"].includes(after?.phase)) {
+    if (functionalMergeProof?.ok !== true || functionalMergeProof.headSha !== snapshot.head || functionalMergeProof.mergeSha !== after.baseSha) {
+      return { ok: false, reason: "release preparation does not descend from the exact reviewed functional squash" };
+    }
+    if (after.phase === "post-merge") {
+      return { ok: true, phase: after.publication?.ok === true ? "published" : "merged" };
+    }
+    return { ok: true, phase: "release-prepared" };
+  }
+  if (
+    before?.phase === "pre-merge" && after?.phase === "post-merge" &&
+    before.version === after.version && before.branch === after.releaseBranch &&
+    before.baseSha === after.baseSha && after.releaseHeadSha === snapshot.head
+  ) {
+    return { ok: true, phase: after.publication?.ok === true ? "published" : "merged" };
+  }
+  return { ok: false, reason: "Shipper changed HEAD outside the exact reviewed release transition" };
+}
+
 export function completeMemoryShipment(snapshot, text, agentId) {
   if (typeof agentId !== "string" || !agentId || !/(?:^|\r?\n)Status: DONE\s*$/.test(text)) throw new Error("Shipper must report terminal Status: DONE");
   const paths = memoryPaths(snapshot.project_root, snapshot.session_id, true);
   const ready = checkMemoryShipperReady(paths.root, snapshot.session_id);
-  if (ready.head !== snapshot.head) {
-    const before = snapshot.release;
-    const after = ready.release;
-    if (before?.phase !== "pre-merge" || after?.phase !== "post-merge" || before.version !== after.version || before.branch !== after.releaseBranch || before.baseSha !== after.baseSha || after.releaseHeadSha !== snapshot.head) {
-      throw new Error("Shipper changed HEAD after review; restore the verified checkout for a functional merge, then confirm the remote effect before retrying completion");
-    }
+  let functionalMergeProof = null;
+  if (ready.head !== snapshot.head && !snapshot.release && ["pre-merge", "post-merge"].includes(ready.release?.phase)) {
+    const evidence = readPiMergedReleaseEvidence(paths.root, snapshot.head);
+    functionalMergeProof = classifyPiFunctionalMergeTransition(paths.root, snapshot.head, ready.release, evidence);
   }
-  atomicWrite(paths.shipment, JSON.stringify({ written_by: "host-subagent-completion", session_id: snapshot.session_id, feature_id: ready.featureId, head: ready.head, agent_id: agentId, status: "completed", ...(ready.release ? { release_phase: ready.release.phase } : {}) }));
+  const transition = classifyMemoryShipmentTransition(snapshot, ready, functionalMergeProof);
+  if (!transition.ok) throw new Error(transition.reason + "; confirm the remote effect before retrying completion");
+  atomicWrite(paths.shipment, JSON.stringify({ written_by: "host-subagent-completion", session_id: snapshot.session_id, feature_id: ready.featureId, head: ready.head, agent_id: agentId, status: "completed", shipment_phase: transition.phase, ...(ready.release ? { release_phase: ready.release.phase } : {}) }));
 }
 export function memoryBrief(projectRoot, sessionId) {
   const paths = memoryPaths(projectRoot, sessionId);

@@ -4,7 +4,7 @@ import { isChildSession, piSessionId } from "../lib/pi-adapter-map.mjs";
 import { piResultText } from "../lib/obs.mjs";
 import { applyHarvest, beginHarvest, checkHarvestReady, checkMemoryShipperReady, completeHarvest, completeMemoryShipment, finalizationStarted, finalizeMemory, invalidateMemoryAttempt, memoryBrief, memoryPaths, readMemory, updateSharedContext } from "../lib/memory-cycle.mjs";
 
-/** Parent-only lifecycle. Native events bind harvest to the actual completed call. */
+/** Parent-only lifecycle. The mutable tool_result hook binds receipts to the actual completed call. */
 export default function harnessMemory(pi: ExtensionAPI) {
   const pending = new Map<string, any>();
   const identity = (ctx: any) => {
@@ -60,7 +60,7 @@ export default function harnessMemory(pi: ExtensionAPI) {
       if (args.subagent_type === "harness-shipper") {
         invalidateMemoryAttempt(ctx.cwd, sessionId, "shipment");
         const ready = checkMemoryShipperReady(ctx.cwd, sessionId);
-        pending.set(key(ctx, event.toolCallId), { kind: "shipment", session_id: sessionId, project_root: ctx.cwd, head: ready.head, ...(ready.release ? { release: ready.release } : {}) });
+        pending.set(key(ctx, event.toolCallId), { kind: "shipment", session_id: sessionId, project_root: ctx.cwd, ...ready });
       } else {
         if (!/^\[HARNESS_HARVEST\](?:\r?\n|$)/.test(args.prompt ?? "")) return;
         invalidateMemoryAttempt(ctx.cwd, sessionId, "harvest");
@@ -68,16 +68,56 @@ export default function harnessMemory(pi: ExtensionAPI) {
       }
     } catch { /* Failed snapshot can never authorize final review. */ }
   });
-  pi.on("tool_execution_end", (event: any, ctx) => {
+  pi.on("tool_result", (event: any, ctx) => {
+    if (event.toolName === "harness_memory") {
+      if (event.details?.ok === false) return { isError: true };
+      return;
+    }
     if (isChildSession(ctx) || event.toolName !== "subagent") return;
+    const subagentType = event.input?.subagent_type;
+    const kind = subagentType === "harness-shipper" ? "shipment" : subagentType === "harness-harvester" ? "harvest" : null;
+    if (!kind) return;
+    let snapshot;
+    let snapshotError;
     try {
       const callKey = key(ctx, event.toolCallId);
-      const snapshot = pending.get(callKey);
+      snapshot = pending.get(callKey);
       pending.delete(callKey);
-      if (!snapshot || event.isError || event.result?.isError || event.result?.details?.status !== "completed") return;
-      if (snapshot.kind === "shipment") completeMemoryShipment(snapshot, piResultText(event.result), event.result.details.agentId);
-      else completeHarvest(snapshot, piResultText(event.result), event.result.details.agentId);
-    } catch (error: any) { ctx.ui?.notify?.(`Harvest not recorded: ${error.message}`, "warning"); }
+    } catch (error: any) {
+      snapshotError = error;
+    }
+    const phase = kind === "shipment" ? "Shipment" : "Harvest";
+    const details = event.details != null && typeof event.details === "object" && !Array.isArray(event.details)
+      ? event.details
+      : {};
+    const receiptResult = (ok: boolean, reason?: string) => ({
+      content: [
+        ...(Array.isArray(event.content) ? event.content : []),
+        { type: "text" as const, text: ok
+          ? "[harness-memory] " + phase + " receipt recorded."
+          : kind === "shipment"
+            ? "[harness-memory] Shipment receipt not recorded: " + reason + ". The remote effect may already have happened. Reconcile the remote before retrying completion; do not repeat a merge or publish automatically."
+            : "[harness-memory] Harvest receipt not recorded: " + reason + ". Correct or rerun the harvest before final review." },
+      ],
+      details: {
+        ...details,
+        harness_memory_receipt: { ok, phase: kind, ...(reason ? { reason } : {}) },
+      },
+      ...(ok ? {} : { isError: true }),
+    });
+    if (event.isError || details.status !== "completed") {
+      return receiptResult(false, phase + " subagent did not complete successfully");
+    }
+    if (!snapshot) {
+      return receiptResult(false, snapshotError?.message ?? phase + " start snapshot is unavailable");
+    }
+    try {
+      if (kind === "shipment") completeMemoryShipment(snapshot, piResultText(event), details.agentId);
+      else completeHarvest(snapshot, piResultText(event), details.agentId);
+      return receiptResult(true);
+    } catch (error: any) {
+      return receiptResult(false, error.message);
+    }
   });
   pi.registerTool({
     name: "harness_memory", label: "Harness memory",
@@ -103,7 +143,8 @@ export default function harnessMemory(pi: ExtensionAPI) {
         else throw new Error("Unknown memory action");
         return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }], details: result };
       } catch (error: any) {
-        const result = { ok: false, reason: error.message };
+        const reason = `[harness-memory:${String(params?.action ?? "unknown")}] ${error.message}`;
+        const result = { ok: false, reason };
         return { isError: true, content: [{ type: "text", text: JSON.stringify(result) }], details: result };
       }
     },
