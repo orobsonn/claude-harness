@@ -715,8 +715,23 @@ function validateCurrentIntegrationAuthority(entry, registry, { projectRoot, ses
   return { ok: true };
 }
 
-/** Read one integration receipt from the global parent registry without rewriting child identity. */
-export function readIntegratedTaskEvidence({ projectRoot, sessionId, featureId, taskId, headSha } = {}) {
+// Internal reconciliation may read an already integrated upstream while the
+// dependent itself owns the barrier. Ordinary admission/final reads stay closed.
+function isReconciliationDependencyRead(registry, upstream, reconciliationFor) {
+  if (!object(reconciliationFor)) return false;
+  const barrier = registry.correction_barrier;
+  const dependent = registry.tasks[reconciliationFor.task_id];
+  const prior = dependent?.reconciliation_required?.upstreams?.[upstream.task_id];
+  return barrier.task_id !== upstream.task_id && barrier.task_id === reconciliationFor.task_id &&
+    barrier.attempt_id === reconciliationFor.attempt_id &&
+    dependent?.task_id === barrier.task_id && dependent.attempt_id === barrier.attempt_id && dependent.status === "blocked" &&
+    dependent.parent_session_id === registry.parent_session_id && dependent.feature_id === registry.feature_id &&
+    dependent.plan_sha256 === registry.plan_sha256 && dependent.spec_sha256 === registry.spec_sha256 &&
+    prior?.task_id === upstream.task_id && prior.attempt_id === upstream.attempt_id;
+}
+
+/** Read one integration receipt without rewriting child identity or clearing a correction barrier. */
+export function readIntegratedTaskEvidence({ projectRoot, sessionId, featureId, taskId, headSha, reconciliationFor } = {}) {
   try {
     if (typeof projectRoot !== "string" || !projectRoot || !isSafeSessionId(sessionId) || !isSafeFeatureId(featureId) || !isSafeTaskId(taskId)) return failure("safe integrated task identity required");
     const root = fs.realpathSync(projectRoot);
@@ -725,7 +740,7 @@ export function readIntegratedTaskEvidence({ projectRoot, sessionId, featureId, 
     const registry = readJson(registryPath, root);
     const entry = registry?.tasks?.[taskId];
     if (registry?.version !== 1 || registry.parent_session_id !== sessionId || registry.feature_id !== featureId || !object(entry) ||
-        registry.correction_barrier != null ||
+        (registry.correction_barrier != null && !isReconciliationDependencyRead(registry, entry, reconciliationFor)) ||
         entry.status !== "integrated" || entry.parent_session_id !== sessionId || entry.feature_id !== featureId || entry.task_id !== taskId ||
         entry.plan_sha256 !== registry.plan_sha256 || entry.spec_sha256 !== registry.spec_sha256) return failure("current integrated task registry entry required");
     const authority = validateCurrentIntegrationAuthority(entry, registry, { projectRoot: root, sessionId, featureId });

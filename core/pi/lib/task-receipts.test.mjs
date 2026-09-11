@@ -1531,3 +1531,38 @@ test("readIntegratedTaskEvidence rejects all historical integrations while a cor
   assert.equal(blocked.ok, false);
   assert.match(blocked.reason, /current integrated task registry entry/i);
 });
+
+test("only the exact blocked dependent can read its corrected upstream during reconciliation", () => {
+  const f = integratedFixture();
+  const context = { task_id: "dependent", attempt_id: "dependent-attempt" };
+  f.registry.correction_barrier = { ...context, aggregate_invalidated: true };
+  f.registry.tasks.dependent = {
+    ...context, parent_session_id: PARENT, feature_id: FEATURE, status: "blocked",
+    plan_sha256: f.registry.plan_sha256, spec_sha256: f.registry.spec_sha256,
+    reconciliation_required: { pre_child_head: f.base, upstreams: {
+      [TASK]: { task_id: TASK, attempt_id: ATTEMPT, receipt_sha256: "c".repeat(64) },
+    } },
+  };
+  const input = { projectRoot: f.root, sessionId: PARENT, featureId: FEATURE, taskId: TASK, headSha: f.base };
+  write(f.registryPath, f.registry);
+  const before = fs.readFileSync(f.registryPath, "utf8");
+  assert.equal(readIntegratedTaskEvidence({ ...input, reconciliationFor: context }).ok, true);
+  assert.equal(fs.readFileSync(f.registryPath, "utf8"), before, "read cannot clear the correction barrier");
+  assert.equal(readIntegratedTaskEvidence(input).ok, false, "final/admission callers retain their barrier");
+  for (const invalid of [{ ...context, attempt_id: "stale" }, { ...context, task_id: "other" }, { task_id: TASK, attempt_id: ATTEMPT }]) {
+    assert.equal(readIntegratedTaskEvidence({ ...input, reconciliationFor: invalid }).ok, false);
+  }
+  for (const corrupt of [
+    (r) => { r.tasks.dependent.status = "running"; },
+    (r) => { r.tasks.dependent.plan_sha256 = "d".repeat(64); },
+    (r) => { delete r.tasks.dependent.reconciliation_required.upstreams[TASK]; },
+    (r) => { r.tasks.dependent.reconciliation_required.upstreams[TASK].attempt_id = "stale"; },
+    (r) => { r.tasks[TASK].integration.result_sha256 = "d".repeat(64); },
+    (r) => { r.tasks[TASK].status = "blocked"; },
+  ]) {
+    const registry = JSON.parse(before);
+    corrupt(registry);
+    write(f.registryPath, registry);
+    assert.equal(readIntegratedTaskEvidence({ ...input, reconciliationFor: context }).ok, false);
+  }
+});
