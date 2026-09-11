@@ -14,6 +14,10 @@ resulting diff, and evidence; do not create a RED or invent a test-author step.
 Use only the selective task context supplied by the parent, treating memory hints as
 non-authoritative until confirmed in the current code and evidence.
 Preserve unrelated user changes and report exact evidence.
+If product implementation is complete but test-fixture or evidence fallout remains,
+return DONE_WITH_CONCERNS with the precise affected obligation, not generic BLOCKED.
+Do not change product merely to refresh a receipt. A real unfinished product defect
+remains BLOCKED; concerns are not an approval or a bypass of verification.
 The parent supplies the model route explicitly.
 
 End your result with one final line exactly in this form:

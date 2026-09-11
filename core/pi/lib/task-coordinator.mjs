@@ -523,7 +523,7 @@ async function launchTask(entry, context, persist, deps, instruction) {
     "Execute the admitted task using the task pipeline. Complete the native TDD, applicable reviewers and current capture. Return only after the task is ready for host integration.";
   const reconciliation = entry.reconciliations?.at(-1);
   const prompt = reconciliation
-    ? `The host merged a dependency correction at ${reconciliation.merged_head}. Preserve the original task, scope and frozen tests. Dispatch an implementation hand to validate or correct affected behavior and obtain a current capture after that merge; do not make cosmetic edits to obtain a receipt. Run applicable checks and obtain current HEAD-bound implementation reviews before returning.\n\n${feedback}`
+    ? `The host merged a dependency correction at ${reconciliation.merged_head}; dependency integration is already complete. Preserve the original task, scope and frozen tests. Before choosing a hand, compare the current HEAD, capture and producer receipt. If they already prove the reconciled implementation and no product delta is requested, do not dispatch executor/sniper just for freshness; resolve only affected test/evidence obligations. If provenance after this merge is still missing, obtain it through the existing task pipeline; a launch alone is not validation. A real product finding requires the appropriate implementation hand, commit, capture and affected eyes. Preserve valid unaffected reviews.\n\nBehavioral feedback:\n${feedback}\n\nDependency integration remains host-owned. Any upstream integration request in that feedback is already fulfilled; never ask a child to merge, rebase or cherry-pick.`
     : feedback;
   const args = [
     entry.runtime.launcher_path,

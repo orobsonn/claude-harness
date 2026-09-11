@@ -415,7 +415,7 @@ Os papéis não são títulos decorativos. As ferramentas e permissões mudam. R
 <details>
 <summary><strong>Roteamento atual dos agentes no Pi</strong></summary>
 
-O Pi usa `openai-codex/*` com a assinatura do operador. O orquestrador principal usa Sol. Cada dispatch é conferido antes de começar; modelo ou esforço divergente é negado.
+O Pi usa `openai-codex/*` com a assinatura do operador. O orquestrador principal usa Terra/high por padrão, preservando override nativo do operador. Cada dispatch é conferido antes de começar; modelo ou esforço divergente é negado.
 
 | Papel | Modelo | Esforço |
 |---|---|---|
@@ -423,7 +423,8 @@ O Pi usa `openai-codex/*` com a assinatura do operador. O orquestrador principal
 | plan-reviewer | Astra | high |
 | discussion-adversary / adversary | Sol | medium |
 | security | Sol | padrão do modelo |
-| compliance / test-author | Terra | high |
+| compliance / test-author `low` ou `medium` | Terra | high |
+| test-author `high` ou `max` legado | Sol | high |
 | test-reviewer | Luna | xhigh |
 | harvester / shipper | Luna | high |
 | executor / sniper de complexidade `low` | Luna | high |

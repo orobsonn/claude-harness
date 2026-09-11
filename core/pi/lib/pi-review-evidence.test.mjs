@@ -450,6 +450,33 @@ test("new review revokes only its old approval, preserves findings and rejects a
   }
 });
 
+test("follow-ups persist through task/final restart without making a role missing", (t) => {
+  const root = fixture(t);
+  const followUp = { description: "Pre-existing DELETE race outside the reviewed change", category: "race", severity: "medium",
+    scope: "src/feature.ts", evidence: "unchanged baseline behavior", fix_hint: "separate follow-up" };
+  for (const phase of ["task", "final"]) for (const blocking of [false, true]) {
+    const role = "harness-adversary";
+    const snapshot = capture(root, { phase, ...(phase === "task" ? { taskId: TASK } : {}) });
+    const args = { projectRoot: root, sessionId: SESSION, featureId: FEATURE, phase, taskId: TASK };
+    const next = binding(role, `${phase}-follow-up-${blocking}`);
+    const report = { issues: blocking ? [{ ...followUp, description: "Current input violates ownership" }] : [], follow_ups: [followUp] };
+    const body = JSON.stringify(report);
+    const parsed = api("parsePiReviewCompletion", { role, result: wrappedResult(body, { agentId: next.agentId }),
+      nativeRecord: nativeRecord(body, { id: next.agentId, type: role }), snapshotStart: snapshot, snapshotEnd: snapshot });
+    assert.equal(parsed.ok, true, parsed.reason);
+    assert.equal(parsed.completion.accepted, !blocking);
+    assert.equal(api("beginPiReviewReceipt", { ...args, role, dispatchCallId: next.dispatchCallId }).ok, true);
+    assert.equal(api("recordPiReviewReceipt", { ...args, completion: parsed.completion, binding: next }).ok, true);
+    const saved = JSON.parse(readFileSync(join(root, ".pi/harness/state", SESSION, "gate-state.json"), "utf8"));
+    const receipt = subject.findPiReviewReceipt(saved, { featureId: FEATURE, taskId: TASK, phase, role });
+    assert.deepEqual(receipt.report, report);
+    const reopened = execFileSync(process.execPath, ["--input-type=module", "-e",
+      `import { missingPiReviewRoles } from ${JSON.stringify(new URL("./pi-review-evidence.mjs", import.meta.url).href)}; process.stdout.write(JSON.stringify(missingPiReviewRoles(${JSON.stringify({ ...args, roles: [role] })})));`,
+    ], { encoding: "utf8" });
+    assert.deepEqual(JSON.parse(reopened), blocking ? [role] : []);
+  }
+});
+
 test("parsePiReviewCompletion rejects any review-input drift after dispatch", (t) => {
   const root = fixture(t);
   const started = capture(root);

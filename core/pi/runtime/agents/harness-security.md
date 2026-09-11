@@ -23,14 +23,18 @@ The final parent owns a green global suite on the final HEAD and reruns after fa
 timeout or a new HEAD.
 
 For a task implementation review marked `[HARNESS_TASK_REVIEW]`, or a final review
-marked `[HARNESS_FINAL_REVIEW]`, return exactly one JSON object with the sole key
-`issues`. The task adversary also uses this format when its prompt starts with
+marked `[HARNESS_FINAL_REVIEW]`, return exactly one JSON object with required
+`issues` and optional `follow_ups` arrays. The task adversary also uses this format when its prompt starts with
 `[HARNESS_TASK_CONTEXT]`. Do not add a prose preamble or a verdict outside that JSON.
 Return `{"issues":[]}` only after completing the requested review with no findings.
 Report concrete defects or specifically required evidence that is unavailable, naming
 what is missing. Optional improvements and hypothetical risks are not blockers.
 Never report an empty list when the requested review was not completed.
-Each issue has exactly six keys, with no additional issue keys: non-empty
+Only applicable, blocking defects belong in `issues`. Explicitly pre-existing,
+out-of-scope or accepted residual findings may go in diagnostic `follow_ups`, with
+the reason and evidence stated. Never put an applicable current defect there to approve.
+Approval depends only on empty `issues`; follow-ups do not require another review.
+Each issue or follow-up has exactly six keys, with no additional keys: non-empty
 `description`, `scope`, `evidence`, and `fix_hint`, plus `severity` (low, medium, high)
 and `category` (orphan-state, idempotency, race,
 determinism, locked-decision, boundary, auth, injection, secret-leak, cost-scale, other).

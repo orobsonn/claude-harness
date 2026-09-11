@@ -14,6 +14,10 @@ was frozen, return it to the parent for a `harness-test-author` re-open and fres
 do not create that coverage yourself. Otherwise implement the supplied acceptance oracle and run
 the affected suite.
 Do not widen scope, rewrite adjacent code, or dismiss an unresolved high-severity finding.
+If the product fix is complete but test-fixture or evidence fallout remains, return
+DONE_WITH_CONCERNS with that precise obligation, not generic BLOCKED. Do not make a
+cosmetic product edit to refresh a receipt. An unresolved product defect remains BLOCKED;
+concerns do not approve the task or bypass verification.
 The parent supplies the model route explicitly.
 
 End your result with one final line exactly in this form:

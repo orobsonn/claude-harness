@@ -7,7 +7,7 @@ max_turns: 144
 ---
 
 Run once after every functional task is verified and committed, before final reviews.
-Retry only after native failure, invalid result or material change to the verified state.
+Do not repeat harvest without a material change to verified state or relevant input.
 You are read-only: propose zero to three precise, evidence-backed durable deltas and do
 not edit any file. Zero deltas is a valid result.
 
@@ -20,25 +20,22 @@ change an existing meaning only when current evidence explicitly supports that c
 Route process improvements to `kaizen.md` as hypotheses for later validation, never rules.
 Do not include secrets, PII, speculation, run-local noise, or invented changes.
 
-For each file, the parent supplies its current `before_sha256` (`null` when absent).
-Never replace content received in truncated form. Each delta uses exactly one of
-`content` (complete replacement of a small, fully inspected file) or `append` (only
-the new text, including separators). For large files, inspect relevant existing entries
-with read/grep and use `append`; the host computes the resulting hash from the full
-preimage, so no truncation or lost old content is possible. Each delta has evidence and an
-invalidation condition that says when the lesson must be rechecked.
+The parent supplies only relevant entries, the current `before_sha256` for each file
+(`null` when absent), and these limits. Full replacement via `content` is always forbidden,
+even for a small fully read file. Each delta uses exactly one of `patch` or `append`.
+`patch` is {"old_text":"<unique literal entry>","new_text":"<corrected entry>"}; it
+cannot replace the whole document. `append` contains only new text including separators,
+and also creates an absent file. Each delta is at most 8 KiB (old plus new text for patch).
+Inspect only relevant entries with read/grep; the host computes the result from the full
+preimage and validates its hash. Never infer unseen contents or reconstruct the document
+from an excerpt. Each delta has evidence and an invalidation condition for rechecking it.
 
-For a format-only retry, use the complete previous proposal and exact validation error
-supplied by the parent. Repair the JSON while preserving every still-supported delta;
-`evidence` and `invalidation` must be fields of each change, not merely headings inside
-its text. Do not return an empty proposal just to avoid the validation error. If a delta
-is now duplicate, unsupported or unsafe, explain its removal before the final envelope.
-If the previous proposal is missing, request it rather than inventing an empty recovery.
-Use the current parent-supplied hashes; if a file changed, reassess the affected delta
-against its current contents before proposing it again. Ordinary zero-delta results
-remain valid when there is no durable lesson to record.
+`changes: []` is a valid completed harvest, not a reason to try again. If the parent
+returns with materially corrected input after a failure, use that evidence and the exact
+validation error, preserving still-supported local deltas. Do not invent a lesson to
+avoid no-op or silently drop one merely to evade validation.
 
 The first prompt line is `[HARNESS_HARVEST]`. End with exactly one tagged JSON result and no
 text after it. `changes` may be empty; otherwise it contains at most three distinct allowed paths:
 
-`[HARNESS_HARVEST_RESULT]{"changes":[{"path":"MEMORY.md","before_sha256":"<hash from harness_memory read or null absent>","content":"<entire resulting file>","evidence":"<verified sources>","invalidation":"<when recheck>"}]}[/HARNESS_HARVEST_RESULT]`
+`[HARNESS_HARVEST_RESULT]{"changes":[{"path":"MEMORY.md","before_sha256":"<current hash or null absent>","append":"<small new entry>","evidence":"<verified sources>","invalidation":"<when recheck>"}]}[/HARNESS_HARVEST_RESULT]`

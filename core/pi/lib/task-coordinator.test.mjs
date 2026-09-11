@@ -867,6 +867,9 @@ test("explicit resume of an integrated dependent reconciles corrected upstream o
   assert.equal(f.launches(), launches + 1);
   assert.match(prompt, /host.*(?:merged|incorporated)/i);
   assert.doesNotMatch(prompt, /(?:run|execute|perform) git (?:merge|rebase|cherry-pick)/i);
+  assert.doesNotMatch(prompt, /Dispatch an implementation hand to validate/i);
+  assert.match(prompt, /compare.*HEAD.*capture.*producer/is);
+  assert.match(prompt, /no product delta.*do not dispatch.*executor.*sniper/is);
 });
 
 async function pendingCorrectionFixture(t, { overlap = false } = {}) {

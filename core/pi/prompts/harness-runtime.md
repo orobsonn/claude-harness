@@ -211,6 +211,22 @@ Antes de olhos de implementação/finais, resolva qualquer `preparation` informa
 de iniciar os revisores. Forneça os SHAs e paths observados dos commits aos olhos;
 fidelidade dos testes continua antes do freeze e não entra nessa restrição.
 
+Antes de redespachar executor/sniper, compare HEAD, captura e recibo produtor vigentes
+com o delta de produto solicitado. Se a implementação já está comprovada e não há
+delta de produto, não chame writer somente para confirmar HEAD limpo ou atualizar um
+recibo: resolva a obrigação afetada de teste/evidência e reutilize a implementação.
+Produto pronto com fallout de teste/fixture/evidência é `DONE_WITH_CONCERNS`, não um
+`BLOCKED` genérico. Isso não dispensa captura inválida nem a proveniência pós-merge
+exigida pelo host; preserve a recuperação test-only legítima e os olhos não afetados.
+Defeito real de produto exige a mão apropriada, commit, capture e revisão focal.
+
+Nos pareceres de implementação/finais, `issues` contém somente defeitos aplicáveis
+e bloqueantes no input atual. `follow_ups` opcional guarda diagnósticos explicitamente
+preexistentes, fora de escopo ou residuais aceitos, com motivo e evidência. Não mova
+defeito aplicável para follow-up para aprovar. Somente `issues` determina a aprovação;
+não convoque outro revisor apenas para limpar ou reformatar follow-ups. Preserve-os
+no recibo e inclua-os no relatório final, sem criar automaticamente issues externas.
+
 Antes da colheita, confirme que todas as tarefas funcionais estão verificadas e commitadas:
 examine status, diff staged/unstaged e arquivos novos. Separe resíduos de runtime dos
 arquivos que fazem parte da entrega; não ignore alteração de produto por estar fora do
@@ -230,21 +246,23 @@ mudar o contrato aprovado, reporte o bloqueio concreto para outra entrega; não 
 o plano durante o fechamento nem declare a entrega concluída com esse achado pendente.
 
 **Colheita durável — antes dos olhos finais.** Com as tarefas funcionais verificadas e
-commitadas, despache o `harness-harvester` somente uma vez por estado verificado; repita
-apenas após falha, resultado inválido ou mudança material. A primeira linha do prompt é
+commitadas, despache o `harness-harvester` somente uma vez por estado verificado. Não
+repita sem mudança material de estado ou do input relevante, inclusive após no-op.
+A primeira linha do prompt é
 `[HARNESS_HARVEST]`. Forneça o diff/commits verificados e, obtidos por `harness_memory
-action="read"`, hashes dos três arquivos duráveis. Para substituição por `content`,
-forneça conteúdo integral não truncado. Em arquivo grande, use delta `append` com apenas
-o acréscimo: o host calcula o resultado a partir do arquivo completo e seu hash. A
+action="read"`, hashes atuais e apenas as entradas relevantes dos arquivos duráveis,
+nunca os documentos inteiros por rotina. Informe o limite de 8 KiB por delta e 24 KiB
+por proposta. Substituição integral por `content` é sempre proibida; use `patch`
+literal {old_text, new_text} de uma entrada única, ou `append` pequeno com apenas
+o acréscimo. Ambos são vinculados ao hash atual; o host calcula o resultado completo. A
 extensão registra o resultado como recibo host-owned. Leia esse recibo com novo
 `harness_memory action="read"`. Zero deltas é válido e não cria tarefa.
 
-Se o resultado for rejeitado por formato, envie ao novo despacho a proposta anterior
-completa e o erro exato de validação; o harvester não herda a conversa anterior.
-Peça a correção do formato preservando os deltas ainda sustentados pelas evidências,
-não uma nova colheita do zero. Se os arquivos mudaram, atualize seus hashes e conteúdo
-relevante antes da correção. Um delta pode ser descartado por duplicação, perda de
-validade ou conteúdo inadequado, com justificativa; não para contornar o erro de formato.
+Se já existe recibo válido para esse estado, reutilize-o, inclusive `changes: []`;
+não chame harvester para confirmar atualidade. Resultado inválido exige diagnosticar
+a proposta e o input, não repetir a mesma colheita. Só retome com entrada materialmente
+corrigida, recorte relevante e hashes atuais, incluindo o erro exato e os deltas ainda
+sustentados. Não descarte um aprendizado válido apenas para esconder erro de formato.
 
 Com delta não vazio, chame `harness_memory` com `action="apply"`. O host aplica a
 proposta validada de forma idempotente, somente nos paths e hashes do recibo. Inspecione
