@@ -97,6 +97,14 @@ enquanto mãos e fidelity continuam sequenciais. Timeout, erro ou retorno incomp
 preservam a tentativa para retomada; não redespache automaticamente implementação já
 pronta sem causa. Integre somente o SHA exato validado pelo coordenador.
 
+Correção de dependência pertence ao host: integre a correção da tarefa dona e use
+`harness_tasks resume` na tentativa dependente quando for necessário revalidá-la,
+inclusive se ela já estiver integrada. O host incorpora o upstream e registra a
+prova antes de lançar o filho. No feedback, descreva o comportamento afetado;
+nunca mande executor/sniper fazer merge, rebase, cherry-pick ou integração global.
+Uma dependência já reconciliada não deve ser apresentada como integração pendente.
+Isso não autoriza reabrir tasks concluídas sem impacto nem repetir olhos não afetados.
+
 Para executar esses olhos em paralelo, emita chamadas `subagent` separadas no mesmo
 lote de ferramentas da resposta, todas em foreground: omita `run_in_background`
 ou use `false`. Paralelismo de revisão não requer background. Se receber

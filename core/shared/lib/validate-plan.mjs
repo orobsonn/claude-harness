@@ -170,6 +170,22 @@ function isAllowlistedLockedTestCommand(command) {
   if (tokens.length === 0) return false;
   const head = tokens[0];
 
+  // Typecheck is an argv contract, not a sandbox for repository scripts.
+  const tscNoEmit = (args) => args[0] === "tsc" && args.includes("--noEmit") &&
+    !args.some((arg, index) => arg === "--noEmit" && args[index + 1] === "false");
+  if (tscNoEmit(tokens)) return true;
+  if (["npm", "pnpm", "yarn", "bun"].includes(head) && tokens[1] === "run" && tokens[2] === "typecheck") return true;
+  if (["pnpm", "yarn", "bun"].includes(head) && tokens[1] === "typecheck") return true;
+  if (head === "npx" && tokens[1] === "--no-install" && tscNoEmit(tokens.slice(2))) return true;
+  if (["pnpm", "yarn"].includes(head) && tokens[1] === "exec" && tscNoEmit(tokens.slice(2))) return true;
+  if (head === "npm" && tokens[1] === "exec") {
+    let index = 2;
+    if (["--no", "--no-install"].includes(tokens[index])) index++;
+    if (tokens[index] === "--" && tscNoEmit(tokens.slice(index + 1))) return true;
+  }
+  if (head === "bun" && tokens[1] === "x" && tokens[2] === "--no-install" && tscNoEmit(tokens.slice(3))) return true;
+  if (head === "bunx" && tokens[1] === "--no-install" && tscNoEmit(tokens.slice(2))) return true;
+
   // node --test <path…>  (also accept path-qualified node binary)
   if (head === "node" || /(?:^|\/)node$/.test(head)) {
     return tokens.some((t) => t === "--test" || t.startsWith("--test="));
@@ -386,7 +402,7 @@ export function validatePlan(plan, opts = {}) {
             // allowlisted runner argv only — metachar denylist alone lets `rm -rf …` through
             if (!isAllowlistedLockedTestCommand(lt.command)) {
               errors.push(
-                `${ltBase}.command must be an allowlisted runner argv form (node --test, vitest/jest/mocha, npm/pnpm/yarn/bun test, npx vitest|jest|mocha)`
+                `${ltBase}.command must be an allowlisted runner or typecheck argv form (node --test, vitest/jest/mocha, npm/pnpm/yarn/bun test or run typecheck, tsc --noEmit via a known binary/exec)`
               );
             }
           }

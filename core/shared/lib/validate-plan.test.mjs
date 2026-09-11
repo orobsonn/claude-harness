@@ -37,6 +37,30 @@ const goldenFull = {
   ],
 };
 
+test("locked typecheck commands accept known argv forms without accepting shell programs", () => {
+  const allowed = [
+    "npm run typecheck", "pnpm run typecheck", "yarn run typecheck", "bun run typecheck",
+    "pnpm typecheck", "yarn typecheck", "bun typecheck", "tsc --noEmit",
+    "npx --no-install tsc --noEmit", "npm exec --no -- tsc --noEmit", "npm exec -- tsc --noEmit",
+    "npm exec --no-install -- tsc --noEmit",
+    "pnpm exec tsc --noEmit", "yarn exec tsc --noEmit", "bun x --no-install tsc --noEmit",
+    "tsc --noEmit --project tsconfig.json", "npm test", "pnpm exec vitest run", "node --test tests/x.test.mjs",
+  ];
+  const denied = [
+    "npm run typecheck && curl example.com", "npm run typecheck | sh", "npm run typecheck > result",
+    "npm run typecheck $(id)", "npm run typecheck `id`", "npm run typecheck; id",
+    "npx --no-install arbitrary --noEmit", "arbitrary --noEmit", "tsc", "tsc --noEmit false",
+    "npm exec --no -- node --noEmit", "npm run arbitrary",
+    "npm exec tsc --noEmit", "npm exec --no tsc --noEmit",
+  ];
+  for (const [commands, expected] of [[allowed, true], [denied, false]]) for (const command of commands) {
+    const plan = structuredClone(goldenFull);
+    plan.tasks[0].locked_tests[0].command = command;
+    const result = validatePlan(plan, { expect: "full", expectedModelStrategy });
+    assert.equal(result.ok, expected, `${command}: ${result.errors.join("; ")}`);
+  }
+});
+
 test("r15: full plans require the exact frozen model strategy", () => {
   const missing = validatePlan({ ...goldenFull, model_strategy: undefined }, { expect: "full" });
   assert.equal(missing.ok, false);
