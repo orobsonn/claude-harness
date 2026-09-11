@@ -63,7 +63,10 @@ a essa mão: trate sua atualização compatível como delta da implementação, 
 test-author um path que o gate já recusou pela mesma autorização.
 Na fidelidade, use o mesmo corte do Claude Code: o teste transcreve todo o
 Given/When/Then aprovado, com fixture correta e RED pelo comportamento ausente?
-Se sim, aprove e avance. Não peça contraprova por PASS, mutações, variantes
+Se sim, aprove e avance. Invariância de sibling é uma constraint de escopo, não um
+catálogo ou matriz automática de locked tests. Escolha o menor RED fiel ao comportamento
+aprovado; não altere produção artificialmente para preservar freeze ou obter recibo.
+Não peça contraprova por PASS, mutações, variantes
 hipotéticas ou uma auditoria de arquitetura.
 
 Entregue ao harness-test-reviewer a tarefa canônica, paths atuais de teste/fixture
@@ -98,8 +101,9 @@ aceite GREEN atual e evidência concreta do erro anterior, sem rollback ou RED
 artificial. Encerre quando o teste e a evidência forem suficientes; esse loop fica
 na tarefa e não sobe ao pai global por rotina.
 
-Depois despache executor, verifique escopo, diff e testes, e registre a captura do
-hand-record atual. Envie aos olhos somente o pacote focal da task: contrato, critérios,
+Depois despache executor, verifique escopo, diff e testes, faça o commit seletivo e
+registre `capture-verified` do hand-record atual com a árvore limpa. Envie aos olhos
+somente o pacote focal da task: contrato, critérios,
 diff, comandos/resultados, freeze e HEAD atuais. Olhos de task não podem exigir
 comandos de `final_review.parent_verification`; a suite global pertence ao pai final.
 Despache adversary, compliance e security
@@ -146,9 +150,13 @@ projeto, não apenas os arquivos nomeados no brief. Preserve segredos e credenci
 Recupere de acordo com o que realmente mudou:
 - Evidência ausente: forneça o diff/resultado acessível. Não abra autoria ou freeze.
 - Produto errado e testes intactos: sniper e verificação do delta; preserve fidelidade.
-- Teste/fixture errado e produto já correto: valide e faça o commit seletivo do
-  produto existente, depois chame capture-verified com a árvore limpa, antes de
-  qualquer test-author corretivo. Esse resultado registra a baseline de produto.
+- Teste/fixture errado e produto já correto: se a task já foi integrada, use o par
+  host-owned de inspeção/integração imediatamente anterior como baseline, inclusive
+  quando ele já registra uma correção test-only. O host revalida esse par e exige
+  que o delta posterior altere somente os paths congelados. Par inválido bloqueia;
+  não escolha um recibo mais antigo. Antes da primeira integração, valide e faça o
+  commit seletivo do produto, depois chame capture-verified com a árvore limpa,
+  antes do primeiro test-author corretivo.
   Test-author corrige só o contrato
   de teste; reviewer verifica a correção com GREEN atual e prova concreta do erro
   anterior. Faça o novo freeze/fidelity e capture-verified do autor. O host reconhece
@@ -191,8 +199,9 @@ retornar, confira o hand-record CURRENT: `capturedVerifiedAt` deve existir e o m
 Um capture antigo não cobre executor ou sniper posterior. A árvore de produto deve
 estar limpa e todo commit informado deve existir.
 
-Após cada executor ou sniper, valide o record recém-produzido e marque
-`capture-verified` para essa task antes de commit/revisores. Um marker antigo, mesmo
+Após cada executor ou sniper, verifique o delta e os testes, faça o commit seletivo
+e marque `capture-verified` para essa task com a árvore limpa antes dos revisores.
+Um marker antigo, mesmo
 com o mesmo SHA, não valida um produtor posterior. Se faltou captura e o commit já
 existe, marque a captura do record atual: o host verifica sua ancestralidade e usa o
 SHA do produtor. Não repita `fidelity`, mãos ou olhos aceitos para corrigir só essa

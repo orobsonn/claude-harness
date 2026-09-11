@@ -332,6 +332,39 @@ function onlyFrozenChanges(root, baseline, head, paths) {
     .every((file) => paths.includes(file));
 }
 
+function integratedRecoveryOrigin(entry, { sessionId, task, events, implementationIndex, producerIndex }) {
+  // A failed immediate pair must not revive an older integration or event capture.
+  const integration = entry.integration_history.at(-1);
+  const result = object(integration) && SHA256.test(integration.result_sha256 ?? "") &&
+    object(entry.result_history)?.[integration.result_sha256];
+  if (!object(result) || hashTaskReceipt(result) !== integration.result_sha256 ||
+      result.session_id !== sessionId || !Array.isArray(result.launches) || !result.launches.length ||
+      result.launches.length > entry.launches.length)
+    return failure("test-only recovery requires the immediately previous matching host integration and inspection");
+  const historicalEntry = { ...entry, result, launches: entry.launches.slice(0, result.launches.length) };
+  const validated = validateIntegration(historicalEntry, integration, {
+    projectRoot: entry.parent_root, sessionId: entry.parent_session_id,
+    featureId: entry.feature_id, taskId: entry.task_id, headSha: integration.integrated_head,
+  });
+  if (!validated.ok) return failure("test-only recovery historical receipt is invalid: " + validated.reason);
+  if (JSON.stringify(frozenPaths(task).sort()) !== JSON.stringify(Object.keys(result.frozen_blobs).sort()))
+    return failure("test-only recovery historical frozen paths must match the canonical task");
+  const hand = result.hand_capture;
+  const historicalProducerIndex = events.findIndex((event) => event.callId === hand.producer_call_id &&
+    event.launchIndex === hand.producer_launch_index && event.tool === "subagent" &&
+    event.args?.subagent_type === hand.agent && taskFromPrompt(event.args?.prompt) === entry.task_id && eventSucceeded(event));
+  const implementation = events[implementationIndex];
+  const origin = hand.agent === "harness-test-author" ? hand.recovery_origin : {
+    producer_call_id: hand.producer_call_id, producer_launch_index: hand.producer_launch_index,
+  };
+  if (historicalProducerIndex < implementationIndex || historicalProducerIndex >= producerIndex ||
+      hand.producer_launch_index >= result.launches.length || origin.producer_call_id !== implementation.callId ||
+      origin.producer_launch_index !== implementation.launchIndex)
+    return failure("test-only recovery historical producer is not bound to the native implementation lineage");
+  return { ok: true, origin: { head_sha: result.child_head, producer_call_id: origin.producer_call_id,
+    producer_launch_index: origin.producer_launch_index } };
+}
+
 /**
  * Inspect a ready delegated task from host-owned files and native event streams.
  * Historic failed/timed-out launches may be repaired by a later successful launch, but every
@@ -428,7 +461,14 @@ export function inspectTaskRun(entry, dependencies = {}) {
           native.events.some((event, index) => index > implementationIndex && index < producerIndex &&
             isWriter(event) && event.args.subagent_type !== "harness-test-author"))
         return failure("test-only recovery requires a prior captured implementation after dependency reconciliation");
-      for (const event of native.events.slice(implementationIndex + 1, firstAuthorIndex)) {
+      if (entry.integration || entry.integration_history !== undefined && !Array.isArray(entry.integration_history))
+        return failure("test-only recovery requires a resumed task with valid integration history");
+      if (entry.integration_history?.length) {
+        const previous = integratedRecoveryOrigin(entry, { sessionId: claim.session_id, task: binding.task,
+          events: native.events, implementationIndex, producerIndex });
+        if (!previous.ok) return previous;
+        recoveryOrigin = previous.origin;
+      } else for (const event of native.events.slice(implementationIndex + 1, firstAuthorIndex)) {
         if (event.tool !== "mark" || event.args?.action !== "capture-verified" || event.args?.task_id !== entry.task_id || !markerSucceeded(event)) continue;
         const firstAuthor = native.events[firstAuthorIndex];
         if (event.launchIndex === firstAuthor.launchIndex && event.endLine >= firstAuthor.line) continue;

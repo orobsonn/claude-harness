@@ -18,6 +18,19 @@ const put = (root, name, value = "asset") => {
 };
 const readAsset = (relative) => fs.readFileSync(new URL(relative, import.meta.url), "utf8");
 
+test("task recovery uses committed host evidence and proportional RED", () => {
+  for (const asset of [readAsset("../prompts/harness-task-runtime.md"),
+    readAsset("../prompts/harness-runtime.md"), readAsset("../skills/harness-task-pipeline/SKILL.md")]) {
+    assert.match(asset, /commit seletivo.*capture-verified.*árvore limpa/is);
+    assert.match(asset, /integração.*imediatamente anterior/is);
+    assert.match(asset, /sibling.*constraint/is);
+    assert.match(asset, /menor RED fiel/);
+    assert.doesNotMatch(asset, /capture-verified.*antes de commit\/revisores/);
+    assert.doesNotMatch(asset, /Depois do executor e da captura atual|recapture a mudança, crie|valide\/capture, commite/);
+    assert.doesNotMatch(asset, /valide e marque `capture-verified` após cada executor\/sniper e faça o/);
+  }
+});
+
 test("task assets preserve LIGHT/FULL eye selection and fresh aggregate review", () => {
   const task = readAsset("../prompts/harness-task-runtime.md");
   const pipeline = readAsset("../skills/harness-task-pipeline/SKILL.md");

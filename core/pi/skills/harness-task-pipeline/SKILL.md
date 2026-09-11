@@ -41,8 +41,17 @@ sessão pai local, usando a pipeline nativa de mãos, fidelidade, freeze, captur
   do contrato aprovado ou observável aprovado concretamente sem cobertura. Após duas
   falhas de fidelidade, escale diagnóstico/autor/contrato; após dois ciclos HIGH de
   sniper/re-gate, escale executor/contrato. Limites nunca aprovam automaticamente.
-- No pai local, valide e marque `capture-verified` após cada executor/sniper e faça o
-  commit seletivo antes dos olhos de implementação. Resolva `preparation` da consulta
+  Invariância de sibling é uma constraint de escopo, não catálogo ou matriz automática
+  de locked tests: escolha o menor RED fiel ao comportamento aprovado.
+- Em recovery test-only de task já integrada, use o par host-owned de inspeção/integração
+  imediatamente anterior, inclusive se ele já veio de outra recovery test-only. O host
+  revalida esse par e exige delta apenas nos paths congelados; falha bloqueia, sem buscar
+  recibo antigo. Antes da primeira integração, use o capture limpo da implementação
+  anterior ao primeiro autor corretivo. Nunca altere produção artificialmente para
+  preservar freeze, fabricar RED ou obter recibo.
+- No pai local, após cada executor/sniper, verifique escopo, diff e testes, faça o
+  commit seletivo e registre `capture-verified` com a árvore limpa antes dos olhos de
+  implementação. Resolva `preparation` da consulta
   `harness_reviews` antes de despachar. Uma captura esquecida pode ser validada depois
   do commit pelo SHA ancestral do produtor atual; ela não exige repetir fidelidade,
   mãos ou revisões ainda aceitas.
