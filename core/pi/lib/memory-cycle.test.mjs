@@ -105,6 +105,67 @@ test("checkCurrentMemoryReviews accepts both exact current receipts with canonic
   assert.deepEqual(checkCurrentMemoryReviews(root, SESSION), { head, featureId: FEATURE });
 });
 
+function reviewedHarvest(root, head) {
+  seed(root, head, { accepted: true, input_digest: currentInput(root).input_digest,
+    report_digest: REPORT_DIGEST, report: EMPTY_REPORT });
+  const snapshot = beginHarvest(root, SESSION);
+  completeHarvest(snapshot, '[HARNESS_HARVEST_RESULT]{"changes":[{"path":"MEMORY.md","before_sha256":null,"append":"Verified after final corrections.\\n","evidence":"final eyes and tests","invalidation":"contract changes"}]}[/HARNESS_HARVEST_RESULT]', "harvester-after-eyes");
+  applyHarvest(root, SESSION);
+  execFileSync("git", ["add", "MEMORY.md"], { cwd: root });
+  execFileSync("git", ["-c", "user.name=Pi Memory", "-c", "user.email=pi-memory@example.test", "commit", "-qm", "docs: harvest reviewed outcome"], { cwd: root });
+  const memoryHead = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
+  assert.notEqual(memoryHead, head);
+  assert.deepEqual(checkMemoryShipperReady(root, SESSION), { head: memoryHead, featureId: FEATURE });
+}
+
+test("harvest waits for final eyes; product changes still require current review", (t) => {
+  const { root, head } = fixture(t);
+  seed(root, head);
+  assert.throws(() => beginHarvest(root, SESSION), /review|evidence/i);
+  reviewedHarvest(root, head);
+  writeFileSync(join(root, "product.txt"), "unreviewed product\n");
+  execFileSync("git", ["add", "product.txt"], { cwd: root });
+  execFileSync("git", ["-c", "user.name=Pi Memory", "-c", "user.email=pi-memory@example.test", "commit", "-qm", "feat: unreviewed change"], { cwd: root });
+  assert.throws(() => checkMemoryShipperReady(root, SESSION), /review|input|harvest/i);
+});
+
+test("post-harvest review status survives restart but never supersedes a newer negative", (t) => {
+  const { root, head } = fixture(t);
+  reviewedHarvest(root, head);
+  const args = { projectRoot: root, sessionId: SESSION, featureId: FEATURE, phase: "final", roles: ["harness-adversary", "harness-compliance"] };
+  assert.deepEqual(missingPiReviewRoles(args), []);
+  const statePath = join(root, ".pi/harness/state", SESSION, "gate-state.json");
+  const state = JSON.parse(readFileSync(statePath, "utf8"));
+  state.final_review_evidence.adversary.accepted = false;
+  writeFileSync(statePath, JSON.stringify(state));
+  assert.deepEqual(missingPiReviewRoles(args), ["harness-adversary"]);
+  assert.throws(() => checkMemoryShipperReady(root, SESSION), /adversary/);
+  const moduleUrl = new URL("./pi-review-evidence.mjs", import.meta.url).href;
+  const restarted = execFileSync(process.execPath, ["--input-type=module", "-e",
+    `import { missingPiReviewRoles } from ${JSON.stringify(moduleUrl)}; process.stdout.write(JSON.stringify(missingPiReviewRoles(${JSON.stringify(args)})));`], { encoding: "utf8" });
+  assert.deepEqual(JSON.parse(restarted), ["harness-adversary"]);
+  const current = currentInput(root);
+  state.final_review_evidence.adversary = receipt("harness-adversary", current.head_sha,
+    { accepted: true, input_digest: current.input_digest, report: EMPTY_REPORT, report_digest: REPORT_DIGEST });
+  writeFileSync(statePath, JSON.stringify(state));
+  assert.deepEqual(missingPiReviewRoles(args), []);
+  assert.equal(checkMemoryShipperReady(root, SESSION).head, current.head_sha);
+});
+
+test("harvest cannot hide spec or executable-mode drift after an authorized append", async (t) => {
+  for (const change of ["spec", "mode"]) await t.test(change, (st) => {
+    const { root, head } = fixture(st);
+    reviewedHarvest(root, head);
+    if (change === "spec") writeFileSync(join(root, ".pi/harness/plans", FEATURE, "spec.md"), "unreviewed contract\n");
+    else {
+      chmodSync(join(root, "MEMORY.md"), 0o755);
+      execFileSync("git", ["add", "MEMORY.md"], { cwd: root });
+      execFileSync("git", ["-c", "user.name=Pi Memory", "-c", "user.email=pi-memory@example.test", "commit", "-qm", "docs: unauthorized mode"], { cwd: root });
+    }
+    assert.throws(() => checkMemoryShipperReady(root, SESSION), /review|input|harvest/);
+  });
+});
+
 test("harvest never hides unproposed durable files when Git reports clean", async (t) => {
   for (const change of ["no-op-mode", "append-hidden-content", "append-hidden-head"]) await t.test(change, (st) => {
     const { root } = fixture(st);
