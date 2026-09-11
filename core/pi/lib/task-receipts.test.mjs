@@ -80,6 +80,18 @@ function replaceEventText(events, toolCallId, text) {
   }).join("\n")}\n`;
 }
 
+function appendImplementationReviews(f, roles = ["harness-adversary", "harness-compliance", "harness-security"]) {
+  for (const role of roles) {
+    const callId = `call-${role}`;
+    const prompt = (role === "harness-adversary" ? "" : "[HARNESS_TASK_REVIEW]\n") +
+      '[HARNESS_TASK_CONTEXT]{"task_id":"' + TASK + '"}[/HARNESS_TASK_CONTEXT]';
+    fs.appendFileSync(f.entry.launches.at(-1).events_path, [
+      event("tool_execution_start", { toolCallId: callId, toolName: "subagent", args: { subagent_type: role, prompt } }),
+      event("tool_execution_end", { toolCallId: callId, toolName: "subagent", result: { details: { status: "completed" } } }), "",
+    ].join("\n"));
+  }
+}
+
 function inspectionFixture({ historicFailure = false, frozenFixture = false } = {}) {
   const { root, base } = repo();
   write(path.join(root, "src", "task.spec.mjs"), "export const expected = 1;\n");
@@ -165,7 +177,7 @@ function inspectionFixture({ historicFailure = false, frozenFixture = false } = 
     job_dir: jobRoot, status: "ready", launches, result: null, integration: null,
   };
   const dependencies = {
-    readTaskRunBindingFn: () => ({ ok: true, grant, task, grantPath }),
+    readTaskRunBindingFn: () => ({ ok: true, grant, task, grantPath, plan: { mode: "full", tasks: [task] } }),
     captureReviewInputFn: () => ({ ok: true, snapshot: { head_sha: head, input_digest: DIGEST } }),
     readTaskContextReturnFn: () => null,
   };
@@ -363,6 +375,7 @@ test("dedicated test reviewer accepts one canonical APPROVE verdict before its e
 
 test("reconciled dependencies keep original audit paths but require fresh reviews and exact host merge proof", () => {
   const f = inspectionFixture();
+  appendImplementationReviews(f);
   // A correction outside the dependent task scope is supplied only by a host merge.
   run(f.root, "git", "checkout", "-b", "parent-correction", f.base);
   write(path.join(f.root, "upstream.mjs"), "export const corrected = true;\n");
@@ -424,7 +437,7 @@ test("reconciled dependencies keep original audit paths but require fresh review
   const bare = `${FEATURE}/${TASK}`;
   state.capture_verified = [`${bare}@${head}`];
   write(f.statePath, state);
-  assert.match(inspectTaskRun(f.entry, f.dependencies).reason, /current accepted adversary task review/);
+  assert.equal(inspectTaskRun(f.entry, f.dependencies).ok, true, "ancestral positives survive the captured reconciliation");
   state.task_adversary_evidence[bare] = review("harness-adversary", head);
   state.task_review_evidence[bare] = { compliance: review("harness-compliance", head), security: review("harness-security", head) };
   write(f.statePath, state);
@@ -524,8 +537,15 @@ test("native task markers bind a real test-only freeze commit through executor c
   ]);
   const removedDispatches = [];
   const binding = { ok: true, grant, task, grantPath };
+  const sessionEntries = [];
+  const nativeCompleted = (id, name, args, text = "", details = { status: "completed" }) => {
+    sessionEntries.push({ type: "message", message: { role: "assistant", content: [{ type: "toolCall", id, name, arguments: args }] } });
+    sessionEntries.push({ type: "message", message: { role: "toolResult", toolCallId: id, toolName: name, details, content: [{ type: "text", text }] } });
+  };
+  const nativePrompt = `[HARNESS_TASK_CONTEXT]{"task_id":"${TASK}"}[/HARNESS_TASK_CONTEXT]`;
   const authority = createPiMarkerAuthority({
     projectRoot: root,
+    readSessionEntries: () => sessionEntries,
     readDispatchRecord: (_projectRoot, { parentSessionId, callId }) => {
       const role = dispatches.get(callId);
       return parentSessionId === CHILD && role
@@ -573,6 +593,9 @@ test("native task markers bind a real test-only freeze commit through executor c
   run(root, "git", "add", "--", "src/task.spec.mjs");
   run(root, "git", "commit", "-m", "freeze tests");
   const freeze = run(root, "git", "rev-parse", "HEAD");
+  nativeCompleted("author", "subagent", { subagent_type: "harness-test-author", prompt: nativePrompt });
+  nativeCompleted("reviewer", "subagent", { subagent_type: "harness-test-reviewer", prompt: nativePrompt }, "Verdict: APPROVE");
+  nativeCompleted("freeze", "bash", { command: "git commit -m freeze" }, `[task ${freeze}] freeze`, {});
   const fidelity = mark("fidelity", "fidelity");
   const authorCapture = mark("capture-verified", "author-capture");
   let state = JSON.parse(fs.readFileSync(statePath, "utf8"));
@@ -587,6 +610,8 @@ test("native task markers bind a real test-only freeze commit through executor c
   hand("harness-executor", "executor", head);
   const executorFinished = mark("hand-finished", "executor-finished");
   const capture = mark("capture-verified", "capture");
+  nativeCompleted("executor", "subagent", { subagent_type: "harness-executor", prompt: nativePrompt });
+  mark("fidelity", "resume-fidelity");
 
   state = JSON.parse(fs.readFileSync(statePath, "utf8"));
   assert.deepEqual(state.capture_verified, [`${bare}@${base}`, `${bare}@${head}`]);
@@ -616,7 +641,7 @@ test("native task markers bind a real test-only freeze commit through executor c
     event("tool_execution_end", { toolCallId: "executor-finished", toolName: "mark", isError: false, result: { details: executorFinished.metadata } }),
     event("tool_execution_start", { toolCallId: "capture", toolName: "mark", args: { action: "capture-verified", task_id: TASK } }),
     event("tool_execution_end", { toolCallId: "capture", toolName: "mark", isError: false, result: { details: capture.metadata } }),
-    event("tool_execution_start", { toolCallId: "call-harness-adversary", toolName: "subagent", args: { subagent_type: "harness-adversary", prompt: `[HARNESS_TASK_REVIEW]\n[HARNESS_TASK_CONTEXT]{"task_id":"${TASK}"}[/HARNESS_TASK_CONTEXT]` } }),
+    event("tool_execution_start", { toolCallId: "call-harness-adversary", toolName: "subagent", args: { subagent_type: "harness-adversary", prompt: `[HARNESS_TASK_CONTEXT]{"task_id":"${TASK}"}[/HARNESS_TASK_CONTEXT]` } }),
     event("tool_execution_end", { toolCallId: "call-harness-adversary", toolName: "subagent", isError: false, result: { details: { status: "completed" } } }),
   ];
   const jobRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pi-task-native-marker-job-"));
@@ -831,20 +856,70 @@ test("inspectTaskRun rejects a review whose input digest is stale on the same HE
   assert.match(inspected.reason, /accepted compliance task review/i);
 });
 
-test("inspectTaskRun requires the baseline adversary without inventing optional implementation reviews", () => {
+test("inspectTaskRun requires initial compliance without inventing adversary or security reviews", () => {
   const fixture = inspectionFixture();
   const state = JSON.parse(fs.readFileSync(fixture.statePath, "utf8"));
-  delete state.task_review_evidence;
+  delete state.task_adversary_evidence;
+  delete state.task_review_evidence[`${FEATURE}/${TASK}`].security;
   write(fixture.statePath, state);
   const inspected = inspectTaskRun(fixture.entry, fixture.dependencies);
   assert.equal(inspected.ok, true, inspected.reason);
-  assert.deepEqual(Object.keys(inspected.result.review_receipts), ["adversary"]);
+  assert.deepEqual(Object.keys(inspected.result.review_receipts), ["compliance"]);
 
-  delete state.task_adversary_evidence;
+  delete state.task_review_evidence;
   write(fixture.statePath, state);
   const missing = inspectTaskRun(fixture.entry, fixture.dependencies);
   assert.equal(missing.ok, false);
-  assert.match(missing.reason, /accepted adversary task review/i);
+  assert.match(missing.reason, /accepted compliance task review/i);
+});
+
+test("LIGHT task inspection accepts no implementation reviews", () => {
+  const f = inspectionFixture();
+  const binding = f.dependencies.readTaskRunBindingFn();
+  f.dependencies.readTaskRunBindingFn = () => ({ ...binding, plan: { ...binding.plan, mode: "light" } });
+  const state = JSON.parse(fs.readFileSync(f.statePath, "utf8"));
+  delete state.task_review_evidence;
+  delete state.task_adversary_evidence;
+  write(f.statePath, state);
+  const result = inspectTaskRun(f.entry, f.dependencies);
+  assert.equal(result.ok, true, result.reason);
+  assert.deepEqual(result.result.review_receipts, {});
+});
+
+test("task inspection preserves ancestral positive reviews but stale negatives still block", () => {
+  const f = inspectionFixture();
+  appendImplementationReviews(f, ["harness-security"]);
+  const state = JSON.parse(fs.readFileSync(f.statePath, "utf8"));
+  const receipt = state.task_review_evidence[`${FEATURE}/${TASK}`].security;
+  receipt.reviewed_head_sha = f.freeze;
+  receipt.input_digest = "e".repeat(64);
+  write(f.statePath, state);
+  assert.equal(inspectTaskRun(f.entry, f.dependencies).ok, true);
+  receipt.accepted = false;
+  write(f.statePath, state);
+  assert.match(inspectTaskRun(f.entry, f.dependencies).reason, /accepted security task review/);
+});
+
+test("an ancestral approval dispatched before executor completion cannot satisfy implementation review", () => {
+  for (const timing of ["before", "in-flight", "after"]) {
+    const f = inspectionFixture();
+    const state = JSON.parse(fs.readFileSync(f.statePath, "utf8"));
+    const receipt = state.task_review_evidence[`${FEATURE}/${TASK}`].security;
+    receipt.reviewed_head_sha = f.freeze;
+    receipt.input_digest = "e".repeat(64);
+    write(f.statePath, state);
+    const file = f.entry.launches.at(-1).events_path;
+    const events = fs.readFileSync(file, "utf8").trimEnd().split("\n");
+    const review = event("tool_execution_start", { toolCallId: receipt.dispatch_call_id, toolName: "subagent", args: {
+      subagent_type: "harness-security", prompt: '[HARNESS_TASK_REVIEW]\n[HARNESS_TASK_CONTEXT]{"task_id":"' + TASK + '"}[/HARNESS_TASK_CONTEXT]',
+    } });
+    const producerStart = events.findIndex((line) => { const row = JSON.parse(line); return row.type === "tool_execution_start" && row.toolCallId === "producer"; });
+    const producerEnd = events.findIndex((line) => { const row = JSON.parse(line); return row.type === "tool_execution_end" && row.toolCallId === "producer"; });
+    events.splice(timing === "before" ? producerStart : timing === "in-flight" ? producerEnd : events.length, 0, review);
+    write(file, events.join("\n") + "\n");
+    const result = inspectTaskRun(f.entry, f.dependencies);
+    assert.equal(result.ok, timing === "after", result.reason ?? timing);
+  }
 });
 
 test("inspectTaskRun cannot ignore a failed optional implementation reviewer from launch history", () => {
@@ -873,6 +948,28 @@ test("inspectTaskRun cannot ignore a failed optional implementation reviewer fro
   const inspected = inspectTaskRun(fixture.entry, fixture.dependencies);
   assert.equal(inspected.ok, false);
   assert.match(inspected.reason, /accepted security task review/i);
+});
+
+test("context-first adversary redispatch supersedes an older approval", () => {
+  const f = inspectionFixture();
+  fs.appendFileSync(f.entry.launches.at(-1).events_path, event("tool_execution_start", {
+    toolCallId: "new-adversary", toolName: "subagent", args: { subagent_type: "harness-adversary",
+      prompt: '[HARNESS_TASK_CONTEXT]{"task_id":"' + TASK + '"}[/HARNESS_TASK_CONTEXT]' },
+  }) + "\n");
+  assert.match(inspectTaskRun(f.entry, f.dependencies).reason, /accepted adversary task review/);
+});
+
+test("repeating fidelity after captured implementation preserves the original freeze chain", () => {
+  const f = inspectionFixture();
+  fs.appendFileSync(f.entry.launches.at(-1).events_path, [
+    event("tool_execution_start", { toolCallId: "impl-commit", toolName: "bash", args: { command: "git commit -m product" } }),
+    event("tool_execution_end", { toolCallId: "impl-commit", toolName: "bash", result: { content: [{ type: "text", text: "[task " + f.head + "] product" }] } }),
+    event("tool_execution_start", { toolCallId: "resumed-fidelity", toolName: "mark", args: { action: "fidelity", task_id: TASK } }),
+    event("tool_execution_end", { toolCallId: "resumed-fidelity", toolName: "mark", result: { details: { ok: true } } }), "",
+  ].join("\n"));
+  const result = inspectTaskRun(f.entry, f.dependencies);
+  assert.equal(result.ok, true, result.reason);
+  assert.equal(result.result.freeze_sha, f.freeze);
 });
 
 test("inspectTaskRun binds a validated child context return to task identity and HEAD", () => {
@@ -1002,11 +1099,11 @@ test("inspectTaskRun rejects a frozen test modified after the event-proven freez
   assert.match(inspected.reason, /frozen file changed/i);
 });
 
-function integratedFixture({ lockedPaths = [] } = {}) {
+function integratedFixture({ lockedPaths = [], mode = "full" } = {}) {
   const { root, base } = repo();
   const planPath = path.join(root, ".pi", "harness", "plans", FEATURE, "execution-plan.json");
   const specPath = path.join(root, ".pi", "harness", "plans", FEATURE, "spec.md");
-  write(planPath, { feature_id: FEATURE, tasks: [{ id: TASK,
+  write(planPath, { feature_id: FEATURE, mode, tasks: [{ id: TASK,
     locked_tests: lockedPaths.map((file, index) => ({ id: "locked-" + index, path: file })) }] });
   write(specPath, "approved task spec\n");
   const planSha = crypto.createHash("sha256").update(fs.readFileSync(planPath)).digest("hex");
@@ -1182,10 +1279,10 @@ test("readIntegratedTaskEvidence rejects a replaced plan approval for the same a
   assert.match(replaced.reason, /current host-owned plan approval/i);
 });
 
-test("readIntegratedTaskEvidence accepts a receipt containing only the baseline adversary review", () => {
+test("readIntegratedTaskEvidence accepts baseline compliance and rejects an omitted required eye", () => {
   const fixture = integratedFixture();
   fixture.registry.tasks[TASK].result.review_receipts = {
-    adversary: fixture.registry.tasks[TASK].result.review_receipts.adversary,
+    compliance: fixture.registry.tasks[TASK].result.review_receipts.compliance,
   };
   fixture.registry.tasks[TASK].integration.result_sha256 = hashTaskReceipt(fixture.registry.tasks[TASK].result);
   write(fixture.registryPath, fixture.registry);
@@ -1197,7 +1294,22 @@ test("readIntegratedTaskEvidence accepts a receipt containing only the baseline 
     headSha: fixture.base,
   });
   assert.equal(evidence.ok, true, evidence.reason);
-  assert.deepEqual(Object.keys(evidence.entry.result.review_receipts), ["adversary"]);
+  assert.deepEqual(Object.keys(evidence.entry.result.review_receipts), ["compliance"]);
+  fixture.registry.tasks[TASK].result.review_receipts = {};
+  fixture.registry.tasks[TASK].integration.result_sha256 = hashTaskReceipt(fixture.registry.tasks[TASK].result);
+  write(fixture.registryPath, fixture.registry);
+  assert.equal(readIntegratedTaskEvidence({ projectRoot: fixture.root, sessionId: PARENT,
+    featureId: FEATURE, taskId: TASK, headSha: fixture.base }).ok, false);
+});
+
+test("LIGHT integration accepts a receipt without implementation eyes", () => {
+  const f = integratedFixture({ mode: "light" });
+  f.entry.result.review_receipts = {};
+  f.entry.integration.result_sha256 = hashTaskReceipt(f.entry.result);
+  write(f.registryPath, f.registry);
+  const result = readIntegratedTaskEvidence({ projectRoot: f.root, sessionId: PARENT, featureId: FEATURE,
+    taskId: TASK, headSha: f.base });
+  assert.equal(result.ok, true, result.reason);
 });
 
 test("readIntegratedTaskEvidence rejects forged freeze or hand ancestry after receipt hashes are recomputed", () => {

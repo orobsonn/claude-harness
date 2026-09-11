@@ -16,6 +16,79 @@ const put = (root, name, value = "asset") => {
   fs.writeFileSync(file, value);
   return file;
 };
+const readAsset = (relative) => fs.readFileSync(new URL(relative, import.meta.url), "utf8");
+
+test("task assets preserve LIGHT/FULL eye selection and fresh aggregate review", () => {
+  const task = readAsset("../prompts/harness-task-runtime.md");
+  const pipeline = readAsset("../skills/harness-task-pipeline/SKILL.md");
+  for (const asset of [task, pipeline]) {
+    assert.match(asset, /Em LIGHT, não (?:despache|rode) olhos de implementação por task/);
+    assert.match(asset, /Em FULL,.*compliance/is);
+    assert.match(asset, /adversary.*somente.*adversarial\.enabled.*true/is);
+    assert.match(asset, /security.*trigger.*aplicabilidade/is);
+    assert.match(asset, /final global.*(?:dual|fresca)/is);
+    assert.match(asset, /triad.*security/is);
+    assert.match(asset, /olho que o produziu e somente\s+(?:outros )?olhos.*obrigação ou trigger explícito.*afetado/is);
+    assert.doesNotMatch(asset, /obrigatório após toda task|Toda task com escrita\s+exige adversary|false.*não (?:o dispensa|remove)|repita todos os\s+olhos já ativados/is);
+  }
+  for (const role of ["planner", "plan-reviewer"]) {
+    const asset = readAsset(`../runtime/agents/harness-${role}.md`);
+    assert.match(asset, /LIGHT has no per-task implementation eyes/);
+    assert.match(asset, /FULL requires\s+compliance/);
+    assert.match(asset, /adversary.*only when `adversarial\.enabled` is true/is);
+    assert.doesNotMatch(asset, /mandatory post-implementation adversary|never disables|does not\s+turn the mandatory/);
+  }
+});
+
+test("task assets preserve fidelity and escalate repeated failures without extra gates", () => {
+  const task = readAsset("../prompts/harness-task-runtime.md");
+  assert.match(task, /um RED\/freeze inicial por task/);
+  assert.match(task, /Findings de produto seguem diretamente ao sniper, preservando a fidelidade/);
+  assert.match(task, /somente quando o próprio teste\/fixture congelado estiver incorreto,\s+o contrato aprovado mudar ou um observável aprovado estiver concretamente sem cobertura/);
+  assert.match(task, /Após duas falhas de fidelidade.*escale/is);
+  assert.match(task, /Após dois ciclos HIGH de sniper\/re-gate.*escale/is);
+  assert.match(task, /Não use stash\/rollback, no-op.*fabricar RED/);
+  assert.doesNotMatch(task, /Defeito real sem cobertura: autor acrescenta|obtenha RED\/sensibilidade e fidelity atuais/);
+  for (const role of ["test-author", "test-reviewer"]) {
+    const asset = readAsset(`../runtime/agents/harness-${role}.md`);
+    assert.match(asset, /one initial RED\/freeze per task/);
+    assert.match(asset, /only for an incorrect frozen\s+test\/fixture, a changed approved\s+contract,? or a concretely uncovered approved observable/);
+    assert.match(asset, /two fidelity failures/);
+    assert.match(asset, /never (?:auto-approve|approve automatically)/);
+  }
+});
+
+test("task eyes cannot import parent final-suite obligations", () => {
+  for (const role of ["adversary", "compliance", "security"]) {
+    const asset = readAsset(`../runtime/agents/harness-${role}.md`);
+    assert.match(asset, /(?:do not|must not) require commands\s+from `final_review\.parent_verification`/);
+    assert.match(asset, /final parent owns a green global suite\s+on the final HEAD|final parent owns a green global suite on the final HEAD/);
+    assert.match(asset, /failure,\s*timeout or a new HEAD/);
+    assert.match(asset, /ancestral task approval may keep an unaffected obligation satisfied without\s+certifying the new HEAD; final global review is fresh/);
+    assert.doesNotMatch(asset, /two HIGH sniper\/re-gate cycles/);
+    assert.match(asset, /Exclude secrets and credentials/);
+  }
+  const pipeline = readAsset("../skills/harness-task-pipeline/SKILL.md");
+  assert.match(pipeline, /suite global precisa estar verde no HEAD final; timeout, falha ou HEAD\s+novo exige rerun pelo pai final/);
+});
+
+test("planning follows the side-effect seam and fidelity checks dependent fixtures locally", () => {
+  for (const role of ["planner", "plan-reviewer"]) {
+    const asset = readAsset(`../runtime/agents/harness-${role}.md`);
+    assert.match(asset, /irreversible or external side effect.*caller\/helper.*last authoritative check\/read and the effect\/write/is);
+    assert.match(asset, /[Ss]cope and ownership.*seam and.*necessary call sites/is);
+    assert.match(asset, /[Nn]amed paths are starting points/);
+    assert.match(asset, /[Ee]xclude\s+secrets and credentials/);
+  }
+  for (const role of ["test-author", "test-reviewer"]) {
+    const asset = readAsset(`../runtime/agents/harness-${role}.md`);
+    assert.match(asset, /TypeScript signature or shared fixture.*authorized path.*all\s+dependent call sites and fixtures in that path/is);
+    assert.match(asset, /[Cc]onsolidate concrete defects.*same pattern.*first/is);
+    assert.match(asset, /expected SUT type error.*acceptable RED/is);
+    assert.match(asset, /fixture-local\s+type error, broken import or\s+zero collection is not/);
+    assert.match(asset, /typecheck evidence.*parent|parent.*typecheck evidence/is);
+  }
+});
 function sourceFixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-runtime-source-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));

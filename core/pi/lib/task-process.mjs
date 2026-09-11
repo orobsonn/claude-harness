@@ -99,7 +99,7 @@ function processCommand(pid) {
   }
 }
 
-function exactWorkerPids(launch) {
+export function exactWorkerPids(launch) {
   if (
     typeof launch?.worker_path !== "string" ||
     typeof launch?.descriptor_path !== "string"

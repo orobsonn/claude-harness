@@ -8,6 +8,7 @@ import { isSafeSessionId, isSafeTaskId, isSafeFeatureId } from "../../shared/lib
 import { parseReviewReportText, validateReviewReport } from "../../shared/lib/review-report-schema.mjs";
 import { validatePlan } from "../../shared/lib/validate-plan.mjs";
 import { parseTaskDispatchIdentity } from "../../opencode/lib/task-dispatch-identity.mjs";
+import { parseTestReviewVerdict } from "../../shared/lib/test-review-verdict.mjs";
 import { piSubagentArgs } from "./pi-adapter-map.mjs";
 import { piDispatchRoute } from "./dispatch-rail.mjs";
 import { readPiSpecApproval } from "./spec-approval.mjs";
@@ -361,10 +362,29 @@ export function readTaskRunBinding(cwd, sessionId) {
   }
 }
 
-/** Prove that task HEAD is the single clean, test-only freeze commit after the test-author hand. */
-export function validateTaskFidelityFreeze({ projectRoot, sessionId, taskId, testAuthorSha }, dependencies = {}) {
+/** Project native session calls, retaining completion order and ignoring prose/aborted dispatches. */
+function fidelityCalls(entries) {
+  if (!Array.isArray(entries)) return [];
+  const calls = [];
+  const pending = new Map();
+  for (const [index, entry] of entries.entries()) {
+    const message = entry?.type === "message" ? entry.message : null;
+    if (message?.role === "assistant" && !["aborted", "error"].includes(message.stopReason)) {
+      for (const block of message.content ?? []) if (block?.type === "toolCall" && typeof block.id === "string") {
+        const call = { id: block.id, name: block.name, args: block.arguments, index, result: null, endIndex: -1 };
+        calls.push(call);
+        pending.set(block.id, call);
+      }
+    } else if (message?.role === "toolResult" && pending.has(message.toolCallId)) {
+      Object.assign(pending.get(message.toolCallId), { result: message, endIndex: index });
+    }
+  }
+  return calls;
+}
+
+/** Prove author -> APPROVE -> test-only freeze, ancestral to HEAD with every locked blob intact. */
+export function validateTaskFidelityFreeze({ projectRoot, sessionId, taskId, sessionEntries }, dependencies = {}) {
   try {
-    if (!HEX_40.test(testAuthorSha ?? "")) return fail("test-author commit identity required before fidelity");
     const binding = (dependencies.readTaskRunBindingFn ?? readTaskRunBinding)(projectRoot, sessionId);
     if (!binding?.ok || binding.grant?.task_id !== taskId) return fail("current task-run binding required before fidelity");
     const frozen = [...new Set((Array.isArray(binding.task?.locked_tests) ? binding.task.locked_tests : []).flatMap((item) =>
@@ -374,21 +394,46 @@ export function validateTaskFidelityFreeze({ projectRoot, sessionId, taskId, tes
     ).filter((item) => typeof item === "string" && item))];
     if (frozen.length === 0) return fail("canonical locked tests required before fidelity");
     const gitFn = dependencies.gitFn ?? ((...args) => git(projectRoot, ...args));
-    const commit = String(gitFn("rev-list", "--parents", "-n", "1", "HEAD")).trim().split(/\s+/);
-    if (commit.length !== 2 || !HEX_40.test(commit[0] ?? "") || commit[1] !== testAuthorSha) {
-      return fail("fidelity requires one linear freeze commit immediately after the test-author hand");
-    }
+    const calls = fidelityCalls(sessionEntries);
+    const forTask = (call) => call.name === "subagent" && parseTaskDispatchIdentity(call.args?.prompt).taskId === taskId;
+    const completed = (call) => call?.result && call.result.isError !== true && call.result.details?.status === "completed";
+    const text = (call) => (call?.result?.content ?? []).filter((block) => block?.type === "text").map((block) => block.text).join("\n");
+    const author = calls.findLast((call) => forTask(call) && call.args.subagent_type === "harness-test-author");
+    if (!completed(author)) return fail("fidelity requires the latest native test-author completion");
+    const nextWriter = calls.find((call) => call.index > author.endIndex && forTask(call) && TASK_WRITING_ROLES.has(call.args.subagent_type));
+    const boundary = nextWriter?.index ?? Infinity;
+    const review = calls.findLast((call) => forTask(call) && call.args.subagent_type === "harness-test-reviewer" &&
+      call.index > author.endIndex && call.index < boundary);
+    if (!completed(review) || parseTestReviewVerdict(text(review))?.verdict !== "APPROVE")
+      return fail("fidelity requires native test-author then test-reviewer APPROVE before freeze");
+    const commitCall = calls.find((call) => call.name === "bash" && call.index > review.endIndex && call.index < boundary &&
+      /\bgit\s+commit\b/.test(call.args?.command ?? "") && call.result && call.result.isError !== true);
+    const abbreviated = text(commitCall).match(/^\[[^\]\n]+\s+([0-9a-f]{7,40})\]/m)?.[1]
+      ?? text(commitCall).match(/\bcommit\s+([0-9a-f]{7,40})\b/i)?.[1];
+    if (!abbreviated) return fail("native test-only freeze commit required after test-reviewer APPROVE");
+    const freezeSha = String(gitFn("rev-parse", `${abbreviated}^{commit}`)).trim();
+    if (!HEX_40.test(freezeSha)) return fail("invalid fidelity freeze commit");
+    gitFn("merge-base", "--is-ancestor", freezeSha, "HEAD");
+    const commit = String(gitFn("rev-list", "--parents", "-n", "1", freezeSha)).trim().split(/\s+/);
+    if (commit.length !== 2) return fail("fidelity freeze must be a linear test-only commit");
     const status = String(gitFn(
       "status", "--porcelain", "--untracked-files=all", "--", ".",
       ":(exclude).pi/harness/", ":(exclude)node_modules/",
     )).trim();
     if (status) return fail("task worktree must be clean before fidelity");
-    const changed = String(gitFn("diff-tree", "--no-commit-id", "--name-only", "-r", "-z", "HEAD"))
+    const changed = String(gitFn("diff-tree", "--no-commit-id", "--name-only", "-r", "-z", freezeSha))
       .split("\0").filter(Boolean);
     if (changed.length === 0 || changed.some((item) => !frozen.includes(item))) {
       return fail("fidelity freeze commit must change only canonical locked tests and fixtures");
     }
-    return { ok: true, freezeSha: commit[0], frozenPaths: frozen };
+    for (const file of frozen) {
+      // Git object identities preserve binary fixtures and detect absent canonical files.
+      if (gitFn("rev-parse", "--verify", `${freezeSha}:${file}`) !== gitFn("rev-parse", "--verify", `HEAD:${file}`))
+        return fail(`frozen file changed after fidelity: ${file}`);
+      if (!/^100[0-7]{3} blob /.test(gitFn("ls-tree", freezeSha, "--", file)))
+        return fail(`canonical frozen file is not a regular blob: ${file}`);
+    }
+    return { ok: true, freezeSha, frozenPaths: frozen };
   } catch (error) {
     return fail(error instanceof Error ? error.message : String(error));
   }

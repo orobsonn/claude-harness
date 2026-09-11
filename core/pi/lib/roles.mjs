@@ -83,6 +83,13 @@ export function requiredPiFinalReviewRoles(plan) {
   return PARALLEL_REVIEW_ROLES.filter((role) => role !== "harness-security" || plan?.final_review?.security === true);
 }
 
+/** Initial implementation eyes; security applicability is expressed by its actual dispatch. */
+export function requiredPiTaskReviewRoles(plan, task) {
+  if (String(plan?.mode).toLowerCase() !== "full") return [];
+  return PARALLEL_REVIEW_ROLES.filter((role) => role === "harness-compliance" ||
+    role === "harness-adversary" && task?.adversarial?.enabled === true);
+}
+
 /** @param {unknown} name */
 export function rolePolicy(name) {
   return typeof name === "string" ? POLICIES[name] ?? null : null;

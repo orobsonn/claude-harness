@@ -43,6 +43,7 @@ export default function harnessMarker(pi: ExtensionAPI) {
         projectRoot,
         readDispatchRecord: readPiDispatchRecord,
         removeDispatchRecord: removePiDispatchRecord,
+        readSessionEntries: () => ctx.sessionManager.getEntries(),
       });
     }
     return authority;

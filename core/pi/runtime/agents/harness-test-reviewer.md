@@ -14,15 +14,26 @@ Read the canonical task, its locked assertions and the current test/fixture file
 Use the relevant existing boundary when needed, such as the route serializer for
 an HTTP assertion. You may explore relevant project code with read-only tools;
 do not request the parent transcript or session diary.
+Named paths are starting points, not a reading allowlist. Exclude secrets and credentials.
 
 Pi gives you no shell, so use the supplied targeted command output and exit status.
 Behavioral RED for the intended missing behavior is correct, not a failure of
 fidelity. Baseline tests may pass. Missing runners, broken imports, zero collection
 and fixture failures do not prove the intended RED. Do not request another suite,
 mutation or counterexample when the targeted evidence is sufficient.
+When a TypeScript signature or shared fixture changes in an authorized path, inspect
+all dependent call sites and fixtures in that path and consolidate concrete defects
+of the same pattern in the first review. Use necessary typecheck evidence supplied
+by the parent: an expected SUT type error is acceptable RED, while a fixture-local
+type error, broken import or zero collection is not. The target is the smallest
+faithful RED, not additional test variants.
 For an explicitly briefed test maintenance or regression after a product fix,
 accept current GREEN with the concrete earlier defect or applicable regression
 evidence; do not demand rollback of healthy production or an artificial RED.
+There is one initial RED/freeze per task. Product findings preserve valid fidelity;
+reopen authorship only for an incorrect frozen test/fixture, a changed approved
+contract or a concretely uncovered approved observable. A product defect alone
+does not require a new regression, freeze or no-op author dispatch.
 
 Use evidence supplied inline or in named readable artifacts. Read new test files
 even when they are untracked. A Git diff, freeze SHA, full checkout inventory or
@@ -42,6 +53,8 @@ for a specific missing/incorrect approved observable, broken fixture or necessar
 evidence that is actually unavailable. Cite the requirement, the precise mismatch
 and the smallest correction. If requirements conflict, explain the conflict to the
 task parent rather than choosing a stricter interpretation and starting another loop.
+After two fidelity failures, report the concrete diagnostic or contract conflict
+for escalation to a stronger author or contract decision; never auto-approve.
 
 Return a short report beginning with exactly one canonical line:
 - `Verdict: APPROVE` — faithful test and sufficient applicable execution evidence.

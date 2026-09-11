@@ -245,15 +245,16 @@ test("a fidelidade segue o contrato aprovado sem burocracia por rodada", () => {
   assert.match(testAuthor, /TRANSCRIPTION.*TEST_INFRA.*PLAN_CONTRADICTION/is);
 });
 
-test("o pai local não redespacha path sem autoridade e roteia reabertura antes do sniper", () => {
+test("o pai local preserva autoridade e só reabre autoria por defeito no contrato de teste", () => {
   const taskPrompt = readFileSync(taskPromptPath, "utf8");
   const testAuthor = readFileSync(testAuthorPath, "utf8");
 
   assert.match(taskPrompt, /test-author só pode alterar paths literais.*locked_tests.*fixture_paths/is);
   assert.match(taskPrompt, /Nunca peça novamente.*path.*gate já recusou/is);
   assert.match(testAuthor, /path present only in `scope_paths` is not\s+test-author authority/is);
-  assert.match(taskPrompt, /teste ou fixture congelado.*reabra primeiro.*harness-test-author.*só\s+depois despache sniper/is);
-  assert.match(taskPrompt, /nunca use um sniper exploratório/i);
+  assert.match(taskPrompt, /Findings de produto seguem diretamente ao sniper, preservando a fidelidade/i);
+  assert.match(taskPrompt, /Reabra.*harness-test-author.*somente.*teste\/fixture congelado estiver incorreto.*contrato aprovado mudar.*observável aprovado estiver concretamente sem cobertura/is);
+  assert.doesNotMatch(taskPrompt, /Defeito real sem cobertura: autor acrescenta|nunca use um sniper exploratório/i);
 });
 
 test("fidelidade resolve bloqueio de evidência sem repetir mão ou comando válido", () => {
@@ -270,8 +271,9 @@ test("olhos pós-implementação revalidam a correção sem rituais de findings"
   const taskPrompt = readFileSync(taskPromptPath, "utf8");
 
   assert.match(taskPrompt, /adversary.*compliance.*security.*lote consolidado/is);
-  assert.match(taskPrompt, /repita todos os\s+olhos já ativados/is);
-  assert.match(taskPrompt, /receipts.*HEAD\/input digest exatos.*repita todos os\s+olhos já ativados/is);
+  assert.match(taskPrompt, /positivo ancestral por task.*manter satisfeita a obrigação.*não certifica o novo HEAD/is);
+  assert.match(taskPrompt, /revalide o olho que o produziu e somente outros olhos\s+cuja obrigação ou trigger explícito foi afetado/is);
+  assert.doesNotMatch(taskPrompt, /repita todos os\s+olhos já ativados/is);
   for (const role of ["adversary", "compliance", "security"]) {
     const instructions = readFileSync(new URL(`../runtime/agents/harness-${role}.md`, import.meta.url), "utf8");
     assert.doesNotMatch(instructions, /stable finding ID|LATE_FINDING|equivalence class|incomplete inspection, or an unresolved concern/i, role);
@@ -342,7 +344,10 @@ test("revisores de implementação podem compartilhar um lote identificado pela 
   assert.match(prompt, /adversary.*pós-implementação.*HARNESS_TASK_CONTEXT/is);
   assert.match(prompt, /HARNESS_TASK_REVIEW/);
   assert.match(prompt, /mesmo lote.*compliance.*security/is);
-  assert.match(prompt, /re-gate.*adversary.*mesmo HEAD/is);
+  assert.match(prompt, /Em LIGHT, não despache olhos de implementação por tarefa/);
+  assert.match(prompt, /Em FULL, despache compliance, adversary somente quando `task.adversarial.enabled` for `true`/);
+  assert.match(prompt, /re-gate.*regate-passed.*olho que produziu o finding.*obrigação ou trigger afetado.*saudáveis no HEAD da correção/is);
+  assert.doesNotMatch(prompt, /Depois de cada mão de implementação, faça a revisão adversarial|após esse adversary concluir saudável/);
 });
 
 test("concorrência limitada preserva barreira, fallback serial e retomada por recibos atuais", () => {
@@ -352,6 +357,10 @@ test("concorrência limitada preserva barreira, fallback serial e retomada por r
   assert.match(prompt, /aguarde todos.*antes.*corrigir.*commit/is);
   assert.match(prompt, /test-fidelity.*continuam seriais/is);
   assert.match(prompt, /somente.*missing/is);
+  for (const source of [prompt, readFileSync(taskPromptPath, "utf8")]) {
+    assert.match(source, /`missing` são obrigações ainda não satisfeitas, inclusive por negativo ou despacho\s+posterior/);
+    assert.doesNotMatch(source, /`missing`[^;\n]*recibo corrente saudável/);
+  }
 });
 
 test("os três revisores retornam relatório estruturado somente em task ou final", () => {
@@ -366,11 +375,13 @@ test("os três revisores retornam relatório estruturado somente em task ou fina
   }
 });
 
-test("achado tardio que pede nova cobertura volta ao autor de testes, não ao sniper", () => {
+test("finding de produto preserva fidelidade e autoria só reabre por contrato de teste", () => {
   const prompt = readFileSync(promptPath, "utf8");
   const sniper = readFileSync(sniperPath, "utf8");
 
-  assert.match(prompt, /achado.*novo.*teste.*congelado.*harness-test-author.*fidelity/is);
+  assert.match(prompt, /finding de produto segue ao sniper sem repetir fidelidade/);
+  assert.match(prompt, /Reabra test-author somente por teste\/fixture congelado incorreto, mudança do contrato aprovado ou observável aprovado concretamente sem cobertura/);
+  assert.doesNotMatch(prompt, /defeito real sem cobertura pede regressão focal/);
   assert.match(sniper, /never edit.*frozen acceptance test/i);
   assert.match(sniper, /return.*parent.*harness-test-author/is);
 });

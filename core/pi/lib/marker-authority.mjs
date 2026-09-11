@@ -34,7 +34,7 @@ import { toOcRole } from "./pi-adapter-map.mjs";
 import { piExecutionPlanPath, piGateStatePath, piHandRecordPath } from "./pi-paths.mjs";
 import { readPiSpecApproval, readPiSpecDraft } from "./spec-approval.mjs";
 import { capturePiReviewInput, hasAcceptedPiReviewEvidence, readPiReviewPlan } from "./pi-review-evidence.mjs";
-import { requiredPiFinalReviewRoles } from "./roles.mjs";
+import { PARALLEL_REVIEW_ROLES, requiredPiFinalReviewRoles } from "./roles.mjs";
 import { readIntegratedTaskEvidence } from "./task-receipts.mjs";
 import { validateTaskFidelityFreeze } from "./task-run.mjs";
 
@@ -182,10 +182,8 @@ export function hasSuccessfulAdversaryCompletion(previous, authorization) {
 }
 
 /** @description Uma revisão de spec não absolve a revisão do diff de uma tarefa. */
-function hasCurrentTaskAdversaryCompletion(previous, authorization, taskId, headSha, captureReviewInput) {
+function hasCurrentTaskReviewCompletion(previous, authorization, taskId, headSha, captureReviewInput) {
   const key = formatFeatureTaskEntry(authorization.featureId, taskId);
-  const evidence = previous?.task_adversary_evidence?.[key];
-  if (!evidence || typeof evidence !== "object" || Array.isArray(evidence)) return false;
   const captured = captureReviewInput({
     projectRoot: authorization.projectRoot,
     sessionId: authorization.sessionId,
@@ -193,9 +191,13 @@ function hasCurrentTaskAdversaryCompletion(previous, authorization, taskId, head
     phase: "task",
     taskId,
   });
-  return captured?.ok === true && hasAcceptedPiReviewEvidence(evidence, captured.snapshot) &&
+  return PARALLEL_REVIEW_ROLES.some((role) => {
+    const evidence = role === "harness-adversary" ? previous?.task_adversary_evidence?.[key] :
+      previous?.task_review_evidence?.[key]?.[role.replace("harness-", "")];
+    if (!evidence || typeof evidence !== "object" || Array.isArray(evidence)) return false;
+    return captured?.ok === true && hasAcceptedPiReviewEvidence(evidence, captured.snapshot) &&
     evidence.written_by === "host-subagent-completion" &&
-    evidence.role === "harness-adversary" &&
+    evidence.role === role &&
     evidence.parent_session_id === authorization.sessionId &&
     evidence.feature_id === authorization.featureId &&
     evidence.task_id === taskId &&
@@ -203,6 +205,7 @@ function hasCurrentTaskAdversaryCompletion(previous, authorization, taskId, head
     typeof evidence.child_session_id === "string" && evidence.child_session_id.length > 0 &&
     typeof evidence.agent_id === "string" && evidence.agent_id.length > 0 &&
     evidence.status === "completed" && evidence.reviewed_head_sha === headSha;
+  });
 }
 
 /** A revisão final não é inferida de uma revisão de tarefa ou da spec: ela precisa cobrir o diff agregado atual. */
@@ -282,6 +285,7 @@ function atomicJsonWrite(file, value) {
  *   captureReviewInputFn?: typeof capturePiReviewInput,
  *   readIntegratedTaskEvidenceFn?: typeof readIntegratedTaskEvidence,
  *   validateTaskFidelityFreezeFn?: typeof validateTaskFidelityFreeze,
+ *   readSessionEntries?: () => unknown[],
  *   now?: () => string,
  * }} options
  * @returns {{
@@ -407,37 +411,34 @@ export function createPiMarkerAuthority(options = {}) {
         const taskId = args.task_id;
         const bare = formatFeatureTaskEntry(authorization.featureId, taskId);
         if (action === "fidelity") {
-          const recordPath = piHandRecordPath(
-            { projectRoot, sessionId: authorization.sessionId, featureId: authorization.featureId },
-            taskId,
-          );
-          let record;
-          try { record = recordPath.ok ? JSON.parse(fs.readFileSync(recordPath.path, "utf8")) : null; } catch { record = null; }
-          if (!isCaptureEligibleHandRecord(record) || toOcRole(record?.agent) !== "test-author") {
-            return { ok: false, reason: "fidelity requires a capture-eligible test-author hand-record" };
-          }
-          const fidelityIdentity = validateExactProducer(record, authorization, taskId);
-          if (!fidelityIdentity.ok) return fidelityIdentity;
-          const sha = typeof record.freezeCommitSha === "string" && record.freezeCommitSha ? record.freezeCommitSha : "";
-          if (!sha || isAncestorSha(projectRoot, sha) !== true) {
-            return { ok: false, reason: "fidelity requires the test-author record SHA to be ancestral to HEAD" };
-          }
-          let fidelitySha = sha;
           if (previous.task_run) {
-            if (!Array.isArray(previous.hand_finished) || !previous.hand_finished.includes(bare)) {
-              return { ok: false, reason: "fidelity requires host-owned test-author completion" };
-            }
-            const frozen = validateFidelityFreeze({
-              projectRoot,
-              sessionId: authorization.sessionId,
-              taskId,
-              testAuthorSha: sha,
-            });
+            const frozen = validateFidelityFreeze({ projectRoot, sessionId: authorization.sessionId, taskId,
+              sessionEntries: options.readSessionEntries?.() });
             if (!frozen?.ok) return { ok: false, reason: frozen?.reason ?? "task fidelity freeze validation failed" };
-            fidelitySha = frozen.freezeSha;
+            payload = formatFeatureTaskEntry(authorization.featureId, taskId, frozen.freezeSha);
+            const previouslyStamped = Array.isArray(previous.fidelity_pass) && previous.fidelity_pass.includes(payload);
+            if (!previouslyStamped && resolveHeadSha(projectRoot) !== frozen.freezeSha)
+              return { ok: false, reason: "first fidelity stamp requires the reviewed freeze commit at HEAD" };
+            patch = { fidelity_pass: [payload] };
+          } else {
+            const recordPath = piHandRecordPath(
+              { projectRoot, sessionId: authorization.sessionId, featureId: authorization.featureId },
+              taskId,
+            );
+            let record;
+            try { record = recordPath.ok ? JSON.parse(fs.readFileSync(recordPath.path, "utf8")) : null; } catch { record = null; }
+            if (!isCaptureEligibleHandRecord(record) || toOcRole(record?.agent) !== "test-author") {
+              return { ok: false, reason: "fidelity requires a capture-eligible test-author hand-record" };
+            }
+            const fidelityIdentity = validateExactProducer(record, authorization, taskId);
+            if (!fidelityIdentity.ok) return fidelityIdentity;
+            const sha = typeof record.freezeCommitSha === "string" && record.freezeCommitSha ? record.freezeCommitSha : "";
+            if (!sha || isAncestorSha(projectRoot, sha) !== true) {
+              return { ok: false, reason: "fidelity requires the test-author record SHA to be ancestral to HEAD" };
+            }
+            payload = formatFeatureTaskEntry(authorization.featureId, taskId, sha);
+            patch = { fidelity_pass: [payload] };
           }
-          payload = formatFeatureTaskEntry(authorization.featureId, taskId, fidelitySha);
-          patch = { fidelity_pass: [payload] };
         } else if (action === "regate-pending") {
           patch = { regate_pending: [bare] };
         } else if (action === "hand-finished") {
@@ -463,8 +464,8 @@ export function createPiMarkerAuthority(options = {}) {
           if (!Array.isArray(previous.regate_pending) || !previous.regate_pending.includes(bare)) {
             return { ok: false, reason: "regate_pending does not contain feature/task" };
           }
-          if (!hasCurrentTaskAdversaryCompletion(previous, { ...authorization, projectRoot }, taskId, sha, captureReviewInput)) {
-            return { ok: false, reason: "regate-passed requires current host-owned task adversary evidence" };
+          if (!hasCurrentTaskReviewCompletion(previous, { ...authorization, projectRoot }, taskId, sha, captureReviewInput)) {
+            return { ok: false, reason: "regate-passed requires current host-owned task review evidence" };
           }
           payload = formatFeatureTaskEntry(authorization.featureId, taskId, sha);
           patch = { regate_passed: [payload] };

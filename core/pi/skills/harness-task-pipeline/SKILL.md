@@ -36,16 +36,29 @@ sessão pai local, usando a pipeline nativa de mãos, fidelidade, freeze, captur
 - A revisão de testes pertence ao `harness-test-reviewer`, somente leitura e exclusivo
   de fidelidade. Cada pai local resolve suas correções até haver evidência suficiente
   e aprovação; compliance fica nas revisões de implementação e final.
+  Há um RED/freeze inicial por task. Findings de produto vão ao sniper e preservam
+  fidelidade; reabra autoria somente por teste/fixture congelado incorreto, mudança
+  do contrato aprovado ou observável aprovado concretamente sem cobertura. Após duas
+  falhas de fidelidade, escale diagnóstico/autor/contrato; após dois ciclos HIGH de
+  sniper/re-gate, escale executor/contrato. Limites nunca aprovam automaticamente.
 - No pai local, valide e marque `capture-verified` após cada executor/sniper e faça o
   commit seletivo antes dos olhos de implementação. Resolva `preparation` da consulta
   `harness_reviews` antes de despachar. Uma captura esquecida pode ser validada depois
   do commit pelo SHA ancestral do produtor atual; ela não exige repetir fidelidade,
   mãos ou revisões ainda aceitas.
-- Após integrar todas as tarefas, execute no HEAD agregado os testes, harvest, revisores finais
-  aplicáveis e shipping normais. Revisões de implementação e finais podem usar até três olhos em
-  paralelo; autoria, mãos, fidelidade e revisão da spec continuam exclusivas. Toda task com escrita
-  exige adversary pós-implementação e re-gate; `adversarial.enabled` apenas acrescenta foco de risco
-  e `false` não remove essa revisão baseline.
+- Em LIGHT, não rode olhos de implementação por task. Em FULL, rode compliance,
+  adversary somente com `task.adversarial.enabled: true`, e security por trigger ou
+  aplicabilidade existente. Após finding, revalide o olho que o produziu e somente
+  outros olhos cuja obrigação ou trigger explícito foi afetado. Um positivo ancestral
+  por task pode manter satisfeita a obrigação de um olho não afetado, mas não certifica
+  o novo HEAD; a revisão final global é fresca e permanece dual
+  (compliance/adversary), ou triad quando security se aplica, inclusive em LIGHT.
+- Olhos de task recebem evidência focal e não podem exigir comandos de
+  `final_review.parent_verification`. Após integrar todas as tarefas, o pai final
+  executa no HEAD agregado os testes, harvest, revisores finais aplicáveis e shipping
+  normais. A suite global precisa estar verde no HEAD final; timeout, falha ou HEAD
+  novo exige rerun pelo pai final. Revisões de implementação e finais podem usar até
+  três olhos em paralelo; autoria, mãos, fidelidade e revisão da spec continuam exclusivas.
 - Dentro de uma sessão Orca (`ORCA_WORKTREE_ID` presente), use obrigatoriamente o backend Orca
   ligado à worktree pai. Cada task nasce no `base_sha` global com parent visual explícito e roda a
   TUI nativa do Pi em terminal próprio, com conclusão automática após o trabalho. O host registra

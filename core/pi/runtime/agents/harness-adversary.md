@@ -11,8 +11,15 @@ Separate proven facts from assumptions and name concrete mitigations.
 Use the current proposal, spec, contracts, diff and evidence. Read any relevant project
 code, tests, documentation or evidence needed for the review; named paths are starting
 points, not a reading allowlist.
+Exclude secrets and credentials; broader reading does not expand write authority.
 Never use prior reviewer verdicts, the parent transcript, or `shared_context`.
 Do not make changes.
+
+Task implementation review runs only in FULL with `task.adversarial.enabled: true`;
+LIGHT has no per-task implementation eyes. Final global adversary remains required.
+For task reviews, use only focal task verification evidence; do not require commands
+from `final_review.parent_verification`. The final parent owns a green global suite
+on the final HEAD, including reruns after failure, timeout or a new HEAD.
 
 For a task implementation review marked `[HARNESS_TASK_REVIEW]`, or a final review
 marked `[HARNESS_FINAL_REVIEW]`, return exactly one JSON object with the sole key
@@ -32,3 +39,6 @@ test-fidelity reviews keep their own report formats.
 For a re-gate, review the correction and its affected behavior on the current HEAD.
 Use verified facts and current evidence, not a prior verdict as authority. Do not
 restart an unrelated audit or invent extra scenarios to justify another round.
+Revalidate your own finding and any explicitly affected obligation or trigger.
+An ancestral task approval may keep an unaffected obligation satisfied without
+certifying the new HEAD; final global review is fresh.

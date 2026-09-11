@@ -13,7 +13,9 @@ import { parseTestReviewVerdict } from "../../shared/lib/test-review-verdict.mjs
 import { validateOcCaptureEligibleHandRecord } from "../../opencode/lib/hand-records.mjs";
 import { hashTaskReceipt, unsupportedTaskScopePattern } from "./task-contract.mjs";
 import { readTaskContextReturn, validateTaskContextReturn } from "./task-context.mjs";
-import { capturePiReviewInput, currentPiReviewIssues, findPiReviewReceipt, hasAcceptedPiReviewEvidence, readPiReviewPlan } from "./pi-review-evidence.mjs";
+import { capturePiReviewInput, currentPiReviewIssues, findPiReviewReceipt, isSatisfiedPiTaskReviewReceipt, readPiReviewPlan } from "./pi-review-evidence.mjs";
+import { PARALLEL_REVIEW_ROLES, requiredPiTaskReviewRoles } from "./roles.mjs";
+import { classifyPiReviewDispatch } from "./pi-review-concurrency.mjs";
 import { piGateStatePath, piHandRecordPath } from "./pi-paths.mjs";
 import { readTaskProcess } from "./task-process.mjs";
 import { capturePlanReviewInput, readTaskRunBinding } from "./task-run.mjs";
@@ -22,9 +24,7 @@ import { taskScopeBase, taskReconciliationDigest } from "./task-reconciliation.m
 
 const COMMIT_SHA = /^[0-9a-f]{40}$/;
 const SHA256 = /^[0-9a-f]{64}$/;
-const REQUIRED_TASK_REVIEW_ROLES = Object.freeze(["harness-adversary"]);
-const OPTIONAL_TASK_REVIEW_ROLES = Object.freeze(["harness-compliance", "harness-security"]);
-const TASK_REVIEW_ROLES = Object.freeze([...REQUIRED_TASK_REVIEW_ROLES, ...OPTIONAL_TASK_REVIEW_ROLES]);
+const TASK_REVIEW_ROLES = PARALLEL_REVIEW_ROLES;
 const MAX_JSON_BYTES = 4 * 1024 * 1024;
 const MAX_EVENTS_BYTES = 128 * 1024 * 1024;
 
@@ -195,18 +195,25 @@ function commitFromEvent(event, worktree) {
 }
 
 function observedImplementationReviewRoles(events, taskId) {
-  return new Set(events.filter((event) => event.tool === "subagent" &&
-    OPTIONAL_TASK_REVIEW_ROLES.includes(event.args?.subagent_type) &&
-    typeof event.args?.prompt === "string" && event.args.prompt.startsWith("[HARNESS_TASK_REVIEW]") &&
-    taskFromPrompt(event.args.prompt) === taskId).map((event) => event.args.subagent_type));
+  const firstImplementation = events.find((event) => event.tool === "subagent" &&
+    ["harness-executor", "harness-sniper"].includes(event.args?.subagent_type) &&
+    taskFromPrompt(event.args?.prompt) === taskId && eventSucceeded(event));
+  return new Map(events.filter((event) => {
+    const review = event.tool === "subagent" && classifyPiReviewDispatch(event.args?.subagent_type, event.args?.prompt);
+    return review?.phase === "task" && review.taskId === taskId;
+  }).map((event) => [event.args.subagent_type, { callId: event.callId,
+    afterImplementation: Boolean(firstImplementation && (event.launchIndex > firstImplementation.launchIndex ||
+      event.launchIndex === firstImplementation.launchIndex && event.line > firstImplementation.endLine)),
+  }]));
 }
 
-function validateCurrentReviews({ state, events, projectRoot, sessionId, featureId, taskId, head, captureReviewInputFn }) {
+function validateCurrentReviews({ state, events, plan, task, projectRoot, sessionId, featureId, taskId, head, captureReviewInputFn }) {
   const captured = captureReviewInputFn({ projectRoot, sessionId, featureId, phase: "task", taskId });
   if (!captured?.ok || captured.snapshot?.head_sha !== head) return failure("current canonical task review snapshot required");
   const receipts = {};
   const observed = observedImplementationReviewRoles(events, taskId);
-  const roles = TASK_REVIEW_ROLES.filter((role) => REQUIRED_TASK_REVIEW_ROLES.includes(role) || observed.has(role) ||
+  const baseline = requiredPiTaskReviewRoles(plan, task);
+  const roles = TASK_REVIEW_ROLES.filter((role) => baseline.includes(role) || observed.has(role) ||
     findPiReviewReceipt(state, { featureId, taskId, role, phase: "task" }) !== null);
   const findings = roles.flatMap((role) => {
     const receipt = findPiReviewReceipt(state, { featureId, taskId, role, phase: "task" });
@@ -215,12 +222,9 @@ function validateCurrentReviews({ state, events, projectRoot, sessionId, feature
   });
   for (const role of roles) {
     const receipt = findPiReviewReceipt(state, { featureId, taskId, role, phase: "task" });
-    if (!hasAcceptedPiReviewEvidence(receipt, captured.snapshot) || receipt.written_by !== "host-subagent-completion" ||
-        receipt.parent_session_id !== sessionId || receipt.feature_id !== featureId || receipt.task_id !== taskId ||
-        receipt.role !== role || receipt.status !== "completed" || receipt.reviewed_head_sha !== head ||
-        typeof receipt.dispatch_call_id !== "string" || !receipt.dispatch_call_id ||
-        typeof receipt.child_session_id !== "string" || !receipt.child_session_id ||
-        typeof receipt.agent_id !== "string" || !receipt.agent_id) {
+    if (!isSatisfiedPiTaskReviewReceipt(receipt, { projectRoot, sessionId, featureId, taskId, role,
+      snapshot: captured.snapshot, dispatchCallId: observed.get(role)?.callId,
+      reviewAfterImplementation: observed.get(role)?.afterImplementation })) {
       return failure("current accepted " + role.replace("harness-", "") + " task review required", { review_findings: findings });
     }
     receipts[role.replace("harness-", "")] = {
@@ -229,6 +233,7 @@ function validateCurrentReviews({ state, events, projectRoot, sessionId, feature
       child_session_id: receipt.child_session_id,
       input_digest: receipt.input_digest,
       report_digest: receipt.report_digest,
+      reviewed_head_sha: receipt.reviewed_head_sha,
     };
   }
   return { ok: true, inputDigest: captured.snapshot.input_digest, receipts };
@@ -294,16 +299,16 @@ function validateFidelity({ events, task, taskId, worktree, head, reviewRole }) 
   const fidelityMarkers = events.filter((event) => event.tool === "mark" && event.args?.action === "fidelity" && event.args?.task_id === taskId && markerSucceeded(event));
   const marker = fidelityMarkers.at(-1);
   if (!marker) return failure("latest successful native fidelity marker required");
-  const markerIndex = events.indexOf(marker);
-  if (events.some((event, index) => index > markerIndex && event.tool === "subagent" && event.args?.subagent_type === "harness-test-author" && eventSucceeded(event))) {
+  const latestMarkerIndex = events.indexOf(marker);
+  if (events.some((event, index) => index > latestMarkerIndex && event.tool === "subagent" && event.args?.subagent_type === "harness-test-author" && eventSucceeded(event))) {
     return failure("latest test-author work has no subsequent fidelity marker");
   }
-  const before = events.filter((event) => event.launchIndex < marker.launchIndex || event.launchIndex === marker.launchIndex && event.line < marker.line);
-  const commitEvent = before.findLast((event) => commitFromEvent(event, worktree));
+  const authorIndex = events.findLastIndex((event, index) => index < latestMarkerIndex && event.tool === "subagent" && event.args?.subagent_type === "harness-test-author" && eventSucceeded(event));
+  const commitEvent = events.find((event, index) => index > authorIndex && index < latestMarkerIndex && commitFromEvent(event, worktree));
   const commitSha = commitFromEvent(commitEvent, worktree);
   if (!commitSha || !ancestor(worktree, commitSha, head)) return failure("fidelity freeze commit is missing or not ancestral to task HEAD");
   const commitIndex = events.indexOf(commitEvent);
-  const authorIndex = events.findLastIndex((event, index) => index < commitIndex && event.tool === "subagent" && event.args?.subagent_type === "harness-test-author" && eventSucceeded(event));
+  const markerIndex = events.findIndex((event, index) => index > commitIndex && fidelityMarkers.includes(event));
   const reviewIndex = events.findLastIndex((event, index) => index > authorIndex && index < commitIndex && event.tool === "subagent" &&
     event.args?.subagent_type === reviewRole && (reviewRole === "harness-compliance" ? eventSucceeded(event) : true));
   if (authorIndex < 0 || reviewIndex < 0 || !fidelityReviewApproved(events[reviewIndex], reviewRole))
@@ -467,7 +472,7 @@ export function inspectTaskRun(entry, dependencies = {}) {
       const checkedContext = validateTaskContextReturn(contextReturn, { sessionId: claim.session_id, taskId: entry.task_id, headSha: head });
       if (!checkedContext.ok) return failure("task context return is invalid: " + checkedContext.reason);
     }
-    const reviews = validateCurrentReviews({ state, events: native.events, projectRoot: worktree, sessionId: claim.session_id, featureId: entry.feature_id, taskId: entry.task_id, head, captureReviewInputFn: dependencies.captureReviewInputFn ?? capturePiReviewInput });
+    const reviews = validateCurrentReviews({ state, events: native.events, plan: binding.plan, task: binding.task, projectRoot: worktree, sessionId: claim.session_id, featureId: entry.feature_id, taskId: entry.task_id, head, captureReviewInputFn: dependencies.captureReviewInputFn ?? capturePiReviewInput });
     const diagnostics = { ...(contextReturn === null ? {} : { context_return: contextReturn }), review_findings: reviews.details?.review_findings ?? [] };
     if (regatePending.some((pending) => !matchesAbsolution(pending, state.regate_passed, (sha) => ancestor(worktree, sha, head)))) return failure("task re-gate is still pending", diagnostics);
     const regatePassed = (Array.isArray(state.regate_passed) ? state.regate_passed : []).filter((passed) =>
@@ -551,7 +556,7 @@ function validateIntegration(entry, integration, { projectRoot, sessionId, featu
     COMMIT_SHA.test(result.hand_capture.freeze_sha ?? "") && typeof result.hand_capture.captured_verified_at === "string" &&
     result.hand_capture.captured_verified_at && result.hand_capture.capture_marker === `${featureId}/${taskId}@${result.hand_capture.freeze_sha}`;
   const reviewReceiptKeys = Object.keys(object(result.review_receipts) ?? {});
-  const reviewReceiptsValid = object(result.review_receipts) && reviewReceiptKeys.includes("adversary") &&
+  const reviewReceiptsValid = object(result.review_receipts) &&
     reviewReceiptKeys.every((key) => TASK_REVIEW_ROLES.some((role) => role === `harness-${key}`)) &&
     reviewReceiptKeys.every((key) => {
     const role = `harness-${key}`;
@@ -559,7 +564,9 @@ function validateIntegration(entry, integration, { projectRoot, sessionId, featu
     return object(receipt) && typeof receipt.agent_id === "string" && receipt.agent_id &&
       typeof receipt.dispatch_call_id === "string" && receipt.dispatch_call_id &&
       typeof receipt.child_session_id === "string" && receipt.child_session_id &&
-      receipt.input_digest === result.review_input_digest && SHA256.test(receipt.report_digest ?? "");
+      SHA256.test(receipt.input_digest ?? "") && SHA256.test(receipt.report_digest ?? "") &&
+      (receipt.reviewed_head_sha === undefined ? receipt.input_digest === result.review_input_digest :
+        COMMIT_SHA.test(receipt.reviewed_head_sha) && ancestor(projectRoot, receipt.reviewed_head_sha, result.child_head));
   });
   const regateValid = object(result.regate) && Array.isArray(result.regate.pending) && Array.isArray(result.regate.passed);
   const contextReturnValid = result.context_return === null ||
@@ -586,10 +593,12 @@ function validateIntegration(entry, integration, { projectRoot, sessionId, featu
     (entry.runtime === undefined || validRuntime(entry.runtime) && validRuntime(result.runtime) && result.runtime.sha256 === entry.runtime.sha256 &&
       result.runtime.launcher_path === entry.runtime.launcher_path);
   if (!resultValid) return failure("task inspection receipt is incomplete or does not match the registry entry");
+  const canonical = readPiReviewPlan({ projectRoot, featureId, expectedSha256: result.plan_sha256 });
+  const canonicalTask = canonical.ok && canonical.plan.tasks.find((item) => item.id === taskId);
+  if (!canonicalTask || requiredPiTaskReviewRoles(canonical.plan, canonicalTask).some((role) =>
+    !reviewReceiptKeys.includes(role.replace("harness-", "")))) return failure("task receipt lacks a canonical required task review");
   if (recovery) {
-    const canonical = readPiReviewPlan({ projectRoot, featureId, expectedSha256: result.plan_sha256 });
-    const task = canonical.ok && canonical.plan.tasks.find((item) => item.id === taskId);
-    if (!task || JSON.stringify(frozenPaths(task).sort()) !== JSON.stringify(Object.keys(result.frozen_blobs).sort()))
+    if (JSON.stringify(frozenPaths(canonicalTask).sort()) !== JSON.stringify(Object.keys(result.frozen_blobs).sort()))
       return failure("test-only recovery frozen paths must match the canonical task");
   }
   const exact = integration.version === 1 && integration.written_by === "host-task-integration" &&

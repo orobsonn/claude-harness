@@ -253,13 +253,21 @@ test("an admitted child keeps its historical dependency receipt after an ancesto
   assert.equal(admitTaskRun(f.grantPath, { cwd: f.root, sessionId: "fresh-task-parent" }).ok, false, "fresh admission cannot reuse stale A receipt");
 });
 
-test("task fidelity accepts only one clean test-only freeze commit after the test-author hand", (t) => {
+test("task fidelity accepts a reviewed ancestral freeze across executor sniper and resume", (t) => {
   const prepare = () => {
     const f = fixture(t);
     const testAuthorSha = f.git("rev-parse", "HEAD");
     const admitted = admitTaskRun(f.grantPath, { cwd: f.root, sessionId: `task-parent-${crypto.randomUUID()}` });
     assert.equal(admitted.ok, true, admitted.reason);
-    return { ...f, sessionId: admitted.sessionId, testAuthorSha };
+    const entries = [];
+    const completed = (id, name, args, text = "", details = { status: "completed" }) => {
+      entries.push({ type: "message", message: { role: "assistant", content: [{ type: "toolCall", id, name, arguments: args }] } });
+      entries.push({ type: "message", message: { role: "toolResult", toolCallId: id, toolName: name, isError: false, details, content: [{ type: "text", text }] } });
+    };
+    const prompt = '[HARNESS_TASK_CONTEXT]{"task_id":"task-one"}[/HARNESS_TASK_CONTEXT]';
+    completed("author", "subagent", { subagent_type: "harness-test-author", prompt });
+    completed("reviewer", "subagent", { subagent_type: "harness-test-reviewer", prompt }, "Verdict: APPROVE");
+    return { ...f, sessionId: admitted.sessionId, testAuthorSha, entries, completed, prompt };
   };
   const writeLockedTest = (f) => {
     fs.mkdirSync(path.join(f.root, "test"), { recursive: true });
@@ -270,21 +278,41 @@ test("task fidelity accepts only one clean test-only freeze commit after the tes
     sessionId: f.sessionId,
     taskId: "task-one",
     testAuthorSha: f.testAuthorSha,
+    sessionEntries: f.entries,
   });
+  const freezeEvent = (f) => f.completed("freeze", "bash", { command: "git commit -m freeze" }, `[task ${f.git("rev-parse", "HEAD")}] freeze`, {});
 
   const valid = prepare();
   writeLockedTest(valid);
   valid.git("add", "--", "test/task-one.test.ts");
   valid.git("-c", "user.name=Harness", "-c", "user.email=harness@example.invalid", "commit", "-q", "-m", "freeze tests");
+  freezeEvent(valid);
+  const freezeSha = valid.git("rev-parse", "HEAD");
   assert.deepEqual(check(valid), {
     ok: true,
-    freezeSha: valid.git("rev-parse", "HEAD"),
+    freezeSha,
     frozenPaths: ["test/task-one.test.ts"],
   });
+  for (const role of ["harness-executor", "harness-sniper"]) {
+    valid.completed(role, "subagent", { subagent_type: role, prompt: valid.prompt });
+    fs.mkdirSync(path.join(valid.root, "src"), { recursive: true });
+    fs.writeFileSync(path.join(valid.root, "src", "task-one.ts"), `export const hand = ${JSON.stringify(role)};\n`);
+    valid.git("add", "src/task-one.ts");
+    valid.git("-c", "user.name=Harness", "-c", "user.email=harness@example.invalid", "commit", "-qm", role);
+  }
+  assert.equal(check(valid).freezeSha, freezeSha, "resume must preserve initial freeze after captured product fixes");
+  const unreviewed = [...valid.entries];
+  valid.completed("later-author", "subagent", { subagent_type: "harness-test-author", prompt: valid.prompt });
+  assert.equal(check(valid).ok, false, "a later test author invalidates earlier fidelity");
+  valid.entries = unreviewed;
+  fs.writeFileSync(path.join(valid.root, "test/task-one.test.ts"), "// mutated test\n");
+  valid.git("add", "test/task-one.test.ts");
+  valid.git("-c", "user.name=Harness", "-c", "user.email=harness@example.invalid", "commit", "-qm", "mutate test");
+  assert.match(check(valid).reason, /frozen file changed/);
 
   const beforeCommit = prepare();
   writeLockedTest(beforeCommit);
-  assert.match(check(beforeCommit).reason, /one linear freeze commit/);
+  assert.equal(check(beforeCommit).ok, false);
 
   const mixed = prepare();
   writeLockedTest(mixed);
@@ -292,12 +320,14 @@ test("task fidelity accepts only one clean test-only freeze commit after the tes
   fs.writeFileSync(path.join(mixed.root, "src", "task-one.ts"), "export const value = 1;\n");
   mixed.git("add", "--", "test/task-one.test.ts", "src/task-one.ts");
   mixed.git("-c", "user.name=Harness", "-c", "user.email=harness@example.invalid", "commit", "-q", "-m", "mixed freeze");
+  freezeEvent(mixed);
   assert.match(check(mixed).reason, /only canonical locked tests/);
 
   const dirty = prepare();
   writeLockedTest(dirty);
   dirty.git("add", "--", "test/task-one.test.ts");
   dirty.git("-c", "user.name=Harness", "-c", "user.email=harness@example.invalid", "commit", "-q", "-m", "freeze tests");
+  freezeEvent(dirty);
   fs.mkdirSync(path.join(dirty.root, "src"), { recursive: true });
   fs.writeFileSync(path.join(dirty.root, "src", "task-one.ts"), "export const dirty = true;\n");
   assert.match(check(dirty).reason, /worktree must be clean/);

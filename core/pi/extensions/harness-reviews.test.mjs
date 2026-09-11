@@ -40,14 +40,14 @@ function fixture(t) {
   git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-qm", "fixture");
   const statePath = join(root, ".pi/harness/state", SESSION, "gate-state.json");
   mkdirSync(join(root, ".pi/harness/state", SESSION), { recursive: true });
-  writeFileSync(statePath, JSON.stringify({ session_id: SESSION, feature_id: FEATURE }));
+  writeFileSync(statePath, JSON.stringify({ session_id: SESSION, feature_id: FEATURE, mode: "LIGHT" }));
   const entries = [];
   const ctx = { cwd: root, sessionManager: { getSessionId: () => SESSION, getHeader: () => ({}), getEntries: () => entries } };
   return { root, statePath, ctx, entries };
 }
 
 function reviewDispatch(role, taskId = TASK, { id = `call-${role}`, stopReason = "toolUse", taskReview = true } = {}) {
-  const prompt = `${taskReview ? "[HARNESS_TASK_REVIEW]\n" : ""}[HARNESS_TASK_CONTEXT]{"task_id":"${taskId}"}[/HARNESS_TASK_CONTEXT]\nReview implementation.`;
+  const prompt = `${taskReview && role !== "harness-adversary" ? "[HARNESS_TASK_REVIEW]\n" : ""}[HARNESS_TASK_CONTEXT]{"task_id":"${taskId}"}[/HARNESS_TASK_CONTEXT]\nReview implementation.`;
   return {
     type: "message",
     id: `entry-${id}`,
@@ -75,21 +75,32 @@ function record(root, role, phase) {
   assert.equal(written.ok, true, written.reason);
 }
 
-test("task status separates its required adversary from available opt-in reviewers", async (t) => {
+function implementationCompleted(f) {
+  f.entries.push(reviewDispatch("harness-executor", TASK, { id: "implementation", taskReview: false }), {
+    type: "message", message: { role: "toolResult", toolCallId: "implementation", toolName: "subagent",
+      details: { status: "completed" }, isError: false, content: [] },
+  });
+}
+
+test("LIGHT task status has no implementation eyes and ancestral positives never become missing", async (t) => {
   const f = fixture(t);
   const args = { phase: "task", task_id: TASK };
   const pristine = await (await tool()).execute("status-pristine", args, undefined, undefined, f.ctx);
   assert.deepEqual(pristine.details, {
-    required: ["harness-adversary"],
+    required: [],
     available: [...PARALLEL_REVIEW_ROLES],
     accepted: [],
-    missing: ["harness-adversary"],
+    missing: [],
   });
-  for (const role of PARALLEL_REVIEW_ROLES.slice(0, 2)) record(f.root, role, "task");
+  implementationCompleted(f);
+  for (const role of PARALLEL_REVIEW_ROLES.slice(0, 2)) {
+    f.entries.push(reviewDispatch(role));
+    record(f.root, role, "task");
+  }
   const before = readFileSync(f.statePath, "utf8");
   const first = await (await tool()).execute("status-one", args, undefined, undefined, f.ctx);
   assert.deepEqual(first.details, {
-    required: PARALLEL_REVIEW_ROLES.slice(0, 2),
+    required: [],
     available: [...PARALLEL_REVIEW_ROLES],
     accepted: PARALLEL_REVIEW_ROLES.slice(0, 2),
     missing: [],
@@ -98,16 +109,16 @@ test("task status separates its required adversary from available opt-in reviewe
   const resumed = await (await tool()).execute("status-two", args, undefined, undefined, f.ctx);
   assert.deepEqual(resumed.details, first.details);
   writeFileSync(join(f.root, "feature.txt"), "behavior B");
+  execFileSync("git", ["add", "feature.txt"], { cwd: f.root });
+  execFileSync("git", ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-qm", "product fix"], { cwd: f.root });
   const stale = await (await tool()).execute("status-three", args, undefined, undefined, f.ctx);
   const { preparation, ...staleReviews } = stale.details;
-  assert.equal(preparation.ok, false);
-  assert.deepEqual(preparation.paths, ["feature.txt"]);
-  assert.match(preparation.reason, /commit/i);
+  assert.equal(preparation, undefined);
   assert.deepEqual(staleReviews, {
-    required: PARALLEL_REVIEW_ROLES.slice(0, 2),
+    required: [],
     available: [...PARALLEL_REVIEW_ROLES],
-    accepted: [],
-    missing: PARALLEL_REVIEW_ROLES.slice(0, 2),
+    accepted: PARALLEL_REVIEW_ROLES.slice(0, 2),
+    missing: [],
   });
   assert.equal(readFileSync(f.statePath, "utf8"), before, "status cannot mutate or fabricate receipts");
 });
@@ -125,10 +136,10 @@ test("task status keeps a dispatched optional reviewer required after REVISE or 
   );
   const result = await (await tool()).execute("status", { phase: "task", task_id: TASK }, undefined, undefined, f.ctx);
   assert.deepEqual(result.details, {
-    required: [...PARALLEL_REVIEW_ROLES],
+    required: ["harness-compliance", "harness-security"],
     available: [...PARALLEL_REVIEW_ROLES],
     accepted: [],
-    missing: [...PARALLEL_REVIEW_ROLES],
+    missing: ["harness-compliance", "harness-security"],
   });
 });
 
@@ -142,10 +153,10 @@ test("task status ignores prose, test-fidelity, foreign-task and non-dispatched 
   );
   const result = await (await tool()).execute("status", { phase: "task", task_id: TASK }, undefined, undefined, f.ctx);
   assert.deepEqual(result.details, {
-    required: ["harness-adversary"],
+    required: [],
     available: [...PARALLEL_REVIEW_ROLES],
     accepted: [],
-    missing: ["harness-adversary"],
+    missing: [],
   });
 });
 
@@ -155,6 +166,37 @@ test("task status fails closed when durable session entries are unavailable", as
   const result = await (await tool()).execute("status", { phase: "task", task_id: TASK }, undefined, undefined, ctx);
   assert.equal(result.isError, true);
   assert.match(result.details.reason, /durable parent session entries/i);
+});
+
+test("FULL task schedules initial compliance and only an enabled adversary", async (t) => {
+  const f = fixture(t);
+  const planPath = join(f.root, ".pi/harness/plans", FEATURE, "execution-plan.json");
+  for (const enabled of [false, true]) {
+    const plan = JSON.parse(readFileSync(planPath, "utf8"));
+    writeFileSync(planPath, JSON.stringify({ ...plan, mode: "full", tasks: [{ id: TASK, adversarial: { enabled } }] }));
+    const result = await (await tool()).execute("full", { phase: "task", task_id: TASK }, undefined, undefined, f.ctx);
+    assert.deepEqual(result.details.missing, enabled ? ["harness-adversary", "harness-compliance"] : ["harness-compliance"]);
+  }
+});
+
+test("a new optional dispatch revokes its older successful receipt", async (t) => {
+  const f = fixture(t);
+  record(f.root, "harness-security", "task");
+  f.entries.push(reviewDispatch("harness-security", TASK, { id: "security-second" }));
+  const result = await (await tool()).execute("pending", { phase: "task", task_id: TASK }, undefined, undefined, f.ctx);
+  assert.deepEqual(result.details.missing, ["harness-security"]);
+});
+
+test("status rejects ancestral review dispatched before implementation completion", async (t) => {
+  const f = fixture(t);
+  f.entries.push(reviewDispatch("harness-security"));
+  record(f.root, "harness-security", "task");
+  implementationCompleted(f);
+  writeFileSync(join(f.root, "feature.txt"), "implementation");
+  execFileSync("git", ["add", "feature.txt"], { cwd: f.root });
+  execFileSync("git", ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-qm", "implementation"], { cwd: f.root });
+  const result = await (await tool()).execute("status", { phase: "task", task_id: TASK }, undefined, undefined, f.ctx);
+  assert.deepEqual(result.details.missing, ["harness-security"]);
 });
 
 test("final status resumes all reviewers required by the canonical plan", async (t) => {

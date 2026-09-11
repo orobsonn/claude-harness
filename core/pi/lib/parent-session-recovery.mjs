@@ -13,6 +13,7 @@ import path from "node:path";
 import { isSafeFeatureId, isSafeSessionId } from "../../shared/lib/feature-id.mjs";
 import { validatePlan } from "../../shared/lib/validate-plan.mjs";
 import { compareAndDeleteLock } from "./pi-gate-state.mjs";
+import { readTaskProcess, taskGroupMembers, exactWorkerPids } from "./task-process.mjs";
 import { piExecutionPlanPath, piGateStatePath, piSpecPath, piStateRoot } from "./pi-paths.mjs";
 import { readTaskRunBinding } from "./task-run.mjs";
 import { hasSuccessfulAdversaryCompletion } from "./marker-authority.mjs";
@@ -414,14 +415,17 @@ function parentProcessIdentity(pid) {
 /**
  * Exclusividade operacional por worktree. Não é fronteira de segurança; serializa pais honestos
  * fresh/resume sobre a mesma implementação. sessionId é apenas diagnóstico, nunca a chave.
- * Resume exato pode substituir um lock órfão somente quando a identidade de início prova que o
- * processo antigo morreu ou o PID foi reutilizado. Fresh/foreign/live/indeterminado negam.
+ * Um lock órfão no mesmo host só é substituído após provar término do owner e dos workers
+ * registrados. Identidade indeterminada e terminal sem observação negam; idade nunca autoriza.
  */
 export function acquirePiParentWorktreeLock(projectRoot, {
   sessionId = null,
   pid = process.pid,
   hostname = localHostname(),
   processIdentityFn = parentProcessIdentity,
+  readTaskProcessFn = readTaskProcess,
+  groupMembersFn = taskGroupMembers,
+  workerPidsFn = exactWorkerPids,
 } = {}) {
   if ((sessionId !== null && !isSafeSessionId(sessionId)) || !Number.isInteger(pid) || pid <= 0 ||
     typeof hostname !== "string" || !hostname) {
@@ -483,12 +487,43 @@ export function acquirePiParentWorktreeLock(projectRoot, {
     if (!validWorktreeLockOwner(existing)) {
       return { ok: false, reason: "parent worktree lock invalid" };
     }
-    const exactResume = sessionId !== null && existing.session_id === sessionId && existing.hostname === hostname;
-    const priorIdentity = exactResume ? processIdentityFn(existing.pid) : null;
-    const priorEnded = exactResume && (priorIdentity === null || (
-      priorIdentity && (/^[ZX]/.test(priorIdentity.state ?? "") || priorIdentity.start !== existing.process_start_ticks)
+    const sameHost = existing.hostname === hostname;
+    const priorIdentity = sameHost ? processIdentityFn(existing.pid) : null;
+    const priorEnded = sameHost && (priorIdentity === null || (
+      priorIdentity?.pid === existing.pid && typeof priorIdentity.start === "string" && priorIdentity.start.length > 0 &&
+      typeof priorIdentity.state === "string" && (/^[ZX]/.test(priorIdentity.state) || priorIdentity.start !== existing.process_start_ticks)
     ));
     if (!priorEnded) return { ok: false, reason: "parent orchestrator already active for worktree" };
+    // An old supervisor can exit while its detached task group keeps working. Observe all
+    // registered launches under the guard, even those with a saved successful result.
+    try {
+      for (const session of fs.readdirSync(stateRoot.path, { withFileTypes: true })) {
+        if (existing.session_id !== null && session.name !== existing.session_id) continue;
+        if (session.isSymbolicLink()) throw new Error("state symlink");
+        if (!session.isDirectory() || !isSafeSessionId(session.name)) continue;
+        const runsDir = path.join(stateRoot.path, session.name, "task-runs");
+        if (!fs.existsSync(runsDir)) continue;
+        if (existing.session_id === null) throw new Error("legacy owner cannot be bound to registered tasks");
+        if (fs.lstatSync(runsDir).isSymbolicLink()) throw new Error("registry symlink");
+        const registryPath = path.join(runsDir, "index.json");
+        if (!fs.existsSync(registryPath) || fs.lstatSync(registryPath).isSymbolicLink()) throw new Error("registry unavailable");
+        const registry = JSON.parse(fs.readFileSync(registryPath, "utf8"));
+        if (!registry.tasks || typeof registry.tasks !== "object" || Array.isArray(registry.tasks)) throw new Error("invalid registry");
+        for (const task of Object.values(registry.tasks)) {
+          if (!Array.isArray(task?.launches)) throw new Error("invalid launches");
+          for (const launch of task.launches) {
+            // readTaskProcess keeps an unregistered/unknown Orca terminal non-terminal.
+            const observed = readTaskProcessFn(launch);
+            if (observed?.running !== false || observed.terminal !== true) throw new Error("worker alive or unknown");
+            if (Number.isInteger(observed.record?.process_group) && groupMembersFn(observed.record.process_group).length !== 0)
+              throw new Error("group alive");
+            if (workerPidsFn(launch).length !== 0) throw new Error("worker alive");
+          }
+        }
+      }
+    } catch {
+      return { ok: false, reason: "parent worktree recovery requires all registered workers, groups and terminals to have ended" };
+    }
     if (!compareAndDeleteLock(lockPath, existing.token)) return { ok: false, reason: "parent worktree lock changed during resume" };
     try {
       fs.writeFileSync(lockPath, JSON.stringify(owner), { encoding: "utf8", mode: 0o600, flag: "wx" });

@@ -51,6 +51,11 @@ When a planned change alters a signature, call, or emitted literal, use targeted
 `grep` on relevant code and tests for its uses/imports/old literal. Inspect existing
 tests that depend on that contract and put the minimum needed update in its owning task
 before freeze; do not turn this into a repository-wide audit.
+For an irreversible or external side effect, follow the caller/helper through the
+last authoritative check/read and the effect/write. Scope and ownership must cover
+that seam and the necessary call sites; no exhaustive call graph or matrix is required.
+Named paths are starting points for relevant reads, not a reading allowlist. Exclude
+secrets and credentials; broader reading never expands the plan's write authority.
 
 ## Revision mode
 
@@ -131,10 +136,10 @@ read locally, reply `BLOCKED` with the missing fact and do not write a plan.
 6. Set `adversarial.enabled` only for auth, payment, data integrity,
    concurrency, external input reaching storage/execution, or secrets. Its
    `focus` must then be non-empty. Use `{ "enabled": false, "focus": [] }`
-   for ordinary tasks. In the Pi task pipeline this flag adds task-specific
-   risk focus; it never disables the mandatory post-implementation adversary
-   and re-gate. Do not enable it on a low-risk task merely to represent that
-   baseline review.
+   for ordinary tasks. LIGHT has no per-task implementation eyes. FULL requires
+   compliance; task adversary runs only when `adversarial.enabled` is true, and
+   security only for an existing trigger or applicability. Final global review
+   remains compliance/adversary plus security when applicable, including LIGHT.
 7. Copy the exact `model_strategy` snapshot below. It is the vendored Pi
    routing contract for this runtime, not a missing product requirement; never
    ask the operator for it or invent routes. Keep `final_review.compliance` and

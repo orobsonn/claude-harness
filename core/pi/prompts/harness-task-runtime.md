@@ -26,18 +26,21 @@ Não consulte o routing do Codex em `model-routing.mjs` nesta lane, incluindo
 Test-author, executor e sniper são sequenciais. Execute também as chamadas de `bash`
 em série nesta lane, inclusive git, testes e typecheck: cada chamada usa um lease
 exclusivo. Aguarde o resultado de uma verificação antes de iniciar a próxima.
-`harness-adversary` é obrigatório após toda task com escrita; seu recibo aprovado libera
-o re-gate. `harness-compliance` e `harness-security` de
-implementação são escolhidos por aplicabilidade. Esses olhos podem rodar em paralelo
+Em LIGHT, não despache olhos de implementação por task. Em FULL, despache
+`harness-compliance`; `harness-adversary` somente quando
+`contract.task.adversarial.enabled` for `true`; `harness-security` somente por
+trigger ou aplicabilidade de segurança existente. Esses olhos podem rodar em paralelo
 sobre o mesmo HEAD e conteúdo imutáveis, conforme o runtime nativo; não force
-`maxConcurrent=1` nem os serialize artificialmente. `contract.task.adversarial.enabled`
-acrescenta foco de risco ao adversary obrigatório; `false` não o dispensa.
+`maxConcurrent=1` nem os serialize artificialmente. `adversarial.enabled: false`
+dispensa o adversary da task. O final global permanece dual (compliance/adversary)
+ou triad quando security se aplica, inclusive em LIGHT.
 Para paralelizar os olhos aplicáveis, emita chamadas `subagent` separadas no mesmo
 lote da resposta, em foreground, omitindo `run_in_background` ou usando `false`.
 Se houver `background-disabled`, corrija esse campo e repita os pendentes no lote
 foreground; a rejeição não exige serializar. Aguarde todos antes de corrigir arquivos.
 
-Em tentativa nova, não presuma fidelity, freeze, captura, revisão ou re-gate. Siga esta
+Há um RED/freeze inicial por task; retomar ou corrigir produto preserva a fidelidade
+válida. Em uma task nova, não presuma fidelity, freeze, captura, revisão ou re-gate. Siga esta
 ordem exata: (1) test-author; (2) RED comportamental executável; (3) aprovação de
 fidelidade pelo harness-test-reviewer; (4) freeze commit seletivo contendo somente testes/fixtures travados;
 (5) marker `fidelity`; (6) marker `capture-verified`; (7) executor. O pai faz o freeze
@@ -49,6 +52,10 @@ completo com `git log -1 --format=%H`; nunca complete por inferência um SHA abr
 Falha de infraestrutura não é RED. Execute as verificações de tipagem/sintaxe
 exigidas pelo contrato ou necessárias para esclarecer um erro concreto; o reviewer
 de fidelidade não acrescenta uma etapa de typecheck por rotina.
+Quando uma assinatura TypeScript ou fixture compartilhada mudar em path autorizado,
+confira todos os call sites e fixtures dependentes naquele path. Forneça o typecheck
+necessário ao reviewer: erro de tipo esperado no SUT pode ser RED; erro local de
+fixture, import quebrado ou zero testes coletados não podem.
 O test-author só pode alterar paths literais presentes em `locked_tests[].path` ou
 `locked_tests[].fixture_paths`. Um teste que aparece apenas em `scope_paths` não pertence
 a essa mão: trate sua atualização compatível como delta da implementação, ou reporte
@@ -82,6 +89,8 @@ Inclua o contrato da fronteira exercitada quando necessário, como rota/serializ
 HTTP e exemplo de fixture existente. Preserve testes não afetados. Sugestão de
 revisor não muda o contrato; não envie o mesmo brief repetidamente esperando outro
 resultado. Resolva a divergência concreta, sem aprovar por limite de rodadas.
+Após duas falhas de fidelidade, escale o diagnóstico, a força do autor ou a decisão
+de contrato; não repita o mesmo brief nem aprove automaticamente.
 Peça `Verdict: APPROVE|REVISE|BLOCKED` em prosa, não JSON de implementação.
 
 Testes baseline podem passar. Para manutenção de teste após produto já corrigido,
@@ -90,36 +99,45 @@ artificial. Encerre quando o teste e a evidência forem suficientes; esse loop f
 na tarefa e não sobe ao pai global por rotina.
 
 Depois despache executor, verifique escopo, diff e testes, e registre a captura do
-hand-record atual. Envie aos olhos o pacote completo: contrato, critérios, diff,
-comandos/resultados, freeze e HEAD atuais. Despache adversary, compliance e security
+hand-record atual. Envie aos olhos somente o pacote focal da task: contrato, critérios,
+diff, comandos/resultados, freeze e HEAD atuais. Olhos de task não podem exigir
+comandos de `final_review.parent_verification`; a suite global pertence ao pai final.
+Despache adversary, compliance e security
 aplicáveis como um lote consolidado sobre esse HEAD imutável e aguarde todos antes de
 corrigir. Consolide os defeitos concretos e peça a menor correção necessária.
-Como os receipts são ligados ao HEAD/input digest exatos, depois de mudança de
-conteúdo repita todos os olhos já ativados, mas peça a revisão da correção e de seus
-impactos, sem reiniciar uma auditoria não relacionada. Não imponha taxonomia de
+Os receipts identificam o HEAD/input digest revisado. Um positivo ancestral por task
+pode manter satisfeita a obrigação daquele olho após correção de outro finding,
+mas não certifica o novo HEAD. Após um finding, revalide o olho que o produziu e somente outros olhos
+cuja obrigação ou trigger explícito foi afetado pela correção. Revise a correção e
+seus impactos, sem reiniciar uma auditoria não relacionada. O final global é fresco.
+Não imponha taxonomia de
 findings, busca de variantes ou novos requisitos. Refute achados incorretos com
 evidência; achados reais seguem para sniper e os markers/re-gate nativos.
-Antes de despachar uma correção pós-implementação, classifique os paths que o finding
-precisa alterar. Se qualquer teste ou fixture congelado precisar mudar, reabra primeiro o
-mesmo task pelo `harness-test-author`, obtenha RED/sensibilidade e fidelity atuais, e só
-depois despache sniper para o delta de produto. Envie direto ao sniper somente findings
-resolvíveis sem alterar teste/fixture congelado; nunca use um sniper exploratório para ele
-descobrir que a cobertura precisa ser reaberta.
+Findings de produto seguem diretamente ao sniper, preservando a fidelidade. Reabra
+`harness-test-author` somente quando o próprio teste/fixture congelado estiver incorreto,
+o contrato aprovado mudar ou um observável aprovado estiver concretamente sem cobertura.
+Nesse caso, corrija primeiro o teste/fixture autorizado e revalide a fidelidade; depois
+despache sniper se ainda houver defeito de produto. Uma sugestão de regressão adicional
+não basta para reabrir autoria. Após dois ciclos HIGH de sniper/re-gate sem resolver o
+defeito, escale ao executor ou à decisão de contrato; nunca aprove automaticamente.
 Se a correção exigir um arquivo pertencente a outra tarefa, retorne `BLOCKED` com
 finding, arquivo, task proprietária, HEAD e evidência. O pai global deve corrigir
 essa proprietária por `harness_tasks resume` e depois retomar a dependente; não
 repita olhos ou re-gate enquanto o mesmo defeito segue aberto. Depois de um merge
 de recuperação feito pelo host, obtenha captura de uma mão e revisões atuais no
-novo HEAD, preservando a fidelidade válida e sem edições cosméticas para gerar recibo.
+novo HEAD conforme as obrigações afetadas, preservando a fidelidade válida e sem
+edições cosméticas para gerar recibo.
 No brief de implementação, entregue o contrato, diff e arquivos atuais, com os
 comandos/resultados necessários acessíveis. O host verifica a linhagem de captura
 e freeze; não peça aos olhos reconstruir histórico de SHAs ou provar paths intactos.
 Nomeie arquivos novos relevantes para leitura. Falta de formatação ou metadados
 não é um defeito; peça evidência adicional somente para uma dúvida concreta.
 Consulte `harness_reviews` na fase `task`: `required` são obrigações já ativadas e
-`missing` precisam de recibo corrente saudável; `available` são opções, não uma ordem
-para despachar todas. Decida compliance e security por aplicabilidade antes do primeiro
-despacho. Depois de ativar um olho opcional, erro, aborto ou REVISE exige repeti-lo.
+`missing` são obrigações ainda não satisfeitas, inclusive por negativo ou despacho
+posterior; `available` são opções, não uma ordem
+para despachar todas. Aplique o modo LIGHT/FULL e os triggers explícitos antes do primeiro
+despacho. Erro, aborto ou REVISE exige revalidar o olho responsável; não cria obrigação
+de repetir todos os outros olhos.
 Não envie `context_handoff` nem o diário local aos revisores. Forneça o contrato,
 fatos verificados e evidência atual; nunca use um veredito anterior como autoridade.
 Os olhos podem ler qualquer código, teste, documentação ou evidência relevante do
@@ -135,11 +153,12 @@ Recupere de acordo com o que realmente mudou:
   de teste; reviewer verifica a correção com GREEN atual e prova concreta do erro
   anterior. Faça o novo freeze/fidelity e capture-verified do autor. O host reconhece
   essa linhagem sem outro executor quando o produto permaneceu idêntico. Refaça os
-  olhos de implementação no HEAD atual; não reimplemente para gerar recibo.
-- Defeito real sem cobertura: autor acrescenta a regressão focal, reviewer confere
-  o RED e o freeze; sniper corrige o produto. Preserve o restante da tarefa.
+  olhos de implementação afetados no HEAD atual; não reimplemente para gerar recibo.
+- Observável aprovado concretamente sem cobertura: autor corrige essa lacuna focal,
+  reviewer confere fidelidade e evidência aplicável; sniper corrige o produto se necessário.
+  Defeito de produto por si só não exige novo RED/freeze.
 Se o teste corrigido ainda mostra falha do produto, despache a mão para essa falha.
-Não use stash/rollback para fabricar RED de um produto saudável. Isolamento de um
+Não use stash/rollback, no-op ou edição cosmética para fabricar RED ou recibo. Isolamento de um
 delta ainda incompleto só é necessário para reproduzir um defeito que não pode ser
 observado no checkout atual; preserve somente os paths autorizados e a evidência.
 

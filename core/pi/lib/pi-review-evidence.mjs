@@ -408,6 +408,21 @@ export function isCurrentPiReviewReceipt(receipt, identity) {
   return receipt?.accepted === true && boundCurrentReceipt(receipt, identity);
 }
 
+/** A task's last positive review survives later product fixes; a new dispatch revokes it. */
+export function isSatisfiedPiTaskReviewReceipt(receipt, identity) {
+  if (identity?.dispatchCallId && receipt?.dispatch_call_id !== identity.dispatchCallId) return false;
+  if (receipt?.reviewed_head_sha !== identity.snapshot?.head_sha && identity.reviewAfterImplementation !== true) return false;
+  if (receipt?.reviewed_head_sha === identity.snapshot?.head_sha && receipt?.input_digest !== identity.snapshot?.input_digest) return false;
+  if (!isCurrentPiReviewReceipt(receipt, { ...identity, phase: "task", snapshot: {
+    head_sha: receipt?.reviewed_head_sha, input_digest: receipt?.input_digest,
+  } })) return false;
+  try {
+    execFileSync("git", ["merge-base", "--is-ancestor", receipt.reviewed_head_sha, identity.snapshot?.head_sha],
+      { cwd: identity.projectRoot, stdio: "ignore", timeout: 10000 });
+    return true;
+  } catch { return false; }
+}
+
 /** Diagnostic only: exposing a current finding never accepts its review. */
 export function currentPiReviewIssues(receipt, identity) {
   return boundCurrentReceipt(receipt, identity) ? receipt.report.issues : [];
