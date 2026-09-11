@@ -1,6 +1,8 @@
 /** @description Canonical Pi role catalog for the delivery harness. */
 
+import { PLANNING_TOOLS } from "./planning-tools.mjs";
 const EYE_TOOLS = Object.freeze(["read", "grep", "find", "ls"]);
+const PLAN_REVIEW_TOOLS = Object.freeze([...EYE_TOOLS, ...PLANNING_TOOLS]);
 const HAND_TOOLS = Object.freeze(["read", "grep", "find", "ls", "bash", "edit", "write"]);
 // O shipper é a mão de entrega, não de produto: precisa de Bash para staging/commit, mas não
 // recebe Write/Edit. Uma proteção redundante no plan-write-gate nega essas tools se um runtime
@@ -12,7 +14,7 @@ const SHIPPER_TOOLS = Object.freeze(["read", "grep", "find", "ls", "bash"]);
  * lane OC tem via `edit: allow`. O plan-write-gate nega a esse papel qualquer outro alvo
  * ("planner may author only canonical execution plans"), então a tool a mais não é escopo a mais.
  */
-const PLANNER_TOOLS = Object.freeze(["read", "grep", "find", "ls", "write"]);
+const PLANNER_TOOLS = Object.freeze(["read", "grep", "find", "ls", "write", ...PLANNING_TOOLS]);
 
 export const EYE_ROLES = Object.freeze([
   "harness-planner",
@@ -49,7 +51,7 @@ export const CANONICAL_ROLES = DELIVERY_ROLES;
 const POLICIES = Object.freeze(Object.fromEntries([
   ...EYE_ROLES.map((name) => [
     name,
-    Object.freeze({ tools: name === "harness-planner" ? PLANNER_TOOLS : EYE_TOOLS, kind: "eye" }),
+    Object.freeze({ tools: name === "harness-planner" ? PLANNER_TOOLS : name === "harness-plan-reviewer" ? PLAN_REVIEW_TOOLS : EYE_TOOLS, kind: "eye" }),
   ]),
   ...HAND_ROLES.map((name) => [
     name,

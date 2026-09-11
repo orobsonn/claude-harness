@@ -282,6 +282,8 @@ const REQUIRED_PI_SOURCE = [
   { rel: "lib/spec-approval.mjs", kind: "file" },
   { rel: "lib/version-check.mjs", kind: "file" },
   { rel: "extensions/harness-bootstrap.ts", kind: "file" },
+  { rel: "extensions/harness-planning-tools.ts", kind: "file" },
+  { rel: "lib/planning-tools.mjs", kind: "file" },
   { rel: "extensions/harness-subagents.ts", kind: "file" },
   { rel: "extensions/harness-classify.ts", kind: "file" },
   { rel: "extensions/harness-context-files.ts", kind: "file" },
@@ -1932,7 +1934,7 @@ export function rewritePiImportsForVendor(content, relFromPiRoot) {
   const depth = Math.max(0, relFromPiRoot.replace(/\\/g, "/").split("/").filter(Boolean).length - 1);
   const from = "../".repeat(depth + 1).replace(/\./g, "\\.");
   const to = depth === 0 ? "./vendor/" : `${"../".repeat(depth)}vendor/`;
-  return content.replace(new RegExp(`(["'])${from}(opencode|shared|codex)/`, "g"), `$1${to}$2/`);
+  return content.replace(new RegExp(`(["'])${from}(opencode|shared|codex|claude-code)/`, "g"), `$1${to}$2/`);
 }
 
 /**

@@ -74,6 +74,19 @@ function dispatch(root, { role = "harness-executor", prompt = MARKER, sessionId 
   return { decision, input };
 }
 
+test("test-author inherits missing complexity, preserves explicit match and denies explicit conflict", () => {
+  const f = fixture();
+  try {
+    for (const complexity of [undefined, "medium"]) {
+      const { decision } = dispatch(f.root, { role: "harness-test-author", extra: { complexity } });
+      assert.equal(decision.block, false, decision.reason);
+      assert.equal(decision.complexity, "medium");
+    }
+    for (const complexity of ["high", "", null]) assert.equal(dispatch(f.root, { role: "harness-test-author", extra: { complexity } }).decision.block, true);
+    assert.equal(dispatch(f.root, { extra: { complexity: undefined } }).decision.block, true);
+  } finally { f.close(); }
+});
+
 test("plano estável válido permite o dispatch guardado e não muta o prompt", () => {
   const f = fixture();
   try {

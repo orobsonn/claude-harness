@@ -4,12 +4,13 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { CANONICAL_ROLES, DISCUSSION_ROLES, EYE_ROLES, HAND_ROLES, RUNTIME_ROLES, isCanonicalRole, isDiscussionRole, isRuntimeRole, rolePolicy } from "./roles.mjs";
+import { PLANNING_TOOLS } from "./planning-tools.mjs";
 
 const ROOT = new URL("../../../", import.meta.url).pathname;
 const EYE_TOOLS = ["read", "grep", "find", "ls"];
 const HAND_TOOLS = ["read", "grep", "find", "ls", "bash", "edit", "write"];
 const SHIPPER_TOOLS = ["read", "grep", "find", "ls", "bash"];
-const PLANNER_TOOLS = ["read", "grep", "find", "ls", "write"];
+const PLANNER_TOOLS = ["read", "grep", "find", "ls", "write", ...PLANNING_TOOLS];
 
 test("only namespaced harness roles are canonical", () => {
   assert.equal(CANONICAL_ROLES.length, 11);
@@ -48,7 +49,7 @@ test("role policies preserve the harness split between eyes and hands", () => {
   ]);
   for (const role of EYE_ROLES) {
     if (role === "harness-planner") continue;
-    assert.deepEqual(rolePolicy(role).tools, EYE_TOOLS, role);
+    assert.deepEqual(rolePolicy(role).tools, role === "harness-plan-reviewer" ? [...EYE_TOOLS, ...PLANNING_TOOLS] : EYE_TOOLS, role);
   }
   for (const role of HAND_ROLES) {
     assert.deepEqual(rolePolicy(role).tools, role === "harness-shipper" ? SHIPPER_TOOLS : HAND_TOOLS, role);

@@ -23,6 +23,7 @@ import {
 import { piStateRoot } from './pi-paths.mjs'
 import { isPiCanonicalPlanPath } from './plan-write-decide.mjs'
 import { isParallelReviewRole } from './roles.mjs'
+import { PLANNING_TOOLS, isPlanningRole } from './planning-tools.mjs'
 
 export function isPiReadOnlyReviewerRole(role) {
   return role === 'harness-test-reviewer' ||
@@ -321,6 +322,7 @@ export function decidePiPolicy(call = {}, options = {}) {
   const toolName = call?.toolName
   const input = call?.input && typeof call.input === 'object' ? call.input : {}
 
+  if (PLANNING_TOOLS.includes(toolName) && isPlanningRole(options.reviewerRole)) return ALLOW
   if (isPiReadOnlyReviewerRole(options.reviewerRole) && !isPiReadTool(toolName)) {
     return { block: true, reason: 'Read-only reviewers may use only read, grep, find and ls.' }
   }

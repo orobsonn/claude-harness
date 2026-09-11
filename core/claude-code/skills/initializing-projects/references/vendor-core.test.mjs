@@ -574,7 +574,7 @@ test("clean vendored worktree loads actual Pi extensions from the host cache wit
     assert.equal(loaded.status, 0, loaded.stderr || loaded.stdout);
     const report = JSON.parse(loaded.stdout.trim().split("\n").at(-1));
     assert.deepEqual(report.errors, []);
-    for (const tool of ["subagent", "classify", "mark", "harness_plan", "harness_spec_write", "seal_spec_review"]) {
+    for (const tool of ["subagent", "classify", "mark", "harness_plan", "harness_spec_write", "seal_spec_review", "harness_complexity", "mv_recall", "mv_get_note", "mp_retrieve"]) {
       assert.ok(report.tools.includes(tool), `${tool} must be registered by the real Pi loader`);
     }
     assert.equal(report.cacheAfterLoad, true, "extension loading must not invalidate the immutable runtime");

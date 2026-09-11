@@ -45,7 +45,7 @@ function layout(launcher) {
     const repo = path.dirname(path.dirname(piRoot));
     return {
       base: repo,
-      roots: ["core/pi", "core/shared", "core/codex", "core/opencode"],
+      roots: ["core/pi", "core/shared", "core/codex", "core/opencode", "core/claude-code/skills/creating-plans/references/complexity-scorer.mjs"],
     };
   }
   if (

@@ -298,6 +298,7 @@ test("every ported gate is loaded, policy first and the UI tracker last", () => 
     join(root, "core/pi/extensions/harness-task-events.ts"),
     join(root, "core/pi/extensions/harness-task-run.ts"),
     join(root, "core/pi/extensions/harness-bootstrap.ts"),
+    join(root, "core/pi/extensions/harness-planning-tools.ts"),
     bridge,
     join(root, "core/pi/extensions/harness-dispatch.ts"),
     join(root, "core/pi/extensions/harness-memory.ts"),
@@ -437,7 +438,7 @@ test("pinned Pi overlay keeps one global auth path for parent and subagents", ()
   assert.throws(() => applyPiAuthPathPatch(packagePath, subagentsPackagePath), /altered patched bytes/);
 });
 
-test("runtime defaults select Sol from Pi's real registry without a CLI model override", async () => {
+test("runtime defaults select Terra/high from Pi's real registry without a CLI model override", async () => {
   const directory = mkdtempSync(join(tmpdir(), "pi-harness-runtime-test-"));
   const runtimeDir = join(directory, "runtime");
   try {
@@ -447,7 +448,7 @@ test("runtime defaults select Sol from Pi's real registry without a CLI model ov
     assert.equal(existsSync(join(runtimeDir, "agents/harness-planner.md")), true);
     assert.equal(existsSync(join(runtimeDir, "auth.json")), false);
 
-    const settingsManager = SettingsManager.create(directory, runtimeDir);
+    const settingsManager = SettingsManager.create(directory, runtimeDir, { projectTrusted: false });
     const modelRuntime = await ModelRuntime.create({
       credentials: AuthStorage.inMemory({
         "openai-codex": {
@@ -466,15 +467,18 @@ test("runtime defaults select Sol from Pi's real registry without a CLI model ov
       isContinuing: false,
       defaultProvider: settingsManager.getDefaultProvider(),
       defaultModelId: settingsManager.getDefaultModel(),
+      defaultThinkingLevel: settingsManager.getDefaultThinkingLevel(),
       modelRuntime,
     });
 
     assert.equal(settingsManager.getDefaultProvider(), "openai-codex");
-    assert.equal(settingsManager.getDefaultModel(), "gpt-5.6-sol");
-    assert.ok(modelRuntime.getModels("openai-codex").some((model) => model.id === "gpt-5.6-sol"), "the installed Pi catalog contains Sol");
+    assert.equal(settingsManager.getDefaultModel(), "gpt-5.6-terra");
+    assert.equal(settingsManager.getDefaultThinkingLevel(), "high");
+    assert.equal(selected.thinkingLevel, "high");
+    assert.ok(modelRuntime.getModels("openai-codex").some((model) => model.id === "gpt-5.6-terra"), "the installed Pi catalog contains Terra");
     assert.deepEqual(selected.model && { provider: selected.model.provider, id: selected.model.id }, {
       provider: "openai-codex",
-      id: "gpt-5.6-sol",
+      id: "gpt-5.6-terra",
     });
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
@@ -519,7 +523,8 @@ test("runtime já materializado migra somente o antigo default do harness para o
 
       assert.deepEqual(JSON.parse(readFileSync(join(runtimeDir, "settings.json"), "utf8")), {
         defaultProvider: "openai-codex",
-        defaultModel: "gpt-5.6-sol",
+        defaultModel: "gpt-5.6-terra",
+        defaultThinkingLevel: "high",
         httpIdleTimeoutMs: 900_000,
         retained: true,
         ...piChildResourceSettings(process.cwd()),
@@ -544,6 +549,7 @@ test("runtime já materializado preserva um default explícito compatível do op
   assert.deepEqual(JSON.parse(readFileSync(join(runtimeDir, "settings.json"), "utf8")), {
     defaultProvider: "openai-codex",
     defaultModel: "gpt-5.6-terra",
+    defaultThinkingLevel: "high",
     httpIdleTimeoutMs: 900_000,
     retained: true,
     ...piChildResourceSettings(process.cwd()),

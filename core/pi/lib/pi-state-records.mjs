@@ -433,7 +433,7 @@ export function canonicalPiDispatchFromPlan(projectRoot, featureId, taskId, role
   }
   if (isTestAuthorRole(toOcRole(role))) {
     if (frozenPaths.length === 0) return { ok: false, reason: "test-author requires canonical locked test paths" };
-    return { ok: true, featureId: bound.featureId, taskId: bound.taskId, scopePaths: frozenPaths, allowedWrites: [], frozenPaths: [], planHash: bound.planHash };
+    return { ok: true, featureId: bound.featureId, taskId: bound.taskId, complexity: bound.task.complexity, scopePaths: frozenPaths, allowedWrites: [], frozenPaths: [], planHash: bound.planHash };
   }
   return { ok: true, featureId: bound.featureId, taskId: bound.taskId, scopePaths, allowedWrites, frozenPaths, planHash: bound.planHash };
 }
@@ -494,6 +494,7 @@ function claimResolvedPiDispatch(projectRoot, { sessionId, callId, role, taskId,
       scope_paths: canonical.scopePaths, allowed_writes: canonical.allowedWrites,
       frozen_paths: canonical.frozenPaths ?? [],
       plan_hash: canonical.planHash, claimed_at: new Date(now).toISOString(),
+      ...(canonical.complexity ? { complexity: canonical.complexity } : {}),
       ...(worktreeBaseline?.entries?.length ? { worktree_baseline: worktreeBaseline } : {}),
     };
     const resolved = piDispatchRecordPath(realRoot, sessionId, callId);

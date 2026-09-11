@@ -205,4 +205,20 @@ O launcher não injeta provedor nem `--model`. O default vem de `core/pi/runtime
 
 ## Rota de modelos
 
-O orquestrador usa Sol como padrão. O rail de dispatch exige: planner Sol/high; plan-reviewer Astra/high; adversary Sol/medium; security Sol padrão; compliance e test-author Terra/high; test-reviewer Luna/xhigh; shipper/harvester Luna/high. Executor e sniper são escolhidos pela complexidade da tarefa canônica: low Luna/high, medium Terra/medium, high Terra/xhigh. Modelo, esforço ou `complexity` divergentes são negados antes do subagente iniciar. O transporte usa limite de inatividade de 15 minutos por chamada de modelo; é finito para ainda expor conexão morta.
+O orquestrador usa Terra/high como padrão no runtime materializado, inclusive quando
+o Pi ignora recursos de projeto não confiável. Preferências explícitas usam a
+precedência nativa do Pi; o harness não contorna trust. O rail mantém planner
+Sol/high, plan-reviewer Astra/high, adversary Sol/medium, security Sol padrão,
+compliance Terra/high, test-reviewer Luna/xhigh e shipper/harvester Luna/high.
+Test-author usa Terra/high para low/medium e Sol/high para high/max legado,
+sempre pela task canônica; complexity omitida é herdada, divergência é rejeitada.
+Executor/sniper mantêm low Luna/high, medium Terra/medium, high/max Terra/xhigh.
+O transporte mantém limite de inatividade de 15 minutos por chamada de modelo.
+
+Planner e plan-reviewer recebem `harness_complexity`, usando diretamente a lógica
+do scorer do Claude Code. `should_split` é consultivo e não muda o schema do plano.
+`mv_recall` e `mv_get_note` consultam os métodos homônimos do MV; `mp_retrieve`
+constrói somente chamadas de leitura para o `code` do MP. A integração usa o
+`pi-mcp-adapter` instalado e configurado pelo operador em `~/.pi/agent`; não
+instala MCP nem copia credenciais. Ausência, falha ou timeout permitem continuar.
+Plan-reviewer usa essas lentes somente na revisão INITIAL, sem redescoberta em REVISE.
