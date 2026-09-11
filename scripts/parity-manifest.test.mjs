@@ -392,10 +392,13 @@ const VENDOR_CORE_PI_RUNTIME_LOADER = "pathToFileURL(join(coreDir, \"pi/lib/pi-r
 const PI_SUBAGENTS_LOADER_PATH = "core/pi/extensions/harness-subagents.ts";
 const PI_SUBAGENTS_CREATE_REQUIRE = "createRequire(runtime.paths.piPackage)";
 const PI_SUBAGENTS_JITI_IMPORT = "runtime.paths.subagentsExtension";
+const PI_PLANNING_LOADER_PATH = "core/pi/extensions/harness-planning-tools.ts";
 const OC_OPAQUE_LOADER_ALLOWLIST = new Map([
   ["scripts/parity-manifest.mjs", new Set([PARITY_MANIFEST_LOADER])],
   [VENDOR_CORE_LOADER_PATH, new Set([VENDOR_CORE_PI_RUNTIME_LOADER])],
   [PI_SUBAGENTS_LOADER_PATH, new Set([PI_SUBAGENTS_CREATE_REQUIRE, PI_SUBAGENTS_JITI_IMPORT])],
+  // Optional operator-installed MCP adapter and verified Pi peers; never project code.
+  [PI_PLANNING_LOADER_PATH, new Set([PI_SUBAGENTS_CREATE_REQUIRE, 'createRequire(join(profile, "npm/package.json"))', 'requireAdapter.resolve("pi-mcp-adapter")'])],
 ]);
 function slashPath(path) {
   return path.split(sep).join("/");
@@ -1757,6 +1760,14 @@ describe("parity-manifest", () => {
         () => assertOpaqueLoadersAudited(scanModuleLoaderSyntax(changed), "core/pi/extensions/harness-subagents.ts", new Set()),
         /opaque module loader is not allowlisted/,
       );
+    }
+  });
+
+  it("t12-module-manifest: audits only the fixed planning adapter and verified Pi peers", () => {
+    const exact = scanModuleLoaderSyntax('nodeModule.createRequire(runtime.paths.piPackage); nodeModule.createRequire(join(profile, "npm/package.json")); jiti.import(requireAdapter.resolve("pi-mcp-adapter"));');
+    assert.doesNotThrow(() => assertOpaqueLoadersAudited(exact, PI_PLANNING_LOADER_PATH, new Set()));
+    for (const changed of ['nodeModule.createRequire(process.cwd())', 'jiti.import(requireAdapter.resolve(input.package))']) {
+      assert.throws(() => assertOpaqueLoadersAudited(scanModuleLoaderSyntax(changed), PI_PLANNING_LOADER_PATH, new Set()), /not allowlisted/);
     }
   });
 

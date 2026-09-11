@@ -199,9 +199,11 @@ export function decidePiPlanGate(event = {}, deps = {}) {
     if (requiresTaskId) {
       const declaredComplexity = typeof event.input?.complexity === "string" ? event.input.complexity : "";
       const plannedComplexity = typeof task?.complexity === "string" ? task.complexity : "";
-      if (!declaredComplexity || declaredComplexity !== plannedComplexity) {
+      const inherited = isTestAuthorRole(role) && event.input?.complexity === undefined;
+      if (!["low", "medium", "high", "max"].includes(plannedComplexity) || (!inherited && declaredComplexity !== plannedComplexity)) {
         return deny(`dispatch complexity conflicts with stable plan task (${declaredComplexity || "(missing)"} != ${plannedComplexity || "(missing)"})`);
       }
+      if (isTestAuthorRole(role)) return { block: false, complexity: plannedComplexity, ...(warn ? { warn } : {}) };
     }
 
     // Deliberadamente NÃO muta args.prompt: o brief é o transporte do modelo.

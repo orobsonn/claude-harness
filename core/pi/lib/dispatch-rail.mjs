@@ -24,7 +24,6 @@ const FIXED_PI_ROUTES = Object.freeze({
   "harness-adversary": Object.freeze({ model: "openai-codex/gpt-5.6-sol", thinking: "medium" }),
   "harness-security": Object.freeze({ model: "openai-codex/gpt-5.6-sol" }),
   "harness-compliance": Object.freeze({ model: "openai-codex/gpt-5.6-terra", thinking: "high" }),
-  "harness-test-author": Object.freeze({ model: "openai-codex/gpt-5.6-terra", thinking: "high" }),
   "harness-harvester": Object.freeze({ model: "openai-codex/gpt-5.6-luna", thinking: "high" }),
   "harness-shipper": Object.freeze({ model: "openai-codex/gpt-5.6-luna", thinking: "high" }),
   "harness-discussion-adversary": Object.freeze({ model: "openai-codex/gpt-5.6-sol", thinking: "medium" }),
@@ -44,6 +43,10 @@ function deny(reason) {
 
 /** @description Resolve a rota imutável de um despacho. Executor/sniper exigem a complexidade do plano. */
 export function piDispatchRoute(role, complexity) {
+  if (role === "harness-test-author") {
+    if (!["low", "medium", "high", "max"].includes(complexity)) return { ok: false, reason: "hand-complexity" };
+    return { ok: true, model: ["high", "max"].includes(complexity) ? "openai-codex/gpt-5.6-sol" : "openai-codex/gpt-5.6-terra", thinking: "high" };
+  }
   const fixed = FIXED_PI_ROUTES[role];
   if (fixed) return { ok: true, ...fixed };
   if (role === "harness-executor" || role === "harness-sniper") {

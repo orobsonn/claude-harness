@@ -111,6 +111,7 @@ function sourceFixture(t) {
   put(root, "core/shared/lib/upstream.mjs", "shared");
   put(root, "core/codex/lib/upstream.mjs", "codex");
   put(root, "core/opencode/lib/upstream.mjs", "opencode");
+  put(root, "core/claude-code/skills/creating-plans/references/complexity-scorer.mjs", "scorer");
   return { root, launcher };
 }
 function vendorFixture(t) {
@@ -144,6 +145,7 @@ function repository(t) {
   put(root, "core/shared/lib/upstream.mjs");
   put(root, "core/codex/lib/upstream.mjs");
   put(root, "core/opencode/lib/upstream.mjs");
+  put(root, "core/claude-code/skills/creating-plans/references/complexity-scorer.mjs", "scorer");
   put(root, ".pi/harness/bin/pi-harness.mjs", "vendor launcher");
   git(root, "init", "-q");
   git(root, "config", "user.name", "Harness");

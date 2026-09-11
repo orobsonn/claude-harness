@@ -23,7 +23,7 @@ import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 import { AuthStorage } from "../../../node_modules/@earendil-works/pi-coding-agent/dist/core/auth-storage.js";
 import { createJiti } from "../../../node_modules/@earendil-works/pi-coding-agent/node_modules/jiti/lib/jiti-static.mjs";
 import { fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
-import harnessBootstrap from "./harness-bootstrap.ts";
+import harnessBootstrap, { validateParentModelPreferences } from "./harness-bootstrap.ts";
 import { RUNTIME_ROLES } from "../lib/roles.mjs";
 
 const PACKAGE_ROOT = resolve(fileURLToPath(new URL("../../../", import.meta.url)));
@@ -36,6 +36,7 @@ const EXPECTED_EXTENSION_BASENAMES = [
   "harness-task-events.ts",
   "harness-task-run.ts",
   "harness-bootstrap.ts",
+  "harness-planning-tools.ts",
   "harness-subagents.ts",
   "harness-dispatch.ts",
   "harness-memory.ts",
@@ -55,6 +56,63 @@ const EXPECTED_EXTENSION_BASENAMES = [
   "harness-context-files.ts",
   "harness-plan-tracker.ts",
 ];
+
+test("native effective parent settings preserve trusted override and reject unknown model/invalid JSON", () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-model-preferences-"));
+  try {
+    const agentDir = join(root, "agent");
+    mkdirSync(agentDir);
+    mkdirSync(join(root, ".pi"));
+    writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ defaultProvider: "openai-codex", defaultModel: "gpt-5.6-terra", defaultThinkingLevel: "high" }));
+    const registry = { find: (provider, model) => provider === "openai-codex" && ["gpt-5.6-terra", "gpt-5.6-sol"].includes(model) };
+    writeFileSync(join(root, ".pi/settings.json"), JSON.stringify({ defaultModel: "gpt-5.6-sol", defaultThinkingLevel: "xhigh" }));
+    const trusted = SettingsManager.create(root, agentDir, { projectTrusted: true });
+    validateParentModelPreferences(trusted, registry);
+    assert.equal(trusted.getDefaultModel(), "gpt-5.6-sol");
+    assert.equal(trusted.getDefaultThinkingLevel(), "xhigh");
+    const untrusted = SettingsManager.create(root, agentDir, { projectTrusted: false });
+    validateParentModelPreferences(untrusted, registry);
+    assert.equal(untrusted.getDefaultModel(), "gpt-5.6-terra");
+    assert.equal(untrusted.getDefaultThinkingLevel(), "high");
+    assert.throws(() => validateParentModelPreferences(SettingsManager.inMemory({ defaultProvider: "openai-codex", defaultModel: "gpt-5.6-terra", modelThinkingLevels: { "openai-codex/gpt-5.6-terra": "typo-effort" } }), registry), /Invalid modelThinkingLevels/);
+    writeFileSync(join(root, ".pi/settings.json"), JSON.stringify({ defaultModel: "gpt-5.6-typo" }));
+    assert.throws(() => validateParentModelPreferences(SettingsManager.create(root, agentDir), registry), /Unknown Pi model preference.*typo/);
+    writeFileSync(join(root, ".pi/settings.json"), "{broken");
+    assert.throws(() => validateParentModelPreferences(SettingsManager.create(root, agentDir), registry), /Invalid Pi settings JSON/);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("native parent startup aborts invalid model preferences before any provider payload", async (t) => {
+  const root = nativeHome(t);
+  const agentDir = join(root, "agent");
+  mkdirSync(agentDir);
+  writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ defaultProvider: "openai-codex", defaultModel: "gpt-5.6-typo" }));
+  const previousDir = process.env.PI_CODING_AGENT_DIR;
+  const previousLauncher = process.env.PI_HARNESS_LAUNCHER;
+  process.env.PI_CODING_AGENT_DIR = agentDir;
+  process.env.PI_HARNESS_LAUNCHER = "1";
+  t.after(() => {
+    if (previousDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previousDir;
+    if (previousLauncher === undefined) delete process.env.PI_HARNESS_LAUNCHER;
+    else process.env.PI_HARNESS_LAUNCHER = previousLauncher;
+  });
+  let payloads = 0;
+  const loader = new DefaultResourceLoader({ cwd: root, agentDir, noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true,
+    extensionFactories: [harnessBootstrap, (pi) => pi.on("before_provider_request", () => { payloads++; })] });
+  await loader.reload();
+  assert.deepEqual(loader.getExtensions().errors, []);
+  const faux = fauxProvider();
+  faux.setResponses([fauxAssistantMessage("must not run")]);
+  const runtime = await ModelRuntime.create({ authPath: join(agentDir, "auth.json"), modelsPath: null, refreshOnCreate: false });
+  runtime.registerNativeProvider(faux.provider);
+  const { session } = await createAgentSession({ cwd: root, agentDir, resourceLoader: loader, modelRuntime: runtime, model: faux.getModel(), sessionManager: SessionManager.inMemory(root), settingsManager: SettingsManager.inMemory(), noTools: "all" });
+  t.after(() => session.dispose());
+  await session.bindExtensions({});
+  await session.prompt("attempt invalid preference", { expandPromptTemplates: false });
+  assert.equal(payloads, 0);
+  assert.ok(session.messages.some((message) => message.customType === "harness-model-preferences-error" && /Unknown Pi model preference/.test(message.content)));
+});
 
 function nativeEnv(home, agentDir = join(home, "custom-agent")) {
   const env = { ...process.env, HOME: home, XDG_CONFIG_HOME: join(home, "config"), PI_CODING_AGENT_DIR: agentDir };
@@ -274,6 +332,9 @@ test("bootstrap vendorizado sem node_modules do produto resolve as bibliotecas d
   const vendorRoot = join(directory, "vendor");
   const agentDir = join(directory, "agent");
   cpSync(join(PACKAGE_ROOT, "core", "pi"), join(vendorRoot, "core", "pi"), { recursive: true });
+  const scorer = "core/claude-code/skills/creating-plans/references/complexity-scorer.mjs";
+  mkdirSync(dirname(join(vendorRoot, scorer)), { recursive: true });
+  cpSync(join(PACKAGE_ROOT, scorer), join(vendorRoot, scorer));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   const previous = process.env.PI_HARNESS_LAUNCHER;
   process.env.PI_HARNESS_LAUNCHER = "1";
@@ -365,7 +426,7 @@ test("bootstrap permanece inerte somente com o sinal explícito do launcher", (t
   });
 
   const handlers = register();
-  assert.equal(handlers.has("before_agent_start"), false);
+  assert.equal(handlers.has("before_agent_start"), true, "launcher still validates native effective model preferences");
   assert.equal(existsSync(join(home, "launcher-runtime", "agents")), false);
 });
 

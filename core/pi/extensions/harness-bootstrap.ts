@@ -1,10 +1,33 @@
-import { getAgentDir, resolveCliModel, type ExtensionAPI, type ExtensionContext, type ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, resolveCliModel, SettingsManager, type ExtensionAPI, type ExtensionContext, type ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 
 import { installNativeHarnessAgents } from "../lib/native-bootstrap.mjs";
 
 const CODEX_PROVIDER = "openai-codex";
 const ASTRA_MODEL = "gpt-6-astra";
+
+/** Validate native effective preferences; never select a model or change project trust. */
+export function validateParentModelPreferences(settings: any, registry: any) {
+  const errors = settings.drainErrors();
+  if (errors.length) throw new Error("Invalid Pi settings JSON; repair the model preferences before launching.");
+  const provider = settings.getDefaultProvider();
+  const model = settings.getDefaultModel();
+  const thinking = settings.getDefaultThinkingLevel();
+  const levels = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+  if (provider !== undefined || model !== undefined) {
+    if (typeof provider !== "string" || typeof model !== "string" || !registry.find(provider, model)) {
+      throw new Error(`Unknown Pi model preference ${String(provider)}/${String(model)}; select an installed model in Pi settings or restore the harness default.`);
+    }
+  }
+  if (thinking !== undefined && !levels.includes(thinking)) {
+    throw new Error("Invalid defaultThinkingLevel in Pi settings; select a supported thinking level.");
+  }
+  for (const [key, level] of Object.entries(settings.getAllModelThinkingLevels())) {
+    if (typeof level !== "string" || !levels.includes(level)) {
+      throw new Error(`Invalid modelThinkingLevels entry for ${key}; select a supported thinking level in Pi settings.`);
+    }
+  }
+}
 
 /**
  * Pi's public CLI resolver accepts a custom id by cloning a known provider
@@ -55,6 +78,21 @@ export default function harnessBootstrap(pi: ExtensionAPI) {
   // its manager/snapshots. It must precede the launcher early return as the
   // launcher's isolated runtime needs the same registry entry.
   registerAstraCompatibilityModel(pi);
+
+  let preferenceError: string | null = null;
+  pi.on("before_agent_start", (_event, ctx) => {
+    if (isChildSession(ctx)) return;
+    try {
+      const settings = SettingsManager.create(ctx.cwd, getAgentDir(), { projectTrusted: ctx.isProjectTrusted() });
+      validateParentModelPreferences(settings, ctx.modelRegistry);
+      preferenceError = null;
+    } catch (error) {
+      preferenceError = `[harness-bootstrap] ${error instanceof Error ? error.message : String(error)}`;
+      return { message: { customType: "harness-model-preferences-error", content: preferenceError, display: true } };
+    }
+  });
+  pi.on("agent_start", (_event, ctx) => { if (preferenceError) ctx.abort(); });
+  pi.on("tool_call", () => preferenceError ? { block: true, reason: preferenceError } : undefined);
 
   // O launcher já materializou sua árvore privada. Nesta condição não podemos tocar no estado
   // nativo/global, nem mesmo para "atualizar" arquivos que o launcher controla.

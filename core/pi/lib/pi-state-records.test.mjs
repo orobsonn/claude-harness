@@ -23,6 +23,7 @@ import {
   writePiHandRecord,
 } from "./pi-state-records.mjs";
 import { piHandRecordPath } from "./pi-paths.mjs";
+import harnessDispatch from "../extensions/harness-dispatch.ts";
 
 const MODEL_STRATEGY = { hand_tiers: { low: "openai/gpt-5.6-luna", medium: "openai/gpt-5.6-luna", high: "openai/gpt-5.6-terra" }, planner: "openai/planner", "plan-reviewer": "openai/reviewer", compliance: "openai/compliance", adversary: "openai/adversary", security: "openai/security", shipper: "openai/shipper", harvester: "openai/harvester" };
 
@@ -63,6 +64,29 @@ function planFixture() {
   fs.writeFileSync(path.join(stateDir, "gate-state.json"), JSON.stringify({ session_id: sessionId, feature_id: featureId, classified: true, mode: "FULL" }));
   return { root, sessionId, featureId, close };
 }
+
+test("materialized test-author dispatch inherits canonical complexity before route and persists it", () => {
+  const f = planFixture();
+  try {
+    let dispatch;
+    harnessDispatch({ on: (name, fn) => { if (name === "tool_call") dispatch = fn; } });
+    const planPath = path.join(f.root, ".pi/harness/plans", f.featureId, "execution-plan.json");
+    const plan = JSON.parse(fs.readFileSync(planPath));
+    for (const complexity of ["low", "medium", "high", "max"]) {
+      plan.tasks[0].complexity = complexity;
+      fs.writeFileSync(planPath, JSON.stringify(plan));
+      const model = ["low", "medium"].includes(complexity) ? "openai-codex/gpt-5.6-terra" : "openai-codex/gpt-5.6-sol";
+      const input = { subagent_type: "harness-test-author", prompt: '[HARNESS_TASK_CONTEXT]{"task_id":"task-1"}[/HARNESS_TASK_CONTEXT]', model, thinking: "high" };
+      assert.equal(dispatch({ toolName: "subagent", input }, { cwd: f.root, sessionManager: { getSessionId: () => f.sessionId } }), undefined);
+      assert.equal(input.complexity, complexity);
+      const claim = claimActivePiDispatch(f.root, { sessionId: f.sessionId, callId: `author-${complexity}`, role: input.subagent_type, taskId: "task-1" });
+      assert.equal(claim.ok, true, claim.reason);
+      assert.equal(claim.claim.complexity, complexity);
+      const reread = readPiDispatchRecord(f.root, { parentSessionId: f.sessionId, callId: `author-${complexity}` });
+      assert.equal(reread.record.complexity, complexity);
+    }
+  } finally { f.close(); }
+});
 
 const FIX_REVIEWED_SHA = "abc123abc123abc123abc123abc123abc123abcd";
 

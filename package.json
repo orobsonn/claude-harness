@@ -49,6 +49,7 @@
       "./core/pi/extensions/harness-task-events.ts",
       "./core/pi/extensions/harness-task-run.ts",
       "./core/pi/extensions/harness-bootstrap.ts",
+      "./core/pi/extensions/harness-planning-tools.ts",
       "./core/pi/extensions/harness-subagents.ts",
       "./core/pi/extensions/harness-dispatch.ts",
       "./core/pi/extensions/harness-memory.ts",

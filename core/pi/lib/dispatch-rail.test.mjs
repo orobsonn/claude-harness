@@ -52,7 +52,7 @@ test("rotas de modelo do Pi são fixas por papel e por complexidade da mão", ()
   assert.deepEqual(piDispatchRoute("harness-planner"), {
     ok: true, model: "openai-codex/gpt-5.6-sol", thinking: "high",
   });
-  assert.deepEqual(piDispatchRoute("harness-test-author"), {
+  assert.deepEqual(piDispatchRoute("harness-test-author", "medium"), {
     ok: true, model: "openai-codex/gpt-5.6-terra", thinking: "high",
   });
   assert.deepEqual(piDispatchRoute("harness-test-reviewer"), {
@@ -107,6 +107,15 @@ test("rotas de modelo do Pi são fixas por papel e por complexidade da mão", ()
     validateSubagentDispatch({ subagent_type: "harness-security", model: "openai-codex/gpt-5.6-sol", thinking: "medium" }),
     { ok: false, reason: "model-route" },
   );
+});
+
+test("test-author routes only canonical low/medium to Terra and high/legacy max to Sol", () => {
+  for (const complexity of ["low", "medium", "high", "max"]) {
+    const model = ["low", "medium"].includes(complexity) ? "openai-codex/gpt-5.6-terra" : "openai-codex/gpt-5.6-sol";
+    assert.deepEqual(piDispatchRoute("harness-test-author", complexity), { ok: true, model, thinking: "high" });
+    assert.deepEqual(validateSubagentDispatch({ subagent_type: "harness-test-author", complexity, model, thinking: "high" }), { ok: true });
+  }
+  assert.equal(piDispatchRoute("harness-test-author").ok, false);
 });
 
 test("dispatch rejects a role shadowed by the issue project", () => {

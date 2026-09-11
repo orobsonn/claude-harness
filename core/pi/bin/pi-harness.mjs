@@ -29,6 +29,7 @@ const EXTENSIONS_BEFORE_SUBAGENTS = [
   "core/pi/extensions/harness-task-events.ts",
   "core/pi/extensions/harness-task-run.ts",
   "core/pi/extensions/harness-bootstrap.ts",
+  "core/pi/extensions/harness-planning-tools.ts",
 ];
 
 /**
@@ -61,6 +62,7 @@ const EXTENSIONS_AFTER_SUBAGENTS = [
 
 /** Libs host-agnósticas que as extensões acima importam; ausência de qualquer uma deixa um gate mudo. */
 const REQUIRED_LIBS = [
+  "core/pi/lib/planning-tools.mjs",
   "core/pi/lib/classify.mjs",
   "core/pi/lib/task-contract.mjs",
   "core/pi/lib/task-context.mjs",
@@ -318,25 +320,38 @@ export function materializeRuntime(root, runtimeDir, stateDir = harnessStateDir(
   try {
     const expected = JSON.parse(readFileSync(settingsSource, "utf8"));
     const current = JSON.parse(readFileSync(settingsTarget, "utf8"));
+    for (const key of ["defaultProvider", "defaultModel"]) {
+      if (current[key] !== undefined && (typeof current[key] !== "string" || !current[key].trim() || /\s/.test(current[key]))) {
+        throw new Error(`Invalid ${key} in ${settingsTarget}; set a valid Pi model preference before launching.`);
+      }
+    }
+    if (current.defaultThinkingLevel !== undefined && !["off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(current.defaultThinkingLevel)) {
+      throw new Error(`Invalid defaultThinkingLevel in ${settingsTarget}; use a supported Pi thinking level.`);
+    }
     const childResources = mergePiChildResourceSettings(current, piChildResourceSettings(root));
     const legacyHarnessDefault =
       current && typeof current === "object" && !Array.isArray(current) &&
       current.defaultProvider === undefined &&
       LEGACY_HARNESS_DEFAULT_MODELS.has(current.defaultModel);
     const needsIdleTimeout = current?.httpIdleTimeoutMs !== expected?.httpIdleTimeoutMs;
+    // This exact pair was the old distributed default. Project preferences and
+    // native per-model settings remain under Pi's own precedence/trust rules.
+    const oldParentDefault = current.defaultProvider === "openai-codex" && current.defaultModel === "gpt-5.6-sol" && current.defaultThinkingLevel === undefined;
+    const needsThinkingDefault = current.defaultThinkingLevel === undefined;
     const needsChildResources =
       JSON.stringify(current?.extensions) !== JSON.stringify(childResources.extensions) ||
       JSON.stringify(current?.skills) !== JSON.stringify(childResources.skills) ||
       JSON.stringify(current?.harnessChildResources) !== JSON.stringify(childResources.harnessChildResources);
-    if (legacyHarnessDefault || needsIdleTimeout || needsChildResources) {
+    if (legacyHarnessDefault || oldParentDefault || needsThinkingDefault || needsIdleTimeout || needsChildResources) {
       writeFileSync(
         settingsTarget,
         `${JSON.stringify({
           ...current,
-          ...(legacyHarnessDefault ? {
+          ...(legacyHarnessDefault || oldParentDefault ? {
             defaultProvider: expected.defaultProvider,
             defaultModel: expected.defaultModel,
           } : {}),
+          ...(needsThinkingDefault ? { defaultThinkingLevel: expected.defaultThinkingLevel } : {}),
           ...(needsIdleTimeout ? { httpIdleTimeoutMs: expected.httpIdleTimeoutMs } : {}),
           ...(needsChildResources ? childResources : {}),
         }, null, 2)}\n`,

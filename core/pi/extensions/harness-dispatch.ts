@@ -5,6 +5,7 @@ import { findShadowedCanonicalRoles, validateSubagentDispatch } from "../lib/dis
 import { isDiscussionRole } from "../lib/roles.mjs";
 import { isChildSession, isPiHeadlessContext, piSessionId, piSubagentArgs } from "../lib/pi-adapter-map.mjs";
 import { loadPiGateStateFromDisk } from "../lib/pi-gate-state.mjs";
+import { decidePiPlanGate } from "../lib/plan-gate.mjs";
 
 function discussionDenied(ctx: any) {
   if (isPiHeadlessContext(ctx)) return "discussion-local-ui-required";
@@ -27,6 +28,13 @@ export default function harnessDispatch(pi: ExtensionAPI) {
     if (event.toolName !== "subagent") return;
     shadowedRoles = findShadowedCanonicalRoles(ctx.cwd, existsSync);
     const role = piSubagentArgs(event.input).subagent_type;
+    if (role === "harness-test-author") {
+      const canonical: any = decidePiPlanGate({ projectRoot: ctx.cwd, sessionId: piSessionId(ctx), toolName: event.toolName, input: event.input });
+      if (canonical.block) return { block: true, reason: canonical.reason };
+      // Resolve before routing and native execution; all later hooks/records see
+      // the same canonical value. Explicit conflicts were rejected above.
+      event.input.complexity = canonical.complexity;
+    }
     if (isDiscussionRole(role)) {
       const reason = discussionDenied(ctx);
       if (reason) return { block: true, reason: `harness dispatch blocked: ${reason}` };
