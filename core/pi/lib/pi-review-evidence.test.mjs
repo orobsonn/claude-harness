@@ -436,6 +436,10 @@ test("new review revokes only its old approval, preserves findings and rejects a
     const receipt = phase === "final" ? saved.final_review_evidence.security : saved.task_review_evidence[`${FEATURE}/${TASK}`].security;
     assert.deepEqual(receipt.report.issues, [finding]);
     assert.deepEqual(api("missingPiReviewRoles", { ...args, roles: ROLES }), [role]);
+    const reopened = execFileSync(process.execPath, ["--input-type=module", "-e",
+      `import { missingPiReviewRoles } from ${JSON.stringify(new URL("./pi-review-evidence.mjs", import.meta.url).href)}; process.stdout.write(JSON.stringify(missingPiReviewRoles(${JSON.stringify({ ...args, roles: ROLES })})));`,
+    ], { encoding: "utf8" });
+    assert.deepEqual(JSON.parse(reopened), [role], "a fresh process must preserve the latest negative receipt");
     const old = parseAccepted(role, snapshot, { suffix: `${phase}-${role}` });
     assert.equal(api("recordPiReviewReceipt", { ...args, completion: old, binding: binding(role, `${phase}-${role}`) }).ok, false);
     assert.deepEqual(api("missingPiReviewRoles", { ...args, roles: ROLES }), [role]);

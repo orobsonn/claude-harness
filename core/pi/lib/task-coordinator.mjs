@@ -939,6 +939,23 @@ export async function executeTaskAction(params, context = {}, injected = {}) {
       if (pending.length && !entry.integration && registry.correction_barrier?.task_id !== entry.task_id)
         throw new Error("only an integrated ancestor can start a dependent correction");
       if (entry.integration) {
+        // Integrated descendants are deliberately preserved during an upstream
+        // correction. Only an explicit resume admits their stale dependency here.
+        const head = git(entry.worktree, "rev-parse", "HEAD");
+        for (const upstream of Object.values(registry.tasks)) {
+          if (upstream.status !== "integrated" || !upstream.integration ||
+              !descendants(artifacts.plan, upstream.task_id).includes(entry.task_id) ||
+              isAncestor(entry.worktree, upstream.integration.integrated_head, head)) continue;
+          const previous = upstream.integration_history?.findLast((receipt) =>
+            isAncestor(entry.worktree, receipt.integrated_head, head));
+          if (!previous) throw new Error(`corrected dependency ${upstream.task_id} lacks the dependent's prior integration receipt`);
+          requireTaskIdentity(entry);
+          entry.reconciliation_required ??= { pre_child_head: head, upstreams: {} };
+          entry.reconciliation_required.upstreams[upstream.task_id] ??= {
+            task_id: upstream.task_id, attempt_id: upstream.attempt_id,
+            receipt_sha256: hashTaskReceipt(previous),
+          };
+        }
         for (const id of pending) {
           const dependent = registry.tasks[id];
           dependent.reconciliation_required ??= {

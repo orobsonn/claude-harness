@@ -843,6 +843,32 @@ test("an admitted dependent can recover an upstream defect without integrating b
   assert.deepEqual(f.registry().tasks.a.integration_history, [before.tasks.a.integration]);
 });
 
+test("explicit resume of an integrated dependent reconciles corrected upstream on the host before launch", async (t) => {
+  const f = await pendingCorrectionFixture(t);
+  const head = git(f.c.worktree, "rev-parse", "HEAD");
+  assert.equal((await f.action({ action: "integrate", task_id: "c", attempt_id: f.c.attempt_id, expected_head: head })).ok, true);
+  const integrated = f.registry().tasks.c.integration;
+  await f.correct();
+  assert.deepEqual(f.registry().tasks.c.integration, integrated, "unrequested integrated tasks stay intact");
+  const launches = f.launches();
+  const start = f.deps.startProcess;
+  let prompt;
+  f.deps.startProcess = async (options) => {
+    assert.equal(fs.readFileSync(path.join(f.c.worktree, "src/a.mjs"), "utf8"), "export const a=2;", "host must reconcile before the child can run");
+    prompt = options.args.at(-1);
+    return start(options);
+  };
+  const resumed = await f.resumeC();
+  assert.equal(resumed.ok, true, resumed.reason);
+  const entry = f.registry().tasks.c;
+  assert.equal(entry.reconciliations.length, 1);
+  assert.equal(entry.reconciliations[0].written_by, "host-task-reconciliation");
+  assert.equal(entry.reconciliations[0].merged_head, git(f.c.worktree, "rev-parse", "HEAD"));
+  assert.equal(f.launches(), launches + 1);
+  assert.match(prompt, /host.*(?:merged|incorporated)/i);
+  assert.doesNotMatch(prompt, /(?:run|execute|perform) git (?:merge|rebase|cherry-pick)/i);
+});
+
 async function pendingCorrectionFixture(t, { overlap = false } = {}) {
   const dependent = task("c", ["a"]);
   if (overlap) dependent.scope_paths.push("src/a.mjs");

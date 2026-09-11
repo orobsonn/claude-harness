@@ -65,3 +65,31 @@ duas recuperações test-only, commit/capture/reviews, testes lean e olhos selet
 - Primeiro CI do PR #944: 14 testes de grep nativo falharam por ausência de `rg`
   e falha do download automático do SDK. O CI agora instala explicitamente
   ripgrep; a política e as assertions de secrets não foram relaxadas.
+
+### Fase B — falsos bloqueios e coordenação
+
+Base atualizada: `f55dc55861717ce1794cf8347295748ca2cbc291`, PR #944 da fase A
+mergeado com CI verde. Release Please permanece reservado para depois das três fases.
+
+- 5.1: reprodução atual RED com dependente já integrado: depois de corrigir o
+  upstream, seu resume lançava o filho ainda com `a=1`, não `a=2`. A transição
+  ignorava dependentes integrados ao marcar reconciliação. A correção só admite
+  a dependência stale quando esse dependente é explicitamente retomado e usa
+  o reconciliador existente, sem modificar seu algoritmo. GREEN: HEAD atualizado
+  antes do launch, uma prova host-owned, um lançamento; tasks não solicitadas
+  mantêm recibos. Não é prova da causa histórica dos prompts perdidos da #275.
+- 5.2: herdado junto à rota canônica na fase A; ausência, igualdade, mismatch e
+  plano inválido continuam cobertos. Sem reimplementação na fase B.
+- 5.3: baseline rejeitava `npm run typecheck`, `pnpm typecheck`, `tsc --noEmit`
+  e `npx --no-install tsc --noEmit`. As formas seguras agora passam; metacaracteres
+  e executáveis arbitrários permanecem negados pelo mesmo parser. Scripts do repo
+  não são sandbox. Equivalentes consultados nas docs oficiais de
+  [npm exec](https://docs.npmjs.com/cli/npm-exec/) e
+  [bunx](https://bun.sh/docs/pm/bunx).
+- Prova real TypeScript 5.9.3 em `/tmp/pi-typecheck-proof-i52F8S`: npm run e
+  npx --no-install passam com XOR correto; mutante permissivo falha TS2578 por
+  perder a obrigação aprovada; restauração volta a GREEN.
+- 5.4: baseline task/final approve → negative → missing passou. Runtime sem diff;
+  teste estendido confirma leitura do negativo em processo novo.
+- Suíte focal inicial: 218 testes verdes (31,8s). Adversary/compliance independentes
+  revisam a fase, sem antecipar a aprovação dos itens restantes da fase C.
