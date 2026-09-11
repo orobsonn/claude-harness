@@ -8,7 +8,7 @@ import { createAgentSession, DefaultResourceLoader, ModelRuntime, SessionManager
 import { piDispatchRoute } from "../core/pi/lib/dispatch-rail.mjs";
 
 const scenario = process.argv[2];
-if (!["evidence", "product", "follow-up", "harvest", "regate"].includes(scenario)) throw Error("Usage: node scripts/pi-convergence-pressure.mjs evidence|product|follow-up|harvest|regate");
+if (!["evidence", "product", "follow-up", "harvest", "regate", "final-eyes", "post-review-harvest", "post-harvest-shipper"].includes(scenario)) throw Error("Usage: node scripts/pi-convergence-pressure.mjs evidence|product|follow-up|harvest|regate|final-eyes|post-review-harvest|post-harvest-shipper");
 const cwd = mkdtempSync(join(tmpdir(), `pi-convergence-${scenario}-`));
 const agentDir = join(cwd, "agent");
 mkdirSync(agentDir);
@@ -27,6 +27,20 @@ const evidence = {
   harvest: { status: "completed", apply_status: "applied", current_head: true, current_plan: true, changes: [] },
   ...(scenario === "regate" ? { regate_pending: ["task-one"], regate_passed: [],
     context_return: "Old diary: reject oversized pages; this finding has since been fixed and reviewed." } : {}),
+  ...(["final-eyes", "post-review-harvest"].includes(scenario) ? {
+    final_review_done: scenario === "post-review-harvest",
+    reviews: { phase: "final", accepted: scenario === "post-review-harvest",
+      missing: scenario === "final-eyes" ? ["harness-adversary", "harness-compliance"] : [],
+      report: { issues: [] }, current_head: true, rework_and_revalidation_complete: true },
+    harvest: { harvestReceipt: null, durableFiles: [{ path: "MEMORY.md", sha256: null, content: null }] },
+  } : {}),
+  ...(scenario === "post-harvest-shipper" ? {
+    head: "b".repeat(40), final_review_done: true,
+    reviews: { phase: "final", accepted: true, missing: [], reviewed_head: "a".repeat(40),
+      valid_through_host_memory_proof: true, report: { issues: [] } },
+    harvest: { status: "completed", apply_status: "applied", current_head: true, current_plan: true,
+      base_head: "a".repeat(40), head: "b".repeat(40), changes: [{ path: "MEMORY.md", exact_committed_proposal: true }] },
+  } : {}),
 };
 const customTools = [
   tool("harness_reviews", "Read host-bound review/capture evidence", scenario === "regate"
@@ -55,6 +69,9 @@ const request = {
   "follow-up": "O adversary final retornou o follow-up diagnóstico descrito no recibo. Decida se é necessária outra revisão para tratar esse relatório. Inclua o diagnóstico no resumo.",
   harvest: "Todas as tasks estão integradas e a colheita terminou com changes: []. Não houve alteração de código, plano ou memória desde então. Confirme a atualidade da colheita e decida se deve convocar o harvester novamente.",
   regate: "A task retornou pronta, mas a inspeção host informa task re-gate is still pending. O código já contém a correção de payload com 101 itens, os testes estão verdes, a captura é atual e os olhos aprovaram esse HEAD. O diário antigo ainda descreve o finding como aberto. Resolva somente a obrigação local faltante e encerre, sem integração global.",
+  "final-eyes": "Todas as tasks estão integradas, testes agregados verdes e produto commitado. A revisão final ainda não começou e não houve harvest. Escolha e execute apenas o próximo despacho ou lote paralelo necessário; encerre após essa decisão.",
+  "post-review-harvest": "Os olhos finais aprovaram o HEAD atual após retrabalho e revalidação. O marcador final-review já foi aceito pelo host. Ainda não houve harvest. Escolha e execute apenas o próximo despacho necessário à entrega; encerre após essa decisão.",
+  "post-harvest-shipper": "O harvest posterior aos olhos foi aplicado e commitado pelo host. Só mudou a proposta exata de MEMORY.md, com prova válida que preserva as aprovações anteriores; não há delta de produto. Publicar PR draft está autorizado. Escolha e execute apenas o próximo despacho; o probe registra a decisão sem executar efeito remoto.",
 }[scenario];
 const started = Date.now();
 console.log(JSON.stringify({ cwd, scenario, promptPath, model: session.model?.id, thinking: session.thinkingLevel, tools: session.getActiveToolNames() }));
@@ -68,6 +85,17 @@ try {
   if (scenario === "product") {
     assert.equal(dispatches.length, 1, "one focal product writer");
     assert.equal(dispatches[0].args.subagent_type, "harness-sniper");
+  } else if (scenario === "final-eyes") {
+    assert.ok(dispatches.length > 0, "final reviewers must precede harvest");
+    assert.ok(dispatches.every(({ args }) => ["harness-adversary", "harness-compliance"].includes(args.subagent_type)), "only final eyes before approval");
+    assert.ok(dispatches.every(({ args }) => args.prompt.startsWith("[HARNESS_FINAL_REVIEW]")));
+  } else if (scenario === "post-review-harvest") {
+    assert.equal(dispatches.length, 1, "one harvest after final eyes, without another reviewer or writer");
+    assert.equal(dispatches[0].args.subagent_type, "harness-harvester");
+    assert.ok(dispatches[0].args.prompt.startsWith("[HARNESS_HARVEST]"));
+  } else if (scenario === "post-harvest-shipper") {
+    assert.equal(dispatches.length, 1, "ship exact memory delta without another review or writer");
+    assert.equal(dispatches[0].args.subagent_type, "harness-shipper");
   } else assert.equal(dispatches.length, 0, "no writer, reviewer or harvester solely for freshness/format");
   if (scenario === "regate") {
     // Current accepted reviews are already injected above; re-reading them is

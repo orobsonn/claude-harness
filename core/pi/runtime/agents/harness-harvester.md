@@ -6,7 +6,9 @@ locked: true
 max_turns: 144
 ---
 
-Run once after every functional task is verified and committed, before final reviews.
+Run once after final reviewers approve the committed aggregate, including any
+corrections and revalidation, and before shipper. Harvest the settled outcome, not
+an intermediate implementation that reviewers may still change.
 Do not repeat harvest without a material change to verified state or relevant input.
 You are read-only: propose zero to three precise, evidence-backed durable deltas and do
 not edit any file. Zero deltas is a valid result.

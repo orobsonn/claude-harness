@@ -11,6 +11,7 @@ import { isSafeFeatureId, isSafeSessionId, isSafeTaskId } from "../../shared/lib
 import { piExecutionPlanPath, piGateStatePath, piSpecPath } from "./pi-paths.mjs";
 import { isPiReviewSecretPath } from "./policy.mjs";
 import { isParallelReviewRole } from "./roles.mjs";
+import { postHarvestReviewSnapshot } from "./memory-cycle.mjs";
 
 const HEX_256 = /^[0-9a-f]{64}$/;
 
@@ -445,9 +446,12 @@ export function missingPiReviewRoles({ projectRoot, sessionId, featureId, phase,
   if (!captured.ok) return [...roles];
   let state = {};
   try { state = JSON.parse(fs.readFileSync(piGateStatePath({ projectRoot, sessionId }).path, "utf8")); } catch { return [...roles]; }
+  const harvested = phase === "final" ? postHarvestReviewSnapshot(projectRoot, sessionId, captured.snapshot) : captured.snapshot;
   return roles.filter((role) => {
     const receipt = findPiReviewReceipt(state, { featureId, taskId, role, phase });
-    return !isCurrentPiReviewReceipt(receipt, { sessionId, featureId, role, phase, taskId, snapshot: captured.snapshot });
+    const identity = { sessionId, featureId, role, phase, taskId };
+    return !isCurrentPiReviewReceipt(receipt, { ...identity, snapshot: captured.snapshot }) &&
+      !isCurrentPiReviewReceipt(receipt, { ...identity, snapshot: harvested });
   });
 }
 

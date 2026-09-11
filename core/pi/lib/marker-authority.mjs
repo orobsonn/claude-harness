@@ -34,6 +34,7 @@ import { toOcRole } from "./pi-adapter-map.mjs";
 import { piExecutionPlanPath, piGateStatePath, piHandRecordPath } from "./pi-paths.mjs";
 import { readPiSpecApproval, readPiSpecDraft } from "./spec-approval.mjs";
 import { capturePiReviewInput, hasAcceptedPiReviewEvidence, readPiReviewPlan } from "./pi-review-evidence.mjs";
+import { postHarvestReviewSnapshot } from "./memory-cycle.mjs";
 import { PARALLEL_REVIEW_ROLES, requiredPiFinalReviewRoles } from "./roles.mjs";
 import { readIntegratedTaskEvidence } from "./task-receipts.mjs";
 import { validateTaskFidelityFreeze } from "./task-run.mjs";
@@ -213,6 +214,10 @@ function hasCurrentFinalReviewCompletion(previous, authorization, role, headSha,
   const key = role.replace("harness-", "");
   const evidence = previous?.final_review_evidence?.[key];
   if (!evidence || typeof evidence !== "object" || Array.isArray(evidence)) return false;
+  if (captured?.ok && !hasAcceptedPiReviewEvidence(evidence, captured.snapshot)) {
+    captured = { ...captured, snapshot: postHarvestReviewSnapshot(authorization.projectRoot, authorization.sessionId, captured.snapshot) };
+    headSha = captured.snapshot.head_sha;
+  }
   return captured?.ok === true && hasAcceptedPiReviewEvidence(evidence, captured.snapshot) &&
     evidence.written_by === "host-subagent-completion" &&
     evidence.role === role &&

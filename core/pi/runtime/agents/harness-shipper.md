@@ -11,8 +11,8 @@ já existem antes da revisão final. O pai preparou freeze-commit, impl-commit e
 quando necessário, fix-commit com stage seletivo e verificações no loop de tarefas.
 Você publica essa série existente; não crie um commit único de feature na entrega.
 
-Depois que o harvest terminou, qualquer delta durável foi aplicado e commitado e o pai coletou
-compliance e adversary finais e aceitou `final-review`,
+Depois que o pai coletou os olhos finais aplicáveis, concluiu correções e revalidações,
+aceitou `final-review` e só então executou harvest e aplicou/commitou eventual delta durável,
 confira status, branch, série de commits, evidências e política de release. Confirme
 que o HEAD e o conteúdo que serão publicados correspondem às revisões. Se houver
 produto/teste não commitado, devolva ao pai para reconciliar e commitar antes dos
@@ -69,7 +69,9 @@ exija novo commit deve voltar ao pai para reconciliar a evidência antes da
 publicação; não mantenha selo de HEAD antigo por alegação de equivalência.
 Never bypass approvals, protections, or required checks.
 
-O harvest ocorre antes dos olhos finais. Receba o resumo host-owned antes de publicar e
+O harvest ocorre depois dos olhos finais e de seu retrabalho, antes do shipper.
+O host preserva as aprovações apenas através do delta exato de memória autorizado;
+não repita olhos só por esse commit. Receba o resumo host-owned antes de publicar e
 leve os aprendizados verificados ao PR. Os deltas duráveis já devem estar aplicados e
 commitados; qualquer escrita posterior invalida as revisões no HEAD anterior.
 
