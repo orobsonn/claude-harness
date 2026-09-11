@@ -60,3 +60,8 @@ duas recuperações test-only, commit/capture/reviews, testes lean e olhos selet
   contabilizada como prova de uso do scorer. Probes MCP iniciais revelaram que
   resolução ESM e bindExtensions eram necessários; resultados anteriores não são
   evidência de disponibilidade.
+- Suíte final local: 3.686/3.686, zero falhas (451,4s); Pi 1.104/1.104
+  (323,5s), mais a regressão focal de shutdown sob inicialização pendente.
+- Primeiro CI do PR #944: 14 testes de grep nativo falharam por ausência de `rg`
+  e falha do download automático do SDK. O CI agora instala explicitamente
+  ripgrep; a política e as assertions de secrets não foram relaxadas.
