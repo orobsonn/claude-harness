@@ -11,6 +11,7 @@ import {
 } from "./task-coordinator.mjs";
 import { hashTaskArtifact } from "./task-run.mjs";
 import { taskRegistryPath } from "./task-contract.mjs";
+import { readIntegratedTaskEvidence } from "./task-receipts.mjs";
 const git = (cwd, ...args) =>
   execFileSync("git", args, {
     cwd,
@@ -872,10 +873,49 @@ test("explicit resume of an integrated dependent reconciles corrected upstream o
   assert.match(prompt, /no product delta.*do not dispatch.*executor.*sniper/is);
 });
 
-async function pendingCorrectionFixture(t, { overlap = false } = {}) {
+test("integrated dependent recovery uses the real receipt reader while its own correction barrier stays closed", async (t) => {
+  const f = await pendingCorrectionFixture(t, { nativeReceipts: true });
+  const head = git(f.c.worktree, "rev-parse", "HEAD");
+  assert.equal((await f.action({ action: "integrate", task_id: "c", attempt_id: f.c.attempt_id, expected_head: head })).ok, true);
+  await f.correct();
+  const input = { projectRoot: f.dir, sessionId: "parent", featureId: "feature", taskId: "a", headSha: git(f.dir, "rev-parse", "HEAD") };
+  assert.equal(readIntegratedTaskEvidence(input).ok, true, "upstream has a genuinely valid current receipt");
+  const launches = f.launches();
+  const resumed = await f.resumeC();
+  assert.equal(resumed.ok, true, resumed.reason);
+  assert.equal(f.launches(), launches + 1);
+  assert.equal(f.registry().correction_barrier.task_id, "c", "reconciliation does not approve final delivery");
+  assert.equal(readIntegratedTaskEvidence(input).ok, false, "ordinary reads remain blocked until correction integrates");
+  assert.equal(fs.readFileSync(path.join(f.c.worktree, "src/a.mjs"), "utf8"), "export const a=2;");
+});
+
+async function pendingCorrectionFixture(t, { overlap = false, nativeReceipts = false } = {}) {
   const dependent = task("c", ["a"]);
   if (overlap) dependent.scope_paths.push("src/a.mjs");
   const f = fixture(t, [task("a"), task("b"), dependent]);
+  if (nativeReceipts) {
+    f.deps.readIntegrated = readIntegratedTaskEvidence;
+    f.deps.inspectRun = (entry) => {
+      const childHead = git(entry.worktree, "rev-parse", "HEAD");
+      return { ok: true, result: {
+        version: 1, written_by: "host-task-inspection", parent_session_id: "parent", feature_id: "feature",
+        task_id: entry.task_id, attempt_id: entry.attempt_id, parent_root: f.dir, worktree: entry.worktree,
+        session_id: "local-session", plan_sha256: entry.plan_sha256, spec_sha256: entry.spec_sha256,
+        base_sha: entry.base_sha, child_head: childHead,
+        changed_paths: git(entry.worktree, "diff", "--name-only", entry.base_sha, childHead).split("\n").filter(Boolean),
+        freeze_sha: null, frozen_blobs: {},
+        hand_capture: { agent: "harness-executor", producer_call_id: "producer", freeze_sha: childHead,
+          captured_verified_at: "2026-09-11T00:00:00Z", capture_marker: `feature/${entry.task_id}@${childHead}` },
+        review_input_digest: "a".repeat(64),
+        review_receipts: { compliance: { agent_id: "reviewer", dispatch_call_id: "review-call", child_session_id: "review-child",
+          input_digest: "a".repeat(64), report_digest: "b".repeat(64) } },
+        context_return: null, regate: { pending: [], passed: [] }, latest_run_id: entry.launches.at(-1).run_id,
+        runtime: entry.runtime,
+        launches: entry.launches.map((launch) => ({ run_id: launch.run_id, pid: launch.pid, exit_code: 0,
+          signal: null, timed_out: false, ended_at: "2026-09-11T00:01:00Z", run_runtime_sha256: entry.runtime.sha256 })),
+      } };
+    };
+  }
   const action = (params) => executeTaskAction(params, f.context, f.deps);
   await action({ action: "dispatch", task_ids: ["a"] });
   const a = f.registry().tasks.a;

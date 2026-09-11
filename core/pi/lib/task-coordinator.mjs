@@ -400,7 +400,8 @@ async function reconcileDependent(entry, task, owner, registry, persist, deps) {
         !isAncestor(owner.root, upstream.integration.integrated_head, parentHead))
       throw new Error(`corrected dependency ${prior.task_id} requires a new integrated receipt in current parent ancestry`);
     const checked = await deps.readIntegrated({ projectRoot: owner.root, sessionId: owner.sessionId,
-      featureId: owner.featureId, taskId: prior.task_id, headSha: parentHead });
+      featureId: owner.featureId, taskId: prior.task_id, headSha: parentHead,
+      reconciliationFor: { task_id: entry.task_id, attempt_id: entry.attempt_id } });
     if (!checked.ok) throw new Error(`corrected dependency ${prior.task_id}: ${checked.reason}`);
     upstreams.push({ task_id: prior.task_id, attempt_id: prior.attempt_id,
       previous_receipt_sha256: prior.receipt_sha256, receipt: upstream.integration });
