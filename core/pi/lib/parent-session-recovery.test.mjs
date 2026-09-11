@@ -400,6 +400,47 @@ test("retomada exata não substitui processo vivo nem identidade indeterminada",
   }
 });
 
+test("fresh orphan recovery proves registered workers and groups ended before taking the lock", () => {
+  for (const observation of ["ended", "worker", "group", "terminal", "terminal-unknown", "unknown"]) {
+    const f = fixture();
+    try {
+      const abandoned = acquirePiParentWorktreeLock(f.root, { sessionId: SESSION, pid: 12345, hostname: "host-a",
+        processIdentityFn: (pid) => ({ pid, state: "S", start: "old" }) });
+      assert.equal(abandoned.ok, true);
+      const registryPath = path.join(f.root, ".pi/harness/state", SESSION, "task-runs/index.json");
+      fs.mkdirSync(path.dirname(registryPath), { recursive: true });
+      const launch = { run_id: "run-one", ...(observation.startsWith("terminal") ? { terminal_mode: true } : {}) };
+      fs.writeFileSync(registryPath, JSON.stringify({ tasks: { one: { launches: [launch] } } }));
+      const recovered = acquirePiParentWorktreeLock(f.root, { sessionId: "fresh-new-session", pid: 54321, hostname: "host-a",
+        processIdentityFn: (pid) => pid === 54321 ? { pid, state: "S", start: "new" } : null,
+        readTaskProcessFn: () => ({ running: observation === "worker", terminal: !observation.endsWith("unknown"), record: { process_group: 98765 } }),
+        groupMembersFn: () => observation === "group" ? [{ pid: 98766 }] : [],
+        workerPidsFn: () => [],
+      });
+      assert.equal(recovered.ok, ["ended", "terminal"].includes(observation), observation);
+      if (recovered.ok) { assert.equal(abandoned.release(), false); recovered.release(); }
+      else { assert.equal(abandoned.release(), true); }
+    } finally { f.cleanup(); }
+  }
+});
+
+test("orphan recovery ignores foreign historic registries and refuses ambiguous legacy task ownership", () => {
+  for (const ownerSession of [SESSION, null]) {
+    const f = fixture();
+    try {
+      const first = acquirePiParentWorktreeLock(f.root, { sessionId: ownerSession, pid: 12345, hostname: "same",
+        processIdentityFn: (pid) => ({ pid, state: "S", start: "old" }) });
+      const foreign = path.join(f.root, ".pi/harness/state", "historic-session", "task-runs");
+      fs.mkdirSync(foreign, { recursive: true });
+      fs.writeFileSync(path.join(foreign, "index.json"), "unavailable historic registry");
+      const recovered = acquirePiParentWorktreeLock(f.root, { sessionId: "new-session", pid: 54321, hostname: "same",
+        processIdentityFn: (pid) => pid === 54321 ? { pid, state: "S", start: "new" } : null });
+      assert.equal(recovered.ok, ownerSession === SESSION);
+      if (recovered.ok) recovered.release(); else first.release();
+    } finally { f.cleanup(); }
+  }
+});
+
 test("Darwin fixa a invocação de ps e devolve uma identidade de início estável", () => {
   const calls = [];
   const identity = darwinProcessIdentity(4321, {

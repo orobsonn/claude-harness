@@ -18,7 +18,7 @@ export function isPiSubagentDescendant() {
 export function classifyPiReviewDispatch(role, prompt) {
   if (!isParallelReviewRole(role) || typeof prompt !== "string") return null;
   if (prompt.startsWith("[HARNESS_FINAL_REVIEW]")) return { phase: "final" };
-  if (role !== "harness-adversary" && !prompt.startsWith("[HARNESS_TASK_REVIEW]")) return null;
+  if (!prompt.startsWith(role === "harness-adversary" ? "[HARNESS_TASK_CONTEXT]" : "[HARNESS_TASK_REVIEW]")) return null;
   const task = parseTaskDispatchIdentity(prompt);
   return task.ok ? { phase: "task", taskId: task.taskId } : null;
 }

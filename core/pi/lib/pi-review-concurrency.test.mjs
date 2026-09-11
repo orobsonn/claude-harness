@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { classifyPiReviewDispatch } from "./pi-review-concurrency.mjs";
 
 const IMPLEMENTATION_URL = new URL("./pi-review-concurrency.mjs", import.meta.url);
 
@@ -17,6 +18,15 @@ async function loadCreatePiReviewConcurrency() {
 }
 
 const createPiReviewConcurrency = await loadCreatePiReviewConcurrency();
+
+test("task adversary classification requires the context marker as its exact prefix", () => {
+  const context = '[HARNESS_TASK_CONTEXT]{"task_id":"task-one"}[/HARNESS_TASK_CONTEXT]';
+  assert.deepEqual(classifyPiReviewDispatch("harness-adversary", context + "\nReview implementation."), { phase: "task", taskId: "task-one" });
+  for (const prefix of ["Quoted example: ", "\n", "[HARNESS_TASK_REVIEW]\n", "[HARNESS_SPEC_REVIEW]\n"]) {
+    assert.equal(classifyPiReviewDispatch("harness-adversary", prefix + context), null, prefix);
+  }
+  assert.deepEqual(classifyPiReviewDispatch("harness-adversary", "[HARNESS_FINAL_REVIEW]\n" + context), { phase: "final" });
+});
 
 function deferred() {
   return Promise.withResolvers();

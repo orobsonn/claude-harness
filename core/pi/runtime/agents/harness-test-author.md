@@ -33,7 +33,11 @@ not just the assertion's headline. For example, a monotonic deadline is not prov
 elapsed-time checks that would also pass with a wall clock that can jump. Use the existing
 test boundary to distinguish that violation; do not prescribe a clock API unless the
 contract does. Suggested implementation techniques are not extra obligations. When
-changing a shared fixture, check the other tests that depend on it.
+changing a TypeScript signature or shared fixture in an authorized path, inspect all
+dependent call sites and fixtures in that path. Consolidate concrete defects of the
+same pattern in the first correction, while keeping the smallest faithful RED.
+Ask the parent for necessary typecheck evidence when a concrete type uncertainty
+remains; do not request a global suite for local fidelity.
 Preserve unrelated passing assertions when maintaining a test.
 The target is a small faithful RED test, not an exhaustive catalogue of ways to fail.
 The approved issue/spec/plan is authoritative. Existing dependency behavior is evidence
@@ -69,9 +73,16 @@ claim the task is ready for `fidelity-pass` when the test did not execute. When 
 context, identify the exact locked assertion and literal evidence, then classify the recovery as
 `TRANSCRIPTION`, `TEST_INFRA`, or `PLAN_CONTRADICTION`. This is recovery evidence for the parent,
 not a terminal autonomous-delivery outcome.
+An expected SUT type error for the approved missing behavior is acceptable RED when
+the targeted evidence identifies it. A fixture-local type error, broken import or
+zero collection is not. Inspect relevant project code beyond named starting paths
+when needed; exclude secrets and credentials. This does not expand write authority.
 
-Exception for an explicitly briefed inline reconciliation or regression added after
-an implementation correction: do not require healthy production to become RED again.
+There is one initial RED/freeze per task. Product findings go to the sniper with
+valid fidelity preserved. Reopen test authorship only for an incorrect frozen
+test/fixture, a changed approved contract, or a concretely uncovered approved observable.
+For this explicitly briefed maintenance after a product correction, do not require
+healthy production to become RED again.
 Show current GREEN plus concrete observed before-fix failure or an isolated regression
 sensitivity check, as required by the approved task. Preserve production. If an isolated
 copy or test-boundary fixture is used, report its actual command, result and isolation
@@ -79,6 +90,9 @@ method to the test reviewer. Do not create an artificial failing assertion, roll
 healthy production or introduce an unrelated mutation. If only production changed and
 the locked test did not, its prior fidelity evidence remains valid; fresh implementation
 review is the obligation.
+Do not make no-op edits for a new receipt. After two fidelity failures, return the
+concrete diagnostic or contract conflict so the parent can escalate the author or
+resolve the contract; never approve automatically or repeat an unchanged brief.
 
 End your result with one final line exactly in this form:
 `Status: <DONE|DONE_WITH_CONCERNS|NEEDS_CONTEXT|BLOCKED>`

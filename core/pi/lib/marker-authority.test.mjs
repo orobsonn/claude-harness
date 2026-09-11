@@ -620,6 +620,36 @@ test("fidelity exige o hand-record exato do test-author; regate-pending grava a 
   assert.deepEqual(state.regate_pending, [`${FEATURE}/${TASK}`]);
 });
 
+test("regate-passed aceita compliance ou security corrente mas nunca somente positivo ancestral", () => {
+  for (const role of ["harness-compliance", "harness-security"]) {
+    const root = makeRoot();
+    const receipt = { written_by: "host-subagent-completion", role, parent_session_id: SESSION,
+      feature_id: FEATURE, task_id: TASK, dispatch_call_id: "eye", child_session_id: "eye-child",
+      agent_id: "eye-agent", status: "completed", reviewed_head_sha: "b".repeat(40), ...acceptedReviewFields() };
+    const state = { regate_pending: [`${FEATURE}/${TASK}`],
+      task_review_evidence: { [`${FEATURE}/${TASK}`]: { [role.replace("harness-", "")]: receipt } } };
+    seedGateState(root, state);
+    const { authority } = makeAuthority(root);
+    assert.equal(call(authority, { action: "regate-passed", task_id: TASK }, { toolCallId: "old" }).result.ok, false);
+    receipt.reviewed_head_sha = SHA;
+    seedGateState(root, state);
+    assert.equal(call(authority, { action: "regate-passed", task_id: TASK }, { toolCallId: "new" }).result.ok, true);
+  }
+});
+
+test("first fidelity stamp requires the freeze at HEAD; an already stamped ancestor survives resume", () => {
+  const root = makeRoot();
+  const freezeSha = "c".repeat(40);
+  seedGateState(root, { task_run: { task_id: TASK } });
+  const { authority } = makeAuthority(root, { validateTaskFidelityFreezeFn: () => ({ ok: true, freezeSha }) });
+  const first = call(authority, { action: "fidelity", task_id: TASK }, { toolCallId: "first" }).result;
+  assert.equal(first.ok, false, "a product commit before initial fidelity cannot be hidden behind an ancestral freeze");
+  assert.equal(readGateState(root).fidelity_pass, undefined);
+  seedGateState(root, { task_run: { task_id: TASK }, fidelity_pass: [`${FEATURE}/${TASK}@${freezeSha}`] });
+  const resumed = call(authority, { action: "fidelity", task_id: TASK }, { toolCallId: "resumed" }).result;
+  assert.equal(resumed.ok, true, resumed.output);
+});
+
 test("regate-passed exige recibo host-owned do adversary para a tarefa e SHA atual", () => {
   const root = makeRoot();
   seedGateState(root);
@@ -634,7 +664,7 @@ test("regate-passed exige recibo host-owned do adversary para a tarefa e SHA atu
   assert.equal(call(authority, { action: "regate-pending", task_id: TASK }, { toolCallId: "c3" }).result.ok, true);
   assert.equal(
     reasonOf(call(authority, { action: "regate-passed", task_id: TASK }, { toolCallId: "c4" }).result),
-    "regate-passed requires current host-owned task adversary evidence",
+    "regate-passed requires current host-owned task review evidence",
   );
   const state = readGateState(root);
   state.task_adversary_evidence = {
@@ -671,7 +701,7 @@ test("regate-passed rejeita recibo completed no HEAD sem relatório aceito e dig
     },
   });
   const result = call(makeAuthority(root).authority, { action: "regate-passed", task_id: TASK }, { toolCallId: "legacy-regate" }).result;
-  assert.equal(reasonOf(result), "regate-passed requires current host-owned task adversary evidence");
+  assert.equal(reasonOf(result), "regate-passed requires current host-owned task review evidence");
   assert.equal(readGateState(root).regate_passed, undefined);
 });
 
@@ -692,7 +722,7 @@ test("regate-passed rejeita recibo aceito quando o snapshot atual da task mudou 
     captureReviewInputFn: () => ({ ok: true, snapshot: { input_digest: "b".repeat(64) } }),
   }).authority;
   const result = call(authority, { action: "regate-passed", task_id: TASK }, { toolCallId: "stale-regate" }).result;
-  assert.equal(reasonOf(result), "regate-passed requires current host-owned task adversary evidence");
+  assert.equal(reasonOf(result), "regate-passed requires current host-owned task review evidence");
   assert.equal(readGateState(root).regate_passed, undefined);
 });
 
@@ -1039,7 +1069,7 @@ test("commits locais freeze e impl preservam a linhagem real de fidelity e captu
         projectRoot: root,
         sessionId: SESSION,
         taskId: TASK,
-        testAuthorSha: handSha,
+        sessionEntries: undefined,
       });
       return { ok: true, freezeSha: freezeCommit };
     },
