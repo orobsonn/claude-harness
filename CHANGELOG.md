@@ -5,6 +5,15 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [2.6.16](https://github.com/orobsonn/claude-harness/compare/v2.6.15...v2.6.16) (2026-09-11)
+
+
+### Bug Fixes
+
+* **pi:** align planning evidence and canonical model routing (phase A) ([#944](https://github.com/orobsonn/claude-harness/issues/944)) ([f55dc55](https://github.com/orobsonn/claude-harness/commit/f55dc55861717ce1794cf8347295748ca2cbc291))
+* **pi:** converge reviews and constrain memory deltas ([#947](https://github.com/orobsonn/claude-harness/issues/947)) ([e72d607](https://github.com/orobsonn/claude-harness/commit/e72d60747cbc022455a8062ef513a1d2404f1671))
+* **pi:** reconcile resumed dependencies and allow safe typecheck ([#946](https://github.com/orobsonn/claude-harness/issues/946)) ([ad7c403](https://github.com/orobsonn/claude-harness/commit/ad7c403c27afa12f4d61e1eeb0686ef046d2537e))
+
 ## [2.6.15](https://github.com/orobsonn/claude-harness/compare/v2.6.14...v2.6.15) (2026-09-11)
 
 
