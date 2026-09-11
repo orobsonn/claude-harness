@@ -5,6 +5,13 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [2.6.18](https://github.com/orobsonn/claude-harness/compare/v2.6.17...v2.6.18) (2026-09-11)
+
+
+### Bug Fixes
+
+* **pi:** orienta fechamento focal do re-gate ([#950](https://github.com/orobsonn/claude-harness/issues/950)) ([e15486b](https://github.com/orobsonn/claude-harness/commit/e15486b370be4b94b94864ac6b69bc42b1c0e706))
+
 ## [2.6.17](https://github.com/orobsonn/claude-harness/compare/v2.6.16...v2.6.17) (2026-09-11)
 
 
