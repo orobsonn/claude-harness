@@ -21,6 +21,7 @@ import { readTaskProcess } from "./task-process.mjs";
 import { capturePlanReviewInput, readTaskRunBinding } from "./task-run.mjs";
 import { readPiSpecApproval } from "./spec-approval.mjs";
 import { taskScopeBase, taskReconciliationDigest } from "./task-reconciliation.mjs";
+import { DURABLE_MEMORY_FILES } from "./memory-cycle.mjs";
 
 const COMMIT_SHA = /^[0-9a-f]{40}$/;
 const SHA256 = /^[0-9a-f]{64}$/;
@@ -332,6 +333,22 @@ function onlyFrozenChanges(root, baseline, head, paths) {
     .every((file) => paths.includes(file));
 }
 
+function onlyRecoveryChanges(entry, root, baseline, head, task, plan) {
+  const paths = frozenPaths(task);
+  // taskScopeBase has already verified these exact host merges. Only their
+  // imported frozen tests/durable notes may cross a historical implementation
+  // capture; the child's own deltas remain restricted to its frozen paths.
+  const importedPaths = [...plan.tasks.flatMap(frozenPaths), ...DURABLE_MEMORY_FILES];
+  let cursor = baseline;
+  for (const proof of entry.reconciliations ?? []) {
+    if (ancestor(root, proof.merged_head, baseline)) continue;
+    if (!onlyFrozenChanges(root, cursor, proof.pre_child_head, paths) ||
+        !onlyFrozenChanges(root, proof.pre_child_head, proof.merged_head, importedPaths)) return false;
+    cursor = proof.merged_head;
+  }
+  return onlyFrozenChanges(root, cursor, head, paths);
+}
+
 function integratedRecoveryOrigin(entry, { sessionId, task, events, implementationIndex, producerIndex }) {
   // A failed immediate pair must not revive an older integration or event capture.
   const integration = entry.integration_history.at(-1);
@@ -341,7 +358,8 @@ function integratedRecoveryOrigin(entry, { sessionId, task, events, implementati
       result.session_id !== sessionId || !Array.isArray(result.launches) || !result.launches.length ||
       result.launches.length > entry.launches.length)
     return failure("test-only recovery requires the immediately previous matching host integration and inspection");
-  const historicalEntry = { ...entry, result, launches: entry.launches.slice(0, result.launches.length) };
+  const historicalEntry = { ...entry, result, launches: entry.launches.slice(0, result.launches.length),
+    reconciliations: entry.reconciliations?.filter((proof) => proof.launch_count < result.launches.length) };
   const validated = validateIntegration(historicalEntry, integration, {
     projectRoot: entry.parent_root, sessionId: entry.parent_session_id,
     featureId: entry.feature_id, taskId: entry.task_id, headSha: integration.integrated_head,
@@ -457,7 +475,7 @@ export function inspectTaskRun(entry, dependencies = {}) {
       const implementationIndex = native.events.findLastIndex((event, index) => index < producerIndex && isImplementationForTask(event));
       const firstAuthorIndex = native.events.findIndex((event, index) => index > implementationIndex && isWriter(event) &&
         event.args.subagent_type === "harness-test-author");
-      if (implementationIndex < 0 || reconciliation && native.events[implementationIndex].launchIndex < reconciliation.launch_count ||
+      if (implementationIndex < 0 ||
           native.events.some((event, index) => index > implementationIndex && index < producerIndex &&
             isWriter(event) && event.args.subagent_type !== "harness-test-author"))
         return failure("test-only recovery requires a prior captured implementation after dependency reconciliation");
@@ -486,7 +504,7 @@ export function inspectTaskRun(entry, dependencies = {}) {
         return failure("test-only recovery requires the latest fidelity author without a later writing hand");
       if (!fidelity.freezeSha || !ancestor(worktree, hand.freezeCommitSha, fidelity.freezeSha) ||
           !ancestor(worktree, recoveryOrigin.head_sha, hand.freezeCommitSha) ||
-          !onlyFrozenChanges(worktree, recoveryOrigin.head_sha, head, frozenPaths(binding.task)))
+          !onlyRecoveryChanges(entry, worktree, recoveryOrigin.head_sha, head, binding.task, binding.plan))
         return failure("test-only recovery cannot change product after the captured implementation");
     } else if (fidelity.freezeSha !== null) {
       if (!ancestor(worktree, fidelity.freezeSha, hand.freezeCommitSha)) {
@@ -662,8 +680,7 @@ function validateIntegration(entry, integration, { projectRoot, sessionId, featu
   if (reconciliation && (!ancestor(projectRoot, reconciliation.merged_head, result.hand_capture.freeze_sha) ||
       !Number.isInteger(result.hand_capture.producer_launch_index) ||
       result.hand_capture.producer_launch_index < reconciliation.launch_count ||
-      result.hand_capture.producer_launch_index >= entry.launches.length ||
-      recovery && recoveryOrigin.producer_launch_index < reconciliation.launch_count))
+      result.hand_capture.producer_launch_index >= entry.launches.length))
     return failure("integrated hand capture must follow dependency reconciliation");
   if (!COMMIT_SHA.test(headSha ?? "") || !ancestor(projectRoot, result.base_sha, result.child_head) ||
       !ancestor(projectRoot, result.child_head, integration.integrated_head) || !ancestor(projectRoot, integration.integrated_head, headSha)) {
@@ -672,7 +689,7 @@ function validateIntegration(entry, integration, { projectRoot, sessionId, featu
   if (!ancestor(projectRoot, result.hand_capture.freeze_sha, result.child_head) ||
       (recovery ? !result.freeze_sha || !ancestor(projectRoot, result.hand_capture.freeze_sha, result.freeze_sha) ||
         !ancestor(projectRoot, recoveryOrigin.head_sha, result.hand_capture.freeze_sha) ||
-        !onlyFrozenChanges(projectRoot, recoveryOrigin.head_sha, result.child_head, Object.keys(result.frozen_blobs)) :
+        !onlyRecoveryChanges(entry, projectRoot, recoveryOrigin.head_sha, result.child_head, canonicalTask, canonical.plan) :
         result.freeze_sha !== null && !ancestor(projectRoot, result.freeze_sha, result.hand_capture.freeze_sha))) {
     return failure("task receipt freeze and hand capture are not ancestral to the child HEAD");
   }

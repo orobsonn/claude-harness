@@ -310,6 +310,94 @@ test("a captured implementation survives a reviewed test-only correction without
   assert.equal(inspected.result.hand_capture.recovery_origin.head_sha, f.recoveryBaseline);
 });
 
+function reconciledTestRecovery({ productDelta = false, memoryDelta = false } = {}) {
+  const f = inspectionFixture();
+  bindPinnedRuntime(f);
+  appendImplementationReviews(f);
+  const binding = f.dependencies.readTaskRunBindingFn();
+  const upstreamTask = { id: "upstream", depends_on: [], scope_paths: ["upstream.mjs"],
+    locked_tests: [{ id: "upstream-test", path: "upstream.spec.mjs", assertion: "upstream behavior" }] };
+  binding.task.depends_on = [upstreamTask.id];
+  binding.plan.tasks.unshift(upstreamTask);
+  f.dependencies.readTaskRunBindingFn = () => binding;
+  const planPath = path.join(f.root, ".pi/harness/plans", FEATURE, "execution-plan.json");
+  write(planPath, { ...binding.plan, feature_id: FEATURE });
+  f.entry.plan_sha256 = binding.grant.plan_sha256 = crypto.createHash("sha256").update(fs.readFileSync(planPath)).digest("hex");
+  const oldResult = { child_head: f.base };
+  const previous = { version: 1, written_by: "host-task-integration", task_id: "upstream", attempt_id: "upstream-attempt",
+    session_id: "upstream-session", result_sha256: hashTaskReceipt(oldResult), parent_session_id: PARENT,
+    feature_id: FEATURE, parent_root: f.root, plan_sha256: f.entry.plan_sha256, spec_sha256: f.entry.spec_sha256,
+    child_head: f.base, integrated_head: f.base };
+  binding.grant.dependencies = [{ task_id: "upstream", child_head: f.base, integrated_head: f.base,
+    receipt: previous, receipt_sha256: hashTaskReceipt(previous) }];
+  archiveInspectedIntegration(f);
+  run(f.root, "git", "checkout", "-b", "upstream-correction", f.base);
+  write(path.join(f.root, "upstream.spec.mjs"), "export const oracle = 'corrected';\n");
+  if (productDelta) write(path.join(f.root, "upstream.mjs"), "export const behavior = 'changed';\n");
+  if (memoryDelta) write(path.join(f.root, "MEMORY.md"), "Host-harvested lesson.\n");
+  run(f.root, "git", "add", "upstream.spec.mjs", ...(productDelta ? ["upstream.mjs"] : []), ...(memoryDelta ? ["MEMORY.md"] : []));
+  run(f.root, "git", "commit", "-m", "upstream correction");
+  const parent = run(f.root, "git", "rev-parse", "HEAD");
+  run(f.root, "git", "checkout", "-b", "dependent-recovery", f.head);
+  run(f.root, "git", "merge", "--no-ff", "-m", "host reconciliation", parent);
+  const merged = run(f.root, "git", "rev-parse", "HEAD");
+  const result = { child_head: parent };
+  const receipt = { ...previous, child_head: parent, integrated_head: parent, result_sha256: hashTaskReceipt(result) };
+  const registry = { version: 1, parent_session_id: PARENT, feature_id: FEATURE,
+    plan_sha256: f.entry.plan_sha256, spec_sha256: f.entry.spec_sha256,
+    tasks: { upstream: { status: "integrated", attempt_id: "upstream-attempt", integration: receipt,
+      integration_history: [previous], result, result_history: { [previous.result_sha256]: oldResult } } } };
+  write(path.join(f.root, ".pi/harness/state", PARENT, "task-runs/index.json"), registry);
+  f.entry.reconciliations = [{ written_by: "host-task-reconciliation", task_id: TASK, attempt_id: ATTEMPT,
+    scope_base_sha: f.base, pre_child_head: f.head, parent_head: parent, merged_head: merged,
+    tree: run(f.root, "git", "rev-parse", "HEAD^{tree}"), launch_count: f.entry.launches.length - 1,
+    upstreams: [{ task_id: "upstream", attempt_id: "upstream-attempt", previous_receipt_sha256: hashTaskReceipt(previous), receipt }] }];
+  return testOnlyRecovery({ fixture: { ...f, head: merged }, capturedImplementation: false });
+}
+
+test("test-only host reconciliation preserves captured implementation without a no-op writer", () => {
+  for (const memoryDelta of [false, true]) {
+    const f = reconciledTestRecovery({ memoryDelta });
+    const inspected = inspectTaskRun(f.entry, f.dependencies);
+    assert.equal(inspected.ok, true, inspected.reason);
+    assert.equal(inspected.result.hand_capture.agent, "harness-test-author");
+    assert.equal(inspected.result.hand_capture.recovery_origin.producer_launch_index, 0);
+    // Reopening/recovering again must validate the reconciled receipt, not discard its proof.
+    const second = testOnlyRecovery({ fixture: f, integrated: true, capturedImplementation: false, suffix: "-second" });
+    const again = inspectTaskRun(second.entry, second.dependencies);
+    assert.equal(again.ok, true, again.reason);
+    assert.equal(again.result.hand_capture.recovery_origin.head_sha, f.head);
+  }
+});
+
+test("a product change in host reconciliation still requires a current implementation producer", () => {
+  const f = reconciledTestRecovery({ productDelta: true });
+  const inspected = inspectTaskRun(f.entry, f.dependencies);
+  assert.equal(inspected.ok, false);
+  assert.match(inspected.reason, /cannot change product/);
+});
+
+test("test-only reconciliation does not excuse child memory edits or a forged historical proof", () => {
+  for (const variant of ["child-memory", "host-tree", "historical-digest"]) {
+    const f = reconciledTestRecovery({ memoryDelta: true });
+    assert.equal(inspectTaskRun(f.entry, f.dependencies).ok, true, variant + " baseline");
+    if (variant === "child-memory") {
+      write(path.join(f.root, "MEMORY.md"), "Unowned child write.\n");
+      run(f.root, "git", "add", "MEMORY.md");
+      run(f.root, "git", "commit", "-m", "unowned child memory");
+    } else if (variant === "host-tree") {
+      f.entry.reconciliations[0].tree = f.base;
+    } else {
+      const integration = f.entry.integration_history.at(-1);
+      const result = f.entry.result_history[integration.result_sha256];
+      result.reconciliation_sha256 = hashTaskReceipt(f.entry.reconciliations);
+      integration.result_sha256 = hashTaskReceipt(result);
+      f.entry.result_history[integration.result_sha256] = result;
+    }
+    assert.equal(inspectTaskRun(f.entry, f.dependencies).ok, false, variant);
+  }
+});
+
 test("host-integrated implementation survives dirty capture and two test-only recoveries", () => {
   const f = inspectionFixture();
   bindPinnedRuntime(f);
