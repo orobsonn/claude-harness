@@ -80,9 +80,13 @@ domain-literal query and `mv_get_note` for at most 1–2 directly relevant notes
 never write memory. These are lenses, not laws: spec and code are authoritative.
 Absence, errors or timeout never block planning; continue with your own judgment.
 
-Use `harness_complexity` on the intended code change and its responsibilities to
-inform decomposition. If only the existing whole file is available, set `whole_file`
-and treat the score as an approximation, not the task's complexity. Its normalized
+Call `harness_complexity` with the `path` of an existing relevant file. The host
+reads that file and applies the exact Claude Code scorer; do not supply inline
+source, pseudocode or a summary, and do not create a file just to obtain a score.
+The result measures the whole file. Treat it as an approximation for the planned
+change, then judge the actual responsibilities and delta, not the score alone.
+For a new file or an unavailable scorer, continue with engineering judgment.
+Its normalized
 `should_split` is advisory. New max/x-high work must be decomposed before approval.
 For high work, explicitly evaluate a cut by outcome/dependency in the description
 or existing judgments; split unless a shared atomic invariant/transaction or
