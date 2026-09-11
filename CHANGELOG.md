@@ -5,6 +5,13 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [2.6.17](https://github.com/orobsonn/claude-harness/compare/v2.6.16...v2.6.17) (2026-09-11)
+
+
+### Bug Fixes
+
+* **pi:** calcula complexidade a partir do arquivo real ([#948](https://github.com/orobsonn/claude-harness/issues/948)) ([a1d06bd](https://github.com/orobsonn/claude-harness/commit/a1d06bd820ba0f4bccd120ead449cb7e491150ee))
+
 ## [2.6.16](https://github.com/orobsonn/claude-harness/compare/v2.6.15...v2.6.16) (2026-09-11)
 
 
