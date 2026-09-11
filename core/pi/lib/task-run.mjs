@@ -463,7 +463,10 @@ export function decideTaskRunTool(binding, event) {
   }
   if (["bash", "powershell"].includes(name)) {
     const command = String(input.command ?? "");
-    if (/\bgit\s+-/.test(command) || /(?:^|\s|\/)git\s+(?:push|pull|merge|rebase|tag)\b/.test(command) ||
+    // Only a standalone literal ancestry query gets the exception. Do not mask
+    // merge-base inside a chain: a later integration command may be obfuscated.
+    const ancestryQuery = /^[ \t]*git[ \t]+merge-base(?:[ \t]+[A-Za-z0-9_./@~^:+-]+)+[ \t]*$/.test(command);
+    if (/\bgit\s+-/.test(command) || (!ancestryQuery && /(?:^|\s|\/)git\s+(?:push|pull|merge|rebase|tag)\b/.test(command)) ||
         /\bgh\s+(?:pr|release|issue)\s+(?:create|merge|edit|close)\b/.test(command) ||
         /\b(?:npm|pnpm)\s+run\s+deploy\b/.test(command) || /\bwrangler\s+(?:deploy|publish)\b/.test(command)) {
       return deny("task run cannot deliver or integrate globally");

@@ -514,7 +514,12 @@ export function inspectTaskRun(entry, dependencies = {}) {
     }
     const reviews = validateCurrentReviews({ state, events: native.events, plan: binding.plan, task: binding.task, projectRoot: worktree, sessionId: claim.session_id, featureId: entry.feature_id, taskId: entry.task_id, head, captureReviewInputFn: dependencies.captureReviewInputFn ?? capturePiReviewInput });
     const diagnostics = { ...(contextReturn === null ? {} : { context_return: contextReturn }), review_findings: reviews.details?.review_findings ?? [] };
-    if (regatePending.some((pending) => !matchesAbsolution(pending, state.regate_passed, (sha) => ancestor(worktree, sha, head)))) return failure("task re-gate is still pending", diagnostics);
+    if (regatePending.some((pending) => !matchesAbsolution(pending, state.regate_passed, (sha) => ancestor(worktree, sha, head)))) {
+      const next = reviews.ok
+        ? "reviews are accepted; in the task session consult harness_reviews and mark regate-passed if still satisfied. Do not repeat writers or accepted reviews just to close this marker"
+        : "in the task session consult harness_reviews, resolve only missing or negative reviews and their applicable findings, then mark regate-passed";
+      return failure(`task re-gate is still pending: ${next}`, diagnostics);
+    }
     const regatePassed = (Array.isArray(state.regate_passed) ? state.regate_passed : []).filter((passed) =>
       typeof passed === "string" && passed.startsWith(`${bare}@`) && ancestor(worktree, passed.slice(`${bare}@`.length), head));
     if (!reviews.ok) return failure(reviews.reason, diagnostics);

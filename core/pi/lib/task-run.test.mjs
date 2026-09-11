@@ -356,6 +356,24 @@ test("task authority blocks global ceremony, sibling work and delivery while all
   }
 });
 
+test("task ancestry inspection permits standalone merge-base but not integration or shell chains", (t) => {
+  const f = fixture(t);
+  assert.equal(admitTaskRun(f.grantPath, { cwd: f.root, sessionId: "task-parent" }).ok, true);
+  const binding = readTaskRunBinding(f.root, "task-parent");
+  const decide = command => decideTaskRunTool(binding, { toolName: "bash", input: { command } });
+  for (const command of ["git merge-base HEAD main", "git merge-base --is-ancestor HEAD origin/main"]) {
+    assert.equal(decide(command).block, false, command);
+  }
+  for (const command of ["git merge main", "git merge main;true", "git merge main&&true",
+    "git merge-base HEAD main && git merge main", "git merge-base HEAD main;git merge main",
+    "git merge-base HEAD main&&git merge main", 'git merge-base HEAD main;"git" merge main',
+    "git merge-base HEAD main | cat", "git merge-base HEAD main > result", "git merge-base HEAD $(echo main)",
+    "git merge-base HEAD `echo main`", "git merge-base HEAD main\ngit merge main",
+    "git merge-index helper HEAD", "git -C repo merge-base HEAD main"]) {
+    assert.equal(decide(command).block, true, command);
+  }
+});
+
 test("admission validates an optional curated context without treating it as authority", (t) => {
   const f = fixture(t);
   updateSharedContext(f.root, "global-parent", "raw parent diary must stay private");

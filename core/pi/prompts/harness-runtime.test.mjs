@@ -39,6 +39,16 @@ test("parent orchestration stays local and dispatches only canonical harness rol
   assert.doesNotMatch(prompt, /Delegue somente aos agentes `harness-\*`/);
 });
 
+test("task and host explicitly close pending re-gate without repeating accepted work", () => {
+  const local = readFileSync(taskPromptPath, "utf8");
+  const host = readFileSync(promptPath, "utf8");
+  assert.match(local, /missing=\[\].*não registra\s+`regate-passed`/s);
+  assert.match(local, /action="regate-passed".*sem fornecer SHA.*ok=true/s);
+  assert.match(local, /não repita\s+mãos ou revisões aceitas/);
+  assert.match(host, /diário pode estar\s+desatualizado/);
+  assert.match(host, /consulta na sessão global não substitui os recibos da filha/);
+});
+
 test("spec seal follows its native adversary marker", () => {
   const prompt = readFileSync(promptPath, "utf8");
   assert.match(prompt, /Depois de tratar o relatório,.*mark.*adversary_fired.*seal_spec_review/);

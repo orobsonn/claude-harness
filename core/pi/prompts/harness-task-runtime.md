@@ -146,6 +146,12 @@ defeitos aplicáveis e bloqueantes; `follow_ups` opcional é somente diagnóstic
 achados explicitamente preexistentes, fora de escopo ou residuais aceitos, com evidência.
 Não mova defeito atual para follow-up. Preserve esses diagnósticos no retorno ao pai,
 sem invalidar aprovação nem repetir revisor apenas para limpar ou reformatar o relatório.
+Se houve re-gate pendente, `harness_reviews` com `missing=[]` não registra
+`regate-passed`: após as revisões aplicáveis, chame `mark` com
+`action="regate-passed"` e `task_id` desta tarefa, sem fornecer SHA, e confira `ok=true`
+antes de retornar pronta. Se o marcador recusar, resolva a razão exata; não repita
+mãos ou revisões aceitas apenas para fechar esse marcador. Atualize o diário com a
+resolução verificada para não devolver como aberto um finding já corrigido.
 Não envie `context_handoff` nem o diário local aos revisores. Forneça o contrato,
 fatos verificados e evidência atual; nunca use um veredito anterior como autoridade.
 Os olhos podem ler qualquer código, teste, documentação ou evidência relevante do
