@@ -79,14 +79,16 @@ test("harvest runs once after functional commits and before final reviews", () =
   }
   assert.equal(
     harvester.trim().split("\n").at(-1),
-    '`[HARNESS_HARVEST_RESULT]{"changes":[{"path":"MEMORY.md","before_sha256":"<hash from harness_memory read or null absent>","content":"<entire resulting file>","evidence":"<verified sources>","invalidation":"<when recheck>"}]}[/HARNESS_HARVEST_RESULT]`',
+    '`[HARNESS_HARVEST_RESULT]{"changes":[{"path":"MEMORY.md","before_sha256":"<current hash or null absent>","append":"<small new entry>","evidence":"<verified sources>","invalidation":"<when recheck>"}]}[/HARNESS_HARVEST_RESULT]`',
   );
   assert.match(harvester, /before_sha256.*content.*evidence.*invalidation/is);
   assert.match(harvester, /24 KiB/i);
   assert.match(harvester, /three distinct root paths.*MEMORY\.md.*CONTEXT\.md.*kaizen\.md/is);
   assert.match(harvester, /before_sha256/i);
-  assert.match(harvester, /never replace content received in truncated form/i);
+  assert.match(harvester, /Full replacement.*always forbidden/is);
   assert.match(harvester, /`append`.*host computes.*full\s+preimage/is);
+  assert.match(harvester, /8 KiB/);
+  assert.match(prompt, /recibo válido.*reutilize.*changes: \[\]/is);
   assert.match(prompt, /zero deltas.*não cria.*tarefa/is);
   assert.match(prompt, /delta não vazio.*action="apply".*host.*idempotente/is);
   assert.match(prompt, /commit seletivo.*paths.*recibo/is);
@@ -386,7 +388,9 @@ test("os três revisores retornam relatório estruturado somente em task ou fina
     assert.match(instructions, /\{"issues":\[\]\}/);
     assert.match(instructions, /specifically required evidence.*unavailable/i);
     assert.match(instructions, /fix_hint/);
-    assert.match(instructions, /exactly six keys.*no additional issue keys/i);
+    assert.match(instructions, /exactly six keys.*no additional keys/i);
+    assert.match(instructions, /optional `follow_ups`/);
+    assert.match(instructions, /Never put an applicable current defect there to approve/);
   }
 });
 

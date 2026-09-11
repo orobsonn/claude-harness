@@ -141,7 +141,11 @@ Consulte `harness_reviews` na fase `task`: `required` são obrigações já ativ
 posterior; `available` são opções, não uma ordem
 para despachar todas. Aplique o modo LIGHT/FULL e os triggers explícitos antes do primeiro
 despacho. Erro, aborto ou REVISE exige revalidar o olho responsável; não cria obrigação
-de repetir todos os outros olhos.
+de repetir todos os outros olhos. Os relatórios de implementação usam `issues` para
+defeitos aplicáveis e bloqueantes; `follow_ups` opcional é somente diagnóstico para
+achados explicitamente preexistentes, fora de escopo ou residuais aceitos, com evidência.
+Não mova defeito atual para follow-up. Preserve esses diagnósticos no retorno ao pai,
+sem invalidar aprovação nem repetir revisor apenas para limpar ou reformatar o relatório.
 Não envie `context_handoff` nem o diário local aos revisores. Forneça o contrato,
 fatos verificados e evidência atual; nunca use um veredito anterior como autoridade.
 Os olhos podem ler qualquer código, teste, documentação ou evidência relevante do

@@ -144,14 +144,19 @@ export function validateReviewReport(logicalRole, value) {
     return { ok: true, report: body, findings: body.findings };
   }
   if (["adversary", "compliance", "security"].includes(logicalRole)) {
-    if (!exactKeys(body, ["issues"])) return { ok: false, reason: "adversary report keys are not canonical" };
+    const hasFollowUps = Object.hasOwn(body, "follow_ups");
+    if (!exactKeys(body, hasFollowUps ? ["issues", "follow_ups"] : ["issues"])) return { ok: false, reason: "adversary report keys are not canonical" };
     const issues = Array.isArray(body.issues) ? body.issues.map(normalizeAdversaryFinding) : null;
     if (!issues || issues.some((issue) => !issue)) {
       return { ok: false, reason: "adversary finding is not canonical" };
     }
+    const followUps = hasFollowUps && Array.isArray(body.follow_ups) ? body.follow_ups.map(normalizeAdversaryFinding) : null;
+    if (hasFollowUps && (!followUps || followUps.some((finding) => !finding))) {
+      return { ok: false, reason: "review follow-up is not canonical" };
+    }
     return {
       ok: true,
-      report: { ...body, issues },
+      report: { ...body, issues, ...(hasFollowUps ? { follow_ups: followUps } : {}) },
       findings: issues.map((issue) => ({ ...issue, suggested_sniper_tier: normalizedSniperTier(issue.severity) })),
     };
   }

@@ -141,6 +141,27 @@ export function beginHarvest(projectRoot, sessionId) {
   return { session_id: sessionId, project_root: paths.root, feature_id: state.feature_id ?? null,
     base_head: gitMemory(paths.root, ["rev-parse", "HEAD"]), planSnapshot, durable: readDurableMemory(paths.root) };
 }
+function validateMemoryDelta(change) {
+  if (Object.hasOwn(change, "content")) throw new Error("Full replacement is forbidden; use a small patch or append with the current before_sha256, or changes: []");
+  const append = Object.hasOwn(change, "append");
+  const patch = change.patch;
+  if (append === Object.hasOwn(change, "patch")) throw new Error("Harvest needs exactly one patch or append");
+  if (append ? typeof change.append !== "string" || !change.append.trim()
+    : !patch || typeof patch !== "object" || Array.isArray(patch) || Object.keys(patch).sort().join(",") !== "new_text,old_text" ||
+      typeof patch.old_text !== "string" || !patch.old_text.trim() || typeof patch.new_text !== "string")
+    throw new Error("Use nonempty append or patch {old_text, new_text} with a unique literal preimage");
+  if (Buffer.byteLength(append ? change.append : patch.old_text + patch.new_text) > 8192)
+    throw new Error("Each memory patch/append must be at most 8 KiB; reduce to the relevant entry");
+}
+function applyMemoryDelta(original, change) {
+  validateMemoryDelta(change);
+  if (Object.hasOwn(change, "append")) return (original ?? "") + change.append;
+  const { old_text, new_text } = change.patch;
+  if (original === null || !original.includes(old_text) || original.indexOf(old_text) !== original.lastIndexOf(old_text))
+    throw new Error("Memory patch needs a unique literal preimage; read the relevant entry and use its current hash");
+  if (original.trim() === old_text.trim()) throw new Error("Memory patch cannot replace the whole document; patch a relevant entry or append");
+  return original.replace(old_text, () => new_text);
+}
 export function completeHarvest(snapshot, text, agentId) {
   if (typeof agentId !== "string" || !agentId) throw new Error("Harvest requires native completion identity");
   if (typeof text !== "string" || Buffer.byteLength(text) > 65536) throw new Error("Invalid harvest result");
@@ -155,16 +176,16 @@ export function completeHarvest(snapshot, text, agentId) {
     seen.add(change.path);
     const before = snapshot.durable.find((entry) => entry.path === change.path);
     if (before.error || change.before_sha256 !== before.sha256) throw new Error("Harvest preimage is stale or unreadable");
-    const append = typeof change.append === "string";
-    if (append === (typeof change.content === "string") || !(append ? change.append : change.content)?.trim() || typeof change.evidence !== "string" || !change.evidence.trim() || typeof change.invalidation !== "string" || !change.invalidation.trim()) throw new Error("Harvest change needs exactly one content/append, evidence and invalidation");
-    if (before.truncated && !append) throw new Error("Use append for large memory; never replace a truncated excerpt");
+    validateMemoryDelta(change);
+    const append = Object.hasOwn(change, "append");
+    if (typeof change.evidence !== "string" || !change.evidence.trim() || typeof change.invalidation !== "string" || !change.invalidation.trim()) throw new Error("Harvest change needs evidence and invalidation");
     const original = readSmall(join(snapshot.project_root, change.path), 1024 * 1024);
     if ((original === null ? null : sha(original)) !== before.sha256) throw new Error("Harvest preimage changed during dispatch");
-    const resulting = append ? (original ?? "") + change.append : change.content;
+    const resulting = applyMemoryDelta(original, change);
     if (Buffer.byteLength(resulting) > 1024 * 1024) throw new Error("Harvest result exceeds the durable memory read limit; reduce the proposal");
     const after_sha256 = sha(resulting);
     if (after_sha256 === before.sha256) throw new Error("Unchanged memory is zero delta; omit it");
-    return { path: change.path, before_sha256: before.sha256, after_sha256, ...(append ? { append: change.append } : { content: change.content }), evidence: change.evidence, invalidation: change.invalidation };
+    return { path: change.path, before_sha256: before.sha256, after_sha256, ...(append ? { append: change.append } : { patch: change.patch }), evidence: change.evidence, invalidation: change.invalidation };
   });
   const paths = memoryPaths(snapshot.project_root, snapshot.session_id, true);
   if (gitMemory(paths.root, ["rev-parse", "HEAD"]) !== snapshot.base_head) throw new Error("HEAD changed during harvest; rerun it");
@@ -191,6 +212,7 @@ export function applyHarvest(projectRoot, sessionId) {
   const harvest = raw === null ? null : JSON.parse(raw);
   if (!harvest || harvest.written_by !== "host-subagent-completion" || harvest.status !== "completed" || harvest.session_id !== sessionId || harvest.project_root !== paths.root) throw new Error("Apply requires this session's completed harvest proposal");
   if (!Array.isArray(harvest.changes) || harvest.proposal_sha256 !== sha(JSON.stringify(harvest.changes))) throw new Error("Invalid harvest receipt");
+  harvest.changes.forEach(validateMemoryDelta);
   if (gitMemory(paths.root, ["rev-parse", "HEAD"]) !== harvest.base_head) throw new Error("HEAD changed before harvest apply; rerun harvest");
   if (snapshotPlan(paths, harvest.feature_id).hash !== harvest.plan_snapshot?.hash) throw new Error("Canonical plan changed before harvest apply");
   const expected = harvest.changes.map((change) => change.path);
@@ -211,7 +233,7 @@ export function applyHarvest(projectRoot, sessionId) {
     const currentSha = current === null ? null : sha(current);
     if (currentSha === change.after_sha256) continue;
     if (currentSha !== change.before_sha256) throw new Error(`Harvest apply found an unexpected version of ${change.path}`);
-    const resulting = Object.hasOwn(change, "append") ? (current ?? "") + change.append : change.content;
+    const resulting = applyMemoryDelta(current, change);
     if (typeof resulting !== "string" || sha(resulting) !== change.after_sha256) throw new Error("Harvest receipt content does not match its hash");
     atomicWrite(join(paths.root, change.path), resulting);
   }
@@ -226,6 +248,7 @@ export function checkHarvestReady(projectRoot, sessionId) {
   const { harvestReceipt: harvest } = readMemory(paths.root, sessionId);
   if (!harvest || harvest.written_by !== "host-subagent-completion" || harvest.status !== "completed") throw new Error("Run a successful [HARNESS_HARVEST] before final review");
   if (!Array.isArray(harvest.changes) || harvest.proposal_sha256 !== sha(JSON.stringify(harvest.changes))) throw new Error("Invalid harvest receipt");
+  harvest.changes.forEach(validateMemoryDelta);
   const current = snapshotPlan(paths, harvest.feature_id);
   const old = harvest.plan_snapshot;
   if (!old || current.hash !== old.hash) throw new Error("Finalization must preserve the canonical plan exactly");

@@ -21,10 +21,28 @@ import test from "node:test";
 
 import harnessMemory from "./harness-memory.ts";
 import { capturePiReviewInput } from "../lib/pi-review-evidence.mjs";
+import { beginHarvest, completeHarvest, applyHarvest } from "../lib/memory-cycle.mjs";
 
 const SESSION = "ses-harvest-parent";
 const FEATURE = "pi-memory-harvest";
 const BASE_TASK = { id: "task-1", scope_paths: ["src/app.ts"] };
+
+test("harvest only accepts hash-bound local patch/append, never full replacement", (t) => {
+  const root = fixture(t);
+  const before = readFileSync(join(root, "MEMORY.md"), "utf8");
+  const snapshot = beginHarvest(root, SESSION);
+  const base = { path: "MEMORY.md", before_sha256: sha256(before), evidence: "verified", invalidation: "contract changes" };
+  const complete = (change) => completeHarvest(snapshot, resultEnvelope([change]), "native-harvester");
+  assert.throws(() => complete({ ...base, content: "replacement" }), /full replacement.*patch.*append/i);
+  assert.throws(() => complete({ ...base, patch: { old_text: before, new_text: "replacement" } }), /whole document/i);
+  assert.throws(() => complete({ ...base, patch: { old_text: "missing", new_text: "new" } }), /unique/i);
+  assert.throws(() => complete({ ...base, before_sha256: "0".repeat(64), append: "new" }), /stale/i);
+  const patch = { old_text: "anterior", new_text: "atualizada" };
+  const receipt = complete({ ...base, patch });
+  assert.deepEqual(receipt.changes[0].patch, patch);
+  assert.equal(applyHarvest(root, SESSION).ok, true);
+  assert.equal(readFileSync(join(root, "MEMORY.md"), "utf8"), before.replace("anterior", "atualizada"));
+});
 
 function register() {
   const handlers = new Map();
@@ -570,7 +588,7 @@ test("harness-memory harvest: delta de documento existente só libera após cont
     changes: [{
       path: "MEMORY.md",
       before_sha256: sha256(before),
-      content: proposed,
+      append: proposed,
       evidence: "teste integrado confirmou o padrão",
       invalidation: "remover se o contrato mudar",
     }],
@@ -585,7 +603,7 @@ test("harness-memory harvest: delta de documento existente só libera após cont
   assert.equal(await api.handlers.get("tool_call")(finalReviewEvent(), ctx(root)), undefined);
 });
 
-test("harness-memory harvest: arquivo antes ausente aceita preimage null e conteúdo completo commitado", async (t) => {
+test("harness-memory harvest: arquivo antes ausente aceita preimage null e append commitado", async (t) => {
   const root = fixture(t, { omit: ["CONTEXT.md"] });
   const api = register();
   const proposed = "# Glossário\n\nTermo: definição verificada.\n";
@@ -593,7 +611,7 @@ test("harness-memory harvest: arquivo antes ausente aceita preimage null e conte
     changes: [{
       path: "CONTEXT.md",
       before_sha256: null,
-      content: proposed,
+      append: proposed,
       evidence: "o domínio usa este termo",
       invalidation: "revisar se o domínio renomear o termo",
     }],
@@ -614,7 +632,7 @@ test("harness-memory harvest: conteúdo persistido diferente da proposta continu
     changes: [{
       path: "kaizen.md",
       before_sha256: sha256(before),
-      content: "proposta exata\n",
+      append: "proposta exata\n",
       evidence: "ocorrência repetida",
       invalidation: "revisar após mudança de processo",
     }],
@@ -644,7 +662,7 @@ test("harness-memory harvest: qualquer mutação do plano durante a finalizaçã
         changes: [{
           path: "MEMORY.md",
           before_sha256: sha256(before),
-          content: proposed,
+          append: proposed,
           evidence: "evidência verificada",
           invalidation: "revalidar se a tarefa mudar",
         }],
@@ -669,8 +687,8 @@ test("harness-memory apply: retoma aplicação parcial somente nos hashes antes/
   const memoryAfter = `${memoryBefore}aprendizado A\n`;
   const contextAfter = `${contextBefore}termo B\n`;
   emitHarvest(api, root, { changes: [
-    { path: "MEMORY.md", before_sha256: sha256(memoryBefore), content: memoryAfter, evidence: "teste A", invalidation: "contrato A mudar" },
-    { path: "CONTEXT.md", before_sha256: sha256(contextBefore), content: contextAfter, evidence: "teste B", invalidation: "domínio B mudar" },
+    { path: "MEMORY.md", before_sha256: sha256(memoryBefore), append: "aprendizado A\n", evidence: "teste A", invalidation: "contrato A mudar" },
+    { path: "CONTEXT.md", before_sha256: sha256(contextBefore), append: "termo B\n", evidence: "teste B", invalidation: "domínio B mudar" },
   ] });
 
   writeFileSync(join(root, "MEMORY.md"), memoryAfter, "utf8");
@@ -857,7 +875,7 @@ test("harness-memory harvest: finalize aceita delta exato revisado e remove reci
     changes: [{
       path: "MEMORY.md",
       before_sha256: sha256(before),
-      content: proposed,
+      append: proposed,
       evidence: "evidência verificada",
       invalidation: "invalidar se o teste deixar de cobrir",
     }],
@@ -876,7 +894,7 @@ test("harness-memory harvest: finalize aceita delta exato revisado e remove reci
   assert.equal(existsSync(join(root, ".pi", "harness", "state", SESSION, "shared_context.md")), false);
   assert.equal(existsSync(harvestPath(root)), false);
   assert.equal(existsSync(shipmentPath(root)), false);
-  assert.equal(readFileSync(join(root, "MEMORY.md"), "utf8"), proposed);
+  assert.equal(readFileSync(join(root, "MEMORY.md"), "utf8"), before + proposed);
 
   const tombstone = JSON.parse(readFileSync(finalizedPath(root), "utf8"));
   assert.deepEqual(Object.keys(tombstone).sort(), ["feature_id", "finalized_at", "head", "session_id"]);

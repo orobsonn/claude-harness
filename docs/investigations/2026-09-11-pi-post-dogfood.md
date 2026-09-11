@@ -18,8 +18,8 @@ verificáveis do identificador efetivo. Não foi alegada troca para Astra/high.
 
 ## Verificação
 
-Em andamento: fases A (planejamento/rotas), B (falsos bloqueios/coordenação) e C
-(convergência/finalização). Orientação posterior do operador: três PRs sequenciais,
+Fases A (#944) e B (#946) mergeadas; fase C em validação.
+Orientação posterior do operador: três PRs sequenciais,
 um por fase, e uma única release via Release Please depois dos três merges.
 Os primeiros testes no worktree
 sem dependências falharam por módulos ausentes; não são evidência de defeito do
@@ -92,4 +92,61 @@ mergeado com CI verde. Release Please permanece reservado para depois das três 
 - 5.4: baseline task/final approve → negative → missing passou. Runtime sem diff;
   teste estendido confirma leitura do negativo em processo novo.
 - Suíte focal inicial: 218 testes verdes (31,8s). Adversary/compliance independentes
-  revisam a fase, sem antecipar a aprovação dos itens restantes da fase C.
+  aprovaram; separador `--` de npm exec corrigido após adversary e revalidado.
+- Pi completo + validator: 1.136 testes verdes (290,9s). CI completo verde em
+  [34605907835](https://github.com/orobsonn/claude-harness/actions/runs/34605907835).
+  [PR #946](https://github.com/orobsonn/claude-harness/pull/946) mergeado em
+  `ad7c403c27afa12f4d61e1eeb0686ef046d2537e`.
+
+### Fase C — convergência e finalização
+
+Base: merge da fase B acima. Regressões de baseline: 143 testes de memória,
+review e acesso passaram; quatro testes de captura histórica/test-only passaram;
+11 testes de harvest passaram, incluindo a permissão antiga de full replacement.
+Novos testes RED comprovaram rejeição de follow_ups e aceitação de replacement;
+o teste do brief também mostrou a ordem incondicional de chamar implementação.
+
+- 5.10: campo opcional `follow_ups` usa os seis campos já existentes dos achados,
+  preservado no mesmo receipt. Só `issues` determina accepted/findings/missing.
+  Parser, persistência e retomada task/final cobrem follow-up isolado e misto.
+  Prosa local/global orienta incluí-lo no relatório, sem outra revisão de formato.
+- 5.11: brief de reconciliação agora declara incorporação host-owned concluída e
+  pede comparar HEAD/capture/produtor antes da mão. Proveniência pós-merge real
+  continua obrigatória, sem considerar um launch prova. Executor/sniper distinguem
+  produto pronto com fallout de teste/evidência (`DONE_WITH_CONCERNS`) de produto
+  incompleto. Recuperação test-only existente foi preservada sem diff.
+- 5.12: `content` rejeitado sempre, inclusive em recibos antigos no apply/final-ready.
+  Só append ou patch literal único {old_text,new_text}, ligado ao hash atual;
+  patch não pode cobrir o documento todo. Limites: 8 KiB por delta, 24 KiB total.
+  Nenhuma inferência de truncamento para autorizar escrita. Parent fornece recorte
+  relevante/hashes; no-op válido é reutilizado sem segundo harvest. Falha exige
+  diagnóstico e input materialmente corrigido, não redispatch do mesmo brief.
+- 5.13/5.14: política de leitura e invalidação seletiva preservadas sem alteração.
+  Regressões nativas de grep/glob, ENOENT versus negação, secrets e symlink passaram;
+  duas recuperações test-only e revisão negativa/ancestral também passaram.
+- Focal C: 235/235 testes passaram (80,1s). Adversary e compliance independentes
+  aprovaram após corrigir dois asserts de fixtures, não o runtime.
+
+Pressure real Terra/high com evidência host injetada, não dogfood de produto:
+
+| Cenário | Prompt efetivo | Tempo | Dispatch observado |
+| --- | --- | ---: | --- |
+| Evidência corrigida, captura válida | task-runtime | 5,075s | nenhum writer |
+| Defeito real de ownership | task-runtime | 8,233s | um sniper Terra/medium |
+| Follow-up não bloqueante | runtime global | 4,576s | nenhum reviewer |
+| Harvest atual com changes vazio | runtime global | 3,509s | nenhum harvester |
+
+Artefatos em `/tmp/pi-convergence-evidence-3aWC4m`, `product-9SQss3`,
+`follow-up-t7MTC7`, `harvest-Sw1JzZ` (os três últimos com o mesmo prefixo
+`/tmp/pi-convergence-`), cada um com `result.json`.
+Os probes anteriores foram descartados: prompt global no lugar do local e tools
+customizadas não ativadas. O script corrigido verifica `subagent` ativa antes da
+chamada. A tool registra a decisão, não lança um child real. Suítes completas,
+artefato distribuído e critérios externos de release/vendor/dogfood seguem pendentes.
+
+Dry-run adicional do vendor oficial em `/tmp/pi-phase-c-vendor-t0RE1r`: 160 arquivos,
+runtime materializado com tools de planejamento, follow_ups nos três olhos, harvester
+sem replacement e default Terra/high. Nenhuma credencial copiada. Scan de secrets,
+checks de sintaxe dos módulos novos e `git diff --check` verdes. O package não declara
+scripts separados de lint/typecheck; as extensões TS são exercitadas pelo bootstrap
+e pelos testes nativos. Nada foi vendorado na raiz do repositório-fonte.

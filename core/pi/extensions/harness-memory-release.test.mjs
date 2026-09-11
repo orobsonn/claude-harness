@@ -389,7 +389,7 @@ test("harness-memory release: finalize preserva proposta durável ainda não per
   completeHarvest(api, f.root, [{
     path: "MEMORY.md",
     before_sha256: createHash("sha256").update(before).digest("hex"),
-    content: "memória proposta e ainda não escrita\n",
+    append: "memória proposta e ainda não escrita\n",
     evidence: "evidência confirmada",
     invalidation: "revalidar no próximo release",
   }]);
