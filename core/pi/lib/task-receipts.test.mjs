@@ -201,14 +201,48 @@ function bindPinnedRuntime(fixture, { testReviewer = false } = {}) {
   return runtime;
 }
 
+function archiveInspectedIntegration(f) {
+  fs.appendFileSync(path.join(f.root, ".git/info/exclude"), "\n.pi/harness/plans/\n");
+  const binding = f.dependencies.readTaskRunBindingFn();
+  const planPath = path.join(f.root, ".pi/harness/plans", FEATURE, "execution-plan.json");
+  write(planPath, { ...binding.plan, feature_id: FEATURE });
+  const planSha = crypto.createHash("sha256").update(fs.readFileSync(planPath)).digest("hex");
+  f.entry.plan_sha256 = binding.grant.plan_sha256 = planSha;
+  const inspected = inspectTaskRun(f.entry, f.dependencies);
+  assert.equal(inspected.ok, true, inspected.reason);
+  const result = inspected.result;
+  const integration = {
+    version: 1, written_by: "host-task-integration", parent_session_id: PARENT, feature_id: FEATURE,
+    task_id: TASK, attempt_id: ATTEMPT, parent_root: f.root, worktree: f.root, session_id: CHILD,
+    plan_sha256: result.plan_sha256, spec_sha256: result.spec_sha256, base_sha: f.base,
+    child_head: f.head, integrated_head: f.head, result_sha256: hashTaskReceipt(result),
+  };
+  (f.entry.integration_history ??= []).push(integration);
+  (f.entry.result_history ??= {})[integration.result_sha256] = result;
+  const previous = f.entry.launches.at(-1);
+  const runId = "run-recovery-" + f.entry.integration_history.length;
+  const runDir = path.join(f.entry.job_dir, runId);
+  const launch = { ...previous, run_id: runId, events_path: path.join(runDir, "events.jsonl"),
+    process_path: path.join(runDir, "process.json"), result_path: path.join(runDir, "result.json") };
+  write(launch.events_path, event("session", { id: CHILD }) + "\n");
+  for (const field of ["process_path", "result_path"]) {
+    write(launch[field], { ...JSON.parse(fs.readFileSync(previous[field], "utf8")), run_id: runId });
+  }
+  f.entry.launches.push(launch);
+  return { result, integration };
+}
+
 function testOnlyRecovery({ capturedImplementation = true, productDelta = false, laterWriter = false,
   extraAuthor = false, earlierAuthorProductDrift = false, lateCapture = false, failedWriter = false,
-  overlappingCapture = false, dirtyCaptureFirst = false, originOverride = {} } = {}) {
-  const f = inspectionFixture();
+  overlappingCapture = false, dirtyCaptureFirst = false, originOverride = {},
+  fixture = inspectionFixture(), integrated = false, suffix = "" } = {}) {
+  const f = fixture;
+  if (integrated) archiveInspectedIntegration(f);
   let baseline = f.head;
   const eventsPath = f.entry.launches.at(-1).events_path;
   const extra = [];
   const add = (id, tool, args, result = { details: { ok: true } }) => {
+    id += suffix;
     extra.push(event("tool_execution_start", { toolCallId: id, toolName: tool, args }));
     extra.push(event("tool_execution_end", { toolCallId: id, toolName: tool, isError: false, result }));
   };
@@ -231,7 +265,7 @@ function testOnlyRecovery({ capturedImplementation = true, productDelta = false,
   if (capturedImplementation && lateCapture) capture();
   if (failedWriter) add("failed-sniper", "subagent", { subagent_type: "harness-sniper", prompt }, { details: { status: "failed" } });
   add("correct-author", "subagent", { subagent_type: "harness-test-author", prompt }, { details: { status: "completed" } });
-  write(path.join(f.root, "src/task.spec.mjs"), "export const expected = { error: 'invalid_state' };\n");
+  write(path.join(f.root, "src/task.spec.mjs"), "export const expected = { error: 'invalid_state" + suffix + "' };\n");
   if (productDelta) {
     write(path.join(f.root, "src/task.mjs"), "export const actual = 'unauthorized drift';\n");
     run(f.root, "git", "add", "src/task.mjs");
@@ -255,7 +289,7 @@ function testOnlyRecovery({ capturedImplementation = true, productDelta = false,
   write(eventsPath, fs.readFileSync(eventsPath, "utf8") + extra.join("\n") + "\n");
   const recordPath = path.join(f.root, ".pi/harness/state/hand-records", FEATURE, CHILD, TASK + ".json");
   const record = JSON.parse(fs.readFileSync(recordPath, "utf8"));
-  write(recordPath, { ...record, agent: "harness-test-author", producerCallId: "correct-author", freezeCommitSha: baseline });
+  write(recordPath, { ...record, agent: "harness-test-author", producerCallId: "correct-author" + suffix, freezeCommitSha: baseline });
   const state = JSON.parse(fs.readFileSync(f.statePath, "utf8"));
   const bare = FEATURE + "/" + TASK;
   state.fidelity_pass.push(bare + "@" + freeze);
@@ -274,6 +308,89 @@ test("a captured implementation survives a reviewed test-only correction without
   assert.equal(inspected.result.freeze_sha, f.head);
   assert.equal(inspected.result.hand_capture.freeze_sha, f.recoveryBaseline);
   assert.equal(inspected.result.hand_capture.recovery_origin.head_sha, f.recoveryBaseline);
+});
+
+test("host-integrated implementation survives dirty capture and two test-only recoveries", () => {
+  const f = inspectionFixture();
+  bindPinnedRuntime(f);
+  const recordPath = path.join(f.root, ".pi/harness/state/hand-records", FEATURE, CHILD, TASK + ".json");
+  const record = JSON.parse(fs.readFileSync(recordPath, "utf8"));
+  write(recordPath, { ...record, freezeCommitSha: f.freeze });
+  const state = JSON.parse(fs.readFileSync(f.statePath, "utf8"));
+  state.capture_verified = [FEATURE + "/" + TASK + "@" + f.freeze];
+  write(f.statePath, state);
+  fs.appendFileSync(f.entry.launches.at(-1).events_path, [
+    event("tool_execution_start", { toolCallId: "dirty-capture", toolName: "mark", args: { action: "capture-verified", task_id: TASK } }),
+    event("tool_execution_end", { toolCallId: "dirty-capture", toolName: "mark", result: { details: {
+      ok: true, capture_origin: { task_id: TASK, producer_call_id: "producer", head_sha: f.freeze, worktree_clean: false },
+    } } }), "",
+  ].join("\n"));
+  const first = testOnlyRecovery({ fixture: f, integrated: true, capturedImplementation: false });
+  const inspected = inspectTaskRun(first.entry, first.dependencies);
+  assert.equal(inspected.ok, true, inspected.reason);
+  assert.equal(inspected.result.hand_capture.recovery_origin.head_sha, f.head);
+  const second = testOnlyRecovery({ fixture: first, integrated: true, capturedImplementation: false, suffix: "-second" });
+  const again = inspectTaskRun(second.entry, second.dependencies);
+  assert.equal(again.ok, true, again.reason);
+  assert.equal(again.result.hand_capture.recovery_origin.head_sha, first.head);
+});
+
+test("historical recovery revalidates the immediate host pair without older fallback", () => {
+  const mutations = {
+    hash: (result, integration) => { integration.result_sha256 = "0".repeat(64); },
+    attempt: (result) => { result.attempt_id = "other-attempt"; },
+    session: (result, integration) => { result.session_id = integration.session_id = "ses-other-child"; },
+    parentSession: (result) => { result.parent_session_id = "ses-other-parent"; },
+    plan: (result) => { result.plan_sha256 = "1".repeat(64); },
+    spec: (result) => { result.spec_sha256 = "2".repeat(64); },
+    inspectionOwner: (result) => { result.written_by = "child"; },
+    integrationOwner: (result, integration) => { integration.written_by = "child"; },
+    runtime: (result) => { result.runtime.sha256 = "3".repeat(64); },
+    worktree: (result) => { result.worktree += "-other"; },
+    frozenPaths: (result) => { result.frozen_blobs["src/task.mjs"] = DIGEST; },
+    producer: (result) => { result.hand_capture.producer_call_id = "foreign"; },
+    ancestry: (result, integration) => { result.child_head = integration.child_head = "0".repeat(40); },
+  };
+  for (const [name, mutate] of Object.entries(mutations)) {
+    const f = inspectionFixture();
+    bindPinnedRuntime(f);
+    const recovery = testOnlyRecovery({ fixture: f, integrated: true });
+    assert.equal(inspectTaskRun(recovery.entry, recovery.dependencies).ok, true, name + " baseline");
+    const valid = f.entry.integration_history.at(-1);
+    const result = structuredClone(f.entry.result_history[valid.result_sha256]);
+    const invalid = structuredClone(valid);
+    mutate(result, invalid);
+    if (name !== "hash") invalid.result_sha256 = hashTaskReceipt(result);
+    f.entry.result_history[invalid.result_sha256] = result;
+    f.entry.integration_history.push(invalid);
+    assert.equal(inspectTaskRun(recovery.entry, recovery.dependencies).ok, false, name);
+  }
+});
+
+test("historical recovery requires the result at its exact digest key", () => {
+  const f = testOnlyRecovery({ integrated: true });
+  assert.equal(inspectTaskRun(f.entry, f.dependencies).ok, true);
+  const integration = f.entry.integration_history.at(-1);
+  const result = f.entry.result_history[integration.result_sha256];
+  for (const history of [{ wrong_key: result }, [result]]) {
+    f.entry.result_history = history;
+    assert.equal(inspectTaskRun(f.entry, f.dependencies).ok, false);
+  }
+});
+
+test("integrated recovery rejects product drift, later writers and forged recovery origins", () => {
+  for (const options of [{ productDelta: true }, { laterWriter: true }, { failedWriter: true }]) {
+    const f = testOnlyRecovery({ integrated: true, capturedImplementation: false, ...options });
+    assert.equal(inspectTaskRun(f.entry, f.dependencies).ok, false, JSON.stringify(options));
+  }
+  const first = testOnlyRecovery({ integrated: true, capturedImplementation: false });
+  const second = testOnlyRecovery({ fixture: first, integrated: true, capturedImplementation: false, suffix: "-second" });
+  const integration = second.entry.integration_history.at(-1);
+  const result = second.entry.result_history[integration.result_sha256];
+  result.hand_capture.recovery_origin.producer_call_id = "forged";
+  integration.result_sha256 = hashTaskReceipt(result);
+  second.entry.result_history[integration.result_sha256] = result;
+  assert.equal(inspectTaskRun(second.entry, second.dependencies).ok, false);
 });
 
 test("test-only recovery cannot cover an uncaptured implementation, product drift or later writer", () => {

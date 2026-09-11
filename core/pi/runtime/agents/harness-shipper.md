@@ -24,6 +24,15 @@ funcional, preparar a release ou confirmar sua publicação. Não reinicie revis
 um pedido de merge/release. Retorne operações realizadas, SHA, URL/estado remoto e
 bloqueios; não descreva um segundo escopo como repetição do primeiro.
 
+Ao aguardar CI, use uma espera bloqueante para o PR explícito:
+`gh pr checks <PR> --watch --interval 30`, com timeout total maior que o CI observado
+(inclua margem para fila e execução). Faça no máximo um retry se os checks ainda não foram
+publicados; após esse retry ou timeout, reporte estado e bloqueio. Não faça polling aberto
+por checks/status. Se o executor retornar um handle de processo, aguarde esse mesmo handle.
+Confirme os checks exigidos no PR antes do merge; timeout nunca equivale a CI verde.
+Se o repositório não usa Release Please, não invente PR de release nem espere essa
+Action: siga somente a política de release existente e a operação autorizada.
+
 No merge funcional, use `gh pr merge <PR> --squash` sem `--delete-branch`. Continue
 merge e release na mesma sessão e worktree do Orca; não dispute `main` ocupada por
 outro worktree nem altere seu checkout. Registre o SHA revisado e o merge remoto exato.

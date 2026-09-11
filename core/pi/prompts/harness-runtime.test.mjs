@@ -39,6 +39,20 @@ test("parent orchestration stays local and dispatches only canonical harness rol
   assert.doesNotMatch(prompt, /Delegue somente aos agentes `harness-\*`/);
 });
 
+test("spec seal follows its native adversary marker", () => {
+  const prompt = readFileSync(promptPath, "utf8");
+  assert.match(prompt, /Depois de tratar o relatório,.*mark.*adversary_fired.*seal_spec_review/);
+});
+
+test("shipper waits for the explicit PR with bounded CI observation", () => {
+  const shipper = readFileSync(shipperPath, "utf8");
+  assert.match(shipper, /gh pr checks <PR> --watch --interval 30/);
+  assert.match(shipper, /timeout.*maior.*CI observado/is);
+  assert.match(shipper, /no máximo um retry.*checks.*publicados/is);
+  assert.match(shipper, /Não faça polling aberto/);
+  assert.match(shipper, /não usa Release Please.*não.*PR de release/is);
+});
+
 test("cerimônia commita cada tarefa antes da revisão final e o shipper publica a série existente", () => {
   const prompt = readFileSync(promptPath, "utf8");
   const shipper = readFileSync(shipperPath, "utf8");
