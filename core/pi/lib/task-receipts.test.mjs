@@ -1112,6 +1112,33 @@ test("inspectTaskRun binds a validated child context return to task identity and
   assert.match(foreign.reason, /context return.*identity/i);
 });
 
+test("accepted task reviews close pending re-gate through the native marker without new dispatches", () => {
+  const f = inspectionFixture();
+  const state = JSON.parse(fs.readFileSync(f.statePath, "utf8"));
+  state.regate_pending = [`${FEATURE}/${TASK}`];
+  write(f.statePath, state);
+  const beforeEvents = fs.readFileSync(f.entry.launches.at(-1).events_path, "utf8");
+  const blocked = inspectTaskRun(f.entry, f.dependencies);
+  assert.equal(blocked.ok, false);
+  assert.match(blocked.reason, /reviews are accepted.*task session.*regate-passed/);
+  assert.match(blocked.reason, /Do not repeat writers or accepted reviews/);
+  const authority = createPiMarkerAuthority({ projectRoot: f.root,
+    captureReviewInputFn: f.dependencies.captureReviewInputFn });
+  const params = { action: "regate-passed", task_id: TASK };
+  assert.deepEqual(authority.authorize({ toolName: "mark", input: params,
+    sessionId: CHILD, toolCallId: "close-regate" }), { ok: true });
+  const result = authority.execute({ toolCallId: "close-regate", params,
+    sessionId: CHILD, isChild: false });
+  assert.equal(result.ok, true, result.output);
+  const ready = inspectTaskRun(f.entry, f.dependencies);
+  assert.equal(ready.ok, true, ready.reason);
+  assert.equal(ready.result.child_head, f.head);
+  const after = JSON.parse(fs.readFileSync(f.statePath, "utf8"));
+  assert.deepEqual(after.task_review_evidence, state.task_review_evidence);
+  assert.deepEqual(after.task_adversary_evidence, state.task_adversary_evidence);
+  assert.equal(fs.readFileSync(f.entry.launches.at(-1).events_path, "utf8"), beforeEvents);
+});
+
 test("blocked re-gate exposes current task context and review findings without a ready receipt", () => {
   const fixture = inspectionFixture();
   const content = "Fix the task-1 signer before resuming task-4; task-4 cannot fix its dependency.";
@@ -1129,6 +1156,7 @@ test("blocked re-gate exposes current task context and review findings without a
   const blocked = inspectTaskRun(fixture.entry, fixture.dependencies);
   assert.equal(blocked.ok, false);
   assert.match(blocked.reason, /re-gate.*pending/);
+  assert.match(blocked.reason, /resolve only missing or negative reviews/);
   assert.equal(blocked.result, undefined);
   assert.deepEqual(blocked.details.context_return, context);
   assert.deepEqual(blocked.details.review_findings, [{ role: "harness-security", issues: security.report.issues }]);

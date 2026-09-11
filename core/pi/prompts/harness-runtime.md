@@ -117,6 +117,13 @@ por `status`, identifique a tarefa dona do defeito e retome essa tentativa com o
 feedback consolidado quando seus processos tiverem encerrado e houver slot seguro.
 Não espere uma tarefa independente terminar se a correção dona já pode avançar.
 Contexto e achados no diagnóstico explicam o bloqueio; não são recibo de integração.
+Um re-gate pendente não implica produto ainda incorreto: o diário pode estar
+desatualizado. Confira o diagnóstico atual antes de repetir a mesma correção.
+Se faltou somente o fechamento, retome a sessão da tarefa para consultar
+`harness_reviews` e registrar `regate-passed` quando as obrigações estiverem
+satisfeitas. A consulta na sessão global não substitui os recibos da filha.
+Não peça novas mãos ou revisões aceitas apenas por esse marcador; se ainda houver
+finding aplicável, corrija-o e revalide somente os olhos afetados.
 
 Se há tasks em execução e nenhum trabalho independente pronto, chame
 `harness_tasks` com `action="wait"`, opcionalmente com `task_id`. Essa chamada espera
