@@ -74,14 +74,16 @@ test("cerimônia commita cada tarefa antes da revisão final e o shipper publica
   assert.match(shipper, /não (?:crie|cria).*commit (?:único|de feature)/is);
 });
 
-test("harvest runs once after functional commits and before final reviews", () => {
+test("harvest runs once after final eyes and rework, before shipper", () => {
   const prompt = readFileSync(promptPath, "utf8");
   const harvester = readFileSync(harvesterPath, "utf8");
   const shipper = readFileSync(shipperPath, "utf8");
 
   assert.match(prompt, /tarefas funcionais verificadas e\s+commitadas/i);
   assert.match(prompt, /harness-harvester.*somente uma vez/is);
-  assert.match(prompt, /antes dos olhos finais/i);
+  assert.match(prompt, /Colheita durável — depois dos olhos finais/i);
+  assert.match(prompt, /retrabalho e a revalidação.*mark action="final-review"/is);
+  assert.match(harvester, /after final reviewers approve.*corrections and revalidation.*before shipper/is);
   assert.match(prompt, /primeira linha.*\[HARNESS_HARVEST\]/is);
   assert.match(harvester, /zero to three.*durable deltas/is);
   for (const field of ["path", "preimage", "replacement", "evidence", "invalidation"]) {
@@ -108,7 +110,7 @@ test("harvest runs once after functional commits and before final reviews", () =
   assert.match(prompt, /recibo host-owned.*persistid.*git.*limpo.*HEAD atual.*mudança não-memória/is);
   assert.match(prompt, /escrita posterior.*invalida.*revisões finais/is);
   assert.doesNotMatch(prompt, /harvest-ready/);
-  assert.match(shipper, /harvest.*antes.*olhos finais/is);
+  assert.match(shipper, /harvest ocorre depois dos olhos finais.*antes do shipper/is);
 });
 
 test("session memory is bounded, injected without read loops and finalized only after delivery receipts", () => {

@@ -67,7 +67,7 @@ function register() {
   };
 }
 
-function fixture(t, { omit = [] } = {}) {
+function fixture(t, { omit = [], reviewed = true } = {}) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "pi-memory-harvest-")));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   execFileSync("git", ["init", "-q"], { cwd: root });
@@ -91,6 +91,7 @@ function fixture(t, { omit = [] } = {}) {
     "utf8",
   );
   writePlan(root, { feature_id: FEATURE, tasks: [BASE_TASK] });
+  if (reviewed) seedFinalReviewState(root);
   return root;
 }
 
@@ -231,18 +232,6 @@ async function assertNoReceipt(api, root, options) {
   assert.equal(result.details.harvestReceipt == null, true);
 }
 
-function finalReviewEvent() {
-  return {
-    toolName: "subagent",
-    toolCallId: "final-review-call",
-    input: {
-      subagent_type: "harness-adversary",
-      description: "final review",
-      prompt: "[HARNESS_FINAL_REVIEW]\nReview the aggregate diff.",
-    },
-  };
-}
-
 function plannerEvent(role = "harness-planner") {
   return {
     toolName: "subagent",
@@ -259,9 +248,9 @@ test("a failed replacement harvest cannot reuse the previous successful receipt"
   const root = fixture(t);
   const api = register();
   emitHarvest(api, root);
-  assert.equal(api.handlers.get("tool_call")(finalReviewEvent(), ctx(root)), undefined);
+  assert.equal(api.handlers.get("tool_call")(shipperEvent(), ctx(root)), undefined);
   emitHarvest(api, root, { callId: "replacement", isError: true, status: "failed" });
-  await assertBlocked(api.handlers.get("tool_call")(finalReviewEvent(), ctx(root)));
+  await assertBlocked(api.handlers.get("tool_call")(shipperEvent(), ctx(root)));
 });
 
 function finalMarkEvent() {
@@ -331,6 +320,7 @@ test("tracked vendored tooling is never excluded from the clean-tree requirement
       writeFileSync(file, "export const allow = false;\n");
       execFileSync("git", ["add", "-f", ".pi/harness/lib/gate.mjs"], { cwd: root });
       commit(root, "fixture vendored tooling");
+      seedFinalReviewState(root);
       const api = register();
       await api.execute({ action: "update", content: "preserve until verified" }, ctx(root));
       emitHarvest(api, root);
@@ -340,7 +330,7 @@ test("tracked vendored tooling is never excluded from the clean-tree requirement
       if (mode !== "unstaged") execFileSync("git", ["add", "-f", ".pi/harness/lib/gate.mjs"], { cwd: root });
       if (mode === "staged-then-restored") writeFileSync(file, "export const allow = false;\n");
       await assertBlocked(await api.handlers.get("tool_call")({ toolName: "subagent", input: harvestArgs() }, ctx(root)));
-      await assertBlocked(await api.handlers.get("tool_call")(finalReviewEvent(), ctx(root)));
+      await assertBlocked(await api.handlers.get("tool_call")(shipperEvent(), ctx(root)));
       assert.equal((await api.execute({ action: "finalize" }, ctx(root))).details.ok, false);
       assert.equal(existsSync(join(root, ".pi", "harness", "state", SESSION, "shared_context.md")), true);
     });
@@ -352,6 +342,7 @@ test("only generated Pi directories are exempt; new vendored tooling blocks harv
   writeFileSync(join(root, ".gitignore"), ".pi/harness/state/\n.pi/harness/plans/\n.pi/harness/runtime/\n.pi/harness/sessions/\nnode_modules/\n");
   execFileSync("git", ["add", ".gitignore"], { cwd: root });
   commit(root, "fixture precise vendor ignores");
+  seedFinalReviewState(root);
   const api = register();
   await api.execute({ action: "update", content: "generated context" }, ctx(root));
   const event = { toolName: "subagent", input: harvestArgs() };
@@ -367,6 +358,7 @@ test("harvest refuses an append whose result would exceed the durable read limit
   writeFileSync(join(root, "MEMORY.md"), original);
   execFileSync("git", ["add", "MEMORY.md"], { cwd: root });
   commit(root, "fixture memory at supported limit");
+  seedFinalReviewState(root);
   const api = register();
   emitHarvest(api, root, { changes: [{ path: "MEMORY.md", before_sha256: sha256(original), append: "\nnew fact\n", evidence: "verified", invalidation: "recheck" }] });
   await assertNoReceipt(api, root);
@@ -395,7 +387,7 @@ test("harness-memory harvest: read expõe documentos duráveis com hash e o reci
   assert.deepEqual(read.details.harvestReceipt?.changes, []);
   await assertNoReceipt(restarted, root, { sessionId: "ses-harvest-other" });
   await assertBlocked(
-    await restarted.handlers.get("tool_call")(finalReviewEvent(), ctx(root, { sessionId: "ses-harvest-other" })),
+    await restarted.handlers.get("tool_call")(shipperEvent(), ctx(root, { sessionId: "ses-harvest-other" })),
   );
 });
 
@@ -429,6 +421,7 @@ test("harness-memory harvest: append pequeno atualiza arquivo durável grande se
   writeFileSync(join(root, "MEMORY.md"), before, "utf8");
   execFileSync("git", ["add", "MEMORY.md"], { cwd: root });
   commit(root, "docs: seed large memory");
+  seedFinalReviewState(root);
   const api = register();
   const bounded = await readMemory(api, root);
   const memory = bounded.details.durableFiles.find(({ path }) => path === "MEMORY.md");
@@ -456,15 +449,16 @@ test("harness-memory harvest: append pequeno atualiza arquivo durável grande se
   execFileSync("git", ["add", "MEMORY.md"], { cwd: root });
   commit(root, "docs: append harvested learning");
   assert.equal(readPlan(root).tasks.length, 1);
-  assert.equal(await api.handlers.get("tool_call")(finalReviewEvent(), ctx(root)), undefined);
+  assert.equal(await api.handlers.get("tool_call")(shipperEvent(), ctx(root)), undefined);
 });
 
 test("harness-memory harvest: finalização bloqueia planner e plan-reviewer sem alterar o plano", async (t) => {
-  const root = fixture(t);
+  const root = fixture(t, { reviewed: false });
   const api = register();
   const original = readFileSync(planPath(root), "utf8");
 
   assert.equal(await api.handlers.get("tool_call")(plannerEvent(), ctx(root)), undefined);
+  seedFinalReviewState(root);
   emitHarvest(api, root);
   await assertBlocked(await api.handlers.get("tool_call")(plannerEvent(), ctx(root)));
   await assertBlocked(await api.handlers.get("tool_call")(plannerEvent("harness-plan-reviewer"), ctx(root)));
@@ -546,16 +540,18 @@ test("harness-memory harvest: path fora da allowlist ou preimage divergente inva
   }
 });
 
-test("harness-memory harvest: revisão final e mark são bloqueados sem recibo e liberados por zero delta atual", async (t) => {
-  const root = fixture(t);
+test("harness-memory harvest: olhos finais não dependem do harvest; harvest espera aprovação", async (t) => {
+  const root = fixture(t, { reviewed: false });
   const api = register();
   const runtime = ctx(root);
-  await assertBlocked(await api.handlers.get("tool_call")(finalReviewEvent(), runtime));
-  await assertBlocked(await api.handlers.get("tool_call")(finalMarkEvent(), runtime));
-
-  emitHarvest(api, root);
-  assert.equal(await api.handlers.get("tool_call")(finalReviewEvent(), runtime), undefined);
+  for (const role of ["harness-adversary", "harness-compliance", "harness-security"])
+    assert.equal(await api.handlers.get("tool_call")({ toolName: "subagent", input: {
+      subagent_type: role, prompt: "[HARNESS_FINAL_REVIEW]\\nReview the aggregate." } }, runtime), undefined);
   assert.equal(await api.handlers.get("tool_call")(finalMarkEvent(), runtime), undefined);
+  await assertBlocked(await api.handlers.get("tool_call")({ toolName: "subagent", input: harvestArgs() }, runtime));
+  seedFinalReviewState(root);
+  emitHarvest(api, root);
+  assert.equal(await api.handlers.get("tool_call")(shipperEvent(), runtime), undefined);
 });
 
 test("harness-memory harvest: zero delta exige que o plano continue semanticamente idêntico", async (t) => {
@@ -566,17 +562,17 @@ test("harness-memory harvest: zero delta exige que o plano continue semanticamen
   tampered.tasks[0].scope_paths = ["src/other.ts"];
   writePlan(root, tampered);
 
-  await assertBlocked(await api.handlers.get("tool_call")(finalReviewEvent(), ctx(root)));
+  await assertBlocked(await api.handlers.get("tool_call")(shipperEvent(), ctx(root)));
 });
 
-test("harness-memory harvest: recibo persistido malformado volta a bloquear a revisão final", async (t) => {
+test("harness-memory harvest: recibo persistido malformado bloqueia shipping, não novos olhos", async (t) => {
   const root = fixture(t);
   const api = register();
   emitHarvest(api, root);
   assert.equal(existsSync(harvestPath(root)), true);
   writeFileSync(harvestPath(root), JSON.stringify({ changes: [] }), "utf8");
 
-  await assertBlocked(await api.handlers.get("tool_call")(finalReviewEvent(), ctx(root)));
+  await assertBlocked(await api.handlers.get("tool_call")(shipperEvent(), ctx(root)));
 });
 
 test("harness-memory harvest: delta de documento existente só libera após conteúdo exato ser commitado", async (t) => {
@@ -594,13 +590,13 @@ test("harness-memory harvest: delta de documento existente só libera após cont
     }],
   });
 
-  await assertBlocked(await api.handlers.get("tool_call")(finalReviewEvent(), ctx(root)));
+  await assertBlocked(await api.handlers.get("tool_call")(shipperEvent(), ctx(root)));
   assert.equal(readFileSync(join(root, "MEMORY.md"), "utf8"), before);
   assert.equal((await api.execute({ action: "apply" }, ctx(root))).details.ok, true);
-  await assertBlocked(await api.handlers.get("tool_call")(finalReviewEvent(), ctx(root)));
+  await assertBlocked(await api.handlers.get("tool_call")(shipperEvent(), ctx(root)));
   execFileSync("git", ["add", "MEMORY.md"], { cwd: root });
   commit(root, "docs: persist harvested memory");
-  assert.equal(await api.handlers.get("tool_call")(finalReviewEvent(), ctx(root)), undefined);
+  assert.equal(await api.handlers.get("tool_call")(shipperEvent(), ctx(root)), undefined);
 });
 
 test("harness-memory harvest: arquivo antes ausente aceita preimage null e append commitado", async (t) => {
@@ -621,7 +617,7 @@ test("harness-memory harvest: arquivo antes ausente aceita preimage null e appen
   execFileSync("git", ["add", "CONTEXT.md"], { cwd: root });
   commit(root, "docs: add harvested context");
 
-  assert.equal(await api.handlers.get("tool_call")(finalMarkEvent(), ctx(root)), undefined);
+  assert.equal(await api.handlers.get("tool_call")(shipperEvent(), ctx(root)), undefined);
 });
 
 test("harness-memory harvest: conteúdo persistido diferente da proposta continua bloqueado", async (t) => {
@@ -642,7 +638,7 @@ test("harness-memory harvest: conteúdo persistido diferente da proposta continu
   execFileSync("git", ["add", "kaizen.md"], { cwd: root });
   commit(root, "docs: persist wrong content");
 
-  await assertBlocked(await api.handlers.get("tool_call")(finalReviewEvent(), ctx(root)));
+  await assertBlocked(await api.handlers.get("tool_call")(shipperEvent(), ctx(root)));
 });
 
 test("harness-memory harvest: qualquer mutação do plano durante a finalização é rejeitada", async (t) => {
@@ -674,7 +670,7 @@ test("harness-memory harvest: qualquer mutação do plano durante a finalizaçã
       mutate(plan);
       writePlan(root, plan);
 
-      await assertBlocked(await api.handlers.get("tool_call")(finalReviewEvent(), ctx(root)));
+      await assertBlocked(await api.handlers.get("tool_call")(shipperEvent(), ctx(root)));
     });
   }
 });
@@ -709,7 +705,7 @@ test("harness-memory harvest: worktree suja ou commit de código posterior inval
     const api = register();
     emitHarvest(api, root);
     writeFileSync(join(root, "src", "app.ts"), "export const value = 2;\n", "utf8");
-    await assertBlocked(await api.handlers.get("tool_call")(finalReviewEvent(), ctx(root)));
+    await assertBlocked(await api.handlers.get("tool_call")(shipperEvent(), ctx(root)));
   });
 
   await t.test("código commitado", async (st) => {
@@ -719,7 +715,7 @@ test("harness-memory harvest: worktree suja ou commit de código posterior inval
     writeFileSync(join(root, "src", "app.ts"), "export const value = 3;\n", "utf8");
     execFileSync("git", ["add", "src/app.ts"], { cwd: root });
     commit(root, "feat: change code after harvest");
-    await assertBlocked(await api.handlers.get("tool_call")(finalMarkEvent(), ctx(root)));
+    await assertBlocked(await api.handlers.get("tool_call")(shipperEvent(), ctx(root)));
   });
 });
 
@@ -747,11 +743,11 @@ test("harness-memory harvest: snapshot do HEAD vem do início do dispatch, antes
     runtime,
   );
 
-  await assertBlocked(await api.handlers.get("tool_call")(finalReviewEvent(), runtime));
+  await assertBlocked(await api.handlers.get("tool_call")(shipperEvent(), runtime));
 });
 
 test("harness-memory shipment: bloqueia publicação antes da revisão final host-owned e libera o HEAD atual", async (t) => {
-  const root = fixture(t);
+  const root = fixture(t, { reviewed: false });
   const api = register();
   const runtime = ctx(root);
   emitHarvest(api, root);
@@ -761,6 +757,7 @@ test("harness-memory shipment: bloqueia publicação antes da revisão final hos
     await api.handlers.get("tool_call")(shipperEvent("This is a metadata-only release stage; publish it."), runtime),
   );
   seedFinalReviewState(root);
+  emitHarvest(api, root);
   assert.equal(await api.handlers.get("tool_call")(shipperEvent(), runtime), undefined);
 });
 
@@ -789,7 +786,7 @@ test("harness-memory shipment: HEAD alterado ou worktree suja bloqueiam antes do
 });
 
 test("harness-memory shipment: start/result direto sem revisão final não cria recibo válido", async (t) => {
-  const root = fixture(t);
+  const root = fixture(t, { reviewed: false });
   const api = register();
   emitHarvest(api, root);
   emitShipper(api, root);
@@ -884,7 +881,6 @@ test("harness-memory harvest: finalize aceita delta exato revisado e remove reci
   execFileSync("git", ["add", "MEMORY.md"], { cwd: root });
   commit(root, "docs: persist final harvest");
   await api.execute({ action: "update", content: "diário a descartar" }, ctx(root));
-  seedFinalReviewState(root);
   emitShipper(api, root);
   assert.equal(existsSync(shipmentPath(root)), true);
 
@@ -897,7 +893,7 @@ test("harness-memory harvest: finalize aceita delta exato revisado e remove reci
   assert.equal(readFileSync(join(root, "MEMORY.md"), "utf8"), before + proposed);
 
   const tombstone = JSON.parse(readFileSync(finalizedPath(root), "utf8"));
-  assert.deepEqual(Object.keys(tombstone).sort(), ["feature_id", "finalized_at", "head", "session_id"]);
+  assert.deepEqual(Object.keys(tombstone).sort(), ["feature_id", "finalized_at", "head", "input_digest", "review_input", "session_id", "written_by"]);
   assert.equal(tombstone.session_id, SESSION);
   assert.equal(tombstone.feature_id, FEATURE);
   assert.equal(tombstone.head, head(root));
@@ -905,6 +901,8 @@ test("harness-memory harvest: finalize aceita delta exato revisado e remove reci
 
   const after = await readMemory(api, root);
   assert.equal(after.details.harvestReceipt == null, true);
+  const restarted = register();
+  assert.equal((await restarted.execute({ action: "finalize" }, ctx(root))).details.ok, true);
 });
 
 test("harness-memory finalize: replay exige tombstone compatível, revisão atual e worktree limpa", async (t) => {

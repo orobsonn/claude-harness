@@ -2,7 +2,7 @@ import { StringEnum, Type } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { isChildSession, piSessionId } from "../lib/pi-adapter-map.mjs";
 import { piResultText } from "../lib/obs.mjs";
-import { applyHarvest, beginHarvest, checkHarvestReady, checkMemoryShipperReady, completeHarvest, completeMemoryShipment, finalizationStarted, finalizeMemory, invalidateMemoryAttempt, memoryBrief, memoryPaths, readMemory, updateSharedContext } from "../lib/memory-cycle.mjs";
+import { applyHarvest, beginHarvest, checkMemoryShipperReady, completeHarvest, completeMemoryShipment, finalizationStarted, finalizeMemory, invalidateMemoryAttempt, memoryBrief, memoryPaths, readMemory, updateSharedContext } from "../lib/memory-cycle.mjs";
 
 /** Parent-only lifecycle. The mutable tool_result hook binds receipts to the actual completed call. */
 export default function harnessMemory(pi: ExtensionAPI) {
@@ -35,15 +35,13 @@ export default function harnessMemory(pi: ExtensionAPI) {
   pi.on("tool_call", (event: any, ctx) => {
     if (isChildSession(ctx)) return;
     const input = event.input ?? {};
-    const isFinal = (event.toolName === "subagent" && ["harness-adversary", "harness-compliance"].includes(input.subagent_type) && /^\[HARNESS_FINAL_REVIEW\]/.test(input.prompt ?? "")) || (event.toolName === "mark" && input.action === "final-review");
     const isHarvest = event.toolName === "subagent" && input.subagent_type === "harness-harvester";
     const isShipper = event.toolName === "subagent" && input.subagent_type === "harness-shipper";
     const isLatePlanner = event.toolName === "subagent" && ["harness-planner", "harness-plan-reviewer"].includes(input.subagent_type);
-    if (!isFinal && !isHarvest && !isShipper && !isLatePlanner) return;
+    if (!isHarvest && !isShipper && !isLatePlanner) return;
     try {
       const sessionId = identity(ctx);
       if (isLatePlanner && finalizationStarted(ctx.cwd, sessionId)) throw new Error("Finalization cannot dispatch planner or plan-reviewer; reuse existing task IDs for reconciliation, or start a separate delivery for new scope");
-      if (isFinal) checkHarvestReady(ctx.cwd, sessionId);
       if (isShipper) checkMemoryShipperReady(ctx.cwd, sessionId);
       if (isHarvest) {
         if (!/^\[HARNESS_HARVEST\](?:\r?\n|$)/.test(input.prompt ?? "")) throw new Error("Start harvester prompt with [HARNESS_HARVEST]");
@@ -66,7 +64,7 @@ export default function harnessMemory(pi: ExtensionAPI) {
         invalidateMemoryAttempt(ctx.cwd, sessionId, "harvest");
         pending.set(key(ctx, event.toolCallId), { ...beginHarvest(ctx.cwd, sessionId), kind: "harvest" });
       }
-    } catch { /* Failed snapshot can never authorize final review. */ }
+    } catch { /* Failed snapshot can never authorize shipping. */ }
   });
   pi.on("tool_result", (event: any, ctx) => {
     if (event.toolName === "harness_memory") {
@@ -97,7 +95,7 @@ export default function harnessMemory(pi: ExtensionAPI) {
           ? "[harness-memory] " + phase + " receipt recorded."
           : kind === "shipment"
             ? "[harness-memory] Shipment receipt not recorded: " + reason + ". The remote effect may already have happened. Reconcile the remote before retrying completion; do not repeat a merge or publish automatically."
-            : "[harness-memory] Harvest receipt not recorded: " + reason + ". Correct or rerun the harvest before final review." },
+            : "[harness-memory] Harvest receipt not recorded: " + reason + ". Correct or rerun the harvest after final reviews and before shipping." },
       ],
       details: {
         ...details,
@@ -127,7 +125,7 @@ export default function harnessMemory(pi: ExtensionAPI) {
       "Keep shared_context under 8192 UTF-8 bytes: concise facts, assumptions and decisions with evidence and revalidation conditions. No secrets, transcripts or gate approvals.",
       "The parent receives the current shared_context automatically as ephemeral custom context. Do not reread unchanged memory; use read only for structured hashes, harvest receipts or explicit diagnostics.",
       "Use only this session's context. Reviewers never inherit the diary; relay relevant facts to hands selectively.",
-      "After functional work is committed, dispatch [HARNESS_HARVEST], then use apply for a non-empty validated proposal and commit only its exact durable paths. Never create a plan task for harvest.",
+      "After final eyes approve the committed aggregate, finish any rework and revalidation, mark final-review, then dispatch [HARNESS_HARVEST]. Apply a non-empty validated proposal and commit only its exact durable paths before shipper. This host-bound memory-only delta preserves final approvals; product changes require current eyes again. Never create a plan task for harvest.",
       "Call finalize only when delivery is complete. Quit, abort or a pause is not completion; preserve the document for exact-session resume.",
     ],
     parameters: Type.Object({ action: StringEnum(["read", "update", "apply", "finalize"] as const), content: Type.Optional(Type.String()) }),

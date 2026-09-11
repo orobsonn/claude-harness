@@ -134,12 +134,19 @@ export function invalidateMemoryAttempt(projectRoot, sessionId, kind) {
 export function beginHarvest(projectRoot, sessionId) {
   const paths = memoryPaths(projectRoot, sessionId);
   cleanTree(paths.root);
+  const release = resolvePiReleaseProof(paths.root);
+  // Preserve the existing, independently verified metadata-only release lane:
+  // it must not redispatch product eyes after the functional squash.
+  if (!release.ok) checkCurrentMemoryReviews(projectRoot, sessionId, { allowHarvest: false });
   const raw = readSmall(join(paths.directory, "gate-state.json"), 1024 * 1024);
   const state = raw === null ? {} : JSON.parse(raw);
   if (state.session_id && state.session_id !== sessionId) throw new Error("Harvest gate identity mismatch");
+  const captured = capturePiReviewInput({ projectRoot, sessionId, featureId: state.feature_id, phase: "final" });
+  if (!captured.ok) throw new Error(captured.reason);
   const { plan: _plan, ...planSnapshot } = snapshotPlan(paths, state.feature_id);
   return { session_id: sessionId, project_root: paths.root, feature_id: state.feature_id ?? null,
-    base_head: gitMemory(paths.root, ["rev-parse", "HEAD"]), planSnapshot, durable: readDurableMemory(paths.root) };
+    base_head: gitMemory(paths.root, ["rev-parse", "HEAD"]), planSnapshot, durable: readDurableMemory(paths.root),
+    ...(!release.ok ? { review_input: { head_sha: captured.snapshot.head_sha, input_digest: captured.snapshot.input_digest } } : {}) };
 }
 function validateMemoryDelta(change) {
   if (Object.hasOwn(change, "content")) throw new Error("Full replacement is forbidden; use a small patch or append with the current before_sha256, or changes: []");
@@ -190,11 +197,20 @@ export function completeHarvest(snapshot, text, agentId) {
   const paths = memoryPaths(snapshot.project_root, snapshot.session_id, true);
   if (gitMemory(paths.root, ["rev-parse", "HEAD"]) !== snapshot.base_head) throw new Error("HEAD changed during harvest; rerun it");
   cleanTree(paths.root);
+  if (!resolvePiReleaseProof(paths.root).ok) checkCurrentMemoryReviews(paths.root, snapshot.session_id, { allowHarvest: false });
   if (snapshotPlan(paths, snapshot.feature_id).hash !== snapshot.planSnapshot.hash) throw new Error("Canonical plan changed during harvest; rerun it");
+  let reviewInput;
+  if (snapshot.review_input) {
+    const captured = capturePiReviewInput({ projectRoot: paths.root, sessionId: snapshot.session_id, featureId: snapshot.feature_id, phase: "final" });
+    if (!captured.ok || captured.snapshot.input_digest !== snapshot.review_input.input_digest) throw new Error("Reviewed input changed during harvest; revalidate before retrying");
+    const memory_paths = changes.map((change) => change.path);
+    reviewInput = { ...snapshot.review_input, memory_paths,
+      remainder_digest: memoryReviewRemainder(captured.snapshot, memory_paths) };
+  }
   const receipt = { written_by: "host-subagent-completion", session_id: snapshot.session_id, parent_session_id: snapshot.session_id,
     project_root: paths.root, feature_id: snapshot.feature_id, base_head: snapshot.base_head,
     agent_id: agentId, status: "completed", apply_status: changes.length === 0 ? "applied" : "proposed",
-    plan_snapshot: snapshot.planSnapshot, changes, proposal_sha256: sha(JSON.stringify(changes)) };
+    plan_snapshot: snapshot.planSnapshot, review_input: reviewInput, changes, proposal_sha256: sha(JSON.stringify(changes)) };
   atomicWrite(paths.harvest, JSON.stringify(receipt, null, 2));
   return receipt;
 }
@@ -246,13 +262,13 @@ export function applyHarvest(projectRoot, sessionId) {
 export function checkHarvestReady(projectRoot, sessionId) {
   const paths = memoryPaths(projectRoot, sessionId);
   const { harvestReceipt: harvest } = readMemory(paths.root, sessionId);
-  if (!harvest || harvest.written_by !== "host-subagent-completion" || harvest.status !== "completed") throw new Error("Run a successful [HARNESS_HARVEST] before final review");
+  if (!harvest || harvest.written_by !== "host-subagent-completion" || harvest.status !== "completed") throw new Error("Run a successful [HARNESS_HARVEST] after final review and before shipping");
   if (!Array.isArray(harvest.changes) || harvest.proposal_sha256 !== sha(JSON.stringify(harvest.changes))) throw new Error("Invalid harvest receipt");
   harvest.changes.forEach(validateMemoryDelta);
   const current = snapshotPlan(paths, harvest.feature_id);
   const old = harvest.plan_snapshot;
   if (!old || current.hash !== old.hash) throw new Error("Finalization must preserve the canonical plan exactly");
-  if (harvest.apply_status !== "applied") throw new Error("Apply the harvest proposal before final review");
+  if (harvest.apply_status !== "applied") throw new Error("Apply the harvest proposal before shipping");
   cleanTree(paths.root);
   gitMemory(paths.root, ["merge-base", "--is-ancestor", harvest.base_head, "HEAD"]);
   const changed = gitMemory(paths.root, ["diff", "--name-only", harvest.base_head, "HEAD"]).split("\n").filter(Boolean);
@@ -263,7 +279,53 @@ export function checkHarvestReady(projectRoot, sessionId) {
   }
   return { ok: true, head: gitMemory(paths.root, ["rev-parse", "HEAD"]), harvest };
 }
-export function checkCurrentMemoryReviews(projectRoot, sessionId) {
+
+// The ordinary review capture remains exact. Only a validated host harvest may
+// carry its already accepted product input across the subsequent memory commit.
+function memoryReviewRemainder(snapshot, memoryPaths) {
+  const { head_sha: _head, input_digest: _digest, ...body } = snapshot;
+  for (const key of ["head", "index", "worktree", "untracked"])
+    body[key] = body[key].filter((entry) => !memoryPaths.includes(entry.path));
+  return sha(stable(body));
+}
+export function postHarvestReviewSnapshot(projectRoot, sessionId, snapshot) {
+  if (snapshot?.phase !== "final") return snapshot;
+  try {
+    const paths = memoryPaths(projectRoot, sessionId);
+    let binding;
+    if (regularFile(paths.harvest)) {
+      const { harvest } = checkHarvestReady(projectRoot, sessionId);
+      if (harvest.feature_id !== snapshot.feature_id) return snapshot;
+      binding = harvest.review_input;
+      if (binding?.head_sha !== harvest.base_head) return snapshot;
+      if (JSON.stringify(binding.memory_paths) !== JSON.stringify(harvest.changes.map((change) => change.path))) return snapshot;
+      // applyHarvest creates regular, non-executable documents. A manual chmod,
+      // symlink or staged alternative is not part of its authorized proposal.
+      for (const change of harvest.changes) {
+        const tree = snapshot.head.find((item) => item.path === change.path);
+        if (!tree || snapshot.index.find((item) => item.path === change.path)?.oid !== tree.oid ||
+            sha(execFileSync("git", ["cat-file", "blob", tree.oid], { cwd: paths.root,
+              timeout: 10000, maxBuffer: 1024 * 1024 + 1, stdio: ["ignore", "pipe", "pipe"] })) !== change.after_sha256) return snapshot;
+        for (const key of ["head", "index", "worktree"]) {
+          const entry = snapshot[key].find((item) => item.path === change.path);
+          if (entry?.mode !== "100644" || (key === "worktree" && (entry.kind !== "file" || entry.sha256 !== change.after_sha256))) return snapshot;
+        }
+      }
+    } else {
+      const finalized = JSON.parse(readSmall(paths.finalized, 8192) ?? "null");
+      if (finalized?.written_by !== "host-memory-finalize" || finalized.session_id !== sessionId ||
+          finalized.feature_id !== snapshot.feature_id || finalized.head !== snapshot.head_sha ||
+          finalized.input_digest !== snapshot.input_digest) return snapshot;
+      binding = finalized.review_input;
+    }
+    if (!binding || !/^[a-f0-9]{64}$/.test(binding.input_digest ?? "") ||
+        !Array.isArray(binding.memory_paths) || binding.memory_paths.some((file) => !DURABLE_MEMORY_FILES.includes(file)) ||
+        binding.remainder_digest !== memoryReviewRemainder(snapshot, binding.memory_paths)) return snapshot;
+    return { ...snapshot, head_sha: binding.head_sha, input_digest: binding.input_digest };
+  } catch { return snapshot; }
+}
+
+export function checkCurrentMemoryReviews(projectRoot, sessionId, { allowHarvest = true } = {}) {
   const paths = memoryPaths(projectRoot, sessionId);
   cleanTree(paths.root);
   const head = gitMemory(paths.root, ["rev-parse", "HEAD"]);
@@ -272,12 +334,14 @@ export function checkCurrentMemoryReviews(projectRoot, sessionId) {
   if (state.session_id !== sessionId || !state.feature_id || state.final_review_done !== true) throw new Error("Finalize requires this session's completed final review");
   const captured = capturePiReviewInput({ projectRoot: paths.root, sessionId, featureId: state.feature_id, phase: "final" });
   if (!captured.ok) throw new Error("Finalize requires both host-owned final reviews with accepted report evidence on the current input");
+  const harvested = allowHarvest ? postHarvestReviewSnapshot(paths.root, sessionId, captured.snapshot) : captured.snapshot;
   const loadedPlan = readPiReviewPlan({ projectRoot: paths.root, featureId: state.feature_id, expectedSha256: captured.snapshot.canonical_plan.sha256 });
   if (!loadedPlan.ok) throw new Error(loadedPlan.reason);
   for (const role of requiredPiFinalReviewRoles(loadedPlan.plan)) {
     const name = role.replace("harness-", "");
     const receipt = state.final_review_evidence?.[name];
-    if (!receipt || !hasAcceptedPiReviewEvidence(receipt, captured.snapshot) || receipt.written_by !== "host-subagent-completion" || receipt.role !== role || receipt.parent_session_id !== sessionId || receipt.feature_id !== state.feature_id || receipt.status !== "completed" || receipt.reviewed_head_sha !== head || !receipt.dispatch_call_id || !receipt.child_session_id || !receipt.agent_id) throw new Error(`Finalize requires host-owned final ${name} review with accepted report evidence on the current input`);
+    const reviewSnapshot = hasAcceptedPiReviewEvidence(receipt, captured.snapshot) ? captured.snapshot : harvested;
+    if (!receipt || !hasAcceptedPiReviewEvidence(receipt, reviewSnapshot) || receipt.written_by !== "host-subagent-completion" || receipt.role !== role || receipt.parent_session_id !== sessionId || receipt.feature_id !== state.feature_id || receipt.status !== "completed" || receipt.reviewed_head_sha !== reviewSnapshot.head_sha || !receipt.dispatch_call_id || !receipt.child_session_id || !receipt.agent_id) throw new Error(`Finalize requires host-owned final ${name} review with accepted report evidence on the current input`);
   }
   return { head, featureId: state.feature_id };
 }
@@ -322,7 +386,11 @@ export function finalizeMemory(projectRoot, sessionId) {
       if (!DURABLE_MEMORY_FILES.includes(change.path) || sha(readSmall(join(paths.root, change.path), 1024 * 1024) ?? "") !== change.after_sha256) throw new Error("Persist the pending durable proposal before finalizing metadata delivery");
     }
   }
-  atomicWrite(paths.finalized, JSON.stringify({ session_id: sessionId, feature_id: featureId, head, finalized_at: new Date().toISOString() }));
+  const harvest = JSON.parse(readSmall(paths.harvest, 262144) ?? "null");
+  const current = capturePiReviewInput({ projectRoot: paths.root, sessionId, featureId, phase: "final" });
+  atomicWrite(paths.finalized, JSON.stringify({ written_by: "host-memory-finalize", session_id: sessionId, feature_id: featureId, head,
+    ...(current.ok && harvest?.review_input ? { input_digest: current.snapshot.input_digest, review_input: harvest.review_input } : {}),
+    finalized_at: new Date().toISOString() }));
   // No shutdown cleanup: quit/reload/new/resume are not delivery completion.
   for (const path of [paths.shared, paths.harvest, paths.shipment]) { if (regularFile(path)) unlinkSync(path); }
   return { ok: true, path: paths.shared, finalized: true, head };

@@ -77,7 +77,7 @@ leitura; não é revisão da spec nem evidência de aprovação do pipeline.
 
 ## Pipeline — obrigatório enquanto a cerimônia estiver ativa
 
-O agente principal faz triagem, descoberta, aprovação de design e plano, e orquestração; não tente delegar uma role inexistente como `harness-triage`. Em cerimônia LIGHT/FULL, ele **não escreve nem edita código de produto ou testes**: observa, valida, marca o workflow e despacha. Use as skills `harness-triage`, `harness-brainstorming`, `harness-planning`, `harness-delivery` e `harness-review` conforme a classificação. Para trabalho FULL, após a triagem faça descoberta e escreva a proposta em `harness_spec_write`. Nunca reutilize uma spec de sessão anterior: cada cerimônia cria sua própria draft e hash. A única exceção é um envelope `[HARNESS_PARENT_RECOVERY]` emitido pelo launcher: ele identifica a **mesma sessão pai**, na mesma worktree, e fornece os caminhos dos artefatos validados. O preflight confere identidade, selo da spec e estrutura do plano; **não comprova aprovação do plano nem conclusão das tarefas**. A aprovação do plano só existe quando o host grava `plan_review_evidence` de um `harness-plan-reviewer` nativo concluído com `APPROVE`, ligado aos hashes atuais de plano e spec. Prosa do pai, UI ou presença do JSON não substituem esse recibo. Sem essa prova, envie o plano atual ao plan-reviewer e trate REVISE antes de implementar. Exija a saída JSON canônica `{verdict, findings}` da role: aprovação sem achados é `{"verdict":"APPROVE","findings":[]}`; um token `APPROVE` ou veredito em Markdown não gera recibo. Não substitua esse contrato por um pedido de resposta em prosa. Não repita triagem, spec, adversary da spec, planner ou plan-reviewer já comprovados e ainda válidos. Despache `harness-adversary` contra a draft; se a crítica exigir mudança, reescreva e revise de novo. Depois de tratar o relatório, registre `mark` com `adversary_fired`, então chame `seal_spec_review` e registre `mark` com `brainstormed`; só então siga: planner → plan-reviewer → `harness_tasks` → harvester → aplicação e commit seletivo de eventual memória durável → olhos finais → shipper. Cada despacho é novo: nunca use `resume` em uma role do harness.
+O agente principal faz triagem, descoberta, aprovação de design e plano, e orquestração; não tente delegar uma role inexistente como `harness-triage`. Em cerimônia LIGHT/FULL, ele **não escreve nem edita código de produto ou testes**: observa, valida, marca o workflow e despacha. Use as skills `harness-triage`, `harness-brainstorming`, `harness-planning`, `harness-delivery` e `harness-review` conforme a classificação. Para trabalho FULL, após a triagem faça descoberta e escreva a proposta em `harness_spec_write`. Nunca reutilize uma spec de sessão anterior: cada cerimônia cria sua própria draft e hash. A única exceção é um envelope `[HARNESS_PARENT_RECOVERY]` emitido pelo launcher: ele identifica a **mesma sessão pai**, na mesma worktree, e fornece os caminhos dos artefatos validados. O preflight confere identidade, selo da spec e estrutura do plano; **não comprova aprovação do plano nem conclusão das tarefas**. A aprovação do plano só existe quando o host grava `plan_review_evidence` de um `harness-plan-reviewer` nativo concluído com `APPROVE`, ligado aos hashes atuais de plano e spec. Prosa do pai, UI ou presença do JSON não substituem esse recibo. Sem essa prova, envie o plano atual ao plan-reviewer e trate REVISE antes de implementar. Exija a saída JSON canônica `{verdict, findings}` da role: aprovação sem achados é `{"verdict":"APPROVE","findings":[]}`; um token `APPROVE` ou veredito em Markdown não gera recibo. Não substitua esse contrato por um pedido de resposta em prosa. Não repita triagem, spec, adversary da spec, planner ou plan-reviewer já comprovados e ainda válidos. Despache `harness-adversary` contra a draft; se a crítica exigir mudança, reescreva e revise de novo. Depois de tratar o relatório, registre `mark` com `adversary_fired`, então chame `seal_spec_review` e registre `mark` com `brainstormed`; só então siga: planner → plan-reviewer → `harness_tasks` → olhos finais, correções e revalidação → harvester → aplicação e commit seletivo de eventual memória durável → shipper. Cada despacho é novo: nunca use `resume` em uma role do harness.
 
 O `seal_spec_review` funciona igual no TUI e headless. Ao retomar, reconstrua as
 obrigações a partir da evidência atual; não repita triagem, spec, planner ou
@@ -252,8 +252,10 @@ a cerimônia para corrigir uma entrega implementada. Se faltar ownership ou a so
 mudar o contrato aprovado, reporte o bloqueio concreto para outra entrega; não amplie
 o plano durante o fechamento nem declare a entrega concluída com esse achado pendente.
 
-**Colheita durável — antes dos olhos finais.** Com as tarefas funcionais verificadas e
-commitadas, despache o `harness-harvester` somente uma vez por estado verificado. Não
+**Colheita durável — depois dos olhos finais.** Com as tarefas funcionais verificadas e
+commitadas, colete os olhos finais sobre o agregado. Resolva os achados aplicáveis,
+conclua o retrabalho e a revalidação e registre `mark action="final-review"`.
+Só então despache o `harness-harvester` somente uma vez por estado verificado. Não
 repita sem mudança material de estado ou do input relevante, inclusive após no-op.
 A primeira linha do prompt é
 `[HARNESS_HARVEST]`. Forneça o diff/commits verificados e, obtidos por `harness_memory
@@ -273,16 +275,19 @@ sustentados. Não descarte um aprendizado válido apenas para esconder erro de f
 
 Com delta não vazio, chame `harness_memory` com `action="apply"`. O host aplica a
 proposta validada de forma idempotente, somente nos paths e hashes do recibo. Inspecione
-o diff, faça commit seletivo dos paths exatos do recibo e só então colete os olhos finais
-no novo HEAD. Harvest e shipping não despacham planner nem plan-reviewer, tampouco uma
+o diff, faça commit seletivo dos paths exatos do recibo e siga para o shipper.
+O host preserva as aprovações finais através desse delta exato de memória; não repita
+olhos apenas pelo commit da colheita. Harvest e shipping não despacham planner nem plan-reviewer, tampouco uma
 mão de implementação para persistir memória. O plano canônico permanece inalterado
 durante toda a finalização. Zero delta já fica aplicado e não cria tarefa.
 
-O dispatch final fica bloqueado até existir recibo host-owned do harvest, a proposta estar
+O shipping fica bloqueado até existir recibo host-owned do harvest, a proposta estar
 exatamente persistida, o git estar limpo no HEAD atual e não haver mudança não-memória desde
 o harvest. **A revisão final ocorre depois de todos os commits por tarefa**, sobre o diff
-agregado e o HEAD publicado. Qualquer escrita posterior invalida as revisões finais e exige
-novos olhos no novo HEAD.
+agregado. Harvest não é pré-requisito dos olhos: só começa após aprovação final atual.
+Qualquer escrita posterior fora da proposta exata de memória invalida as revisões finais
+e exige novos olhos sobre o produto corrigido antes de uma nova colheita. Mudança de
+spec/plano ou parecer negativo novo nunca é dispensado pela colheita.
 
 **Release após squash.** Ao entrar em `chore/release-X.Y.Z`, tente o shipper e a
 operação de release normalmente. Não reexecute tarefas funcionais só porque o squash
@@ -331,8 +336,8 @@ Ao retomar após um PR draft, explique a finalidade de cada despacho: merge do P
 Se o merge do shipper encontrar conflito, ele termina `BLOCKED` com o HEAD revisado, a
 nova base observada e a evidência de conflito disponível. Não chame planner nem plan-reviewer nessa
 finalização. Quando todos os paths já pertencem ao plano, reutilize os IDs das tarefas
-existentes, reconcilie somente as obrigações afetadas e refaça harvest e olhos finais no
-novo HEAD. Path sem dono é escopo novo: reporte o bloqueio e trate-o em outra entrega;
+existentes, reconcilie somente as obrigações afetadas e refaça olhos finais no
+novo HEAD; depois das correções e aprovações, refaça harvest. Path sem dono é escopo novo: reporte o bloqueio e trate-o em outra entrega;
 não acrescente tarefa ao plano que já chegou ao shipping.
 
 **Staging — mesmas exclusões do shipper Claude Code.** Nunca stagear `.dev.vars`, `.env*`, `.env.local`, `.local.*`, `.claude/settings.local.json`, `.claude/plans/`, `.pi/harness/`, `.DS_Store`, `*.log`, `node_modules/`, `dist/`, `coverage/`, arquivos de credenciais (credential) ou token. Antes de commitar, inspecione tanto os nomes quanto o diff de todo o index (`git diff --cached --name-only`, depois `git diff --cached`), inclusive conteúdo que já estava staged antes da tarefa. Não leia valores de segredos para fazer essa conferência: path suspeito é bloqueio. Stage seletivo não autoriza incluir sujeira preexistente.

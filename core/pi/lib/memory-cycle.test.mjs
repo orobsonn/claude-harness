@@ -3,11 +3,12 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { checkCurrentMemoryReviews, classifyMemoryShipmentTransition } from "./memory-cycle.mjs";
+import { applyHarvest, beginHarvest, checkCurrentMemoryReviews, checkMemoryShipperReady, completeHarvest, classifyMemoryShipmentTransition } from "./memory-cycle.mjs";
+import { missingPiReviewRoles } from "./pi-review-evidence.mjs";
 
 let capturePiReviewInput;
 try {
@@ -62,6 +63,7 @@ function receipt(role, head, extra = {}) {
     child_session_id: `child-${key}`,
     agent_id: `agent-${key}`,
     status: "completed",
+    phase: "final",
     reviewed_head_sha: head,
     ...extra,
   };
@@ -101,6 +103,44 @@ test("checkCurrentMemoryReviews accepts both exact current receipts with canonic
     report: EMPTY_REPORT,
   });
   assert.deepEqual(checkCurrentMemoryReviews(root, SESSION), { head, featureId: FEATURE });
+});
+
+test("harvest never hides unproposed durable files when Git reports clean", async (t) => {
+  for (const change of ["no-op-mode", "append-hidden-content", "append-hidden-head"]) await t.test(change, (st) => {
+    const { root } = fixture(st);
+    for (const file of ["MEMORY.md", "CONTEXT.md"]) writeFileSync(join(root, file), "original durable evidence\n");
+    execFileSync("git", ["add", "MEMORY.md", "CONTEXT.md"], { cwd: root });
+    const commit = () => execFileSync("git", ["-c", "user.name=Pi Memory", "-c", "user.email=pi-memory@example.test", "commit", "-qm", "docs: memory"], { cwd: root });
+    commit();
+    const current = currentInput(root);
+    seed(root, current.head_sha, { accepted: true, input_digest: current.input_digest, report_digest: REPORT_DIGEST, report: EMPTY_REPORT });
+    const changes = change === "no-op-mode" ? [] : [{ path: "MEMORY.md", before_sha256: createHash("sha256").update("original durable evidence\n").digest("hex"), append: "verified addition\n", evidence: "reviewed", invalidation: "contract changes" }];
+    completeHarvest(beginHarvest(root, SESSION), `[HARNESS_HARVEST_RESULT]${JSON.stringify({ changes })}[/HARNESS_HARVEST_RESULT]`, "harvester");
+    if (changes.length) {
+      applyHarvest(root, SESSION);
+      execFileSync("git", ["add", "MEMORY.md"], { cwd: root });
+      commit();
+    }
+    assert.ok(checkMemoryShipperReady(root, SESSION));
+    if (change === "no-op-mode") {
+      execFileSync("git", ["config", "core.fileMode", "false"], { cwd: root });
+      chmodSync(join(root, "MEMORY.md"), 0o755);
+    } else if (change === "append-hidden-content") {
+      execFileSync("git", ["update-index", "--assume-unchanged", "CONTEXT.md"], { cwd: root });
+      writeFileSync(join(root, "CONTEXT.md"), "unreviewed durable evidence\n");
+    } else {
+      const authorized = readFileSync(join(root, "MEMORY.md"), "utf8");
+      writeFileSync(join(root, "MEMORY.md"), "unapproved committed content\n");
+      execFileSync("git", ["add", "MEMORY.md"], { cwd: root });
+      commit();
+      execFileSync("git", ["update-index", "--assume-unchanged", "MEMORY.md"], { cwd: root });
+      writeFileSync(join(root, "MEMORY.md"), authorized);
+    }
+    assert.equal(execFileSync("git", ["status", "--porcelain"], { cwd: root, encoding: "utf8" }), "");
+    assert.throws(() => checkMemoryShipperReady(root, SESSION), /review|input/);
+    assert.deepEqual(missingPiReviewRoles({ projectRoot: root, sessionId: SESSION, featureId: FEATURE, phase: "final",
+      roles: ["harness-adversary", "harness-compliance"] }), ["harness-adversary", "harness-compliance"]);
+  });
 });
 
 test("finalization preserves the canonical plan's mandatory security review", (t) => {
