@@ -5,6 +5,13 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [2.6.19](https://github.com/orobsonn/claude-harness/compare/v2.6.18...v2.6.19) (2026-09-11)
+
+
+### Bug Fixes
+
+* **pi:** validate upstream receipts during dependent reconciliation ([#952](https://github.com/orobsonn/claude-harness/issues/952)) ([52d8a24](https://github.com/orobsonn/claude-harness/commit/52d8a24d3cf433b73d27b1952b2e7fadc5777464))
+
 ## [2.6.18](https://github.com/orobsonn/claude-harness/compare/v2.6.17...v2.6.18) (2026-09-11)
 
 
