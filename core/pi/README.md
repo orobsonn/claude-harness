@@ -216,7 +216,10 @@ Executor/sniper mantêm low Luna/high, medium Terra/medium, high/max Terra/xhigh
 O transporte mantém limite de inatividade de 15 minutos por chamada de modelo.
 
 Planner e plan-reviewer recebem `harness_complexity`, usando diretamente a lógica
-do scorer do Claude Code. `should_split` é consultivo e não muda o schema do plano.
+do scorer do Claude Code. A tool recebe o `path` de um arquivo existente e o host
+lê seu conteúdo; não aceita source inline, pseudocódigo ou resumo. O resultado é
+a complexidade do arquivo, uma aproximação para julgar a mudança da task.
+`should_split` é consultivo e não muda o schema do plano.
 `mv_recall` e `mv_get_note` consultam os métodos homônimos do MV; `mp_retrieve`
 constrói somente chamadas de leitura para o `code` do MP. A integração usa o
 `pi-mcp-adapter` instalado e configurado pelo operador em `~/.pi/agent`; não

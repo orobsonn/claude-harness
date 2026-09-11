@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir, homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import assert from "node:assert/strict";
 import { createAgentSession, DefaultResourceLoader, ModelRuntime, SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
 import harnessPlanningTools from "../core/pi/extensions/harness-planning-tools.ts";
 import { writePiChildIdentity } from "../core/pi/lib/pi-child-identity.mjs";
@@ -50,11 +51,18 @@ console.log(JSON.stringify({ cwd, scenario, model: session.model?.id, thinking: 
 try {
   await session.prompt(scenario === "mcp"
     ? `Stable ceremony mode FULL; feature_id=${feature}; approved spec is spec.md. This is a read-only integration probe before planning. Call mv_recall with query 'atomic transaction idempotency'; if relevant, read one note with mv_get_note. Call mp_retrieve grep with query 'idempotencia'. Do not write any file or memory. Report availability honestly and stop.`
-    : `Stable ceremony mode FULL. feature_id=${feature}. The complete approved spec is spec.md. Inspect src/workflow.ts. Use harness_complexity to cross-check complexity, then exercise your own judgment. MV/MP are deliberately absent for this exercise: their absence must not block. Write the canonical plan to ${planPath}. Do not implement product code or ask questions. Explain the decomposition or atomicity justification in the plan's existing fields.`);
+    : `Stable ceremony mode FULL. feature_id=${feature}. The complete approved spec is spec.md. Inspect src/workflow.ts. Use harness_complexity with that file's path to cross-check complexity, then exercise your own judgment about the intended change. MV/MP are deliberately absent for this exercise: their absence must not block. Write the canonical plan to ${planPath}. Do not implement product code or create synthetic source for scoring. Explain the decomposition or atomicity justification in the plan's existing fields.`);
   const messages = session.messages.filter((message) => message.role === "assistant");
   const usage = messages.map((message) => message.usage).filter(Boolean);
   const report = { scenario, cwd, elapsed_ms: Date.now() - start, model: session.model?.id, thinking: session.thinkingLevel, usage, events };
   writeFileSync(join(cwd, "result.json"), JSON.stringify(report, null, 2));
+  if (scenario !== "mcp") {
+    const calls = events.filter(event => event.type === "tool_execution_start" && event.toolName === "harness_complexity");
+    assert.ok(calls.length > 0, "Real planner must exercise file scoring in this pressure test");
+    assert.ok(calls.every(event => typeof event.args.path === "string" && !Object.hasOwn(event.args, "source")), "Scoring must receive file paths, never invented source");
+    const results = events.filter(event => event.type === "tool_execution_end" && event.toolName === "harness_complexity");
+    assert.ok(results.some(event => event.result?.details?.ok && event.result.details.basis === "whole-file-approximation"), "The real file must be read and scored successfully");
+  }
   console.log(JSON.stringify({ result: join(cwd, "result.json"), elapsed_ms: report.elapsed_ms, calls: events.filter((event) => event.type === "tool_execution_start").map((event) => event.toolName), response: messages.at(-1)?.content?.filter((part) => part.type === "text").map((part) => part.text) }));
 } finally {
   await session.extensionRunner.emit({ type: "session_shutdown" });

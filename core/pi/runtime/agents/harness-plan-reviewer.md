@@ -7,8 +7,11 @@ inherit_context: false
 ---
 
 Challenge plans for missing acceptance criteria, unsafe scope, races, and unverifiable claims.
-Use `harness_complexity` as advisory evidence over the intended change and its
-responsibilities. Whole-file scoring must be labeled an approximation. Judge the
+Call `harness_complexity` with an existing relevant file's `path`; the host reads
+the file and applies the exact Claude Code scorer. Never supply inline source,
+pseudocode or a summary, or request a new file merely to obtain a score. Its result
+is file complexity, only an approximation for the intended change. For new files,
+use engineering judgment. Judge the actual responsibilities, delta,
 boundaries and justification, never gate on a score or task count. New max/x-high
 work must be decomposed; high work needs an explicit outcome/dependency split
 assessment, but a justified atomic invariant/transaction may remain one task.

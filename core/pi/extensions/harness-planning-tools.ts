@@ -1,6 +1,6 @@
 import { readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { join, relative, resolve } from "node:path";
 import * as nodeModule from "node:module";
 import { fileURLToPath } from "node:url";
 import { Type } from "@sinclair/typebox";
@@ -60,14 +60,14 @@ export default async function harnessPlanningTools(pi: ExtensionAPI, deps: any =
     } catch { /* Optional host integration; use the spec and code when absent. */ }
   }
   const schemas: any = {
-    harness_complexity: Type.Object({ source: Type.Optional(Type.String({ maxLength: 65536 })), path: Type.Optional(Type.String()), responsibilities: Type.Optional(Type.Array(Type.String())), whole_file: Type.Optional(Type.Boolean()) }),
+    harness_complexity: Type.Object({ path: Type.String({ minLength: 1 }), responsibilities: Type.Optional(Type.Array(Type.String())) }, { additionalProperties: false }),
     mv_recall: Type.Object({ query: Type.String() }),
     mv_get_note: Type.Object({ id: Type.String() }),
     mp_retrieve: Type.Object({ operation: Type.Union([Type.Literal("grep"), Type.Literal("read"), Type.Literal("ls"), Type.Literal("glob")]), query: Type.Optional(Type.String()), path: Type.Optional(Type.String()) }),
   };
   for (const name of PLANNING_TOOLS) pi.registerTool({
     name, label: name,
-    description: name === "harness_complexity" ? "Advisory complexity of planned code and responsibilities. Whole-file input must be labeled an approximation. No approval gate." : name === "mp_retrieve" ? "Read-only MP code adapter: grep, read, ls or glob. No model-supplied code or writes. Optional, best effort." : `Optional read-only Mind Vault ${name.slice(3)}. Spec and code remain authoritative.`,
+    description: name === "harness_complexity" ? "Pass an existing file path. The host reads the file and returns its complexity using the exact Claude Code scorer. No inline source or pseudocode. File complexity is advisory, not task complexity or an approval gate." : name === "mp_retrieve" ? "Read-only MP code adapter: grep, read, ls or glob. No model-supplied code or writes. Optional, best effort." : `Optional read-only Mind Vault ${name.slice(3)}. Spec and code remain authoritative.`,
     parameters: schemas[name],
     async execute(_id: string, input: any, signal: AbortSignal | undefined, _update: any, ctx: any) {
       const identity: any = readPiChildIdentity(ctx.cwd, piSessionId(ctx), { parentSessionId: ctx.sessionManager?.getHeader?.()?.parentSession });
@@ -79,16 +79,12 @@ export default async function harnessPlanningTools(pi: ExtensionAPI, deps: any =
           return call(...args, ctx);
         }, signal);
         else try {
-          let scoringInput = input;
-          if (input.source === undefined) {
-            const decision = decidePiPolicy({ toolName: "read", input: { path: input.path } }, { cwd: ctx.cwd, projectRoot: ctx.cwd, reviewerRole: "harness-plan-reviewer" });
-            if (decision.block) throw Error(decision.reason);
-            if (typeof input.path !== "string") throw Error("Supply a source path or planned source text.");
-            const target = resolve(ctx.cwd, input.path);
-            if (statSync(target).size > 262144) throw Error("File too large for advisory scoring; provide the planned code slice.");
-            scoringInput = { ...input, source: readFileSync(target, "utf8"), whole_file: true };
-          }
-          result = scorePlannedChange(scoringInput);
+          if (typeof input.path !== "string" || !input.path.trim() || Object.hasOwn(input, "source")) throw Error("Supply an existing file path; inline source and pseudocode are not accepted. For new files, use engineering judgment.");
+          const decision = decidePiPolicy({ toolName: "read", input: { path: input.path } }, { cwd: ctx.cwd, projectRoot: ctx.cwd, reviewerRole: "harness-plan-reviewer" });
+          if (decision.block) throw Error(decision.reason);
+          const target = resolve(ctx.cwd, input.path);
+          if (statSync(target).size > 262144) throw Error("File too large for advisory scoring; continue using code inspection and engineering judgment.");
+          result = scorePlannedChange({ path: relative(ctx.cwd, target), responsibilities: input.responsibilities, source: readFileSync(target, "utf8"), whole_file: true });
         } catch (error) { result = { ok: false, advisory: true, reason: String(error) }; }
       }
       return { content: [{ type: "text", text: JSON.stringify(result) }], details: result };
