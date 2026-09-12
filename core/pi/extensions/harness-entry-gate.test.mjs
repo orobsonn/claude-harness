@@ -181,9 +181,12 @@ test("advisory não bloqueia e sai em details.bash_advisory no tool_result", asy
   }
 });
 
-test("tool_execution_end grava o fato terminal com os args memorizados em tool_execution_start", () => {
+for (const mode of ["FULL", "LIGHT"]) test(`tool_execution_end preserves capture but only arms implementation re-gate in FULL (${mode})`, () => {
   const f = fixture();
   try {
+    const statePath = join(f.root, ".pi", "harness", "state", SESSION, "gate-state.json");
+    const state = JSON.parse(readFileSync(statePath, "utf8"));
+    writeFileSync(statePath, JSON.stringify({ ...state, mode }));
     const h = handlers();
     h.get("session_start")({}, ctxOf(f.root));
     const claimed = claimPiDispatchForRuntime(
@@ -216,6 +219,7 @@ test("tool_execution_end grava o fato terminal com os args memorizados em tool_e
       readFileSync(join(f.root, ".pi", "harness", "state", SESSION, "gate-state.json"), "utf8"),
     );
     assert.deepEqual(gateState.hand_finished, [`${FEATURE}/task-1`]);
+    assert.equal(Boolean(gateState.regate_pending?.includes(`${FEATURE}/task-1`)), mode === "FULL");
   } finally {
     f.close();
   }
