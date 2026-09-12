@@ -260,7 +260,7 @@ function validateDependencies(grant, task, entry) {
   return { ok: true };
 }
 
-function validateLaunches(entry, jobRoot, readTaskProcessFn = readTaskProcess) {
+function validateLaunches(entry, jobRoot, readTaskProcessFn = readTaskProcess, allowFailedLatest = false) {
   if (!Array.isArray(entry.launches) || entry.launches.length === 0) return failure("task run has no launches");
   const lifecycles = [];
   const interruptedIndexes = new Set();
@@ -290,7 +290,7 @@ function validateLaunches(entry, jobRoot, readTaskProcessFn = readTaskProcess) {
     lifecycles.push(lifecycle);
   }
   const last = lifecycles.at(-1);
-  if (last.exitCode !== 0 || last.timedOut || last.signal !== null) return failure("latest task launch did not exit successfully");
+  if (!allowFailedLatest && (last.exitCode !== 0 || last.timedOut || last.signal !== null)) return failure("latest task launch did not exit successfully");
   return { ok: true, lifecycles, interruptedIndexes };
 }
 
@@ -383,6 +383,47 @@ function integratedRecoveryOrigin(entry, { sessionId, task, events, implementati
     producer_launch_index: origin.producer_launch_index } };
 }
 
+/** Only the host's sealed abandonment proof can exclude a writer from lineage.
+ * Review events, raw launches and their cost remain in the ordinary inspection.
+ */
+function abandonedWriterLaunches(entry, jobRoot) {
+  const indexes = new Set();
+  if (entry.abandoned_resumes === undefined) return indexes;
+  if (!Array.isArray(entry.abandoned_resumes)) throw new Error("invalid resume abandonment history");
+  for (const record of entry.abandoned_resumes) {
+    const proof = record?.proof;
+    const integration = entry.integration_history?.find((receipt) => hashTaskReceipt(receipt) === proof?.integration_sha256);
+    const result = entry.result_history?.[proof?.result_sha256];
+    if (record?.written_by !== "host-task-resume-abandonment" || record.no_product_obligation !== true ||
+        typeof record.reason !== "string" || !record.reason.trim() || !integration || !result ||
+        proof.result_sha256 !== integration.result_sha256 || hashTaskReceipt(result) !== proof.result_sha256 ||
+        proof.child_head !== result.child_head || proof.review_input_digest !== result.review_input_digest ||
+        !COMMIT_SHA.test(proof.parent_head ?? "") ||
+        !ancestor(entry.parent_root, integration.integrated_head, proof.parent_head) ||
+        !ancestor(entry.parent_root, proof.parent_head, "HEAD") ||
+        proof.inspected_launch_count !== result.launches?.length ||
+        !Number.isInteger(proof.launch_count) || proof.launch_count <= proof.inspected_launch_count ||
+        proof.launch_count > entry.launches.length ||
+        hashTaskReceipt(entry.launches.slice(0, proof.launch_count)) !== proof.launches_sha256 ||
+        !Array.isArray(proof.events_sha256) || proof.events_sha256.length !== proof.launch_count ||
+        !object(proof.hand_record) || hashTaskReceipt(proof.hand_record) !== proof.hand_sha256)
+      throw new Error("resume abandonment history is not bound to its host receipt and launch interval");
+    const historical = validateIntegration({ ...entry, result, launches: entry.launches.slice(0, result.launches.length),
+      reconciliations: entry.reconciliations?.filter((item) => item.launch_count < result.launches.length) }, integration, {
+      projectRoot: entry.parent_root, sessionId: entry.parent_session_id,
+      featureId: entry.feature_id, taskId: entry.task_id, headSha: integration.integrated_head,
+    });
+    if (!historical.ok) throw new Error(historical.reason);
+    for (let index = 0; index < proof.launch_count; index++) {
+      const bytes = fs.readFileSync(regularFile(entry.launches[index].events_path, jobRoot, MAX_EVENTS_BYTES));
+      if (crypto.createHash("sha256").update(bytes).digest("hex") !== proof.events_sha256[index])
+        throw new Error("resume abandonment native events changed");
+      if (index >= proof.inspected_launch_count) indexes.add(index);
+    }
+  }
+  return indexes;
+}
+
 /**
  * Inspect a ready delegated task from host-owned files and native event streams.
  * Historic failed/timed-out launches may be repaired by a later successful launch, but every
@@ -434,6 +475,7 @@ export function inspectTaskRun(entry, dependencies = {}) {
     const scopedChanges = splitZero(git(worktree, ["diff", "--name-only", "-z", scopeBase, head]));
     if (scopedChanges.some((item) => !covered(item, scopes))) return failure("task changed paths outside canonical scope", { changed: scopedChanges });
     const native = readEvents(entry.launches, jobRoot, launches.interruptedIndexes);
+    const abandonedWriters = abandonedWriterLaunches(entry, jobRoot);
     if (native.sessionIds.size !== 1 || !native.sessionIds.has(claim.session_id)) return failure("native event session does not match the claimed child session");
     // A blocked hand can explain its failure without being eligible to approve it.
     // Bind diagnostics before capture checks, using the same identity/hash contract
@@ -460,6 +502,7 @@ export function inspectTaskRun(entry, dependencies = {}) {
     if (reconciliation && !ancestor(worktree, reconciliation.merged_head, hand.freezeCommitSha))
       return failure("current hand requires a new capture after dependency reconciliation");
     const isImplementationForTask = (event) => event.tool === "subagent" &&
+      !abandonedWriters.has(event.launchIndex) &&
       ["harness-executor", "harness-sniper"].includes(event.args?.subagent_type) &&
       taskFromPrompt(event.args?.prompt) === entry.task_id && eventSucceeded(event);
     const recovery = hand.agent === "harness-test-author";
@@ -481,6 +524,7 @@ export function inspectTaskRun(entry, dependencies = {}) {
     let recoveryOrigin = null;
     if (recovery) {
       const isWriter = (event) => event.tool === "subagent" &&
+        !abandonedWriters.has(event.launchIndex) &&
         ["harness-executor", "harness-sniper", "harness-test-author"].includes(event.args?.subagent_type);
       const implementationIndex = native.events.findLastIndex((event, index) => index < producerIndex && isImplementationForTask(event));
       const firstAuthorIndex = native.events.findIndex((event, index) => index > implementationIndex && isWriter(event) &&
@@ -752,7 +796,7 @@ function isReconciliationDependencyRead(registry, upstream, reconciliationFor) {
 }
 
 /** Read one integration receipt without rewriting child identity or clearing a correction barrier. */
-export function readIntegratedTaskEvidence({ projectRoot, sessionId, featureId, taskId, headSha, reconciliationFor } = {}) {
+export function readIntegratedTaskEvidence({ projectRoot, sessionId, featureId, taskId, headSha, reconciliationFor } = {}, dependencies = {}) {
   try {
     if (typeof projectRoot !== "string" || !projectRoot || !isSafeSessionId(sessionId) || !isSafeFeatureId(featureId) || !isSafeTaskId(taskId)) return failure("safe integrated task identity required");
     const root = fs.realpathSync(projectRoot);
@@ -766,7 +810,25 @@ export function readIntegratedTaskEvidence({ projectRoot, sessionId, featureId, 
         entry.plan_sha256 !== registry.plan_sha256 || entry.spec_sha256 !== registry.spec_sha256) return failure("current integrated task registry entry required");
     const authority = validateCurrentIntegrationAuthority(entry, registry, { projectRoot: root, sessionId, featureId });
     if (!authority.ok) return authority;
-    const validated = validateIntegration(entry, entry.integration, { projectRoot: root, sessionId, featureId, taskId, headSha });
+    let inspectionEntry = entry;
+    if (entry.result?.launches?.length !== entry.launches?.length) {
+      const abandoned = entry.abandoned_resumes?.at(-1);
+      if (abandoned?.written_by !== "host-task-resume-abandonment" || abandoned.no_product_obligation !== true ||
+          typeof abandoned.reason !== "string" || !abandoned.reason.trim()) return failure("explicit host resume abandonment required");
+      const sealedHead = abandoned.proof?.parent_head;
+      if (!COMMIT_SHA.test(sealedHead ?? "") || !COMMIT_SHA.test(headSha ?? "") ||
+          !ancestor(root, sealedHead, headSha)) return failure("resume abandonment parent HEAD is not ancestral to the requested HEAD");
+      // The unchanged-path obligation belongs to the abandonment instant, not
+      // every future owner of those production paths. Current frozen blobs and
+      // integration ancestry are still checked below against the requested HEAD.
+      const checked = inspectTaskResumeAbandonment(entry, { headSha: sealedHead }, dependencies);
+      if (!checked.ok) return checked;
+      if (hashTaskReceipt(checked.proof) !== hashTaskReceipt(abandoned.proof) ||
+          hashTaskReceipt(entry.integration) !== hashTaskReceipt(checked.integration) ||
+          hashTaskReceipt(entry.result) !== hashTaskReceipt(checked.result)) return failure("resume abandonment evidence changed");
+      inspectionEntry = checked.inspectionEntry;
+    }
+    const validated = validateIntegration(inspectionEntry, entry.integration, { projectRoot: root, sessionId, featureId, taskId, headSha });
     if (!validated.ok) return validated;
     return { ok: true, result: entry.integration, entry };
   } catch (error) {
@@ -786,6 +848,96 @@ export function readAllIntegratedTaskEvidence({ projectRoot, sessionId, featureI
     results.push(evidence.result);
   }
   return { ok: true, results };
+}
+
+/** Revalidate a prior integration after an explicitly abandoned, unchanged resume.
+ * The current hand is evidence of the abandoned work, never a replacement approval.
+ * Keep every launch on the registry; only validate the original receipt against its
+ * original launch prefix, with a separate proof binding the entire retained history.
+ */
+export function inspectTaskResumeAbandonment(entry, { headSha } = {}, dependencies = {}) {
+  try {
+    const integration = Array.isArray(entry?.integration_history) && entry.integration_history.at(-1);
+    const result = object(entry?.result_history)?.[integration?.result_sha256];
+    if (!object(result) || hashTaskReceipt(result) !== integration.result_sha256 ||
+        !Array.isArray(result.launches) || !result.launches.length ||
+        !Array.isArray(entry.launches) || result.launches.length >= entry.launches.length)
+      return failure("resume abandonment requires the immediately previous integration and exact inspection");
+    if (entry.reconciliation_required || entry.reconciliation_intent)
+      return failure("dependency reconciliation cannot be abandoned as an unchanged resume");
+    const inspectionEntry = { ...entry, result, launches: entry.launches.slice(0, result.launches.length) };
+    const historical = validateIntegration(inspectionEntry, integration, {
+      projectRoot: entry.parent_root, sessionId: entry.parent_session_id,
+      featureId: entry.feature_id, taskId: entry.task_id, headSha,
+    });
+    if (!historical.ok) return historical;
+    const worktree = fs.realpathSync(entry.worktree);
+    const jobRoot = fs.realpathSync(entry.job_dir);
+    if (worktree !== entry.worktree || jobRoot !== entry.job_dir)
+      return failure("resume abandonment requires canonical task roots");
+    const launches = validateLaunches(entry, jobRoot, dependencies.readTaskProcessFn ?? readTaskProcess, true);
+    if (!launches.ok) return launches;
+    if (launches.interruptedIndexes.size) return failure("resume abandonment requires known terminal process evidence for every launch");
+    if (String(git(worktree, ["rev-parse", "HEAD"])).trim() !== result.child_head ||
+        String(git(worktree, ["status", "--porcelain", "--untracked-files=all", "--", ".",
+          ":(exclude).pi/harness/", ":(exclude)node_modules/"])).trim())
+      return failure("resume abandonment requires the original clean child HEAD");
+    if (result.changed_paths.length && String(git(entry.parent_root,
+      ["diff", "--name-only", result.child_head, headSha, "--", ...result.changed_paths])).trim())
+      return failure("original integrated task paths changed on the parent");
+    const binding = (dependencies.readTaskRunBindingFn ?? readTaskRunBinding)(worktree, result.session_id);
+    if (!binding?.ok || binding.grant.task_id !== entry.task_id || binding.grant.attempt_id !== entry.attempt_id ||
+        binding.grant.parent_session_id !== entry.parent_session_id || binding.grant.parent_root !== entry.parent_root ||
+        binding.grant.feature_id !== entry.feature_id || binding.grant.plan_sha256 !== entry.plan_sha256 ||
+        binding.grant.spec_sha256 !== entry.spec_sha256 || binding.grant.base_sha !== entry.base_sha)
+      return failure("resume abandonment task binding changed");
+    const claim = readJson(`${entry.grant_path}.claim`, worktree);
+    if (claim.session_id !== result.session_id) return failure("resume abandonment child session changed");
+    const events = readEvents(entry.launches, jobRoot);
+    if (events.sessionIds.size !== 1 || !events.sessionIds.has(result.session_id))
+      return failure("resume abandonment native session changed");
+    const hand = readJson(piHandRecordPath({ projectRoot: worktree, sessionId: result.session_id,
+      featureId: entry.feature_id }, entry.task_id).path, worktree);
+    const violations = recordViolations(hand);
+    if (hand.featureId !== entry.feature_id || hand.taskId !== entry.task_id || hand.sessionId !== result.session_id ||
+        hand.writtenBy !== "host-hand-finished" || violations.scope.length || violations.frozen.length)
+      return failure("resume abandonment hand identity or violations require ordinary recovery");
+    const originalHand = hand.producerCallId === result.hand_capture.producer_call_id;
+    if (originalHand ? (!isCaptureEligibleHandRecord(hand) || hand.agent !== result.hand_capture.agent ||
+        hand.freezeCommitSha !== result.hand_capture.freeze_sha || hand.capturedVerifiedAt !== result.hand_capture.captured_verified_at)
+      : (hand.outcome !== "BLOCKED" || hand.freezeCommitSha !== result.child_head ||
+        !Array.isArray(hand.touchedPaths) || hand.touchedPaths.length || !events.events.some((event) =>
+          event.launchIndex >= result.launches.length && event.callId === hand.producerCallId && event.tool === "subagent" &&
+          event.args.subagent_type === hand.agent && ["harness-executor", "harness-sniper"].includes(hand.agent) &&
+          taskFromPrompt(event.args.prompt) === entry.task_id && eventSucceeded(event))))
+      return failure("resume abandonment requires the original capture or a native blocked hand without changes");
+    // Fidelity changes need their ordinary recovery path. Task eyes below include
+    // every later dispatch, so an optional, negative or incomplete eye cannot hide.
+    if (events.events.some((event) => event.launchIndex >= result.launches.length &&
+        event.tool === "subagent" && ["harness-test-author", "harness-test-reviewer"].includes(event.args.subagent_type)))
+      return failure("new fidelity work requires ordinary task recovery");
+    const state = readJson(piGateStatePath({ projectRoot: worktree, sessionId: result.session_id }).path, worktree);
+    const reviews = validateCurrentReviews({ state, events: events.events, plan: binding.plan, task: binding.task,
+      projectRoot: worktree, sessionId: result.session_id, featureId: entry.feature_id, taskId: entry.task_id,
+      head: result.child_head, captureReviewInputFn: dependencies.captureReviewInputFn ?? capturePiReviewInput });
+    if (!reviews.ok) return reviews;
+    if (reviews.inputDigest !== result.review_input_digest || hashTaskReceipt(reviews.receipts) !== hashTaskReceipt(result.review_receipts))
+      return failure("resume abandonment requires unchanged review input and original accepted eyes");
+    const eventDigests = entry.launches.map((launch) => {
+      const bytes = fs.readFileSync(regularFile(launch.events_path, jobRoot, MAX_EVENTS_BYTES));
+      for (const line of bytes.toString("utf8").split("\n")) if (line.trim()) JSON.parse(line);
+      return crypto.createHash("sha256").update(bytes).digest("hex");
+    });
+    return { ok: true, result, integration, inspectionEntry, proof: {
+      integration_sha256: hashTaskReceipt(integration), result_sha256: integration.result_sha256,
+      parent_head: headSha, child_head: result.child_head, review_input_digest: reviews.inputDigest,
+      inspected_launch_count: result.launches.length, launch_count: entry.launches.length,
+      launches_sha256: hashTaskReceipt(entry.launches), events_sha256: eventDigests,
+      hand_sha256: hashTaskReceipt(hand), hand_record: hand,
+    } };
+  } catch (error) {
+    return failure(`resume abandonment evidence unavailable: ${error.message}`);
+  }
 }
 
 export default { inspectTaskRun, readIntegratedTaskEvidence, readAllIntegratedTaskEvidence };

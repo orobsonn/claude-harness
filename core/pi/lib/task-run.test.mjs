@@ -355,6 +355,7 @@ test("task authority blocks global ceremony, sibling work and delivery while all
     { toolName: "harness_tasks", input: { action: "dispatch" } },
     { toolName: "mark", input: { action: "final-review", task_id: "task-one" } },
     { toolName: "harness_memory", input: { action: "apply" } },
+    { toolName: "harness_memory", input: { action: "reconcile" } },
     { toolName: "harness_memory", input: { action: "finalize" } },
     { toolName: "bash", input: { command: "git push origin HEAD" } },
   ]) assert.equal(decideTaskRunTool(binding, event).block, true);

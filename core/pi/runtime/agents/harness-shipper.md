@@ -44,7 +44,13 @@ não repita publicação cegamente nem confunda falha do recibo com merge não r
 Se o merge falhar por conflito com a base, não altere produto, não chame planner e não
 proponha uma tarefa nova. Retorne `Status: BLOCKED` com o HEAD revisado, o SHA atual da
 base e a evidência de conflito disponível. O pai reconcilia paths já pertencentes ao plano
-reutilizando seus IDs; path sem dono exige outra entrega, fora desta finalização.
+pela operação global `harness_memory reconcile`, antes de decidir se existe retrabalho
+real de produto. Não encaminhe incorporação de `main` a uma task ou writer.
+Conflitos em `MEMORY.md`, `CONTEXT.md` e `kaizen.md` são anotações do integrador,
+não escopo novo: o pai resolve preservando os dois lados, como no Claude/Orca.
+Esse merge pode também incorporar produto sem conflito; o pai revalida o input final,
+refaz harvest após os olhos atuais e só então volta ao shipper. Produto novo fora do
+plano exige outra entrega, não uma task inventada no fechamento.
 
 Em release manual exclusivamente de versão/changelog, o host reconhece a branch
 `chore/release-X.Y.Z` e, depois do merge, o commit exato associado ao PR mergeado com

@@ -1,11 +1,11 @@
 /** Run-local curated context and evidence-backed harvest, never a substitute for gate-state. */
 import { constants, closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readSync, realpathSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { isSafeSessionId, isSafeFeatureId } from "../../shared/lib/feature-id.mjs";
 import { classifyPiFunctionalMergeTransition, readPiMergedReleaseEvidence, resolvePiReleaseProof } from "./release-only.mjs";
-import { capturePiReviewInput, hasAcceptedPiReviewEvidence, readPiReviewPlan } from "./pi-review-evidence.mjs";
+import { capturePiReviewInput, hasAcceptedPiReviewEvidence, isPiReviewExcludedPath, readPiReviewPlan } from "./pi-review-evidence.mjs";
 import { requiredPiFinalReviewRoles } from "./roles.mjs";
 
 export const DURABLE_MEMORY_FILES = Object.freeze(["MEMORY.md", "CONTEXT.md", "kaizen.md"]);
@@ -106,6 +106,103 @@ function cleanTree(root) {
   const tracked = gitMemory(root, ["status", "--porcelain", "--untracked-files=no"]);
   const untracked = tracked ? "" : gitMemory(root, ["status", "--porcelain", "--untracked-files=all", "--", ".", ":(exclude).pi/harness/runtime/", ":(exclude).pi/harness/state/", ":(exclude).pi/harness/plans/", ":(exclude).pi/harness/sessions/", ":(exclude)node_modules/"]);
   if (tracked || untracked) throw new Error("Commit and verify all delivery changes before final review or finalize");
+}
+
+/** Global delivery integration, following the Orca integrator's annotation-only
+ * conflict resolution. Git owns the merge; tasks and approval receipts are untouched.
+ * Omit resolutions to preview. An explicit array (including []) applies the merge. */
+export function reconcileMemoryDelivery(projectRoot, sessionId, { expected_head, base_sha, resolutions } = {}) {
+  const paths = memoryPaths(projectRoot, sessionId);
+  const root = paths.root;
+  const state = JSON.parse(readSmall(join(paths.directory, "gate-state.json"), 1024 * 1024) ?? "null");
+  if (!state || state.session_id !== sessionId || state.task_run) throw new Error("Delivery reconciliation belongs to the global parent");
+  if (!finalizationStarted(root, sessionId)) throw new Error("Delivery reconciliation requires an existing finalization; use task coordination during implementation");
+  if (![expected_head, base_sha].every((value) => typeof value === "string" && /^[a-f0-9]{40}$/.test(value)))
+    throw new Error("Use explicit full expected_head and base_sha commit SHAs");
+  if (gitMemory(root, ["rev-parse", "--show-toplevel"]) !== root) throw new Error("Reconciliation requires the canonical worktree root");
+  if (gitMemory(root, ["rev-parse", "HEAD"]) !== expected_head) throw new Error("HEAD is stale; inspect the current delivery before retrying");
+  if (gitMemory(root, ["rev-parse", "--verify", `${base_sha}^{commit}`]) !== base_sha) throw new Error("Base must name an existing commit");
+  for (const name of ["MERGE_HEAD", "rebase-merge", "rebase-apply", "CHERRY_PICK_HEAD"]) {
+    if (stat(gitMemory(root, ["rev-parse", "--path-format=absolute", "--git-path", name])))
+      throw new Error("An integration is already pending; preserve and inspect it before retrying");
+  }
+  cleanTree(root);
+  // The same explicit ref labels are used for preview and merge, so patch hashes
+  // also bind Git's conflict text, not a model's excerpt or reconstructed document.
+  const preview = spawnSync("git", ["merge-tree", "--write-tree", "--name-only", "-z", "HEAD", base_sha],
+    { cwd: root, encoding: "utf8", timeout: 10000, maxBuffer: 8 * 1024 * 1024 });
+  if (preview.error || ![0, 1].includes(preview.status)) throw new Error("Cannot preview the base merge; inspect Git ancestry and repository configuration");
+  const fields = preview.stdout.split("\0");
+  const tree = fields.shift();
+  if (!/^[a-f0-9]{40}$/.test(tree)) throw new Error("Git did not produce a merge preview tree");
+  const conflictPaths = preview.status === 0 ? [] : fields.slice(0, fields.indexOf(""));
+  if (preview.status === 1 && !conflictPaths.length) throw new Error("Git reported a conflict without safe paths");
+  if (conflictPaths.some((file) => !DURABLE_MEMORY_FILES.includes(file)))
+    throw new Error("Merge has product conflicts outside durable memory; no files were changed. Reconcile the affected product obligation on the host, never ask a task to integrate globally");
+  const changed = gitMemory(root, ["diff", "--name-only", "-z", expected_head, tree]).split("\0").filter(Boolean);
+  if (changed.some((file) => isPiReviewExcludedPath(root, file) || file.startsWith(".pi/harness/plans/")))
+    throw new Error("Base merge would import secrets or ephemeral runtime/plan files; no files were changed");
+  const memoryPathsChanged = new Set([...conflictPaths, ...changed.filter((file) => DURABLE_MEMORY_FILES.includes(file))]);
+  for (const file of memoryPathsChanged) {
+    // No rename/delete conflict, executable or symlink resolution under the notes
+    // exception. Clean upstream additions/deletions remain ordinary base integration.
+    for (const ref of [expected_head, base_sha, tree]) {
+      const object = gitMemory(root, ["ls-tree", ref, "--", file]);
+      if ((conflictPaths.includes(file) || object) && !/^100644 blob /.test(object))
+        throw new Error("Memory reconciliation requires existing regular non-executable files on both sides");
+    }
+    regularFile(join(root, file));
+  }
+  const blob = (ref, file) => execFileSync("git", ["show", `${ref}:${file}`],
+    { cwd: root, encoding: "utf8", timeout: 10000, maxBuffer: 1024 * 1024 });
+  const conflicts = conflictPaths.map((file) => {
+    const content = blob(tree, file);
+    return { path: file, sha256: sha(content), content, truncated: false };
+  });
+  const result = { ok: true, applied: false, expected_head, base_sha, tree, changed_paths: changed };
+  if (resolutions === undefined) return { ...result, conflicts: conflicts.map((entry) => ({ ...entry,
+    content: entry.content.slice(0, 24576), truncated: entry.content.length > 24576 })) };
+  if (!Array.isArray(resolutions) || resolutions.length !== conflicts.length ||
+      new Set(resolutions.map((entry) => entry?.path)).size !== conflicts.length)
+    throw new Error("Provide exactly one hash-bound patch per memory conflict; [] applies a clean merge");
+  const patches = conflicts.map((entry) => {
+    const resolution = resolutions.find((item) => item?.path === entry.path);
+    if (!resolution || resolution.before_sha256 !== entry.sha256 || !resolution.patch || Object.hasOwn(resolution, "content"))
+      throw new Error("Memory conflict resolution is stale or invalid; use a small patch with the preview hash, never full replacement");
+    const content = applyMemoryDelta(entry.content, resolution);
+    if (/^(?:<{7}|={7}|>{7}|\|{7})(?:\s|$)/m.test(content)) throw new Error("Resolve all memory conflict markers and preserve both sides' verified knowledge");
+    return { path: entry.path, before: entry.content, content };
+  });
+  cleanTree(root);
+  if (gitMemory(root, ["rev-parse", "HEAD"]) !== expected_head) throw new Error("HEAD changed after merge preview; retry against the current head");
+  const merge = spawnSync("git", ["merge", "--no-ff", "--no-commit", "--no-edit", base_sha],
+    { cwd: root, encoding: "utf8", timeout: 10000, maxBuffer: 8 * 1024 * 1024 });
+  // Never silently reset/abort after an interrupted merge: Git's own journal and
+  // index remain available for recovery. A failure cannot create approval evidence.
+  if (merge.error || ![0, 1].includes(merge.status)) throw new Error("Git merge failed; preserve and inspect the worktree before retrying");
+  const pending = stat(gitMemory(root, ["rev-parse", "--path-format=absolute", "--git-path", "MERGE_HEAD"]));
+  if (!pending && merge.status === 0 && gitMemory(root, ["rev-parse", "HEAD"]) === expected_head)
+    return { ...result, head: expected_head, already_incorporated: true };
+  if (!pending || gitMemory(root, ["rev-parse", "MERGE_HEAD"]) !== base_sha || gitMemory(root, ["rev-parse", "HEAD"]) !== expected_head)
+    throw new Error("Merge identity changed; preserve and inspect the worktree");
+  const unresolved = gitMemory(root, ["diff", "--name-only", "--diff-filter=U", "-z"]).split("\0").filter(Boolean);
+  if (stable([...unresolved].sort()) !== stable([...conflictPaths].sort())) throw new Error("Merge conflicts changed after preview; preserve and inspect the worktree");
+  for (const patch of patches) {
+    if (readSmall(join(root, patch.path), 1024 * 1024) !== patch.before) throw new Error("Memory preimage changed during merge; preserve and inspect the worktree");
+  }
+  for (const patch of patches) atomicWrite(join(root, patch.path), patch.content);
+  if (patches.length) gitMemory(root, ["add", "--", ...patches.map((patch) => patch.path)]);
+  const indexDelta = gitMemory(root, ["diff", "--cached", "--name-only", "-z", tree]).split("\0").filter(Boolean);
+  if (indexDelta.some((file) => !conflictPaths.includes(file)) || gitMemory(root, ["diff", "--name-only"]))
+    throw new Error("Merge differs from the preview outside memory resolutions; preserve and inspect the index");
+  for (const patch of patches) {
+    if (blob("", patch.path) !== patch.content || !/^100644 /.test(gitMemory(root, ["ls-files", "--stage", "--", patch.path])))
+      throw new Error("Staged memory differs from the resolution; preserve and inspect the index");
+  }
+  gitMemory(root, ["commit", "-m", "chore: reconcilia base e memória da entrega"]);
+  cleanTree(root);
+  return { ...result, applied: true, head: gitMemory(root, ["rev-parse", "HEAD"]),
+    next: "Inspect the incorporated delta, run affected verification and obtain current final eyes, then harvest and ship. Do not reopen completed tasks or reuse stale approvals." };
 }
 
 function snapshotPlan(paths, featureId) {

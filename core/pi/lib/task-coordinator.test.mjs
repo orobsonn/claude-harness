@@ -159,6 +159,56 @@ test("scope overlap includes tests and fixtures, with component boundaries", () 
   ), false, "Next.js bracket segments are literal paths");
 });
 
+test("parent explicitly abandons an unchanged resume while retaining launches, history and invalid final eyes", async (t) => {
+  const f = fixture(t, [task("a")]);
+  const action = (params) => executeTaskAction(params, f.context, f.deps);
+  assert.equal((await action({ action: "dispatch", task_ids: ["a"] })).ok, true);
+  let entry = f.registry().tasks.a;
+  fs.mkdirSync(path.join(entry.worktree, "src"));
+  fs.writeFileSync(path.join(entry.worktree, "src/a.mjs"), "export const a = 1;\n");
+  git(entry.worktree, "add", "src/a.mjs");
+  git(entry.worktree, "commit", "-qm", "implement a");
+  const head = git(entry.worktree, "rev-parse", "HEAD");
+  assert.equal((await action({ action: "integrate", task_id: "a", attempt_id: entry.attempt_id, expected_head: head })).ok, true);
+  const original = f.registry().tasks.a;
+  const statePath = path.join(f.dir, ".pi/harness/state/parent/gate-state.json");
+  write(statePath, { ...JSON.parse(fs.readFileSync(statePath)), final_review_done: true, demo_done: true,
+    final_review_evidence: { old: "accepted" } });
+  write(`${entry.grant_path}.claim`, { session_id: "local-session" });
+  assert.equal((await action({ action: "resume", task_id: "a", attempt_id: entry.attempt_id, instruction: "Reconcile delivery" })).ok, true);
+  const resumed = f.registry();
+  f.deps.inspectResumeAbandonment = () => ({ ok: true, result: original.result, integration: original.integration,
+    proof: { launch_count: 2, inspected_launch_count: 1 } });
+  const request = { action: "abandon-resume", task_id: "a", attempt_id: entry.attempt_id, expected_head: head,
+    no_product_obligation: true, reason: "Delivery conflict belongs to the global parent; no task correction remains." };
+  assert.equal((await action({ ...request, no_product_obligation: false })).ok, false);
+  assert.equal((await action({ ...request, reason: " " })).ok, false);
+  assert.equal((await action({ ...request, expected_head: "0".repeat(40) })).ok, false);
+  f.deps.readProcess = () => ({ running: true, terminal: false });
+  assert.equal((await action(request)).ok, false);
+  f.deps.readProcess = () => ({ ok: true, running: false, terminal: true });
+  const done = await action(request);
+  assert.equal(done.ok, true, done.reason);
+  const restored = f.registry();
+  entry = restored.tasks.a;
+  assert.equal(entry.status, "integrated");
+  assert.deepEqual(entry.integration, original.integration);
+  assert.deepEqual(entry.result, original.result);
+  assert.deepEqual(entry.launches, resumed.tasks.a.launches);
+  assert.deepEqual(entry.integration_history, resumed.tasks.a.integration_history);
+  assert.deepEqual(entry.result_history, resumed.tasks.a.result_history);
+  assert.equal(entry.abandoned_resumes[0].reason, request.reason);
+  assert.equal(entry.abandoned_resumes[0].no_product_obligation, true);
+  assert.equal(restored.correction_barrier, undefined);
+  assert.equal(git(f.dir, "rev-parse", "HEAD"), original.integration.integrated_head);
+  const state = JSON.parse(fs.readFileSync(path.join(f.dir, ".pi/harness/state/parent/gate-state.json")));
+  assert.equal(state.final_review_done, undefined);
+  assert.equal(state.demo_done, undefined);
+  assert.equal(state.final_review_evidence, undefined);
+  assert.equal(done.tasks[0].abandoned_resumes[0].launch_count, 2);
+  assert.equal(f.launches(), 2);
+});
+
 test("dispatch rejects unsupported scope globs before creating a registry, worktree or job", async (t) => {
   const cases = [
     ["scope_paths", (candidate) => { candidate.scope_paths = ["src/**/*.mjs"]; }],

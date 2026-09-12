@@ -344,11 +344,39 @@ A aprovação de testes fecha quando os observáveis aprovados estão representa
 Ao retomar após um PR draft, explique a finalidade de cada despacho: merge do PR funcional e preparação do PR de release são operações distintas, não repetição da mesma entrega. Verifique o estado remoto e a autorização existente antes de agir, e informe quando um dispatch anterior foi bloqueado. O shipper não deve criar outro commit de produto depois das revisões finais; se descobrir mudança necessária, devolva à tarefa apropriada e revalide a evidência afetada.
 
 Se o merge do shipper encontrar conflito, ele termina `BLOCKED` com o HEAD revisado, a
-nova base observada e a evidência de conflito disponível. Não chame planner nem plan-reviewer nessa
-finalização. Quando todos os paths já pertencem ao plano, reutilize os IDs das tarefas
-existentes, reconcilie somente as obrigações afetadas e refaça olhos finais no
-novo HEAD; depois das correções e aprovações, refaça harvest. Path sem dono é escopo novo: reporte o bloqueio e trate-o em outra entrega;
-não acrescente tarefa ao plano que já chegou ao shipping.
+nova base observada e a evidência de conflito disponível. Primeiro diagnostique no
+**pai global** com `harness_memory action="reconcile"`, `expected_head` e `base_sha`
+completos, depois de buscar a base observada com `git fetch`; sem `resolutions`,
+a operação apenas mostra o merge previsto. Não use
+`harness_tasks resume` nem executor/sniper para incorporar `main`: essa operação
+não é reconciliação de dependência entre tasks. Nunca peça merge/rebase/cherry-pick
+ao filho. No Claude/Orca, o integrador resolve as anotações; no Pi, o host aplica
+essa mesma responsabilidade na finalização.
+
+Se uma retomada operacional já reabriu indevidamente uma task integrada, não
+invente um delta para conseguir recibo. Antes de incorporar a nova base, examine
+o HEAD e as evidências atuais. Havendo integração original intacta e nenhuma
+obrigação de correção de produto, use `harness_tasks action="abandon-resume"`
+com o `expected_head` da task, `no_product_obligation: true` e motivo factual.
+O host revalida o histórico; não converte uma mão `BLOCKED` em aprovação nem
+descarta parecer negativo. Mudança real de produto/teste exige a recuperação
+normal, não abandono. Olhos finais invalidados continuam precisando de revisão.
+
+Merge limpo: envie `resolutions: []`. Se os conflitos forem somente `MEMORY.md`,
+`CONTEXT.md` ou `kaizen.md`, resolva cada um com patch literal pequeno vinculado ao
+hash do preview. Preserve os aprendizados válidos de ambos os lados e leia a prosa
+resultante; não peça revisão humana de rotina nem substitua o documento a partir
+de excerpt. Memória de entrega não é path sem dono nem tarefa de produto.
+Conflito de produto interrompe a operação antes de modificar arquivos: diagnostique
+a obrigação afetada, sem tentar integração global dentro da task.
+
+Incorporar uma base pode trazer produto sem conflito mesmo quando só memória conflitou.
+Inspecione o delta, execute a verificação afetada e obtenha olhos finais atuais no
+novo input; depois refaça harvest e shipping. Preserve tasks concluídas e olhos de
+task não afetados. Só reabra a task existente se houver correção real de produto,
+nunca para recibo ou integração; nesse retrabalho, reutilize os IDs das tarefas
+existentes. Não chame planner nem plan-reviewer nessa
+finalização; escopo novo de produto exige outra entrega, não uma task adicionada ao plano.
 
 **Staging — mesmas exclusões do shipper Claude Code.** Nunca stagear `.dev.vars`, `.env*`, `.env.local`, `.local.*`, `.claude/settings.local.json`, `.claude/plans/`, `.pi/harness/`, `.DS_Store`, `*.log`, `node_modules/`, `dist/`, `coverage/`, arquivos de credenciais (credential) ou token. Antes de commitar, inspecione tanto os nomes quanto o diff de todo o index (`git diff --cached --name-only`, depois `git diff --cached`), inclusive conteúdo que já estava staged antes da tarefa. Não leia valores de segredos para fazer essa conferência: path suspeito é bloqueio. Stage seletivo não autoriza incluir sujeira preexistente.
 

@@ -216,6 +216,10 @@ function summary(entry) {
       ...(launch.orca ? { orca: launch.orca } : {}),
     })),
     ...(entry.integration ? { integration: entry.integration } : {}),
+    ...(entry.abandoned_resumes?.length ? { abandoned_resumes: entry.abandoned_resumes.map((record) => ({
+      reason: record.reason, abandoned_at: record.abandoned_at,
+      inspected_launch_count: record.proof.inspected_launch_count, launch_count: record.proof.launch_count,
+    })) } : {}),
   };
 }
 function requireFrozen(root, tree, results) {
@@ -596,7 +600,7 @@ export async function executeTaskAction(params, context = {}, injected = {}) {
     const owner = admission(context);
     if (
       !params ||
-      !["dispatch", "status", "integrate", "resume"].includes(params.action)
+      !["dispatch", "status", "integrate", "resume", "abandon-resume"].includes(params.action)
     )
       throw new Error("unknown task action");
     if (params.action !== "dispatch" && params.task_ids !== undefined)
@@ -608,6 +612,7 @@ export async function executeTaskAction(params, context = {}, injected = {}) {
       status: ["action", "task_id"],
       integrate: ["action", "task_id", "attempt_id", "expected_head"],
       resume: ["action", "task_id", "attempt_id", "instruction"],
+      "abandon-resume": ["action", "task_id", "attempt_id", "expected_head", "no_product_obligation", "reason"],
     }[params.action];
     if (Object.keys(params).some((key) => !allowed.includes(key)))
       throw new Error("unexpected task parameters");
@@ -650,6 +655,8 @@ export async function executeTaskAction(params, context = {}, injected = {}) {
       import("./task-receipts.mjs").then((module) =>
         module.readIntegratedTaskEvidence(input),
       );
+    deps.inspectResumeAbandonment ??= (entry, input) =>
+      import("./task-receipts.mjs").then((module) => module.inspectTaskResumeAbandonment(entry, input));
     if (registry?.correction_barrier)
       invalidateAggregate(owner, registry, persist);
     if (registry) reconcileMerge(owner, registry, persist);
@@ -909,6 +916,40 @@ export async function executeTaskAction(params, context = {}, injected = {}) {
     const entry = registry.tasks[params.task_id];
     if (!entry || params.attempt_id !== entry.attempt_id)
       throw new Error("exact current task and attempt required");
+    if (params.action === "abandon-resume") {
+      if (params.no_product_obligation !== true || typeof params.reason !== "string" ||
+          !params.reason.trim() || params.reason.length > 4000)
+        throw new Error("explicit no_product_obligation declaration and a bounded reason required");
+      if (entry.integration || registry.correction_barrier?.task_id !== entry.task_id ||
+          registry.correction_barrier.attempt_id !== entry.attempt_id)
+        throw new Error("only the current pending integrated-task correction can be abandoned");
+      if (!/^[a-f0-9]{40}$/.test(params.expected_head ?? "") ||
+          git(entry.worktree, "rev-parse", "HEAD") !== params.expected_head)
+        throw new Error("exact unchanged task expected_head required");
+      if (entry.launches.some((launch) => !deps.readProcess(launch).terminal))
+        throw new Error("task processes must terminate before abandoning a resume");
+      if (Object.values(registry.tasks).some((task) => task.reconciliation_required?.upstreams?.[entry.task_id]))
+        throw new Error("dependent corrections must be reconciled through ordinary task recovery");
+      requireTaskIdentity(entry);
+      requireClean(owner.root);
+      const runtime = deps.verifyRuntime(entry.runtime);
+      if (!runtime.ok) throw new Error(runtime.reason);
+      const checked = await deps.inspectResumeAbandonment(entry, { headSha: git(owner.root, "rev-parse", "HEAD") });
+      if (!checked.ok) throw new Error(checked.reason);
+      (entry.abandoned_resumes ??= []).push({
+        written_by: "host-task-resume-abandonment", no_product_obligation: true,
+        reason: params.reason.trim(), abandoned_at: new Date().toISOString(), proof: checked.proof,
+      });
+      entry.integration = checked.integration;
+      entry.result = checked.result;
+      entry.status = "integrated";
+      delete entry.reason;
+      delete registry.correction_barrier;
+      // No launch, hand, review or prior receipt is removed or rewritten. The
+      // global final eyes invalidated at resume remain invalidated.
+      persist();
+      return { ok: true, tasks: [summary(entry)] };
+    }
     if (params.action === "resume") {
       if (
         params.instruction !== undefined &&

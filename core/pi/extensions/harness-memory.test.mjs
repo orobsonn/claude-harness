@@ -122,6 +122,21 @@ function makeRoot(t, prefix = "pi-harness-memory-") {
   return root;
 }
 
+test("native memory surface exposes reconcile but rejects delegated children and local task parents", async (t) => {
+  const api = register();
+  assert.ok(api.tool.parameters.properties.action.enum.includes("reconcile"));
+  assert.ok(api.tool.parameters.properties.resolutions);
+  const root = makeRoot(t);
+  mkdirSync(join(root, ".pi/harness/state", SESSION), { recursive: true });
+  writeFileSync(gateStatePath(root), JSON.stringify({ session_id: SESSION, final_review_done: true, task_run: { task_id: "task-one" } }));
+  const params = { action: "reconcile", expected_head: "a".repeat(40), base_sha: "b".repeat(40), resolutions: [] };
+  for (const runtime of [ctx(root), ctx(root, { child: true })]) {
+    const result = await api.execute(params, runtime);
+    assert.equal(result.isError, true);
+    assert.match(resultText(result), /global parent|parent-only/i);
+  }
+});
+
 function ctx(root, { sessionId = SESSION, child = false } = {}) {
   return {
     cwd: root,

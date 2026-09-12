@@ -51,6 +51,7 @@ function excluded(root, relativePath) {
     base === ".env" || base.startsWith(".env.") || base === ".dev.vars" ||
     base === "credentials" || base === "credentials.json" || base === "auth.json";
 }
+export { excluded as isPiReviewExcludedPath };
 
 /** Ensure product input is committed before implementation or final review dispatch. */
 export function checkPiReviewPreparation({ projectRoot, featureId } = {}) {

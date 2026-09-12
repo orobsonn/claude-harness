@@ -2,7 +2,7 @@ import { StringEnum, Type } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { isChildSession, piSessionId } from "../lib/pi-adapter-map.mjs";
 import { piResultText } from "../lib/obs.mjs";
-import { applyHarvest, beginHarvest, checkMemoryShipperReady, completeHarvest, completeMemoryShipment, finalizationStarted, finalizeMemory, invalidateMemoryAttempt, memoryBrief, memoryPaths, readMemory, updateSharedContext } from "../lib/memory-cycle.mjs";
+import { applyHarvest, beginHarvest, checkMemoryShipperReady, completeHarvest, completeMemoryShipment, finalizationStarted, finalizeMemory, invalidateMemoryAttempt, memoryBrief, memoryPaths, readMemory, reconcileMemoryDelivery, updateSharedContext } from "../lib/memory-cycle.mjs";
 
 /** Parent-only lifecycle. The mutable tool_result hook binds receipts to the actual completed call. */
 export default function harnessMemory(pi: ExtensionAPI) {
@@ -119,16 +119,21 @@ export default function harnessMemory(pi: ExtensionAPI) {
   });
   pi.registerTool({
     name: "harness_memory", label: "Harness memory",
-    description: "Read project memory and this run's curated shared_context, update that ephemeral document, apply a validated harvest proposal, or finalize delivery and remove ephemeral context.",
+    description: "Read project memory and this run's curated shared_context, update that ephemeral document, apply a validated harvest proposal, reconcile a delivery base on the global host, or finalize delivery and remove ephemeral context.",
     promptSnippet: "Keep useful run discoveries with harness_memory update; apply a validated harvest proposal; finalize after delivery.",
     promptGuidelines: [
       "Keep shared_context under 8192 UTF-8 bytes: concise facts, assumptions and decisions with evidence and revalidation conditions. No secrets, transcripts or gate approvals.",
       "The parent receives the current shared_context automatically as ephemeral custom context. Do not reread unchanged memory; use read only for structured hashes, harvest receipts or explicit diagnostics.",
       "Use only this session's context. Reviewers never inherit the diary; relay relevant facts to hands selectively.",
       "After final eyes approve the committed aggregate, finish any rework and revalidation, mark final-review, then dispatch [HARNESS_HARVEST]. Apply a non-empty validated proposal and commit only its exact durable paths before shipper. This host-bound memory-only delta preserves final approvals; product changes require current eyes again. Never create a plan task for harvest.",
+      "For a shipping base conflict, use reconcile on the global parent, never task resume or a writer. Supply full expected_head/base_sha. Omit resolutions for a read-only preview; supply [] for a clean merge or one hash-bound literal patch per durable-memory conflict. Preserve both sides' verified knowledge; never replace a document from an excerpt. Product conflicts stop without mutation. After integration, inspect changes and revalidate final input before harvest/shipping; no old receipt is promoted.",
       "Call finalize only when delivery is complete. Quit, abort or a pause is not completion; preserve the document for exact-session resume.",
     ],
-    parameters: Type.Object({ action: StringEnum(["read", "update", "apply", "finalize"] as const), content: Type.Optional(Type.String()) }),
+    parameters: Type.Object({ action: StringEnum(["read", "update", "apply", "reconcile", "finalize"] as const), content: Type.Optional(Type.String()),
+      expected_head: Type.Optional(Type.String()), base_sha: Type.Optional(Type.String()),
+      resolutions: Type.Optional(Type.Array(Type.Object({ path: Type.String(), before_sha256: Type.String(),
+        patch: Type.Object({ old_text: Type.String(), new_text: Type.String() }) }))),
+    }),
     executionMode: "sequential",
     async execute(_callId, params, _signal, _update, ctx) {
       try {
@@ -137,6 +142,7 @@ export default function harnessMemory(pi: ExtensionAPI) {
         if (params.action === "read") result = readMemory(ctx.cwd, sessionId);
         else if (params.action === "update") result = updateSharedContext(ctx.cwd, sessionId, params.content);
         else if (params.action === "apply") result = applyHarvest(ctx.cwd, sessionId);
+        else if (params.action === "reconcile") result = reconcileMemoryDelivery(ctx.cwd, sessionId, params);
         else if (params.action === "finalize") result = finalizeMemory(ctx.cwd, sessionId);
         else throw new Error("Unknown memory action");
         return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }], details: result };
