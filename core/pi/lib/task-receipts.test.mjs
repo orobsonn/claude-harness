@@ -8,7 +8,7 @@ import test from "node:test";
 
 import { hashTaskReceipt } from "./task-contract.mjs";
 import { createPiMarkerAuthority } from "./marker-authority.mjs";
-import { inspectTaskRun, readIntegratedTaskEvidence } from "./task-receipts.mjs";
+import { inspectTaskRun, readIntegratedTaskEvidence, inspectTaskResumeAbandonment } from "./task-receipts.mjs";
 import { validateTaskFidelityFreeze } from "./task-run.mjs";
 
 const FEATURE = "receipt-feature";
@@ -232,6 +232,148 @@ function archiveInspectedIntegration(f) {
   return { result, integration };
 }
 
+function abandonedResumeFixture({ blockedHand = true } = {}) {
+  const f = inspectionFixture();
+  const spec = path.join(f.root, ".pi/harness/plans", FEATURE, "spec.md");
+  write(spec, "Approved spec\n");
+  f.entry.spec_sha256 = f.dependencies.readTaskRunBindingFn().grant.spec_sha256 =
+    crypto.createHash("sha256").update(fs.readFileSync(spec)).digest("hex");
+  const previous = archiveInspectedIntegration(f);
+  const handPath = path.join(f.root, ".pi/harness/state/hand-records", FEATURE, CHILD, `${TASK}.json`);
+  const hand = JSON.parse(fs.readFileSync(handPath));
+  if (!blockedHand) return { ...f, ...previous, handPath };
+  write(handPath, { ...hand, agent: "harness-sniper", producerCallId: "blocked-resume",
+    outcome: "BLOCKED", touchedPaths: [], capturedVerifiedAt: undefined });
+  fs.appendFileSync(f.entry.launches.at(-1).events_path, [
+    event("tool_execution_start", { toolCallId: "blocked-resume", toolName: "subagent", args: {
+      subagent_type: "harness-sniper", prompt: `[HARNESS_TASK_CONTEXT]{"task_id":"${TASK}"}[/HARNESS_TASK_CONTEXT]`,
+    } }),
+    event("tool_execution_end", { toolCallId: "blocked-resume", toolName: "subagent",
+      result: { details: { status: "completed" }, content: [{ type: "text", text: "BLOCKED" }] } }), "",
+  ].join("\n"));
+  return { ...f, ...previous, handPath };
+}
+
+test("abandoning an operational resume revalidates the original integration without approving its blocked hand", () => {
+  const f = abandonedResumeFixture();
+  const before = fs.readFileSync(f.handPath, "utf8");
+  const inspected = inspectTaskResumeAbandonment(f.entry, { headSha: f.head }, f.dependencies);
+  assert.equal(inspected.ok, true, inspected.reason);
+  assert.deepEqual(inspected.result, f.result);
+  assert.deepEqual(inspected.integration, f.integration);
+  assert.equal(inspected.proof.launch_count, 2);
+  assert.equal(inspected.proof.inspected_launch_count, 1);
+  assert.equal(f.entry.launches.length, 2, "all launches remain auditable and countable");
+  assert.equal(fs.readFileSync(f.handPath, "utf8"), before);
+  assert.equal(inspectTaskRun(f.entry, f.dependencies).ok, false, "the resumed hand remains blocked");
+});
+
+test("coordinator-only resume can retain its original captured hand without a new writer", () => {
+  const f = abandonedResumeFixture({ blockedHand: false });
+  const inspected = inspectTaskResumeAbandonment(f.entry, { headSha: f.head }, f.dependencies);
+  assert.equal(inspected.ok, true, inspected.reason);
+  assert.equal(inspected.result.hand_capture.producer_call_id, "producer");
+  assert.equal(inspected.proof.launch_count, 2);
+});
+
+test("an explicitly abandoned blocked writer does not become the producer of later real test-only recovery", () => {
+  const f = abandonedResumeFixture();
+  const abandoned = inspectTaskResumeAbandonment(f.entry, { headSha: f.head }, f.dependencies);
+  assert.equal(abandoned.ok, true, abandoned.reason);
+  f.entry.abandoned_resumes = [{ written_by: "host-task-resume-abandonment", no_product_obligation: true,
+    reason: "Delivery work belonged to the parent", proof: abandoned.proof }];
+  const previous = f.entry.launches.at(-1);
+  const runId = "real-test-recovery";
+  const runDir = path.join(f.entry.job_dir, runId);
+  const launch = { ...previous, run_id: runId, events_path: path.join(runDir, "events.jsonl"),
+    process_path: path.join(runDir, "process.json"), result_path: path.join(runDir, "result.json") };
+  write(launch.events_path, event("session", { id: CHILD }) + "\n");
+  for (const field of ["process_path", "result_path"]) write(launch[field], {
+    ...JSON.parse(fs.readFileSync(previous[field], "utf8")), run_id: runId,
+  });
+  f.entry.launches.push(launch);
+  const recovered = testOnlyRecovery({ fixture: f, capturedImplementation: false });
+  const inspected = inspectTaskRun(recovered.entry, recovered.dependencies);
+  assert.equal(inspected.ok, true, inspected.reason);
+  assert.equal(inspected.result.hand_capture.recovery_origin.producer_call_id, "producer");
+  assert.equal(inspected.result.launches.length, 3);
+  assert.notEqual(inspected.result.child_head, abandoned.result.child_head, "the test correction is a real commit");
+  const validDigest = abandoned.proof.events_sha256[1];
+  abandoned.proof.events_sha256[1] = "0".repeat(64);
+  assert.equal(inspectTaskRun(recovered.entry, recovered.dependencies).ok, false, "forged abandonment cannot select older producers");
+  abandoned.proof.events_sha256[1] = validDigest;
+  const state = JSON.parse(fs.readFileSync(recovered.statePath));
+  state.task_review_evidence[`${FEATURE}/${TASK}`].security.accepted = false;
+  write(recovered.statePath, state);
+  assert.equal(inspectTaskRun(recovered.entry, recovered.dependencies).ok, false, "new negative eyes are never abandoned");
+});
+
+test("restored evidence reads retain all launches and reject changed abandonment proof or later negative reviews", () => {
+  const f = abandonedResumeFixture();
+  const inspected = inspectTaskResumeAbandonment(f.entry, { headSha: f.head }, f.dependencies);
+  assert.equal(inspected.ok, true, inspected.reason);
+  const grant = f.dependencies.readTaskRunBindingFn().grant;
+  f.entry.grant = { ...grant, version: 1, kind: "task-run",
+    origin: { kind: "parent-approved-plan", plan_review_call_id: "plan-call" } };
+  f.entry.status = "integrated";
+  f.entry.integration = inspected.integration;
+  f.entry.result = inspected.result;
+  f.entry.abandoned_resumes = [{ written_by: "host-task-resume-abandonment", no_product_obligation: true,
+    reason: "No product obligation remains", proof: inspected.proof }];
+  const registryPath = path.join(f.root, ".pi/harness/state", PARENT, "task-runs/index.json");
+  const registry = { version: 1, parent_session_id: PARENT, feature_id: FEATURE,
+    plan_sha256: f.entry.plan_sha256, spec_sha256: f.entry.spec_sha256, tasks: { [TASK]: f.entry } };
+  write(registryPath, registry);
+  write(path.join(f.root, ".pi/harness/state", PARENT, "gate-state.json"), {
+    session_id: PARENT, feature_id: FEATURE, mode: "FULL", spec_status: "adversary-reviewed",
+    reviewed_spec_sha256: f.entry.spec_sha256, adversary_fired: true, adversary_spec_sha256: f.entry.spec_sha256,
+    plan_review_evidence: { written_by: "host-subagent-completion", parent_session_id: PARENT, feature_id: FEATURE,
+      role: "harness-plan-reviewer", status: "completed", verdict: "APPROVE", dispatch_call_id: "plan-call",
+      child_session_id: "plan-child", agent_id: "plan-agent", plan_sha256: f.entry.plan_sha256, spec_sha256: f.entry.spec_sha256 },
+  });
+  const input = { projectRoot: f.root, sessionId: PARENT, featureId: FEATURE, taskId: TASK, headSha: f.head };
+  const readEvidence = () => readIntegratedTaskEvidence(input, f.dependencies);
+  const restored = readEvidence();
+  assert.equal(restored.ok, true, restored.reason);
+  assert.equal(restored.entry.launches.length, 2);
+  assert.equal(restored.result.child_head, f.head);
+  f.entry.abandoned_resumes[0].proof.events_sha256[1] = "0".repeat(64);
+  write(registryPath, registry);
+  assert.match(readEvidence().reason, /abandonment evidence changed/);
+  f.entry.abandoned_resumes[0].proof = inspectTaskResumeAbandonment(f.entry, { headSha: f.head }, f.dependencies).proof;
+  write(registryPath, registry);
+  const state = JSON.parse(fs.readFileSync(f.statePath));
+  state.task_review_evidence[`${FEATURE}/${TASK}`].security.accepted = false;
+  write(f.statePath, state);
+  assert.equal(readEvidence().ok, false, "restoration cannot mask a later negative review");
+});
+
+test("resume abandonment refuses drift, live processes, invalid history, and new negative or missing reviews", () => {
+  for (const scenario of ["dirty", "new-head", "history-hash", "running", "touched-hand", "scope-violation", "new-negative-review", "new-missing-review", "input-digest"]) {
+    const f = abandonedResumeFixture();
+    if (scenario === "dirty") fs.appendFileSync(path.join(f.root, "src/task.mjs"), "// changed\n");
+    if (scenario === "new-head") { write(path.join(f.root, "extra.txt"), "new\n"); commit(f.root, "new head"); }
+    if (scenario === "history-hash") f.entry.result_history[f.integration.result_sha256].child_head = f.base;
+    if (scenario === "running") f.dependencies.readTaskProcessFn = () => ({ running: true, terminal: false });
+    if (scenario === "touched-hand" || scenario === "scope-violation") {
+      const hand = JSON.parse(fs.readFileSync(f.handPath));
+      hand[scenario === "touched-hand" ? "touchedPaths" : "scopeViolations"] = ["src/task.mjs"];
+      write(f.handPath, hand);
+    }
+    if (scenario === "new-negative-review" || scenario === "new-missing-review") {
+      appendImplementationReviews(f, ["harness-security"]);
+      const state = JSON.parse(fs.readFileSync(f.statePath));
+      if (scenario === "new-missing-review") delete state.task_review_evidence[`${FEATURE}/${TASK}`].security;
+      else state.task_review_evidence[`${FEATURE}/${TASK}`].security.accepted = false;
+      write(f.statePath, state);
+    }
+    if (scenario === "input-digest") f.dependencies.captureReviewInputFn = () => ({ ok: true, snapshot: { head_sha: f.head, input_digest: "0".repeat(64) } });
+    const inspected = inspectTaskResumeAbandonment(f.entry, { headSha: f.head }, f.dependencies);
+    assert.equal(inspected.ok, false, scenario);
+    assert.equal(f.entry.integration, null, scenario);
+  }
+});
+
 function testOnlyRecovery({ capturedImplementation = true, productDelta = false, laterWriter = false,
   extraAuthor = false, earlierAuthorProductDrift = false, lateCapture = false, failedWriter = false,
   overlappingCapture = false, dirtyCaptureFirst = false, originOverride = {},
@@ -289,7 +431,8 @@ function testOnlyRecovery({ capturedImplementation = true, productDelta = false,
   write(eventsPath, fs.readFileSync(eventsPath, "utf8") + extra.join("\n") + "\n");
   const recordPath = path.join(f.root, ".pi/harness/state/hand-records", FEATURE, CHILD, TASK + ".json");
   const record = JSON.parse(fs.readFileSync(recordPath, "utf8"));
-  write(recordPath, { ...record, agent: "harness-test-author", producerCallId: "correct-author" + suffix, freezeCommitSha: baseline });
+  write(recordPath, { ...record, agent: "harness-test-author", producerCallId: "correct-author" + suffix,
+    freezeCommitSha: baseline, outcome: "DONE", capturedVerifiedAt: "2026-09-07T00:02:00.000Z" });
   const state = JSON.parse(fs.readFileSync(f.statePath, "utf8"));
   const bare = FEATURE + "/" + TASK;
   state.fidelity_pass.push(bare + "@" + freeze);

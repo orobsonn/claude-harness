@@ -87,6 +87,21 @@ const toolContext = {
   sessionManager: { getSessionId: () => "parent", getHeader: () => ({}) },
 };
 
+test("abandon-resume exposes the explicit product judgment and passes only host-derived identity", async () => {
+  const params = { action: "abandon-resume", task_id: "a", attempt_id: "attempt", expected_head: "a".repeat(40),
+    no_product_obligation: true, reason: "Only the global delivery base required reconciliation." };
+  const tool = taskTool({ executeAction: async (actual, context) => {
+    assert.deepEqual(actual, params);
+    assert.equal(context.projectRoot, toolContext.cwd);
+    assert.equal(context.sessionId, "parent");
+    return { ok: true, tasks: [] };
+  } });
+  assert.equal(tool.parameters.properties.action.anyOf.some((item) => item.const === "abandon-resume"), true);
+  assert.equal(tool.parameters.properties.no_product_obligation.type, "boolean");
+  const result = await tool.execute("abandon", params, undefined, undefined, toolContext);
+  assert.equal(result.details.ok, true);
+});
+
 test("wait retries bounded Orca exit windows inside one tool call and revalidates status", async () => {
   let statusReads = 0;
   let waits = 0;

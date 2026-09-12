@@ -142,11 +142,11 @@ export default function harnessTasks(pi: ExtensionAPI, injected: Parameters<type
     name: "harness_tasks",
     label: "Task runs",
     description:
-      "Dispatch approved tasks in isolated worktrees, observe or wait on durable handles, integrate an exact verified task HEAD, or resume the same local task session with bounded feedback. Independent tasks may run in parallel. To fix an upstream defect blocking a dependent, resume and integrate the owning task once affected processes terminate, then resume the dependent: the host incorporates the correction before launching its validation. This does not reconcile a PR with main; use global harness_memory reconcile for delivery-base conflicts, never task resume solely for integration. Status and wait never start or repeat work.",
+      "Dispatch approved tasks in isolated worktrees, observe or wait on durable handles, integrate an exact verified task HEAD, or resume the same local task session with bounded feedback. Independent tasks may run in parallel. To fix an upstream defect blocking a dependent, resume and integrate the owning task once affected processes terminate, then resume the dependent: the host incorporates the correction before launching its validation. This does not reconcile a PR with main; use global harness_memory reconcile for delivery-base conflicts, never task resume solely for integration. If an integrated task was resumed unnecessarily and no product obligation remains, abandon-resume explicitly records that judgment and revalidates its unchanged historical integration; it never approves the blocked hand or restores global final eyes. Status and wait never start or repeat work.",
     parameters: Type.Object(
       {
         action: Type.Union(
-          ["dispatch", "status", "wait", "integrate", "resume"].map((value) =>
+          ["dispatch", "status", "wait", "integrate", "resume", "abandon-resume"].map((value) =>
             Type.Literal(value),
           ),
         ),
@@ -175,6 +175,8 @@ export default function harnessTasks(pi: ExtensionAPI, injected: Parameters<type
         attempt_id: Type.Optional(Type.String()),
         expected_head: Type.Optional(Type.String()),
         instruction: Type.Optional(Type.String({ maxLength: 16000 })),
+        no_product_obligation: Type.Optional(Type.Boolean({ description: "For abandon-resume only: explicitly declare that the resumed task has no remaining product correction obligation." })),
+        reason: Type.Optional(Type.String({ maxLength: 4000, description: "For abandon-resume only: record why this operational resume is being abandoned; not a replacement verdict." })),
       },
       { additionalProperties: false },
     ),
