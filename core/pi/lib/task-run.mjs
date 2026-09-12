@@ -458,7 +458,7 @@ export function decideTaskRunTool(binding, event) {
   if (name === "mark" && (!TASK_MARKERS.has(input.action) || input.task_id !== binding.grant.task_id)) {
     return deny("only markers of the granted task are permitted");
   }
-  if (name === "harness_memory" && ["apply", "finalize"].includes(input.action)) {
+  if (name === "harness_memory" && ["apply", "reconcile", "finalize"].includes(input.action)) {
     return deny("durable harvest and finalization belong to the global parent");
   }
   if (["bash", "powershell"].includes(name)) {
