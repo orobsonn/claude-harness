@@ -5,6 +5,13 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [2.6.24](https://github.com/orobsonn/claude-harness/compare/v2.6.23...v2.6.24) (2026-09-12)
+
+
+### Bug Fixes
+
+* **pi:** reconcile delivery memory conflicts on the global host ([#962](https://github.com/orobsonn/claude-harness/issues/962)) ([55bf8cb](https://github.com/orobsonn/claude-harness/commit/55bf8cbaecf7fc0c9cae9967cf763f99afc600c1))
+
 ## [2.6.23](https://github.com/orobsonn/claude-harness/compare/v2.6.22...v2.6.23) (2026-09-12)
 
 
