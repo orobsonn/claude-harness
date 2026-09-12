@@ -213,7 +213,7 @@ function archiveInspectedIntegration(f) {
   const result = inspected.result;
   const integration = {
     version: 1, written_by: "host-task-integration", parent_session_id: PARENT, feature_id: FEATURE,
-    task_id: TASK, attempt_id: ATTEMPT, parent_root: f.root, worktree: f.root, session_id: CHILD,
+    task_id: TASK, attempt_id: ATTEMPT, parent_root: f.entry.parent_root, worktree: f.root, session_id: CHILD,
     plan_sha256: result.plan_sha256, spec_sha256: result.spec_sha256, base_sha: f.base,
     child_head: f.head, integrated_head: f.head, result_sha256: hashTaskReceipt(result),
   };
@@ -232,13 +232,23 @@ function archiveInspectedIntegration(f) {
   return { result, integration };
 }
 
-function abandonedResumeFixture({ blockedHand = true } = {}) {
+function abandonedResumeFixture({ blockedHand = true, separateParent = false } = {}) {
   const f = inspectionFixture();
   const spec = path.join(f.root, ".pi/harness/plans", FEATURE, "spec.md");
   write(spec, "Approved spec\n");
   f.entry.spec_sha256 = f.dependencies.readTaskRunBindingFn().grant.spec_sha256 =
     crypto.createHash("sha256").update(fs.readFileSync(spec)).digest("hex");
+  if (separateParent) {
+    const parent = fs.mkdtempSync(path.join(os.tmpdir(), "pi-abandon-parent-"));
+    roots.push(parent);
+    run(f.root, "git", "clone", "--quiet", "--shared", f.root, parent);
+    run(parent, "git", "config", "user.email", "test@example.com");
+    run(parent, "git", "config", "user.name", "Test");
+    f.entry.parent_root = f.dependencies.readTaskRunBindingFn().grant.parent_root = parent;
+  }
   const previous = archiveInspectedIntegration(f);
+  if (separateParent) fs.cpSync(path.join(f.root, ".pi/harness/plans"),
+    path.join(f.entry.parent_root, ".pi/harness/plans"), { recursive: true });
   const handPath = path.join(f.root, ".pi/harness/state/hand-records", FEATURE, CHILD, `${TASK}.json`);
   const hand = JSON.parse(fs.readFileSync(handPath));
   if (!blockedHand) return { ...f, ...previous, handPath };
@@ -308,8 +318,8 @@ test("an explicitly abandoned blocked writer does not become the producer of lat
   assert.equal(inspectTaskRun(recovered.entry, recovered.dependencies).ok, false, "new negative eyes are never abandoned");
 });
 
-test("restored evidence reads retain all launches and reject changed abandonment proof or later negative reviews", () => {
-  const f = abandonedResumeFixture();
+function restoredResumeFixture(options = {}) {
+  const f = abandonedResumeFixture(options);
   const inspected = inspectTaskResumeAbandonment(f.entry, { headSha: f.head }, f.dependencies);
   assert.equal(inspected.ok, true, inspected.reason);
   const grant = f.dependencies.readTaskRunBindingFn().grant;
@@ -320,19 +330,25 @@ test("restored evidence reads retain all launches and reject changed abandonment
   f.entry.result = inspected.result;
   f.entry.abandoned_resumes = [{ written_by: "host-task-resume-abandonment", no_product_obligation: true,
     reason: "No product obligation remains", proof: inspected.proof }];
-  const registryPath = path.join(f.root, ".pi/harness/state", PARENT, "task-runs/index.json");
+  const registryPath = path.join(f.entry.parent_root, ".pi/harness/state", PARENT, "task-runs/index.json");
   const registry = { version: 1, parent_session_id: PARENT, feature_id: FEATURE,
     plan_sha256: f.entry.plan_sha256, spec_sha256: f.entry.spec_sha256, tasks: { [TASK]: f.entry } };
   write(registryPath, registry);
-  write(path.join(f.root, ".pi/harness/state", PARENT, "gate-state.json"), {
+  write(path.join(f.entry.parent_root, ".pi/harness/state", PARENT, "gate-state.json"), {
     session_id: PARENT, feature_id: FEATURE, mode: "FULL", spec_status: "adversary-reviewed",
     reviewed_spec_sha256: f.entry.spec_sha256, adversary_fired: true, adversary_spec_sha256: f.entry.spec_sha256,
     plan_review_evidence: { written_by: "host-subagent-completion", parent_session_id: PARENT, feature_id: FEATURE,
       role: "harness-plan-reviewer", status: "completed", verdict: "APPROVE", dispatch_call_id: "plan-call",
       child_session_id: "plan-child", agent_id: "plan-agent", plan_sha256: f.entry.plan_sha256, spec_sha256: f.entry.spec_sha256 },
   });
-  const input = { projectRoot: f.root, sessionId: PARENT, featureId: FEATURE, taskId: TASK, headSha: f.head };
+  const input = { projectRoot: f.entry.parent_root, sessionId: PARENT, featureId: FEATURE, taskId: TASK, headSha: f.head };
   const readEvidence = () => readIntegratedTaskEvidence(input, f.dependencies);
+  return { ...f, registry, registryPath, input, readEvidence };
+}
+
+test("restored evidence reads retain all launches and reject changed abandonment proof or later negative reviews", () => {
+  const f = restoredResumeFixture();
+  const { registry, registryPath, readEvidence } = f;
   const restored = readEvidence();
   assert.equal(restored.ok, true, restored.reason);
   assert.equal(restored.entry.launches.length, 2);
@@ -346,6 +362,24 @@ test("restored evidence reads retain all launches and reject changed abandonment
   state.task_review_evidence[`${FEATURE}/${TASK}`].security.accepted = false;
   write(f.statePath, state);
   assert.equal(readEvidence().ok, false, "restoration cannot mask a later negative review");
+});
+
+test("abandonment seals the parent obligation without freezing later legitimate production ownership", () => {
+  const f = restoredResumeFixture({ separateParent: true });
+  assert.equal(f.readEvidence().ok, true);
+  const sealed = f.entry.abandoned_resumes[0].proof;
+  write(path.join(f.entry.parent_root, "src/task.mjs"), "export const actual = 2;\n");
+  f.input.headSha = commit(f.entry.parent_root, "next owner improves production");
+  assert.equal(inspectTaskResumeAbandonment(f.entry, { headSha: f.input.headSha }, f.dependencies).ok, false,
+    "production drift before abandonment still fails");
+  const evolved = f.readEvidence();
+  assert.equal(evolved.ok, true, evolved.reason);
+  assert.equal(sealed.parent_head, f.head);
+  write(path.join(f.entry.parent_root, "src/task.spec.mjs"), "export const expected = 2;\n");
+  f.input.headSha = commit(f.entry.parent_root, "change frozen test");
+  assert.equal(f.readEvidence().ok, false, "current frozen hashes remain strict after abandonment");
+  f.input.headSha = f.base;
+  assert.equal(f.readEvidence().ok, false, "the sealed parent must remain ancestral to the requested HEAD");
 });
 
 test("resume abandonment refuses drift, live processes, invalid history, and new negative or missing reviews", () => {

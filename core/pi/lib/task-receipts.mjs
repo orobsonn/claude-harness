@@ -398,6 +398,9 @@ function abandonedWriterLaunches(entry, jobRoot) {
         typeof record.reason !== "string" || !record.reason.trim() || !integration || !result ||
         proof.result_sha256 !== integration.result_sha256 || hashTaskReceipt(result) !== proof.result_sha256 ||
         proof.child_head !== result.child_head || proof.review_input_digest !== result.review_input_digest ||
+        !COMMIT_SHA.test(proof.parent_head ?? "") ||
+        !ancestor(entry.parent_root, integration.integrated_head, proof.parent_head) ||
+        !ancestor(entry.parent_root, proof.parent_head, "HEAD") ||
         proof.inspected_launch_count !== result.launches?.length ||
         !Number.isInteger(proof.launch_count) || proof.launch_count <= proof.inspected_launch_count ||
         proof.launch_count > entry.launches.length ||
@@ -812,7 +815,13 @@ export function readIntegratedTaskEvidence({ projectRoot, sessionId, featureId, 
       const abandoned = entry.abandoned_resumes?.at(-1);
       if (abandoned?.written_by !== "host-task-resume-abandonment" || abandoned.no_product_obligation !== true ||
           typeof abandoned.reason !== "string" || !abandoned.reason.trim()) return failure("explicit host resume abandonment required");
-      const checked = inspectTaskResumeAbandonment(entry, { headSha }, dependencies);
+      const sealedHead = abandoned.proof?.parent_head;
+      if (!COMMIT_SHA.test(sealedHead ?? "") || !COMMIT_SHA.test(headSha ?? "") ||
+          !ancestor(root, sealedHead, headSha)) return failure("resume abandonment parent HEAD is not ancestral to the requested HEAD");
+      // The unchanged-path obligation belongs to the abandonment instant, not
+      // every future owner of those production paths. Current frozen blobs and
+      // integration ancestry are still checked below against the requested HEAD.
+      const checked = inspectTaskResumeAbandonment(entry, { headSha: sealedHead }, dependencies);
       if (!checked.ok) return checked;
       if (hashTaskReceipt(checked.proof) !== hashTaskReceipt(abandoned.proof) ||
           hashTaskReceipt(entry.integration) !== hashTaskReceipt(checked.integration) ||
@@ -921,7 +930,7 @@ export function inspectTaskResumeAbandonment(entry, { headSha } = {}, dependenci
     });
     return { ok: true, result, integration, inspectionEntry, proof: {
       integration_sha256: hashTaskReceipt(integration), result_sha256: integration.result_sha256,
-      child_head: result.child_head, review_input_digest: reviews.inputDigest,
+      parent_head: headSha, child_head: result.child_head, review_input_digest: reviews.inputDigest,
       inspected_launch_count: result.launches.length, launch_count: entry.launches.length,
       launches_sha256: hashTaskReceipt(entry.launches), events_sha256: eventDigests,
       hand_sha256: hashTaskReceipt(hand), hand_record: hand,
