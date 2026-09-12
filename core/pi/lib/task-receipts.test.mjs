@@ -578,6 +578,22 @@ test("dedicated test reviewer accepts one canonical APPROVE verdict before its e
   assert.equal(inspected.ok, true, inspected.reason);
 });
 
+test("dedicated test reviewer accepts consistent boundary approvals in persisted evidence", () => {
+  const fixture = inspectionFixture();
+  bindPinnedRuntime(fixture, { testReviewer: true });
+  const eventsPath = fixture.entry.launches.at(-1).events_path;
+  const events = fs.readFileSync(eventsPath, "utf8")
+    .replace('"subagent_type":"harness-compliance"', '"subagent_type":"harness-test-reviewer"')
+    .replace("Fidelity evidence.\\nVerdict: APPROVE", "Verdict: APPROVE\\nFidelity evidence.\\nVerdict: APPROVE");
+  write(eventsPath, events);
+  const before = fs.readFileSync(eventsPath, "utf8");
+  for (let restart = 0; restart < 2; restart++) {
+    const inspected = inspectTaskRun(fixture.entry, fixture.dependencies);
+    assert.equal(inspected.ok, true, inspected.reason);
+    assert.equal(fs.readFileSync(eventsPath, "utf8"), before, "approval is interpreted without rewriting native evidence");
+  }
+});
+
 test("reconciled dependencies keep original audit paths but require fresh reviews and exact host merge proof", () => {
   const f = inspectionFixture();
   appendImplementationReviews(f);

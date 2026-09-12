@@ -62,6 +62,15 @@ sessão pai local, usando a pipeline nativa de mãos, fidelidade, freeze, captur
   por task pode manter satisfeita a obrigação de um olho não afetado, mas não certifica
   o novo HEAD; a revisão final global é fresca e permanece dual
   (compliance/adversary), ou triad quando security se aplica, inclusive em LIGHT.
+- Antes do primeiro lote FULL, avalie a mudança efetiva: `required` de `harness_reviews`
+  mostra o mínimo já ativado, não uma classificação completa de aplicabilidade.
+  A ausência de security nessa lista não o dispensa. Seguindo o Claude, despache
+  security quando a task alterar autenticação/autorização, segredos/configuração
+  sensível, clientes HTTP externos, entradas externas (schemas, parsers, webhooks),
+  entrypoints de serviço, dependências novas ou statements de log. Julgue o delta,
+  não apenas o nome do arquivo; mudança interna sem esses gatilhos não exige security.
+  `final_review.security` agenda outra etapa: a revisão final não substitui security
+  aplicável na task FULL. Não reabra olhos já satisfeitos nem force três olhos em toda task.
 - Olhos de task recebem evidência focal e não podem exigir comandos de
   `final_review.parent_verification`. Após integrar todas as tarefas, o pai final
   executa no HEAD agregado os testes, harvest, revisores finais aplicáveis e shipping

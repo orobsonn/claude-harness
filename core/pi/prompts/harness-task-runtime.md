@@ -34,6 +34,16 @@ sobre o mesmo HEAD e conteúdo imutáveis, conforme o runtime nativo; não force
 `maxConcurrent=1` nem os serialize artificialmente. `adversarial.enabled: false`
 dispensa o adversary da task. O final global permanece dual (compliance/adversary)
 ou triad quando security se aplica, inclusive em LIGHT.
+Antes do primeiro lote FULL, avalie a mudança efetiva: `required` de `harness_reviews`
+mostra o mínimo já ativado, não uma classificação completa de aplicabilidade.
+A ausência de security nessa lista não o dispensa. Seguindo o Claude, despache
+security quando a task alterar autenticação/autorização, segredos/configuração
+sensível, clientes HTTP externos, entradas externas (schemas, parsers, webhooks),
+entrypoints de serviço, dependências novas ou statements de log. Julgue o delta,
+não apenas o nome do arquivo; mudança interna sem esses gatilhos não exige security.
+`final_review.security` agenda outra etapa: a revisão final não substitui security
+aplicável na task FULL. Não reabra olhos já satisfeitos nem force três olhos em toda task.
+
 Para paralelizar os olhos aplicáveis, emita chamadas `subagent` separadas no mesmo
 lote da resposta, em foreground, omitindo `run_in_background` ou usando `false`.
 Se houver `background-disabled`, corrija esse campo e repita os pendentes no lote
@@ -105,7 +115,10 @@ revisor não muda o contrato; não envie o mesmo brief repetidamente esperando o
 resultado. Resolva a divergência concreta, sem aprovar por limite de rodadas.
 Após duas falhas de fidelidade, escale o diagnóstico, a força do autor ou a decisão
 de contrato; não repita o mesmo brief nem aprove automaticamente.
-Peça `Verdict: APPROVE|REVISE|BLOCKED` em prosa, não JSON de implementação.
+Somente ao `harness-test-reviewer` de fidelidade, peça relatório começando com uma
+única linha `Verdict: APPROVE|REVISE|BLOCKED`; não peça repetir o verdict no fim.
+Para adversary/compliance/security de implementação, peça JSON `issues` e
+`follow_ups` opcional, conforme os assets desses olhos; não peça `Verdict` em prosa.
 
 Testes baseline podem passar. Para manutenção de teste após produto já corrigido,
 aceite GREEN atual e evidência concreta do erro anterior, sem rollback ou RED

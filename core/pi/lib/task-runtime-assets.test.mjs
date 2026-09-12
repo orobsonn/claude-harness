@@ -42,7 +42,7 @@ test("task assets preserve LIGHT/FULL eye selection and fresh aggregate review",
     assert.match(asset, /final global.*(?:dual|fresca)/is);
     assert.match(asset, /triad.*security/is);
     assert.match(asset, /olho que o produziu e somente\s+(?:outros )?olhos.*obrigação ou trigger explícito.*afetado/is);
-    assert.doesNotMatch(asset, /obrigatório após toda task|Toda task com escrita\s+exige adversary|false.*não (?:o dispensa|remove)|repita todos os\s+olhos já ativados/is);
+    assert.doesNotMatch(asset, /obrigatório após toda task|Toda task com escrita\s+exige adversary|false[^.\n]*não (?:o dispensa|remove)|repita todos os\s+olhos já ativados/is);
   }
   for (const role of ["planner", "plan-reviewer"]) {
     const asset = readAsset(`../runtime/agents/harness-${role}.md`);
@@ -51,6 +51,24 @@ test("task assets preserve LIGHT/FULL eye selection and fresh aggregate review",
     assert.match(asset, /adversary.*only when `adversarial\.enabled` is true/is);
     assert.doesNotMatch(asset, /mandatory post-implementation adversary|never disables|does not\s+turn the mandatory/);
   }
+});
+
+test("task coordinators assess security triggers beyond the status minimum", () => {
+  for (const asset of [readAsset("../prompts/harness-task-runtime.md"),
+    readAsset("../prompts/harness-runtime.md"), readAsset("../skills/harness-task-pipeline/SKILL.md")]) {
+    assert.match(asset, /`required`.*mínimo/is);
+    assert.match(asset, /autenticação\/autorização/);
+    assert.match(asset, /entradas externas.*schemas/is);
+    assert.match(asset, /revisão final.*não substitui.*task/is);
+    assert.match(asset, /sem.*gatilhos.*não.*security/is);
+  }
+});
+
+test("task briefs keep fidelity and implementation verdict formats distinct", () => {
+  const task = readAsset("../prompts/harness-task-runtime.md");
+  assert.match(task, /Somente ao `harness-test-reviewer`.*começando.*única linha/is);
+  assert.match(task, /não peça repetir o verdict no fim/);
+  assert.match(task, /adversary\/compliance\/security de implementação, peça JSON `issues`/);
 });
 
 test("task assets preserve fidelity and escalate repeated failures without extra gates", () => {

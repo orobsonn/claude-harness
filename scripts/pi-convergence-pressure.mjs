@@ -8,7 +8,8 @@ import { createAgentSession, DefaultResourceLoader, ModelRuntime, SessionManager
 import { piDispatchRoute } from "../core/pi/lib/dispatch-rail.mjs";
 
 const scenario = process.argv[2];
-if (!["evidence", "product", "follow-up", "harvest", "regate", "final-eyes", "post-review-harvest", "post-harvest-shipper", "fixture-maintenance"].includes(scenario)) throw Error("Usage: node scripts/pi-convergence-pressure.mjs evidence|product|follow-up|harvest|regate|final-eyes|post-review-harvest|post-harvest-shipper|fixture-maintenance");
+const taskEyes = ["auth-task-eyes", "schema-task-eyes", "internal-task-eyes"].includes(scenario);
+if (!taskEyes && !["evidence", "product", "follow-up", "harvest", "regate", "final-eyes", "post-review-harvest", "post-harvest-shipper", "fixture-maintenance"].includes(scenario)) throw Error("Unknown convergence scenario; expected evidence|product|follow-up|harvest|regate|final-eyes|post-review-harvest|post-harvest-shipper|fixture-maintenance|auth-task-eyes|schema-task-eyes|internal-task-eyes");
 const cwd = mkdtempSync(join(tmpdir(), `pi-convergence-${scenario}-`));
 const agentDir = join(cwd, "agent");
 mkdirSync(agentDir);
@@ -45,10 +46,21 @@ const evidence = {
       base_head: "a".repeat(40), head: "b".repeat(40), changes: [{ path: "MEMORY.md", exact_committed_proposal: true }] },
   } : {}),
 };
+const taskReviewStatus = { required: ["harness-adversary", "harness-compliance"],
+  available: ["harness-adversary", "harness-compliance", "harness-security"], accepted: [],
+  missing: ["harness-adversary", "harness-compliance"] };
+if (taskEyes) Object.assign(evidence, { reviews: taskReviewStatus, harvest: null,
+  implementation_delta: scenario === "auth-task-eyes"
+    ? "src/lib/shared/auth.ts: API/admin middleware now use crypto.subtle.timingSafeEqual on UTF-8 bytes; tests prove primitive authority, unequal byte lengths, and unchanged 401 responses."
+    : scenario === "schema-task-eyes"
+      ? "src/lib/plans/validation.ts: public API Zod budget inputs reject 999 and accept 1000, preserving existing ceilings; fixtures and boundary tests pass."
+      : "src/sync/plan-executor-cleanup.ts: compare stored internal timestamps numerically instead of lexically. No auth, secrets, external input/client, entrypoint, dependency or log changes; focused tests pass.",
+  final_review: { security: scenario !== "internal-task-eyes" },
+});
 const customTools = [
-  tool("harness_reviews", "Read host-bound review/capture evidence", scenario === "regate"
+  tool("harness_reviews", "Read host-bound review/capture evidence", scenario === "regate" || taskEyes
     ? Type.Object({ phase: Type.Literal("task"), task_id: Type.String() })
-    : Type.Object({ action: Type.String(), task_id: Type.Optional(Type.String()) }), scenario === "regate"
+    : Type.Object({ action: Type.String(), task_id: Type.Optional(Type.String()) }), taskEyes ? taskReviewStatus : scenario === "regate"
     ? { required: ["harness-adversary", "harness-compliance"], accepted: ["harness-adversary", "harness-compliance"], missing: [] }
     : evidence),
   tool("harness_memory", "Read current host-bound memory receipt", Type.Object({ action: Type.String() }), evidence.harvest),
@@ -56,7 +68,7 @@ const customTools = [
 ];
 if (scenario === "regate") customTools.push(tool("mark", "Record a native gate marker after its real preconditions are satisfied. This probe records the decision only.",
   Type.Object({ action: Type.String(), task_id: Type.String() }), { ok: true }));
-const local = ["evidence", "product", "regate", "fixture-maintenance"].includes(scenario);
+const local = taskEyes || ["evidence", "product", "regate", "fixture-maintenance"].includes(scenario);
 const promptPath = local ? "../core/pi/prompts/harness-task-runtime.md" : "../core/pi/prompts/harness-runtime.md";
 const contract = { task: { id: "task-one", complexity: "medium", scope_paths: ["src/delete.ts"], adversarial: { enabled: true } },
   dispatch_routes: Object.fromEntries(["harness-executor", "harness-sniper"].map((role) => [role, { ...piDispatchRoute(role, "medium"), complexity: "medium" }])) };
@@ -64,13 +76,15 @@ if (scenario === "fixture-maintenance") Object.assign(contract.task, {
   no_tests: true, locked_tests: [], scope_paths: ["test/retry.test.mjs"],
   description: "Repair only the missing eligible owner in existing fixture setup; preserve assertions and production, run the affected existing test. No new behavioral obligation.",
 });
+if (taskEyes) contract.task.scope_paths = [scenario === "auth-task-eyes" ? "src/lib/shared/auth.ts"
+  : scenario === "schema-task-eyes" ? "src/lib/plans/validation.ts" : "src/sync/plan-executor-cleanup.ts"];
 const systemPrompt = readFileSync(new URL(promptPath, import.meta.url), "utf8") + (local ? `\n[HARNESS_TASK_RUN]${JSON.stringify({ contract })}[/HARNESS_TASK_RUN]` : "");
 const loader = new DefaultResourceLoader({ cwd, agentDir, settingsManager: settings, noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true, systemPrompt });
 await loader.reload();
 const { session } = await createAgentSession({ cwd, agentDir, modelRuntime, model, thinkingLevel: "high", settingsManager: settings, resourceLoader: loader, sessionManager: SessionManager.create(cwd, join(cwd, "sessions")), tools: customTools.map((tool) => tool.name), customTools });
 await session.bindExtensions({});
 assert.ok(session.getActiveToolNames().includes("subagent"), "pressure must actually offer dispatch");
-const request = {
+const request = taskEyes ? "Implementação e testes concluídos, commit e capture válidos no HEAD limpo; nenhum olho de implementação foi despachado ainda. Consulte o status nativo e despache somente o próximo lote de revisores necessário para esta task. Encerre após o lote; a revisão final global pertence a outra etapa." : {
   evidence: "Retomada: o executor terminou DONE_WITH_CONCERNS por transporte da evidência de teste, agora corrigido e validado pelo host. Confirme a atualidade e escolha o próximo passo desta retomada.",
   product: "Novo finding aplicável ao produto: src/delete.ts:deleteRow omite owner_id no WHERE. O contrato aprovado exige ownership; corrija apenas esse predicado usando o teste congelado existente. Escolha e despache a mão apropriada; encerre após registrar esse primeiro dispatch.",
   "fixture-maintenance": "Nova task aprovada para corrigir somente a precondição da fixture existente. O produto correto veio de commits históricos de outra sessão; nenhum produtor/capture existe nesta task. A fixture ainda não foi alterada. Escolha e execute somente o primeiro despacho apropriado para a mudança real. Não fabrique um RED nem alteração de produção.",
@@ -90,7 +104,10 @@ try {
   writeFileSync(join(cwd, "result.json"), JSON.stringify(result, null, 2));
   console.log(JSON.stringify({ result: join(cwd, "result.json"), elapsed_ms: result.elapsed_ms, calls }));
   const dispatches = calls.filter((call) => call.name === "subagent");
-  if (scenario === "fixture-maintenance") {
+  if (taskEyes) {
+    const expected = ["harness-compliance", "harness-adversary", ...(scenario === "internal-task-eyes" ? [] : ["harness-security"])];
+    assert.deepEqual(dispatches.map(({ args }) => args.subagent_type).sort(), expected.sort(), "dispatch applicable task eyes, not only the minimum returned by status and not all eyes by default");
+  } else if (scenario === "fixture-maintenance") {
     assert.equal(dispatches.length, 1, "one hand for the real fixture delta, without pre-applied test-author work");
     assert.equal(dispatches[0].args.subagent_type, "harness-executor");
   } else if (scenario === "product") {
