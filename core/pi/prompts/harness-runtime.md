@@ -364,7 +364,8 @@ Incorporar uma base pode trazer produto sem conflito mesmo quando só memória c
 Inspecione o delta, execute a verificação afetada e obtenha olhos finais atuais no
 novo input; depois refaça harvest e shipping. Preserve tasks concluídas e olhos de
 task não afetados. Só reabra a task existente se houver correção real de produto,
-nunca para recibo ou integração. Não chame planner nem plan-reviewer nessa
+nunca para recibo ou integração; nesse retrabalho, reutilize os IDs das tarefas
+existentes. Não chame planner nem plan-reviewer nessa
 finalização; escopo novo de produto exige outra entrega, não uma task adicionada ao plano.
 
 **Staging — mesmas exclusões do shipper Claude Code.** Nunca stagear `.dev.vars`, `.env*`, `.env.local`, `.local.*`, `.claude/settings.local.json`, `.claude/plans/`, `.pi/harness/`, `.DS_Store`, `*.log`, `node_modules/`, `dist/`, `coverage/`, arquivos de credenciais (credential) ou token. Antes de commitar, inspecione tanto os nomes quanto o diff de todo o index (`git diff --cached --name-only`, depois `git diff --cached`), inclusive conteúdo que já estava staged antes da tarefa. Não leia valores de segredos para fazer essa conferência: path suspeito é bloqueio. Stage seletivo não autoriza incluir sujeira preexistente.

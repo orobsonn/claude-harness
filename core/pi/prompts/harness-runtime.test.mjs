@@ -106,6 +106,9 @@ test("harvest runs once after final eyes and rework, before shipper", () => {
   assert.match(prompt, /commit seletivo.*paths.*recibo/is);
   assert.match(prompt, /harvest.*shipping.*não.*planner.*plan-reviewer/is);
   assert.match(prompt, /conflito.*reutiliz.*IDs.*tarefas\s+existentes/is);
+  assert.match(prompt, /pai global.*harness_memory action="reconcile"/is);
+  assert.match(prompt, /Não use\s+`harness_tasks resume`.*incorporar `main`/is);
+  assert.match(shipper, /harness_memory reconcile/);
   assert.doesNotMatch(prompt, /HARNESS_HARVEST_CONTEXT/);
   assert.match(prompt, /recibo host-owned.*persistid.*git.*limpo.*HEAD atual.*mudança não-memória/is);
   assert.match(prompt, /escrita posterior.*invalida.*revisões finais/is);
