@@ -144,9 +144,11 @@ export function reconcileMemoryDelivery(projectRoot, sessionId, { expected_head,
     throw new Error("Base merge would import secrets or ephemeral runtime/plan files; no files were changed");
   const memoryPathsChanged = new Set([...conflictPaths, ...changed.filter((file) => DURABLE_MEMORY_FILES.includes(file))]);
   for (const file of memoryPathsChanged) {
-    // No rename/delete, executable or symlink resolution under the notes exception.
+    // No rename/delete conflict, executable or symlink resolution under the notes
+    // exception. Clean upstream additions/deletions remain ordinary base integration.
     for (const ref of [expected_head, base_sha, tree]) {
-      if (!/^100644 blob /.test(gitMemory(root, ["ls-tree", ref, "--", file])))
+      const object = gitMemory(root, ["ls-tree", ref, "--", file]);
+      if ((conflictPaths.includes(file) || object) && !/^100644 blob /.test(object))
         throw new Error("Memory reconciliation requires existing regular non-executable files on both sides");
     }
     regularFile(join(root, file));

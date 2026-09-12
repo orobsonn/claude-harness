@@ -92,6 +92,18 @@ test("clean delivery merge requires explicit application and does not invent a m
   assert.equal(memoryCycle.reconcileMemoryDelivery(root, SESSION, { ...input, expected_head: merged.head, resolutions: [] }).already_incorporated, true);
 });
 
+test("clean base integration accepts the first durable note created by another run", (t) => {
+  const { root, git, ...input } = parallelDelivery(t, { memoryConflict: false });
+  git("checkout", "-q", "parallel-main");
+  writeFileSync(join(root, "CONTEXT.md"), "Verified upstream domain vocabulary.\n");
+  git("add", "CONTEXT.md"); git("commit", "-qm", "docs: first domain note");
+  const base_sha = git("rev-parse", "HEAD");
+  git("checkout", "-q", "--detach", input.expected_head);
+  const merged = memoryCycle.reconcileMemoryDelivery(root, SESSION, { ...input, base_sha, resolutions: [] });
+  assert.equal(merged.applied, true);
+  assert.equal(readFileSync(join(root, "CONTEXT.md"), "utf8"), "Verified upstream domain vocabulary.\n");
+});
+
 test("delivery reconciliation rejects unsafe proposals and paths before mutation", async (t) => {
   for (const variant of ["task-parent", "dirty", "stale-hash", "full-replace", "secret", "runtime", "symlink", "executable", "delete"])
     await t.test(variant, (st) => {

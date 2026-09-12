@@ -8,8 +8,9 @@ import { createAgentSession, DefaultResourceLoader, ModelRuntime, SessionManager
 import { piDispatchRoute } from "../core/pi/lib/dispatch-rail.mjs";
 
 const scenario = process.argv[2];
+const abandonedResume = scenario === "abandoned-delivery-resume";
 const taskEyes = ["auth-task-eyes", "schema-task-eyes", "internal-task-eyes"].includes(scenario);
-if (!taskEyes && !["evidence", "product", "follow-up", "harvest", "regate", "final-eyes", "post-review-harvest", "post-harvest-shipper", "fixture-maintenance", "delivery-conflict"].includes(scenario)) throw Error("Unknown convergence scenario; expected evidence|product|follow-up|harvest|regate|final-eyes|post-review-harvest|post-harvest-shipper|fixture-maintenance|delivery-conflict|auth-task-eyes|schema-task-eyes|internal-task-eyes");
+if (!taskEyes && !abandonedResume && !["evidence", "product", "follow-up", "harvest", "regate", "final-eyes", "post-review-harvest", "post-harvest-shipper", "fixture-maintenance", "delivery-conflict"].includes(scenario)) throw Error("Unknown convergence scenario; expected evidence|product|follow-up|harvest|regate|final-eyes|post-review-harvest|post-harvest-shipper|fixture-maintenance|delivery-conflict|abandoned-delivery-resume|auth-task-eyes|schema-task-eyes|internal-task-eyes");
 const cwd = mkdtempSync(join(tmpdir(), `pi-convergence-${scenario}-`));
 const agentDir = join(cwd, "agent");
 mkdirSync(agentDir);
@@ -48,6 +49,15 @@ const evidence = {
   ...(scenario === "delivery-conflict" ? { final_review_done: true, tasks: [{ id: "task-one", status: "integrated" }],
     shipment: { status: "BLOCKED", pr: 42, head: "a".repeat(40), base_sha: "b".repeat(40), mergeable: "CONFLICTING", checks: [] },
     product_delta_requested: false } : {}),
+  ...(abandonedResume ? {
+    final_review_done: false, reviews: { accepted: false, phase: "final", invalidated_by_resume: true },
+    task: { id: "task-one", attempt_id: "attempt-one", head: "c".repeat(40), clean: true,
+      status: "blocked", launches: 2, correction_barrier: true,
+      original_integration: { intact: true, parent_contains_exact_task: true, reviews_still_valid: true },
+      latest_hand: { outcome: "BLOCKED", touchedPaths: [], reason: "task run cannot deliver or integrate globally" },
+      resume_reason: "Incorporar main para resolver conflito de MEMORY.md na entrega" },
+    base_fetched: true, base_not_merged: true, product_delta_requested: false,
+  } : {}),
 };
 const taskReviewStatus = { required: ["harness-adversary", "harness-compliance"],
   available: ["harness-adversary", "harness-compliance", "harness-security"], accepted: [],
@@ -70,8 +80,10 @@ const customTools = [
     ? { ok: true, applied: false, conflicts: [{ path: "MEMORY.md" }], message: "Preview recorded; stop here as requested." } : evidence.harvest),
   tool("subagent", "Dispatch a fresh harness role. The probe records the decision without launching a child.", Type.Object({ subagent_type: Type.String(), prompt: Type.String(), model: Type.Optional(Type.String()), thinking: Type.Optional(Type.String()), complexity: Type.Optional(Type.String()), description: Type.Optional(Type.String()) }), { status: "completed", result: "Probe recorded the chosen next dispatch. Stop here; later pipeline stages are outside this probe." }),
 ];
-if (scenario === "delivery-conflict") customTools.push(tool("harness_tasks", "Resume or observe approved task worktrees; record the requested operation in this probe.",
-  Type.Object({ action: Type.String(), task_id: Type.Optional(Type.String()), instruction: Type.Optional(Type.String()) }), { ok: true }));
+if (scenario === "delivery-conflict" || abandonedResume) customTools.push(tool("harness_tasks", "Resume or observe approved task worktrees, or abandon-resume with exact historical evidence; record the requested operation in this probe.",
+  Type.Object({ action: Type.String(), task_id: Type.Optional(Type.String()), instruction: Type.Optional(Type.String()),
+    attempt_id: Type.Optional(Type.String()), expected_head: Type.Optional(Type.String()),
+    no_product_obligation: Type.Optional(Type.Boolean()), reason: Type.Optional(Type.String()) }), { ok: true }));
 if (scenario === "regate") customTools.push(tool("mark", "Record a native gate marker after its real preconditions are satisfied. This probe records the decision only.",
   Type.Object({ action: Type.String(), task_id: Type.String() }), { ok: true }));
 const local = taskEyes || ["evidence", "product", "regate", "fixture-maintenance"].includes(scenario);
@@ -101,6 +113,7 @@ const request = taskEyes ? "Implementação e testes concluídos, commit e captu
   "post-review-harvest": "Os olhos finais aprovaram o HEAD atual após retrabalho e revalidação. O marcador final-review já foi aceito pelo host. Ainda não houve harvest. Escolha e execute apenas o próximo despacho necessário à entrega; encerre após essa decisão.",
   "post-harvest-shipper": "O harvest posterior aos olhos foi aplicado e commitado pelo host. Só mudou a proposta exata de MEMORY.md, com prova válida que preserva as aprovações anteriores; não há delta de produto. Publicar PR draft está autorizado. Escolha e execute apenas o próximo despacho; o probe registra a decisão sem executar efeito remoto.",
   "delivery-conflict": "O shipper criou o PR e parou porque o GitHub reportou conflito com a main; nenhum CI iniciou. A task já estava integrada e o harvest foi aplicado após os olhos finais. Retome a entrega: execute somente a primeira operação necessária para diagnosticar o bloqueio e encerre. Não há finding novo de produto.",
+  "abandoned-delivery-resume": "A tentativa anterior reabriu equivocadamente a task para integrar a base global, e o filho bloqueou sem delta. A inspeção confirmou a integração original intacta e nenhuma obrigação pendente de produto. Execute somente a próxima operação necessária para recuperar essa retomada antes de incorporar a base. Encerre após a operação; não tente executar o resto da entrega.",
 }[scenario];
 const started = Date.now();
 console.log(JSON.stringify({ cwd, scenario, promptPath, model: session.model?.id, thinking: session.thinkingLevel, tools: session.getActiveToolNames() }));
@@ -111,6 +124,18 @@ try {
   writeFileSync(join(cwd, "result.json"), JSON.stringify(result, null, 2));
   console.log(JSON.stringify({ result: join(cwd, "result.json"), elapsed_ms: result.elapsed_ms, calls }));
   const dispatches = calls.filter((call) => call.name === "subagent");
+  if (abandonedResume) {
+    assert.equal(dispatches.length, 0, "do not fabricate a writer or reviewer for the abandoned operation");
+    const mutations = calls.filter(({ name, args }) => name === "harness_tasks" || (name === "harness_memory" && args.action !== "status"));
+    assert.equal(mutations.length, 1, "abandon before changing the delivery base");
+    assert.equal(mutations[0].name, "harness_tasks");
+    assert.equal(mutations[0].args.action, "abandon-resume");
+    assert.equal(mutations[0].args.task_id, evidence.task.id);
+    assert.equal(mutations[0].args.attempt_id, evidence.task.attempt_id);
+    assert.equal(mutations[0].args.expected_head, evidence.task.head);
+    assert.equal(mutations[0].args.no_product_obligation, true);
+    assert.ok(mutations[0].args.reason?.trim(), "explicit factual judgment, not an implicit approval");
+  }
   if (scenario === "delivery-conflict") {
     assert.equal(dispatches.length, 0, "no writer or reviewer for a base integration");
     assert.ok(!calls.some(({ name, args }) => name === "harness_tasks" && args.action === "resume"), "do not send global merge work to a task");

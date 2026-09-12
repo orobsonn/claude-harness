@@ -53,6 +53,28 @@ intactos e a mudança real de input exige olhos finais atuais, depois harvest/sh
 Falha operacional após iniciar o merge não é sucesso: o índice e o diário Git são
 preservados para inspeção, sem reset destrutivo nem repetição cega.
 
+## Recuperar a retomada operacional já aberta
+
+A prevenção acima não desfaz a retomada incorreta das #208/#210. `resume` arquivou
+a integração original e abriu a barreira de correção. Na #208, o sniper `BLOCKED`
+também substituiu o hand corrente. Na #210, reintegrar o mesmo commit ancestral
+apenas retorna "Already up to date", sem concluir a correção pendente.
+
+`harness_tasks abandon-resume` registra a decisão explícita do pai de que nenhuma
+obrigação de correção de produto permanece. Exige task/attempt/HEAD exatos, motivo,
+processos terminados, árvore limpa, integração histórica verificável, input e olhos
+originais intactos. Não aprova a mão bloqueada: restaura a integração anterior e
+vincula o intervalo abandonado aos hashes dos eventos, launches e hand. Parecer
+negativo posterior impede a operação. Nenhum evento, launch ou custo é removido,
+e os olhos finais invalidados não são restaurados.
+
+Essa operação vem **antes** da incorporação da base. Uma mudança real de teste ou
+produto continua exigindo recuperação normal. Na #208, o upstream #212 altera a
+fixture de orçamento no path congelado: a retomada posterior precisa de delta
+test-only real, não writer sem delta nem relaxamento do hash congelado. A inspeção
+do host reconhece apenas os intervalos de writers abandonados com prova íntegra;
+o runtime pinado do filho e todas as revisões permanecem inalterados.
+
 ## Evidências e limites
 
 - Dois testes inicialmente RED na baseline por ausência da operação global.
@@ -60,13 +82,21 @@ preservados para inspeção, sem reset destrutivo nem repetição cega.
   aprendizados e os recibos; bloqueia harvest/shipping até novos olhos, então libera
   a continuação normal. Merge limpo também é coberto, sem patch inventado.
 - Casos focais: pai de task, HEAD/hash stale, árvore suja, substituição integral,
-  conflito misto de produto, secret/runtime e tipo symlink/executável/deleção.
+  conflito misto de produto, secret/runtime e tipo symlink/executável. Adição e
+  remoção limpas de notas upstream são aceitas; patch conflitado exige arquivo
+  regular presente nos dois lados.
 - Extensão nativa expõe a ação e recusa pai local/delegados; rail de task também
   a proíbe. A exclusão mútua existente dos olhos continua envolvendo a ferramenta.
 - Pressure test opt-in `node scripts/pi-convergence-pressure.mjs delivery-conflict`:
   Terra/high escolheu somente a operação global com SHAs corretos (9,256s).
   Ferramentas do probe registram decisões; isso não é uma dogfood de produto.
+- Pressure test `abandoned-delivery-resume`: Terra/high escolheu a ação explícita
+  de abandono antes de mudar a base, com identidade, HEAD e motivo corretos
+  (6,292s), sem writer/reviewer. Também usa ferramentas injetadas, não altera runs.
 - Adversary/compliance, pacote, materialização, suítes completas e retomadas reais
   precisam de verificação do HEAD final antes de declarar a correção entregue.
-- A correção evita o novo encaminhamento errado. Ela não reescreve o registry ou
-  hand record que a tentativa indevida da #208 já modificou, nem migra a #207.
+- Recuperação: 122 testes focais verdes, incluindo abandono → autoria test-only
+  real → nova captura, adulteração de prova e parecer negativo posterior. Probes
+  read-only dos estados reais #208/#210 passaram; não equivalem a retomada real.
+- A atualização não migra o runtime pinado da #207; nova sessão continua pendente
+  de autorização do operador. Não atribuir às runs antigas a prevenção nova.

@@ -346,11 +346,21 @@ Ao retomar após um PR draft, explique a finalidade de cada despacho: merge do P
 Se o merge do shipper encontrar conflito, ele termina `BLOCKED` com o HEAD revisado, a
 nova base observada e a evidência de conflito disponível. Primeiro diagnostique no
 **pai global** com `harness_memory action="reconcile"`, `expected_head` e `base_sha`
-completos; sem `resolutions`, a operação apenas mostra o merge previsto. Não use
+completos, depois de buscar a base observada com `git fetch`; sem `resolutions`,
+a operação apenas mostra o merge previsto. Não use
 `harness_tasks resume` nem executor/sniper para incorporar `main`: essa operação
 não é reconciliação de dependência entre tasks. Nunca peça merge/rebase/cherry-pick
 ao filho. No Claude/Orca, o integrador resolve as anotações; no Pi, o host aplica
 essa mesma responsabilidade na finalização.
+
+Se uma retomada operacional já reabriu indevidamente uma task integrada, não
+invente um delta para conseguir recibo. Antes de incorporar a nova base, examine
+o HEAD e as evidências atuais. Havendo integração original intacta e nenhuma
+obrigação de correção de produto, use `harness_tasks action="abandon-resume"`
+com o `expected_head` da task, `no_product_obligation: true` e motivo factual.
+O host revalida o histórico; não converte uma mão `BLOCKED` em aprovação nem
+descarta parecer negativo. Mudança real de produto/teste exige a recuperação
+normal, não abandono. Olhos finais invalidados continuam precisando de revisão.
 
 Merge limpo: envie `resolutions: []`. Se os conflitos forem somente `MEMORY.md`,
 `CONTEXT.md` ou `kaizen.md`, resolva cada um com patch literal pequeno vinculado ao
