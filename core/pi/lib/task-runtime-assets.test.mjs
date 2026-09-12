@@ -71,6 +71,11 @@ test("task briefs keep fidelity and implementation verdict formats distinct", ()
   assert.match(task, /adversary\/compliance\/security de implementação, peça JSON `issues`/);
 });
 
+test("task pipeline summary preserves final eyes before harvest", () => {
+  const asset = readAsset("../skills/harness-task-pipeline/SKILL.md");
+  assert.match(asset, /executa no HEAD agregado os testes, revisores finais aplicáveis, harvest e shipping/);
+});
+
 test("task assets preserve fidelity and escalate repeated failures without extra gates", () => {
   const task = readAsset("../prompts/harness-task-runtime.md");
   assert.match(task, /um RED\/freeze inicial por task/);

@@ -35,6 +35,9 @@ a omissão. A baseline Claude exige security conforme o delta, não em toda task
 - Distinguir o brief de fidelidade (Verdict único inicial) do brief dos olhos de
   implementação (JSON issues/follow_ups). O probe revelou que a antiga instrução
   genérica de Verdict contaminava também o brief dos olhos de implementação.
+- Alinhar a frase-resumo da skill à ordem já implementada: testes, olhos finais,
+  harvest e shipping. A frase ainda listava harvest antes dos olhos; uma regressão
+  focal foi RED antes dessa correção de prosa. Não há mudança do fluxo de memória.
 
 Sem novo gate, schema, roteamento, motor de paths ou obrigação de três olhos.
 Esses ajustes tratam falsos bloqueios e paridade de prosa do briefing pós-#275;

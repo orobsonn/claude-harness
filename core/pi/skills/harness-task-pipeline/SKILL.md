@@ -73,7 +73,7 @@ sessão pai local, usando a pipeline nativa de mãos, fidelidade, freeze, captur
   aplicável na task FULL. Não reabra olhos já satisfeitos nem force três olhos em toda task.
 - Olhos de task recebem evidência focal e não podem exigir comandos de
   `final_review.parent_verification`. Após integrar todas as tarefas, o pai final
-  executa no HEAD agregado os testes, harvest, revisores finais aplicáveis e shipping
+  executa no HEAD agregado os testes, revisores finais aplicáveis, harvest e shipping
   normais. A suite global precisa estar verde no HEAD final; timeout, falha ou HEAD
   novo exige rerun pelo pai final. Revisões de implementação e finais podem usar até
   três olhos em paralelo; autoria, mãos, fidelidade e revisão da spec continuam exclusivas.
