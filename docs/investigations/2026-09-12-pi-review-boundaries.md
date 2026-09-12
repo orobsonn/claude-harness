@@ -14,7 +14,13 @@ Replay read-only do corpo original (SHA-256
 `3a630a2a847e11314590f370d654438a5a2bf0d649592308855fffd3bb8f9f25`)
 reproduziu a recusa antiga e a aceitação pelo parser corrigido. Nenhum log,
 recibo, HEAD ou parecer foi reescrito. Este replay não equivale à conclusão da
-run após atualização oficial.
+run após atualização oficial. A auditoria da tentativa confirmou que o runtime
+da filha é fixado por digest na admissão e verificado em cada retomada e integração.
+Não existe operação oficial de migração dessa tentativa: atualizar apenas o pai
+não troca o parser de `mark` da filha; atualizar os assets da filha invalida o digest.
+Não editar esse recibo, ignorar a verificação ou tratar uma sessão avulsa como launch
+host-owned. Publicar o fix evita o problema em novas admissões, mas não conserta
+retroativamente essa tentativa legada.
 
 Na Victor #210, a task alterou a comparação de chaves nos middlewares de
 autenticação, mas despachou somente compliance/adversary. O status nativo mostra
@@ -48,7 +54,8 @@ não reimplementam a supersessão de parecer negativo nem a fidelidade históric
 - Baseline v2.6.22 em worktree separado intacto: 75/75 testes de task-run e
   task-receipts. As novas regressões foram RED antes do ajuste.
 - Parser e fronteiras de task: 81/81 GREEN, incluindo releitura da mesma evidência
-  persistida e freeze ancestral. Assets e runtime: 43/43 GREEN.
+  persistida e freeze ancestral. Assets e runtime: 44/44 GREEN, incluindo a ordem
+  corrigida na frase-resumo da skill.
 - Probes reais Terra/high: auth e schema despacharam os três papéis; mudança
   interna despachou somente compliance/adversary. Após distinguir os formatos,
   novo probe auth despachou três papéis com briefs JSON corretos (18,214 s).
