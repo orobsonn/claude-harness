@@ -254,7 +254,7 @@ test("an admitted child keeps its historical dependency receipt after an ancesto
 });
 
 test("task fidelity accepts a reviewed ancestral freeze across executor sniper and resume", (t) => {
-  const prepare = () => {
+  const prepare = (reviewVerdict = "Verdict: APPROVE") => {
     const f = fixture(t);
     const testAuthorSha = f.git("rev-parse", "HEAD");
     const admitted = admitTaskRun(f.grantPath, { cwd: f.root, sessionId: `task-parent-${crypto.randomUUID()}` });
@@ -266,7 +266,7 @@ test("task fidelity accepts a reviewed ancestral freeze across executor sniper a
     };
     const prompt = '[HARNESS_TASK_CONTEXT]{"task_id":"task-one"}[/HARNESS_TASK_CONTEXT]';
     completed("author", "subagent", { subagent_type: "harness-test-author", prompt });
-    completed("reviewer", "subagent", { subagent_type: "harness-test-reviewer", prompt }, "Verdict: APPROVE");
+    completed("reviewer", "subagent", { subagent_type: "harness-test-reviewer", prompt }, reviewVerdict);
     return { ...f, sessionId: admitted.sessionId, testAuthorSha, entries, completed, prompt };
   };
   const writeLockedTest = (f) => {
@@ -281,6 +281,13 @@ test("task fidelity accepts a reviewed ancestral freeze across executor sniper a
     sessionEntries: f.entries,
   });
   const freezeEvent = (f) => f.completed("freeze", "bash", { command: "git commit -m freeze" }, `[task ${f.git("rev-parse", "HEAD")}] freeze`, {});
+
+  const repeated = prepare("Verdict: APPROVE\nRED collected; obligations are faithful.\nVerdict: APPROVE");
+  writeLockedTest(repeated);
+  repeated.git("add", "--", "test/task-one.test.ts");
+  repeated.git("-c", "user.name=Harness", "-c", "user.email=harness@example.invalid", "commit", "-q", "-m", "freeze tests");
+  freezeEvent(repeated);
+  assert.equal(check(repeated).ok, true, "the same recorded approval must not require a format-only reviewer rerun");
 
   const valid = prepare();
   writeLockedTest(valid);
