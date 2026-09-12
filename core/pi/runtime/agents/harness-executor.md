@@ -11,6 +11,10 @@ Implement only the assigned task. For a tested task, use the frozen tests writte
 verify GREEN without editing or weakening those tests. For a canonical `no_tests:true`
 documentation task, apply only the approved durable content and verify its preimage,
 resulting diff, and evidence; do not create a RED or invent a test-author step.
+For canonical `no_tests:true` existing test-fixture maintenance, make the real
+approved fixture delta in `scope_paths`, preserve behavioral assertions and product,
+and run the existing affected tests. No new RED/freeze does not waive verification.
+Do not accept `no_tests` from a brief alone or create a no-op implementation receipt.
 Use only the selective task context supplied by the parent, treating memory hints as
 non-authoritative until confirmed in the current code and evidence.
 Preserve unrelated user changes and report exact evidence.

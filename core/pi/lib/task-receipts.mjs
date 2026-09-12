@@ -435,17 +435,27 @@ export function inspectTaskRun(entry, dependencies = {}) {
     if (scopedChanges.some((item) => !covered(item, scopes))) return failure("task changed paths outside canonical scope", { changed: scopedChanges });
     const native = readEvents(entry.launches, jobRoot, launches.interruptedIndexes);
     if (native.sessionIds.size !== 1 || !native.sessionIds.has(claim.session_id)) return failure("native event session does not match the claimed child session");
+    // A blocked hand can explain its failure without being eligible to approve it.
+    // Bind diagnostics before capture checks, using the same identity/hash contract
+    // as successful returns; never turn this context into an implementation receipt.
+    const contextReturnFn = dependencies.readTaskContextReturnFn ?? readTaskContextReturn;
+    const contextReturn = contextReturnFn({ projectRoot: worktree, sessionId: claim.session_id, taskId: entry.task_id, headSha: head });
+    if (contextReturn !== null) {
+      const checkedContext = validateTaskContextReturn(contextReturn, { sessionId: claim.session_id, taskId: entry.task_id, headSha: head });
+      if (!checkedContext.ok) return failure("task context return is invalid: " + checkedContext.reason);
+    }
+    const contextDiagnostics = contextReturn === null ? {} : { context_return: contextReturn };
     const implementationObserved = native.events.some((event) => event.tool === "subagent" && ["harness-executor", "harness-sniper"].includes(event.args?.subagent_type) && eventSucceeded(event));
-    if (!implementationObserved) return failure("successful native implementation call was not observed");
+    if (!implementationObserved) return failure("successful native implementation call was not observed", contextDiagnostics);
     const statePath = piGateStatePath({ projectRoot: worktree, sessionId: claim.session_id });
     const handPath = piHandRecordPath({ projectRoot: worktree, sessionId: claim.session_id, featureId: entry.feature_id }, entry.task_id);
     const state = readJson(statePath.path, worktree);
     const hand = readJson(handPath.path, worktree);
-    if (!isCaptureEligibleHandRecord(hand)) return failure("current child hand record is not capture-eligible");
+    if (!isCaptureEligibleHandRecord(hand)) return failure("current child hand record is not capture-eligible", contextDiagnostics);
     const identity = validateOcCaptureEligibleHandRecord(hand, { featureId: entry.feature_id, taskId: entry.task_id, sessionId: claim.session_id });
     const violations = recordViolations(hand);
     if (!identity.ok || violations.scope.length || violations.frozen.length || typeof hand.capturedVerifiedAt !== "string" || !hand.capturedVerifiedAt ||
-        !COMMIT_SHA.test(hand.freezeCommitSha ?? "") || !ancestor(worktree, hand.freezeCommitSha, head)) return failure("current child hand capture is invalid");
+        !COMMIT_SHA.test(hand.freezeCommitSha ?? "") || !ancestor(worktree, hand.freezeCommitSha, head)) return failure("current child hand capture is invalid", contextDiagnostics);
     const reconciliation = entry.reconciliations?.at(-1);
     if (reconciliation && !ancestor(worktree, reconciliation.merged_head, hand.freezeCommitSha))
       return failure("current hand requires a new capture after dependency reconciliation");
@@ -524,12 +534,6 @@ export function inspectTaskRun(entry, dependencies = {}) {
     if (!Array.isArray(state.hand_finished) || !state.hand_finished.includes(bare) || !Array.isArray(state.capture_verified) || !state.capture_verified.includes(capturePayload)) return failure("current child capture markers are incomplete");
     const regatePending = (Array.isArray(state.regate_pending) ? state.regate_pending : []).filter((pending) =>
       typeof pending === "string" && (pending === bare || pending.startsWith(`${bare}@`)));
-    const contextReturnFn = dependencies.readTaskContextReturnFn ?? readTaskContextReturn;
-    const contextReturn = contextReturnFn({ projectRoot: worktree, sessionId: claim.session_id, taskId: entry.task_id, headSha: head });
-    if (contextReturn !== null) {
-      const checkedContext = validateTaskContextReturn(contextReturn, { sessionId: claim.session_id, taskId: entry.task_id, headSha: head });
-      if (!checkedContext.ok) return failure("task context return is invalid: " + checkedContext.reason);
-    }
     const reviews = validateCurrentReviews({ state, events: native.events, plan: binding.plan, task: binding.task, projectRoot: worktree, sessionId: claim.session_id, featureId: entry.feature_id, taskId: entry.task_id, head, captureReviewInputFn: dependencies.captureReviewInputFn ?? capturePiReviewInput });
     const diagnostics = { ...(contextReturn === null ? {} : { context_return: contextReturn }), review_findings: reviews.details?.review_findings ?? [] };
     if (regatePending.some((pending) => !matchesAbsolution(pending, state.regate_passed, (sha) => ancestor(worktree, sha, head)))) {

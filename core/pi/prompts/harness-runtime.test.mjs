@@ -162,6 +162,17 @@ test("writing roles keep test authorship and genuine no-tests documentation dist
   assert.match(sniper, /selective finding context/i);
 });
 
+test("new fixture maintenance uses canonical no_tests and a real executor delta, not recovery lineage", () => {
+  const planner = readFileSync(new URL("../runtime/agents/harness-planner.md", import.meta.url), "utf8");
+  const executor = readFileSync(executorPath, "utf8");
+  const task = readFileSync(new URL("./harness-task-runtime.md", import.meta.url), "utf8");
+  assert.match(planner, /existing test.fixture maintenance.*no_tests: true/is);
+  assert.match(planner, /preserve.*assertions.*existing.*tests/is);
+  assert.match(executor, /fixture maintenance.*real.*delta/is);
+  assert.match(task, /no_tests:true.*locked_tests.*executor/is);
+  assert.match(task, /sessão nova.*não herda.*linhagem/is);
+});
+
 test("pai e shipper preservam a lista de never-stage do Claude Code", () => {
   const prompt = readFileSync(promptPath, "utf8");
   const shipper = readFileSync(shipperPath, "utf8");

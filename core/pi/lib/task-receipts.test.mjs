@@ -1260,6 +1260,36 @@ test("blocked re-gate exposes current task context and review findings without a
   assert.equal(staleContext.details?.context_return, undefined);
 });
 
+test("blocked author preserves current scope diagnosis without a capture or ready receipt", () => {
+  const f = inspectionFixture();
+  const handPath = path.join(f.root, ".pi", "harness", "state", "hand-records", FEATURE, CHILD, `${TASK}.json`);
+  const previous = JSON.parse(fs.readFileSync(handPath, "utf8"));
+  write(handPath, { ...previous, agent: "harness-test-author", outcome: "BLOCKED", capturedVerifiedAt: null });
+  const content = "PLAN_CONTRADICTION: src/lib/publish/publish-publicacao.spec.ts is outside admitted test scope; do not redispatch without changing authorization.";
+  const context = { version: 1, kind: "task-context-return", session_id: CHILD, task_id: TASK,
+    head_sha: f.head, content, sha256: crypto.createHash("sha256").update(content).digest("hex") };
+  f.dependencies.readTaskContextReturnFn = () => context;
+  const blocked = inspectTaskRun(f.entry, f.dependencies);
+  assert.equal(blocked.ok, false);
+  assert.match(blocked.reason, /not capture-eligible/);
+  assert.equal(blocked.result, undefined);
+  assert.deepEqual(blocked.details?.context_return, context);
+  for (const invalid of [
+    { ...context, session_id: "foreign-session" },
+    { ...context, task_id: "foreign-task" },
+    { ...context, head_sha: f.base },
+    { ...context, sha256: "0".repeat(64) },
+  ]) {
+    f.dependencies.readTaskContextReturnFn = () => invalid;
+    const rejected = inspectTaskRun(f.entry, f.dependencies);
+    assert.equal(rejected.ok, false);
+    assert.equal(rejected.result, undefined);
+    assert.equal(rejected.details?.context_return, undefined);
+  }
+  f.dependencies.readTaskContextReturnFn = () => null;
+  assert.equal(inspectTaskRun(f.entry, f.dependencies).details?.context_return, undefined);
+});
+
 test("inspectTaskRun rejects an unstamped current capture and a foreign native producer", () => {
   const unstamped = inspectionFixture();
   const handPath = path.join(unstamped.root, ".pi", "harness", "state", "hand-records", FEATURE, CHILD, `${TASK}.json`);
