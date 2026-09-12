@@ -434,6 +434,7 @@ export default function harnessEntryGate(pi: ExtensionAPI) {
       });
       if (
         completion.ok === true && completion.capturePending === true &&
+        String(loaded?.state?.mode).toUpperCase() !== "LIGHT" &&
         /^(?:harness-)?(?:executor|sniper)(?:-(?:low|medium|high))?$/.test(String(args.subagent_type))
       ) {
         const statePath = piGateStatePath({ projectRoot, sessionId });

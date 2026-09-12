@@ -1284,6 +1284,40 @@ test("LIGHT task inspection accepts no implementation reviews", () => {
   assert.deepEqual(result.result.review_receipts, {});
 });
 
+test("LIGHT legacy pending re-gate does not invent implementation reviews", () => {
+  const f = inspectionFixture();
+  const binding = f.dependencies.readTaskRunBindingFn();
+  f.dependencies.readTaskRunBindingFn = () => ({ ...binding, plan: { ...binding.plan, mode: "light" } });
+  const state = JSON.parse(fs.readFileSync(f.statePath, "utf8"));
+  delete state.task_review_evidence;
+  delete state.task_adversary_evidence;
+  state.regate_pending = [`${FEATURE}/${TASK}`];
+  write(f.statePath, state);
+  const before = fs.readFileSync(f.statePath, "utf8");
+  const result = inspectTaskRun(f.entry, f.dependencies);
+  assert.equal(result.ok, true, result.reason);
+  assert.deepEqual(result.result.review_receipts, {});
+  assert.deepEqual(result.result.regate.pending, state.regate_pending);
+  assert.equal(fs.readFileSync(f.statePath, "utf8"), before, "inspection must not forge a marker");
+  state.capture_verified = [];
+  write(f.statePath, state);
+  assert.match(inspectTaskRun(f.entry, f.dependencies).reason, /capture markers are incomplete/);
+});
+
+test("LIGHT pending re-gate still enforces an actually dispatched negative review", () => {
+  const f = inspectionFixture();
+  const binding = f.dependencies.readTaskRunBindingFn();
+  f.dependencies.readTaskRunBindingFn = () => ({ ...binding, plan: { ...binding.plan, mode: "light" } });
+  appendImplementationReviews(f, ["harness-security"]);
+  const state = JSON.parse(fs.readFileSync(f.statePath, "utf8"));
+  state.regate_pending = [`${FEATURE}/${TASK}`];
+  state.task_review_evidence[`${FEATURE}/${TASK}`].security.accepted = false;
+  write(f.statePath, state);
+  const result = inspectTaskRun(f.entry, f.dependencies);
+  assert.equal(result.ok, false);
+  assert.match(result.reason, /missing or negative reviews/);
+});
+
 test("task inspection preserves ancestral positive reviews but stale negatives still block", () => {
   const f = inspectionFixture();
   appendImplementationReviews(f, ["harness-security"]);
@@ -1761,11 +1795,14 @@ test("readIntegratedTaskEvidence accepts baseline compliance and rejects an omit
 test("LIGHT integration accepts a receipt without implementation eyes", () => {
   const f = integratedFixture({ mode: "light" });
   f.entry.result.review_receipts = {};
+  f.entry.result.regate = { pending: [`${FEATURE}/${TASK}`], passed: [] };
   f.entry.integration.result_sha256 = hashTaskReceipt(f.entry.result);
   write(f.registryPath, f.registry);
   const result = readIntegratedTaskEvidence({ projectRoot: f.root, sessionId: PARENT, featureId: FEATURE,
     taskId: TASK, headSha: f.base });
   assert.equal(result.ok, true, result.reason);
+  assert.deepEqual(JSON.parse(fs.readFileSync(f.registryPath, "utf8")).tasks[TASK].result.regate,
+    { pending: [`${FEATURE}/${TASK}`], passed: [] }, "restart preserves the historical marker without inventing approval");
 });
 
 test("readIntegratedTaskEvidence rejects forged freeze or hand ancestry after receipt hashes are recomputed", () => {

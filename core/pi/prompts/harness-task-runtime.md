@@ -170,7 +170,12 @@ defeitos aplicáveis e bloqueantes; `follow_ups` opcional é somente diagnóstic
 achados explicitamente preexistentes, fora de escopo ou residuais aceitos, com evidência.
 Não mova defeito atual para follow-up. Preserve esses diagnósticos no retorno ao pai,
 sem invalidar aprovação nem repetir revisor apenas para limpar ou reformatar o relatório.
-Se houve re-gate pendente, `harness_reviews` com `missing=[]` não registra
+Em LIGHT sem revisores de implementação ativados (`required=[]`), não convoque um
+olho nem marque re-gate apenas para obter recibo. Se um runtime antigo deixou esse
+marcador pendente, retorne a captura verificada ao host: a inspeção valida o contrato
+LIGHT sem inventar uma revisão. Revisores realmente despachados e negativos continuam
+obrigatórios; olhos finais globais não são dispensados.
+Quando há obrigações de revisão e re-gate pendente, `harness_reviews` com `missing=[]` não registra
 `regate-passed`: após as revisões aplicáveis, chame `mark` com
 `action="regate-passed"` e `task_id` desta tarefa, sem fornecer SHA, e confira `ok=true`
 antes de retornar pronta. Se o marcador recusar, resolva a razão exata; não repita
