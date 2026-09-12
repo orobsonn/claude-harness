@@ -147,6 +147,15 @@ Keep low/medium work cohesive. Scorer absence/error does not prevent planning.
    persisted state, or surfaced error—not merely status, existence, truthiness,
    or absence of a throw. A genuine documentation task required by the sealed spec
    may use canonical `no_tests: true` and an empty `locked_tests` array.
+   Existing test-fixture maintenance with no new product behavior may also use
+   canonical `no_tests: true` and `locked_tests: []`: assign the real fixture delta
+   to the executor through `scope_paths`, preserve the existing assertions, and
+   require running the existing affected tests. Explain the missing precondition
+   and intended repair in the approved task. This means no new RED/freeze, not no
+   verification. Do not use it to waive new behavior or weaken a failing assertion.
+   Do not pre-apply that delta with test-author and then request a no-op executor;
+   a new task does not inherit native captured implementation lineage from Git
+   commits or another session. Existing captured-task recovery remains unchanged.
    Validate that its RED can be collected on the exact base plus already integrated
    dependencies; import or collection failure is not the expected RED. The
    test-author never creates production scaffolds or stubs to fix imports: express
@@ -275,7 +284,8 @@ dispatch; do not create an alternate plan path. Confirm all of the following:
 
 1. Every approved acceptance criterion is owned by at least one task.
 2. Every task criterion has an observable locked test on that task, except a genuine
-   documentation-only task required by the sealed spec with `no_tests: true`.
+   documentation task or existing test-fixture maintenance described above,
+   required by the sealed spec with `no_tests: true` and explicit verification.
 3. IDs, dependencies, severity, complexity, scope paths, criterion refs,
    locked tests, and model strategy conform to the schema above.
 4. Each locked test is satisfiable at its own task boundary and its test path

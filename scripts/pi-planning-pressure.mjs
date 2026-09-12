@@ -11,7 +11,7 @@ import { PLANNING_TOOLS } from "../core/pi/lib/planning-tools.mjs";
 import { piDispatchRoute } from "../core/pi/lib/dispatch-rail.mjs";
 
 const scenario = process.argv[2];
-if (!["max", "atomic-high", "mcp"].includes(scenario)) throw Error("Usage: node scripts/pi-planning-pressure.mjs max|atomic-high|mcp");
+if (!["max", "atomic-high", "mcp", "fixture-maintenance"].includes(scenario)) throw Error("Usage: node scripts/pi-planning-pressure.mjs max|atomic-high|mcp|fixture-maintenance");
 const root = resolve(fileURLToPath(new URL("../", import.meta.url)));
 const cwd = mkdtempSync(join(tmpdir(), `pi-pressure-${scenario}-`));
 const agentDir = join(cwd, "agent");
@@ -22,7 +22,13 @@ const planPath = join(cwd, ".pi/harness/plans", feature, "execution-plan.json");
 mkdirSync(resolve(planPath, ".."), { recursive: true });
 const branches = scenario === "max" ? 65 : 34;
 writeFileSync(join(cwd, "src/workflow.ts"), `export function processRecord(record) {\n${Array.from({ length: branches }, (_, i) => `  if (record.kind === ${i}) record.value += ${i};`).join("\n")}\n  return record;\n}\n`);
-const spec = scenario === "max"
+if (scenario === "fixture-maintenance") {
+  mkdirSync(join(cwd, "test"));
+  writeFileSync(join(cwd, "test/retry.test.mjs"), 'import assert from "node:assert/strict";\nimport test from "node:test";\nconst fixture = { owner: null };\ntest("preserves terminal readback", () => {\n  assert.ok(fixture.owner?.active, "missing eligible fixture owner");\n  const readback = { status: "published", attempts: 5 };\n  assert.deepEqual(readback, { status: "published", attempts: 5 });\n});\n');
+}
+const spec = scenario === "fixture-maintenance"
+  ? "Maintain only test/retry.test.mjs (#ac-1): its existing fixture omits the eligible active owner now required before the unchanged terminal-readback assertions. Supply the missing setup precondition and preserve the existing assertions exactly; do not change product or add a new behavioral obligation. Run node --test test/retry.test.mjs after the repair. Production was delivered by a different historical session; this is a new bounded task with no native implementation/capture history. Choose a viable writing-hand workflow, without pre-applying the entire change and then dispatching a no-op hand."
+  : scenario === "max"
   ? "Implement three independently observable outcomes: validate inbound records with explicit invalid-record errors (#ac-1); schedule retry of transient delivery failures preserving idempotency keys (#ac-2); export a read-only delivery audit summary (#ac-3). These have independent contracts and may be delivered after their declared dependencies. A proposed single max task combines all three; reconsider its decomposition. Each may own a separate test file. No fixed task count is required."
   : "Implement atomic claim and fencing-token increment in one database transaction (#ac-1). Reject expired ownership on commit and preserve a concurrent winner (#ac-2). Claim and token update share a single invariant: consumers must never observe one without the other. Splitting would require an artificial intermediate API/state and break the invariant. Keep the minimal behavioral tests together. Assess high complexity and document the atomicity justification; do not invent independent work.";
 writeFileSync(join(cwd, "spec.md"), `# Approved specification\n${spec}\nJourney #uj-delivery: deterministic delivery processing.\n`);
@@ -51,7 +57,7 @@ console.log(JSON.stringify({ cwd, scenario, model: session.model?.id, thinking: 
 try {
   await session.prompt(scenario === "mcp"
     ? `Stable ceremony mode FULL; feature_id=${feature}; approved spec is spec.md. This is a read-only integration probe before planning. Call mv_recall with query 'atomic transaction idempotency'; if relevant, read one note with mv_get_note. Call mp_retrieve grep with query 'idempotencia'. Do not write any file or memory. Report availability honestly and stop.`
-    : `Stable ceremony mode FULL. feature_id=${feature}. The complete approved spec is spec.md. Inspect src/workflow.ts. Use harness_complexity with that file's path to cross-check complexity, then exercise your own judgment about the intended change. MV/MP are deliberately absent for this exercise: their absence must not block. Write the canonical plan to ${planPath}. Do not implement product code or create synthetic source for scoring. Explain the decomposition or atomicity justification in the plan's existing fields.`);
+    : `Stable ceremony mode FULL. feature_id=${feature}. The complete approved spec is spec.md. Inspect ${scenario === "fixture-maintenance" ? "test/retry.test.mjs" : "src/workflow.ts"}. Use harness_complexity with that file's path to cross-check complexity, then exercise your own judgment about the intended change. MV/MP are deliberately absent for this exercise: their absence must not block. Write the canonical plan to ${planPath}. Do not implement product code or create synthetic source for scoring. Explain the decomposition or atomicity justification in the plan's existing fields.`);
   const messages = session.messages.filter((message) => message.role === "assistant");
   const usage = messages.map((message) => message.usage).filter(Boolean);
   const report = { scenario, cwd, elapsed_ms: Date.now() - start, model: session.model?.id, thinking: session.thinkingLevel, usage, events };
@@ -62,6 +68,12 @@ try {
     assert.ok(calls.every(event => typeof event.args.path === "string" && !Object.hasOwn(event.args, "source")), "Scoring must receive file paths, never invented source");
     const results = events.filter(event => event.type === "tool_execution_end" && event.toolName === "harness_complexity");
     assert.ok(results.some(event => event.result?.details?.ok && event.result.details.basis === "whole-file-approximation"), "The real file must be read and scored successfully");
+  }
+  if (scenario === "fixture-maintenance") {
+    const plan = JSON.parse(readFileSync(planPath, "utf8"));
+    assert.ok(plan.tasks.length > 0);
+    assert.ok(plan.tasks.every(task => task.no_tests === true && task.locked_tests?.length === 0), "fixture maintenance has no invented RED/freeze");
+    assert.ok(plan.tasks.every(task => task.scope_paths?.every(path => path === "test/retry.test.mjs")), "only the approved existing fixture may change");
   }
   console.log(JSON.stringify({ result: join(cwd, "result.json"), elapsed_ms: report.elapsed_ms, calls: events.filter((event) => event.type === "tool_execution_start").map((event) => event.toolName), response: messages.at(-1)?.content?.filter((part) => part.type === "text").map((part) => part.text) }));
 } finally {

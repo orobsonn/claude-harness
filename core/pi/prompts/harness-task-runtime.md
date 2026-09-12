@@ -39,7 +39,18 @@ lote da resposta, em foreground, omitindo `run_in_background` ou usando `false`.
 Se houver `background-disabled`, corrija esse campo e repita os pendentes no lote
 foreground; a rejeição não exige serializar. Aguarde todos antes de corrigir arquivos.
 
-Há um RED/freeze inicial por task; retomar ou corrigir produto preserva a fidelidade
+Quando o contrato canônico aprovado contém `no_tests:true` e `locked_tests:[]`,
+despache o executor para a mudança real autorizada, sem autoria/freeze/RED inicial.
+Isso inclui documentação ou manutenção de fixture existente sem novo comportamento:
+preserve assertions e produto, execute os testes existentes afetados e mantenha
+commit, captura e olhos aplicáveis. `no_tests` só no brief não autoriza esse caminho.
+Uma sessão nova não herda a linhagem nativa de implementação capturada de outra
+task/sessão pelos commits Git. Não pré-aplique a fixture com test-author para depois
+chamar executor sem delta; recovery test-only sem executor adicional exige a
+implementação anterior já capturada na mesma task. Se o plano for incompatível,
+reporte a contradição antes da mão, sem inventar RED ou alterar grants/recibos.
+
+Nas tasks com testes travados há um RED/freeze inicial por task; retomar ou corrigir produto preserva a fidelidade
 válida. Em uma task nova, não presuma fidelity, freeze, captura, revisão ou re-gate. Siga esta
 ordem exata: (1) test-author; (2) RED comportamental executável; (3) aprovação de
 fidelidade pelo harness-test-reviewer; (4) freeze commit seletivo contendo somente testes/fixtures travados;

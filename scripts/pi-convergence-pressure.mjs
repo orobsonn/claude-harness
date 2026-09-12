@@ -8,7 +8,7 @@ import { createAgentSession, DefaultResourceLoader, ModelRuntime, SessionManager
 import { piDispatchRoute } from "../core/pi/lib/dispatch-rail.mjs";
 
 const scenario = process.argv[2];
-if (!["evidence", "product", "follow-up", "harvest", "regate", "final-eyes", "post-review-harvest", "post-harvest-shipper"].includes(scenario)) throw Error("Usage: node scripts/pi-convergence-pressure.mjs evidence|product|follow-up|harvest|regate|final-eyes|post-review-harvest|post-harvest-shipper");
+if (!["evidence", "product", "follow-up", "harvest", "regate", "final-eyes", "post-review-harvest", "post-harvest-shipper", "fixture-maintenance"].includes(scenario)) throw Error("Usage: node scripts/pi-convergence-pressure.mjs evidence|product|follow-up|harvest|regate|final-eyes|post-review-harvest|post-harvest-shipper|fixture-maintenance");
 const cwd = mkdtempSync(join(tmpdir(), `pi-convergence-${scenario}-`));
 const agentDir = join(cwd, "agent");
 mkdirSync(agentDir);
@@ -27,6 +27,9 @@ const evidence = {
   harvest: { status: "completed", apply_status: "applied", current_head: true, current_plan: true, changes: [] },
   ...(scenario === "regate" ? { regate_pending: ["task-one"], regate_passed: [],
     context_return: "Old diary: reject oversized pages; this finding has since been fixed and reviewed." } : {}),
+  ...(scenario === "fixture-maintenance" ? { implementation_complete: false, capture: null,
+    reviews: { accepted: false, missing: ["harness-compliance"] }, harvest: null,
+    fixture_delta: "Existing retry test lacks an eligible owner in its setup; its behavioral assertions are unchanged. No hand has edited it in this new task." } : {}),
   ...(["final-eyes", "post-review-harvest"].includes(scenario) ? {
     final_review_done: scenario === "post-review-harvest",
     reviews: { phase: "final", accepted: scenario === "post-review-harvest",
@@ -53,10 +56,14 @@ const customTools = [
 ];
 if (scenario === "regate") customTools.push(tool("mark", "Record a native gate marker after its real preconditions are satisfied. This probe records the decision only.",
   Type.Object({ action: Type.String(), task_id: Type.String() }), { ok: true }));
-const local = ["evidence", "product", "regate"].includes(scenario);
+const local = ["evidence", "product", "regate", "fixture-maintenance"].includes(scenario);
 const promptPath = local ? "../core/pi/prompts/harness-task-runtime.md" : "../core/pi/prompts/harness-runtime.md";
 const contract = { task: { id: "task-one", complexity: "medium", scope_paths: ["src/delete.ts"], adversarial: { enabled: true } },
   dispatch_routes: Object.fromEntries(["harness-executor", "harness-sniper"].map((role) => [role, { ...piDispatchRoute(role, "medium"), complexity: "medium" }])) };
+if (scenario === "fixture-maintenance") Object.assign(contract.task, {
+  no_tests: true, locked_tests: [], scope_paths: ["test/retry.test.mjs"],
+  description: "Repair only the missing eligible owner in existing fixture setup; preserve assertions and production, run the affected existing test. No new behavioral obligation.",
+});
 const systemPrompt = readFileSync(new URL(promptPath, import.meta.url), "utf8") + (local ? `\n[HARNESS_TASK_RUN]${JSON.stringify({ contract })}[/HARNESS_TASK_RUN]` : "");
 const loader = new DefaultResourceLoader({ cwd, agentDir, settingsManager: settings, noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true, systemPrompt });
 await loader.reload();
@@ -66,6 +73,7 @@ assert.ok(session.getActiveToolNames().includes("subagent"), "pressure must actu
 const request = {
   evidence: "Retomada: o executor terminou DONE_WITH_CONCERNS por transporte da evidência de teste, agora corrigido e validado pelo host. Confirme a atualidade e escolha o próximo passo desta retomada.",
   product: "Novo finding aplicável ao produto: src/delete.ts:deleteRow omite owner_id no WHERE. O contrato aprovado exige ownership; corrija apenas esse predicado usando o teste congelado existente. Escolha e despache a mão apropriada; encerre após registrar esse primeiro dispatch.",
+  "fixture-maintenance": "Nova task aprovada para corrigir somente a precondição da fixture existente. O produto correto veio de commits históricos de outra sessão; nenhum produtor/capture existe nesta task. A fixture ainda não foi alterada. Escolha e execute somente o primeiro despacho apropriado para a mudança real. Não fabrique um RED nem alteração de produção.",
   "follow-up": "O adversary final retornou o follow-up diagnóstico descrito no recibo. Decida se é necessária outra revisão para tratar esse relatório. Inclua o diagnóstico no resumo.",
   harvest: "Todas as tasks estão integradas e a colheita terminou com changes: []. Não houve alteração de código, plano ou memória desde então. Confirme a atualidade da colheita e decida se deve convocar o harvester novamente.",
   regate: "A task retornou pronta, mas a inspeção host informa task re-gate is still pending. O código já contém a correção de payload com 101 itens, os testes estão verdes, a captura é atual e os olhos aprovaram esse HEAD. O diário antigo ainda descreve o finding como aberto. Resolva somente a obrigação local faltante e encerre, sem integração global.",
@@ -82,7 +90,10 @@ try {
   writeFileSync(join(cwd, "result.json"), JSON.stringify(result, null, 2));
   console.log(JSON.stringify({ result: join(cwd, "result.json"), elapsed_ms: result.elapsed_ms, calls }));
   const dispatches = calls.filter((call) => call.name === "subagent");
-  if (scenario === "product") {
+  if (scenario === "fixture-maintenance") {
+    assert.equal(dispatches.length, 1, "one hand for the real fixture delta, without pre-applied test-author work");
+    assert.equal(dispatches[0].args.subagent_type, "harness-executor");
+  } else if (scenario === "product") {
     assert.equal(dispatches.length, 1, "one focal product writer");
     assert.equal(dispatches[0].args.subagent_type, "harness-sniper");
   } else if (scenario === "final-eyes") {
