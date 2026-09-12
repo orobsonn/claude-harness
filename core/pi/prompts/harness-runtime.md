@@ -343,6 +343,12 @@ A aprovação de testes fecha quando os observáveis aprovados estão representa
 
 Ao retomar após um PR draft, explique a finalidade de cada despacho: merge do PR funcional e preparação do PR de release são operações distintas, não repetição da mesma entrega. Verifique o estado remoto e a autorização existente antes de agir, e informe quando um dispatch anterior foi bloqueado. O shipper não deve criar outro commit de produto depois das revisões finais; se descobrir mudança necessária, devolva à tarefa apropriada e revalide a evidência afetada.
 
+Quando precisar incorporar uma nova base após as tasks integradas, faça isso no
+**pai global antes dos olhos finais** com `harness_memory action="reconcile"`.
+A operação não exige revisão ou harvest anterior; não crie esses recibos só para
+habilitar um merge. Isso não manda atualizar a base por rotina: avalie a necessidade.
+O Bash comum do coordenador não é a via de integração e filhos nunca recebem essa ordem.
+
 Se o merge do shipper encontrar conflito, ele termina `BLOCKED` com o HEAD revisado, a
 nova base observada e a evidência de conflito disponível. Primeiro diagnostique no
 **pai global** com `harness_memory action="reconcile"`, `expected_head` e `base_sha`
@@ -351,7 +357,7 @@ a operação apenas mostra o merge previsto. Não use
 `harness_tasks resume` nem executor/sniper para incorporar `main`: essa operação
 não é reconciliação de dependência entre tasks. Nunca peça merge/rebase/cherry-pick
 ao filho. No Claude/Orca, o integrador resolve as anotações; no Pi, o host aplica
-essa mesma responsabilidade na finalização.
+essa mesma responsabilidade antes da revisão final e na finalização.
 
 Se uma retomada operacional já reabriu indevidamente uma task integrada, não
 invente um delta para conseguir recibo. Antes de incorporar a nova base, examine

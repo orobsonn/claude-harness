@@ -116,7 +116,8 @@ export function reconcileMemoryDelivery(projectRoot, sessionId, { expected_head,
   const root = paths.root;
   const state = JSON.parse(readSmall(join(paths.directory, "gate-state.json"), 1024 * 1024) ?? "null");
   if (!state || state.session_id !== sessionId || state.task_run) throw new Error("Delivery reconciliation belongs to the global parent");
-  if (!finalizationStarted(root, sessionId)) throw new Error("Delivery reconciliation requires an existing finalization; use task coordination during implementation");
+  // Incorporate the input before reviewing it. Host identity, exact Git inputs and
+  // safe conflict handling govern this operation; a merge never grants approval.
   if (![expected_head, base_sha].every((value) => typeof value === "string" && /^[a-f0-9]{40}$/.test(value)))
     throw new Error("Use explicit full expected_head and base_sha commit SHAs");
   if (gitMemory(root, ["rev-parse", "--show-toplevel"]) !== root) throw new Error("Reconciliation requires the canonical worktree root");

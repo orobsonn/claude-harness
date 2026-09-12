@@ -25,7 +25,7 @@ const REPORT_DIGEST = createHash("sha256").update(JSON.stringify(EMPTY_REPORT)).
 
 // Sanitized boundary from #208/#210: after final eyes and harvest, another run
 // appended memory and merged product. The PR conflicts only in MEMORY.md.
-function parallelDelivery(t, { productConflict = false, memoryConflict = true } = {}) {
+function parallelDelivery(t, { productConflict = false, memoryConflict = true, beforeFinalReview = false } = {}) {
   const { root } = fixture(t);
   const git = (...args) => execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
   git("config", "user.name", "Pi fixture");
@@ -43,10 +43,15 @@ function parallelDelivery(t, { productConflict = false, memoryConflict = true } 
   git("add", "MEMORY.md", "product.txt"); git("commit", "-qm", "feat: parallel delivery");
   const base_sha = git("rev-parse", "HEAD");
   git("checkout", "-q", "--detach", expected_head);
-  seed(root, expected_head, { accepted: true, input_digest: currentInput(root).input_digest,
-    report_digest: REPORT_DIGEST, report: EMPTY_REPORT });
-  completeHarvest(beginHarvest(root, SESSION), '[HARNESS_HARVEST_RESULT]{"changes":[]}[/HARNESS_HARVEST_RESULT]', "native-harvester");
-  assert.ok(checkMemoryShipperReady(root, SESSION));
+  if (beforeFinalReview) {
+    writeFileSync(join(root, ".pi/harness/state", SESSION, "gate-state.json"),
+      JSON.stringify({ session_id: SESSION, feature_id: FEATURE }));
+  } else {
+    seed(root, expected_head, { accepted: true, input_digest: currentInput(root).input_digest,
+      report_digest: REPORT_DIGEST, report: EMPTY_REPORT });
+    completeHarvest(beginHarvest(root, SESSION), '[HARNESS_HARVEST_RESULT]{"changes":[]}[/HARNESS_HARVEST_RESULT]', "native-harvester");
+    assert.ok(checkMemoryShipperReady(root, SESSION));
+  }
   return { root, git, expected_head, base_sha };
 }
 
@@ -79,6 +84,28 @@ test("parallel finalization reconciles memory on the host, preserves receipts an
     report_digest: REPORT_DIGEST, report: EMPTY_REPORT });
   completeHarvest(beginHarvest(root, SESSION), '[HARNESS_HARVEST_RESULT]{"changes":[]}[/HARNESS_HARVEST_RESULT]', "native-harvester-new-base");
   assert.equal(checkMemoryShipperReady(root, SESSION).head, merged.head);
+});
+
+for (const memoryConflict of [false, true]) test(`host can reconcile before first final review without manufacturing approval (memory conflict: ${memoryConflict})`, (t) => {
+  const { root, git, ...input } = parallelDelivery(t, { memoryConflict, beforeFinalReview: true });
+  const statePath = join(root, ".pi/harness/state", SESSION, "gate-state.json");
+  const stateBefore = readFileSync(statePath, "utf8");
+  assert.equal(memoryCycle.finalizationStarted(root, SESSION), false);
+  const preview = memoryCycle.reconcileMemoryDelivery(root, SESSION, input);
+  assert.equal(git("rev-parse", "HEAD"), input.expected_head);
+  assert.equal(git("status", "--porcelain"), "");
+  const resolutions = preview.conflicts.map((entry) => ({ path: entry.path, before_sha256: entry.sha256,
+    patch: { old_text: entry.content.match(/^<<<<<<<[^\n]*\n[\s\S]*?^>>>>>>>[^\n]*\n/m)[0],
+      new_text: "Local learning.\nUpstream learning.\n" } }));
+  const merged = memoryCycle.reconcileMemoryDelivery(root, SESSION, { ...input, resolutions });
+  assert.equal(merged.applied, true);
+  assert.equal(readFileSync(join(root, "product.txt"), "utf8"), "upstream product\n");
+  assert.equal(readFileSync(statePath, "utf8"), stateBefore);
+  assert.equal(memoryCycle.finalizationStarted(root, SESSION), false, "a merge must not open finalization or approve eyes");
+  assert.deepEqual(missingPiReviewRoles({ projectRoot: root, sessionId: SESSION, featureId: FEATURE,
+    phase: "final", roles: ["harness-adversary", "harness-compliance"] }), ["harness-adversary", "harness-compliance"]);
+  assert.throws(() => beginHarvest(root, SESSION), /review|evidence/i);
+  assert.throws(() => checkMemoryShipperReady(root, SESSION), /review|harvest|changed/i);
 });
 
 test("clean delivery merge requires explicit application and does not invent a memory patch or writer", (t) => {
