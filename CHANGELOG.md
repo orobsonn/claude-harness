@@ -5,6 +5,13 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [3.0.0](https://github.com/orobsonn/claude-harness/compare/v2.6.26...v3.0.0) (2026-09-12)
+
+
+### Chores
+
+* consolida validação do Pi Harness 3.0.0 ([4310ab2](https://github.com/orobsonn/claude-harness/commit/4310ab2ce2d3d7be01a24b349d4394f32275a8a5))
+
 ## [2.6.26](https://github.com/orobsonn/claude-harness/compare/v2.6.25...v2.6.26) (2026-09-12)
 
 
