@@ -120,13 +120,13 @@ export default function harnessMemory(pi: ExtensionAPI) {
   pi.registerTool({
     name: "harness_memory", label: "Harness memory",
     description: "Read project memory and this run's curated shared_context, update that ephemeral document, apply a validated harvest proposal, reconcile a delivery base on the global host, or finalize delivery and remove ephemeral context.",
-    promptSnippet: "Keep useful run discoveries with harness_memory update; apply a validated harvest proposal; finalize after delivery.",
+    promptSnippet: "Keep useful run discoveries with harness_memory update; reconcile a required base before final review or shipping; apply a validated harvest proposal; finalize after delivery.",
     promptGuidelines: [
       "Keep shared_context under 8192 UTF-8 bytes: concise facts, assumptions and decisions with evidence and revalidation conditions. No secrets, transcripts or gate approvals.",
       "The parent receives the current shared_context automatically as ephemeral custom context. Do not reread unchanged memory; use read only for structured hashes, harvest receipts or explicit diagnostics.",
       "Use only this session's context. Reviewers never inherit the diary; relay relevant facts to hands selectively.",
       "After final eyes approve the committed aggregate, finish any rework and revalidation, mark final-review, then dispatch [HARNESS_HARVEST]. Apply a non-empty validated proposal and commit only its exact durable paths before shipper. This host-bound memory-only delta preserves final approvals; product changes require current eyes again. Never create a plan task for harvest.",
-      "For a shipping base conflict, use reconcile on the global parent, never task resume or a writer. Supply full expected_head/base_sha. Omit resolutions for a read-only preview; supply [] for a clean merge or one hash-bound literal patch per durable-memory conflict. Preserve both sides' verified knowledge; never replace a document from an excerpt. Product conflicts stop without mutation. After integration, inspect changes and revalidate final input before harvest/shipping; no old receipt is promoted.",
+      "When a new base must be incorporated, use reconcile on the global parent before the first final review, or for a shipping base conflict; never task resume or a writer. Do not review or harvest just to unlock a merge. Supply full expected_head/base_sha. Omit resolutions for a read-only preview; supply [] for a clean merge or one hash-bound literal patch per durable-memory conflict. Preserve both sides' verified knowledge; never replace a document from an excerpt. Product conflicts stop without mutation. After integration, inspect changes and revalidate final input before harvest/shipping; no old receipt is promoted.",
       "Call finalize only when delivery is complete. Quit, abort or a pause is not completion; preserve the document for exact-session resume.",
     ],
     parameters: Type.Object({ action: StringEnum(["read", "update", "apply", "reconcile", "finalize"] as const), content: Type.Optional(Type.String()),
