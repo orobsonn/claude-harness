@@ -790,6 +790,10 @@ test("dedicated test reviewer accepts consistent boundary approvals in persisted
 test("reconciled dependencies keep original audit paths but require fresh reviews and exact host merge proof", () => {
   const f = inspectionFixture();
   appendImplementationReviews(f);
+  const specPath = path.join(f.root, ".pi/harness/plans", FEATURE, "spec.md");
+  write(specPath, "Approved dependency recovery spec\n");
+  f.entry.spec_sha256 = f.dependencies.readTaskRunBindingFn().grant.spec_sha256 =
+    crypto.createHash("sha256").update(fs.readFileSync(specPath)).digest("hex");
   // A correction outside the dependent task scope is supplied only by a host merge.
   run(f.root, "git", "checkout", "-b", "parent-correction", f.base);
   write(path.join(f.root, "upstream.mjs"), "export const corrected = true;\n");
@@ -800,7 +804,7 @@ test("reconciled dependencies keep original audit paths but require fresh review
   run(f.root, "git", "merge", "--no-ff", "-m", "host dependency merge", parent);
   const head = run(f.root, "git", "rev-parse", "HEAD");
   const planPath = path.join(f.root, ".pi/harness/plans", FEATURE, "execution-plan.json");
-  write(planPath, { tasks: [{ id: "upstream", depends_on: [] }, { id: "unregistered", depends_on: [] }, { id: TASK, depends_on: ["upstream"] }] });
+  write(planPath, { feature_id: FEATURE, tasks: [{ id: "upstream", depends_on: [] }, { id: "unregistered", depends_on: [] }, { id: TASK, depends_on: ["upstream"] }] });
   fs.appendFileSync(path.join(f.root, ".git/info/exclude"), "\n.pi/harness/plans/\n");
   f.entry.plan_sha256 = crypto.createHash("sha256").update(fs.readFileSync(planPath)).digest("hex");
   f.dependencies.readTaskRunBindingFn().grant.plan_sha256 = f.entry.plan_sha256;
@@ -875,13 +879,67 @@ test("reconciled dependencies keep original audit paths but require fresh review
   const recaptured = inspectTaskRun(f.entry, f.dependencies);
   assert.equal(recaptured.ok, true, recaptured.reason);
   assert.equal(recaptured.result.hand_capture.producer_call_id, hand.producerCallId);
+  // The exact inspection emitted above must remain consumable after integration
+  // and reopening; preserving capture only at status is not sufficient.
+  const grant = { ...f.dependencies.readTaskRunBindingFn().grant, version: 1, kind: "task-run",
+    origin: { kind: "parent-approved-plan", plan_review_call_id: "plan-current" } };
+  write(path.join(f.root, ".pi/harness/state", PARENT, "gate-state.json"), {
+    session_id: PARENT, feature_id: FEATURE, mode: "FULL", spec_status: "adversary-reviewed",
+    reviewed_spec_sha256: f.entry.spec_sha256, adversary_fired: true, adversary_spec_sha256: f.entry.spec_sha256,
+    plan_review_evidence: { written_by: "host-subagent-completion", parent_session_id: PARENT,
+      feature_id: FEATURE, role: "harness-plan-reviewer", status: "completed", verdict: "APPROVE",
+      dispatch_call_id: "plan-current", child_session_id: "plan-child", agent_id: "plan-agent",
+      plan_sha256: f.entry.plan_sha256, spec_sha256: f.entry.spec_sha256 },
+  });
+  const result = recaptured.result;
+  const integration = { version: 1, written_by: "host-task-integration", parent_session_id: PARENT,
+    feature_id: FEATURE, task_id: TASK, attempt_id: ATTEMPT, parent_root: f.root, worktree: f.root,
+    session_id: CHILD, plan_sha256: f.entry.plan_sha256, spec_sha256: f.entry.spec_sha256,
+    base_sha: f.base, child_head: head, integrated_head: head, result_sha256: hashTaskReceipt(result) };
+  registry.tasks[TASK] = { ...f.entry, grant, status: "integrated", result, integration };
+  write(registryPath, registry);
+  const readFinal = () => readIntegratedTaskEvidence({ projectRoot: f.root, sessionId: PARENT,
+    featureId: FEATURE, taskId: TASK, headSha: head });
+  const registryBefore = fs.readFileSync(registryPath, "utf8");
+  for (let restart = 0; restart < 2; restart++) {
+    const final = readFinal();
+    assert.equal(final.ok, true, final.reason);
+    assert.equal(fs.readFileSync(registryPath, "utf8"), registryBefore, "final read must not rewrite receipt hashes");
+  }
   const validReplay = fs.readFileSync(launch.events_path, "utf8");
   for (const override of [{ head_sha: f.head }, { worktree_clean: false }, { producer_call_id: "foreign" }, { task_id: "other-task" }]) {
     const rows = validReplay.trim().split("\n").map(JSON.parse);
     Object.assign(rows.find((row) => row.type === "tool_execution_end").result.details.capture_origin, override);
     write(launch.events_path, rows.map(JSON.stringify).join("\n") + "\n");
     assert.equal(inspectTaskRun(f.entry, f.dependencies).ok, false, JSON.stringify(override));
+    assert.equal(readFinal().ok, false, `final gate must reject ${JSON.stringify(override)}`);
   }
+  const foreignSession = validReplay.replace(`"id":"${CHILD}"`, '"id":"foreign-child"');
+  write(launch.events_path, foreignSession);
+  assert.equal(readFinal().ok, false, "foreign child event stream is not capture authority");
+  const originalEvents = fs.readFileSync(oldLaunch.events_path, "utf8");
+  write(oldLaunch.events_path, originalEvents + validReplay);
+  write(launch.events_path, event("session", { id: CHILD }) + "\n");
+  assert.equal(readFinal().ok, false, "capture before the reconciliation launch cannot approve final evidence");
+  write(oldLaunch.events_path, originalEvents);
+  write(launch.events_path, validReplay);
+  assert.equal(readFinal().ok, true, "restored native evidence revalidates without rewriting the integrated receipt");
+  const interruptedEntry = structuredClone(registry.tasks[TASK]);
+  interruptedEntry.launches.splice(1, 0, { ...oldLaunch, run_id: "interrupted-history",
+    events_path: path.join(f.entry.job_dir, "interrupted-history", "events.jsonl") });
+  interruptedEntry.result.launches.splice(1, 0, { ...result.launches[0], run_id: "interrupted-history",
+    interrupted: true, exit_code: null, signal: "UNKNOWN", ended_at: null });
+  interruptedEntry.integration.result_sha256 = hashTaskReceipt(interruptedEntry.result);
+  registry.tasks[TASK] = interruptedEntry;
+  write(registryPath, registry);
+  const interruptedFinal = readFinal();
+  assert.equal(interruptedFinal.ok, true, interruptedFinal.reason);
+  delete interruptedEntry.result.launches[1].interrupted;
+  interruptedEntry.integration.result_sha256 = hashTaskReceipt(interruptedEntry.result);
+  write(registryPath, registry);
+  assert.equal(readFinal().ok, false, "missing ordinary launch events still fail closed");
+  registry.tasks[TASK] = { ...f.entry, grant, status: "integrated", result, integration };
+  write(registryPath, registry);
   write(launch.events_path, beforeReplay);
   write(handPath, { ...hand, freezeCommitSha: head, producerCallId: "recovered-producer" });
   state.capture_verified = [`${bare}@${head}`];

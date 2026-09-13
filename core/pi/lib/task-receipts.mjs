@@ -183,6 +183,22 @@ function readEvents(launches, jobRoot, interruptedIndexes = new Set()) {
   return { events, sessionIds };
 }
 
+// Capture replay observes the reconciled HEAD without rewriting the producer's
+// original freeze. Inspection and final integration reads must use the same proof.
+function hasReconciledCapture(entry, native, { projectRoot, sessionId, producerCallId, headSha }) {
+  const reconciliation = entry.reconciliations?.at(-1);
+  if (!reconciliation || native.sessionIds.size !== 1 || !native.sessionIds.has(sessionId)) return false;
+  return native.events.some((event) => {
+    if (event.launchIndex < reconciliation.launch_count || event.tool !== "mark" ||
+        event.args?.action !== "capture-verified" || event.args?.task_id !== entry.task_id || !markerSucceeded(event)) return false;
+    let metadata = event.end.result?.details;
+    if (!metadata?.capture_origin) { try { metadata = JSON.parse(eventText(event.end.result)); } catch { return false; } }
+    const origin = metadata?.capture_origin;
+    return origin?.task_id === entry.task_id && origin.producer_call_id === producerCallId &&
+      origin.worktree_clean === true && origin.head_sha === headSha && ancestor(projectRoot, reconciliation.merged_head, headSha);
+  });
+}
+
 function commitFromEvent(event, worktree) {
   if (event?.tool !== "bash" || !/\bgit\s+commit\b/.test(event.args?.command ?? "") || !event.end || event.end.isError === true) return null;
   const text = eventText(event.end.result);
@@ -501,15 +517,8 @@ export function inspectTaskRun(entry, dependencies = {}) {
     const reconciliation = entry.reconciliations?.at(-1);
     // A native replay captures the current clean HEAD without rewriting the
     // original producer's SHA. Host reconciliation alone needs no no-op writer.
-    const reconciledCapture = reconciliation && native.events.some((event) => {
-      if (event.launchIndex < reconciliation.launch_count || event.tool !== "mark" ||
-          event.args?.action !== "capture-verified" || event.args?.task_id !== entry.task_id || !markerSucceeded(event)) return false;
-      let metadata = event.end.result?.details;
-      if (!metadata?.capture_origin) { try { metadata = JSON.parse(eventText(event.end.result)); } catch { return false; } }
-      const origin = metadata?.capture_origin;
-      return origin?.task_id === entry.task_id && origin.producer_call_id === hand.producerCallId &&
-        origin.worktree_clean === true && origin.head_sha === head && ancestor(worktree, reconciliation.merged_head, head);
-    });
+    const reconciledCapture = hasReconciledCapture(entry, native, { projectRoot: worktree,
+      sessionId: claim.session_id, producerCallId: hand.producerCallId, headSha: head });
     if (reconciliation && !reconciledCapture && !ancestor(worktree, reconciliation.merged_head, hand.freezeCommitSha))
       return failure("current hand requires a new capture after dependency reconciliation");
     const isImplementationForTask = (event) => event.tool === "subagent" &&
@@ -740,11 +749,21 @@ function validateIntegration(entry, integration, { projectRoot, sessionId, featu
       (result.reconciliation_sha256 ?? null) !== taskReconciliationDigest(entry))
     return failure("task integration reconciliation proof differs from its inspection receipt");
   const reconciliation = entry.reconciliations?.at(-1);
-  if (reconciliation && (!ancestor(projectRoot, reconciliation.merged_head, result.hand_capture.freeze_sha) ||
-      !Number.isInteger(result.hand_capture.producer_launch_index) ||
-      result.hand_capture.producer_launch_index < reconciliation.launch_count ||
-      result.hand_capture.producer_launch_index >= entry.launches.length))
-    return failure("integrated hand capture must follow dependency reconciliation");
+  if (reconciliation) {
+    const producerIndex = result.hand_capture.producer_launch_index;
+    if (!Number.isInteger(producerIndex) || producerIndex < 0 || producerIndex >= entry.launches.length)
+      return failure("integrated hand capture producer launch is invalid");
+    if (!ancestor(projectRoot, reconciliation.merged_head, result.hand_capture.freeze_sha) || producerIndex < reconciliation.launch_count) {
+      // Re-read the original host-owned event stream, including for v3.0.1 receipts.
+      // Never rewrite an already hashed inspection/integration to retrofit approval.
+      const jobRoot = fs.realpathSync(entry.job_dir);
+      const interruptedIndexes = new Set(result.launches.flatMap((launch, index) =>
+        launch.interrupted === true && launch.run_id === entry.launches[index]?.run_id ? [index] : []));
+      if (jobRoot !== path.resolve(entry.job_dir) || !hasReconciledCapture(entry, readEvents(entry.launches, jobRoot, interruptedIndexes), {
+        projectRoot, sessionId: result.session_id, producerCallId: result.hand_capture.producer_call_id, headSha: result.child_head,
+      })) return failure("integrated hand capture must follow dependency reconciliation");
+    }
+  }
   if (!COMMIT_SHA.test(headSha ?? "") || !ancestor(projectRoot, result.base_sha, result.child_head) ||
       !ancestor(projectRoot, result.child_head, integration.integrated_head) || !ancestor(projectRoot, integration.integrated_head, headSha)) {
     return failure("task integration is not ancestral to the requested HEAD");

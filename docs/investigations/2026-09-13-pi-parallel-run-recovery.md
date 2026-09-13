@@ -50,3 +50,32 @@ capture inspector cannot fix #237; distribute the source correction officially
 before its next inspection. Never manually fabricate accepted receipts, reset
 the task registry, vendor runtime by copying directories, or re-run writers only
 to confirm an unchanged HEAD.
+
+## Follow-up: integration accepted, final reader still rejected
+
+Release v3.0.1 (source PR #971, Release Please #972) allowed Victor #237 to
+integrate task-2 without another child launch. At 02:14 UTC, however, the final
+review marker rejected the same integrated evidence. `validateIntegration`
+still required the producer's original freeze to follow the dependency merge.
+This was a second reader of the same proof, missed by the first regression.
+
+The scoped correction shares the native capture-origin check with inspection.
+For an already hashed integration whose producer predates reconciliation, the
+reader verifies the original host-owned event stream instead of rewriting the
+receipt or requiring another writer. Current clean HEAD, task, child session,
+producer, reconciliation launch interval and merge ancestry must still match.
+Previously authenticated interrupted launches retain their existing tolerance
+for missing historical event files; ordinary missing evidence still fails.
+
+The regression now consumes the inspection result through the final integrated
+evidence reader, reopens it, and checks unchanged registry bytes. Negative cases
+cover stale/dirty HEAD, foreign producer/task/session, pre-reconciliation capture
+and missing ordinary launch events. The actual #237 final reader succeeds at
+`60b0d90bb634fb127639c13a0f2003c1fd3fc4f1` without changing registry bytes.
+This probe alone is not evidence that the live final ceremony has completed.
+
+At 02:25 UTC the recovered Lainny #18 session reported final reviews, harvest,
+product PR #99, release PR #100 and v0.9.0 completed. Victor #228's metadata-only
+repair PR #350 passed CI and merged at `6f3bf4914234557490fb27ecddae8a22803c7f95`;
+v0.21.0 tag and GitHub Release were subsequently verified at that exact commit.
+Publication was repaired externally, not by fabricating legacy session receipts.
