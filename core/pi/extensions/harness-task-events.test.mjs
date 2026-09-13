@@ -320,3 +320,22 @@ test("the first parent start requires matching native header and runtime session
   assert.match(f.notifications[0][0], /session header identity mismatch/);
   assert.deepEqual(f.lines(), []);
 });
+
+
+test("TUI persists the local assistant report before shutdown without private thinking or nested reports", (t) => {
+  const f = fixture(t);
+  f.handlers.get("session_start")({}, f.ctx);
+  const message = { role: "assistant", stopReason: "stop", content: [
+    { type: "thinking", thinking: "private", thinkingSignature: "secret" },
+    { type: "text", text: "BLOCKED: recovery test conflicts with proposed fix." },
+  ] };
+  f.handlers.get("message_end")({ message }, f.ctx);
+  assert.deepEqual(f.lines().at(-1), { type: "message_end", message: {
+    role: "assistant", stopReason: "stop", content: [message.content[1]],
+  } });
+  const before = f.lines().length;
+  f.handlers.get("message_end")({ message: { role: "user", content: [{ type: "text", text: "DONE" }] } }, f.ctx);
+  assert.equal(f.lines().length, before);
+  f.handlers.get("agent_end")({}, f.ctx);
+  assert.equal(f.lines().at(-1).message.content[0].text, message.content[1].text);
+});

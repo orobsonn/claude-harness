@@ -2017,3 +2017,53 @@ test("only the exact blocked dependent can read its corrected upstream during re
     assert.equal(readIntegratedTaskEvidence({ ...input, reconciliationFor: context }).ok, false);
   }
 });
+
+
+test("uncaptured corrective hand exposes its conflict and current findings without approving the task", () => {
+  const f = inspectionFixture();
+  const handPath = path.join(f.root, ".pi", "harness", "state", "hand-records", FEATURE, CHILD, `${TASK}.json`);
+  const hand = JSON.parse(fs.readFileSync(handPath, "utf8"));
+  write(handPath, { ...hand, outcome: "DONE_WITH_CONCERNS", capturedVerifiedAt: null });
+  const report = "Fix suggestion contradicts recovery test; 12/13 passed. Status: DONE_WITH_CONCERNS";
+  const eventsPath = f.entry.launches.at(-1).events_path;
+  write(eventsPath, replaceEventText(fs.readFileSync(eventsPath, "utf8"), "producer", report));
+  const state = JSON.parse(fs.readFileSync(f.statePath, "utf8"));
+  const security = state.task_review_evidence[FEATURE + "/" + TASK].security;
+  security.accepted = false;
+  security.report = { issues: [{ description: "Replay changes historical attribution", scope: "src/task.mjs",
+    evidence: "alarm reuses replay time", fix_hint: "Preserve attribution", severity: "medium", category: "idempotency" }] };
+  security.report_digest = crypto.createHash("sha256").update(JSON.stringify(security.report)).digest("hex");
+  write(f.statePath, state);
+  const final = event("message_end", { message: { role: "assistant", stopReason: "stop",
+    content: [{ type: "text", text: "BLOCKED: distinguish interrupted recovery from completed duplicate." }] } });
+  fs.appendFileSync(eventsPath, final + "\n");
+  const blocked = inspectTaskRun(f.entry, f.dependencies);
+  assert.equal(blocked.ok, false);
+  assert.match(blocked.reason, /capture is invalid/);
+  assert.equal(blocked.result, undefined);
+  assert.equal(blocked.details.hand_report.text, report);
+  assert.match(blocked.details.task_report.text, /distinguish interrupted/);
+  assert.deepEqual(blocked.details.review_findings, [{ role: "harness-security", issues: security.report.issues }]);
+
+  security.input_digest = "0".repeat(64);
+  write(f.statePath, state);
+  write(handPath, { ...hand, producerCallId: "foreign", capturedVerifiedAt: null });
+  fs.appendFileSync(eventsPath, event("tool_execution_start", { toolCallId: "new-work", toolName: "read", args: {} }) + "\n");
+  const stale = inspectTaskRun(f.entry, f.dependencies);
+  assert.equal(stale.ok, false);
+  assert.equal(stale.details.hand_report, undefined);
+  assert.equal(stale.details.task_report, undefined);
+  assert.deepEqual(stale.details.review_findings, []);
+});
+
+test("failed launch explains timeout without issuing a receipt", () => {
+  const f = inspectionFixture();
+  f.dependencies.readTaskProcessFn = () => ({ ok: true, terminal: true, result: {
+    exitCode: null, signal: "SIGTERM", timedOut: true, ended_at: "2026-09-13T17:01:29.259Z",
+  } });
+  const blocked = inspectTaskRun(f.entry, f.dependencies);
+  assert.equal(blocked.ok, false);
+  assert.equal(blocked.result, undefined);
+  assert.equal(blocked.details.launch_failure.timed_out, true);
+  assert.equal(blocked.details.launch_failure.signal, "SIGTERM");
+});

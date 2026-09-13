@@ -133,6 +133,23 @@ comandos de `final_review.parent_verification`; a suite global pertence ao pai f
 Despache adversary, compliance e security
 aplicáveis como um lote consolidado sobre esse HEAD imutável e aguarde todos antes de
 corrigir. Consolide os defeitos concretos e peça a menor correção necessária.
+Antes de despachar uma correção, separe o defeito demonstrado da sugestão `fix_hint`.
+Um achado válido não torna sua solução sugerida parte do contrato. Confronte a sugestão
+com a spec, o Given/When/Then e as precondições do teste congelado. Se ela conserta um
+cenário quebrando outro obrigatório, resolva a distinção entre os estados antes de
+chamar outra mão; entregue um único brief que preserve ambos os comportamentos.
+Quando a divergência for uma precondição comprovadamente ausente na fixture congelada,
+primeiro despache test-author para corrigir essa fixture autorizada e revalide a fidelidade;
+não envie o executor/sniper implementar contra o mesmo teste sabidamente incorreto.
+Preserve as asserções que representam o contrato e acrescente somente a precondição real.
+Não alterne ordens incompatíveis nem trate "não alterar testes" como solução para
+uma contradição. Teste incorreto usa a recuperação focal existente; defeito real com
+teste fiel exige outra solução de produto. Se faltarem fatos para decidir, investigue
+somente essa fronteira. Se não houver solução no escopo aprovado, retorne BLOCKED com
+o critério, o teste, o finding e a decisão ou dependência exata que falta.
+Registre esse diagnóstico também no diário local via harness_memory update antes de
+encerrar. Não reverta todo o delta apenas porque uma parte foi rejeitada: preserve a
+correção independente que satisfaz o contrato, com verificação focal pela mão autorizada.
 Os receipts identificam o HEAD/input digest revisado. Um positivo ancestral por task
 pode manter satisfeita a obrigação daquele olho após correção de outro finding,
 mas não certifica o novo HEAD. Após um finding, revalide o olho que o produziu e somente outros olhos

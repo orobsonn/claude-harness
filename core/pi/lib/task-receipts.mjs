@@ -155,7 +155,9 @@ function readEvents(launches, jobRoot, interruptedIndexes = new Set()) {
   const events = [];
   const calls = new Map();
   const sessionIds = new Set();
+  let report = null;
   launches.forEach((launch, launchIndex) => {
+    report = null; // Never replay a report from an earlier launch after resume.
     let file;
     try { file = regularFile(launch.events_path, jobRoot, MAX_EVENTS_BYTES); }
     catch (error) {
@@ -170,7 +172,12 @@ function readEvents(launches, jobRoot, interruptedIndexes = new Set()) {
       let native;
       try { native = JSON.parse(raw); } catch { continue; }
       if (native?.type === "session" && typeof native.id === "string") sessionIds.add(native.id);
+      if (native?.type === "message_end" && native.message?.role === "assistant") {
+        report = native.message.stopReason === "stop"
+          ? { launchIndex, line, text: eventText(native.message) } : null;
+      }
       if (native?.type === "tool_execution_start" && typeof native.toolCallId === "string") {
+        report = null; // An intermediate answer is not the task's final report.
         const event = { launchIndex, line, callId: native.toolCallId, tool: native.toolName, args: object(native.args) ?? {}, end: null };
         calls.set(`${launchIndex}:${native.toolCallId}`, event);
         events.push(event);
@@ -180,7 +187,7 @@ function readEvents(launches, jobRoot, interruptedIndexes = new Set()) {
       }
     }
   });
-  return { events, sessionIds };
+  return { events, sessionIds, report };
 }
 
 // Capture replay observes the reconciled HEAD without rewriting the producer's
@@ -306,7 +313,10 @@ function validateLaunches(entry, jobRoot, readTaskProcessFn = readTaskProcess, a
     lifecycles.push(lifecycle);
   }
   const last = lifecycles.at(-1);
-  if (!allowFailedLatest && (last.exitCode !== 0 || last.timedOut || last.signal !== null)) return failure("latest task launch did not exit successfully");
+  if (!allowFailedLatest && (last.exitCode !== 0 || last.timedOut || last.signal !== null)) return failure("latest task launch did not exit successfully", {
+    launch_failure: { run_id: entry.launches.at(-1).run_id, exit_code: last.exitCode,
+      signal: last.signal, timed_out: last.timedOut === true, ended_at: last.ended_at },
+  });
   return { ok: true, lifecycles, interruptedIndexes };
 }
 
@@ -509,11 +519,38 @@ export function inspectTaskRun(entry, dependencies = {}) {
     const handPath = piHandRecordPath({ projectRoot: worktree, sessionId: claim.session_id, featureId: entry.feature_id }, entry.task_id);
     const state = readJson(statePath.path, worktree);
     const hand = readJson(handPath.path, worktree);
-    if (!isCaptureEligibleHandRecord(hand)) return failure("current child hand record is not capture-eligible", contextDiagnostics);
+    const blockedDiagnostics = (currentReviews) => {
+      const details = { ...contextDiagnostics };
+      const observedReport = native.report?.text;
+      if (observedReport?.trim()) details.task_report = {
+        session_id: claim.session_id, run_id: entry.launches.at(-1).run_id,
+        head_sha: head, text: observedReport.slice(0, 6000), truncated: observedReport.length > 6000,
+      };
+      const producer = native.events.findLast((event) => event.callId === hand?.producerCallId &&
+        event.tool === "subagent" && event.args?.subagent_type === hand.agent &&
+        taskFromPrompt(event.args?.prompt) === entry.task_id && eventSucceeded(event));
+      if (hand?.sessionId === claim.session_id && hand.featureId === entry.feature_id &&
+          hand.taskId === entry.task_id && producer?.launchIndex === entry.launches.length - 1) {
+        const text = eventText(producer.end.result);
+        if (text.trim()) details.hand_report = { producer_call_id: producer.callId,
+          agent: hand.agent, text: text.slice(0, 6000), truncated: text.length > 6000 };
+      }
+      // These are explanations only. Capture/fidelity/review failures below retain
+      // their authority; a DONE sentence must never produce a ready receipt.
+      try {
+        const reviews = currentReviews ?? validateCurrentReviews({ state, events: native.events, plan: binding.plan,
+          task: binding.task, projectRoot: worktree, sessionId: claim.session_id,
+          featureId: entry.feature_id, taskId: entry.task_id, head,
+          captureReviewInputFn: dependencies.captureReviewInputFn ?? capturePiReviewInput });
+        details.review_findings = reviews.details?.review_findings ?? [];
+      } catch { /* Unavailable review evidence cannot hide the original capture failure. */ }
+      return details;
+    };
+    if (!isCaptureEligibleHandRecord(hand)) return failure("current child hand record is not capture-eligible", blockedDiagnostics());
     const identity = validateOcCaptureEligibleHandRecord(hand, { featureId: entry.feature_id, taskId: entry.task_id, sessionId: claim.session_id });
     const violations = recordViolations(hand);
     if (!identity.ok || violations.scope.length || violations.frozen.length || typeof hand.capturedVerifiedAt !== "string" || !hand.capturedVerifiedAt ||
-        !COMMIT_SHA.test(hand.freezeCommitSha ?? "") || !ancestor(worktree, hand.freezeCommitSha, head)) return failure("current child hand capture is invalid", contextDiagnostics);
+        !COMMIT_SHA.test(hand.freezeCommitSha ?? "") || !ancestor(worktree, hand.freezeCommitSha, head)) return failure("current child hand capture is invalid", blockedDiagnostics());
     const reconciliation = entry.reconciliations?.at(-1);
     // A native replay captures the current clean HEAD without rewriting the
     // original producer's SHA. Host reconciliation alone needs no no-op writer.
@@ -595,11 +632,11 @@ export function inspectTaskRun(entry, dependencies = {}) {
       return failure("event-proven latest freeze lacks its persisted fidelity marker");
     }
     const capturePayload = formatFeatureTaskEntry(entry.feature_id, entry.task_id, hand.freezeCommitSha);
-    if (!Array.isArray(state.hand_finished) || !state.hand_finished.includes(bare) || !Array.isArray(state.capture_verified) || !state.capture_verified.includes(capturePayload)) return failure("current child capture markers are incomplete");
+    if (!Array.isArray(state.hand_finished) || !state.hand_finished.includes(bare) || !Array.isArray(state.capture_verified) || !state.capture_verified.includes(capturePayload)) return failure("current child capture markers are incomplete", blockedDiagnostics());
     const regatePending = (Array.isArray(state.regate_pending) ? state.regate_pending : []).filter((pending) =>
       typeof pending === "string" && (pending === bare || pending.startsWith(`${bare}@`)));
     const reviews = validateCurrentReviews({ state, events: native.events, plan: binding.plan, task: binding.task, projectRoot: worktree, sessionId: claim.session_id, featureId: entry.feature_id, taskId: entry.task_id, head, captureReviewInputFn: dependencies.captureReviewInputFn ?? capturePiReviewInput });
-    const diagnostics = { ...(contextReturn === null ? {} : { context_return: contextReturn }), review_findings: reviews.details?.review_findings ?? [] };
+    const diagnostics = { ...blockedDiagnostics(reviews), review_findings: reviews.details?.review_findings ?? [] };
     // Older LIGHT runtimes armed this marker after every executor although they have
     // no implementation-review obligation. Keep the historical marker untouched;
     // actual required/dispatched receipts (including negatives) still govern above.

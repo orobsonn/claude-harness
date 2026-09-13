@@ -182,6 +182,23 @@ export default function harnessTaskEvents(pi: ExtensionAPI) {
   pi.on("tool_execution_start", recordToolEvent);
   pi.on("tool_execution_end", recordToolEvent);
 
+  // TUI stdout is rendered, not JSON. Preserve only the assistant's public text
+  // so a blocked task can explain itself even when it never earned a capture.
+  pi.on("message_end", (event: any, ctx: any) => {
+    if (isChildSession(ctx) || ctx?.mode !== "tui" || disabled) return;
+    if (event.message?.role !== "assistant") return;
+    try {
+      assertOwner(ctx);
+      appendNative({ type: "message_end", message: {
+        role: "assistant", stopReason: event.message.stopReason,
+        content: (event.message.content ?? []).filter((part: any) => part.type === "text" && typeof part.text === "string")
+          .map((part: any) => ({ type: "text", text: part.text })),
+      } });
+    } catch (error) {
+      reportFailure(ctx, error);
+    }
+  });
+
   pi.on("agent_end", (_event, ctx: any) => {
     if (isChildSession(ctx) || ctx?.mode !== "tui" || disabled) return;
     try {

@@ -708,6 +708,9 @@ export async function executeTaskAction(params, context = {}, injected = {}) {
               current.context_return = inspected.details.context_return;
             if (inspected.details.review_findings !== undefined)
               current.review_findings = inspected.details.review_findings;
+            for (const field of ["task_report", "hand_report", "launch_failure"]) {
+              if (inspected.details[field] !== undefined) current[field] = inspected.details[field];
+            }
             if (Object.keys(current).length > 0)
               diagnostics[entry.task_id] = current;
           }

@@ -415,3 +415,12 @@ pendentes continuam protegidas. Ela apaga o `shared_context.md` e os payloads de
 e entrega da própria sessão, mantendo apenas um marcador de finalização sem o diário.
 Shutdown, abort ou entrega incompleta preserva esse buffer para retomada.
 Nunca apague buffers de outra sessão.
+
+Ao receber uma task bloqueada, leia os diagnósticos atuais de `harness_tasks status`
+(`task_report`, `hand_report`, `review_findings`, `context_return`, `launch_failure`)
+antes de decidir a retomada. São relatos/evidências para conferir, nunca aprovação.
+Reporte a causa concreta junto da pendência de gate; "capture is invalid" não prova
+que só falta um marker. Timeout com signal/ended_at é falha operacional, não finding
+de produto. Um conflito entre fix_hint e critério aprovado exige resolução focal,
+não outro "retome" com as mesmas instruções. Encaminhe um brief consistente à mesma
+tentativa e preserve a fidelidade/revisões ainda válidas, sem falsificar captura.

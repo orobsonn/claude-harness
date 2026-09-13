@@ -435,6 +435,9 @@ test("blocked status returns fresh diagnostics without persisting or replaying t
     ok: false,
     reason: "implementation review rejected the current HEAD",
     details: {
+      task_report: { text: "BLOCKED: conflicting contract", run_id: "current" },
+      hand_report: { text: "12/13 passed" },
+      launch_failure: { timed_out: true, signal: "SIGTERM" },
       context_return: contextReturn,
       review_findings: [{ severity: "high", finding: "Missing boundary check" }],
     },
@@ -447,6 +450,9 @@ test("blocked status returns fresh diagnostics without persisting or replaying t
   );
   assert.deepEqual(blocked.diagnostics, {
     a: {
+      task_report: { text: "BLOCKED: conflicting contract", run_id: "current" },
+      hand_report: { text: "12/13 passed" },
+      launch_failure: { timed_out: true, signal: "SIGTERM" },
       context_return: contextReturn,
       review_findings: [{ severity: "high", finding: "Missing boundary check" }],
     },
