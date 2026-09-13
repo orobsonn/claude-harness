@@ -65,6 +65,7 @@ test("shipper waits for the explicit PR with bounded CI observation", () => {
 
 test("release manual follows Claude changelog rotation before merge and does not reopen product tasks", () => {
   const shipper = readFileSync(shipperPath, "utf8");
+  assert.match(shipper, /Antes de preparar a branch de release.*`git fetch origin`.*merge funcional confirmado/is);
   assert.match(shipper, /Antes de abrir\/mergear.*PR.*confira.*diff/is);
   assert.match(shipper, /mova o conteúdo de `## \[Unreleased\]`.*`## \[X.Y.Z\] - YYYY-MM-DD`/s);
   assert.match(shipper, /não peça repetição.*tasks funcionais.*metadados/is);

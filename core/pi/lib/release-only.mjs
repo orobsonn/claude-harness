@@ -417,8 +417,11 @@ export function classifyPiPostMergeRelease(projectRoot, evidence) {
       releaseNotes = mergeFiles.releaseNotes;
     }
     const contentTreeSha = mergedCommit.treeSha;
-    if (commitMetadata(projectRoot, releaseHeadSha, "tree") !== contentTreeSha) {
-      return { ok: false, reason: "release PR head and squash merge do not have identical content" };
+    // A release branch may precede product already merged into main. Preserve the
+    // nominal fast path; otherwise prove Git's actual merge, not a stale whole tree.
+    if (commitMetadata(projectRoot, releaseHeadSha, "tree") !== contentTreeSha &&
+        git(projectRoot, ["merge-tree", "--write-tree", baseSha, releaseHeadSha]) !== contentTreeSha) {
+      return { ok: false, reason: "release squash does not match the verified Git merge of its base and PR head" };
     }
     if (![releaseHeadSha, mergeOid].includes(candidate.checkoutSha)) {
       return { ok: false, reason: "checkout is neither the prepared release HEAD nor its squash merge" };
