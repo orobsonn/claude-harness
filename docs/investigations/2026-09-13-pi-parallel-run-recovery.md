@@ -79,3 +79,26 @@ product PR #99, release PR #100 and v0.9.0 completed. Victor #228's metadata-onl
 repair PR #350 passed CI and merged at `6f3bf4914234557490fb27ecddae8a22803c7f95`;
 v0.21.0 tag and GitHub Release were subsequently verified at that exact commit.
 Publication was repaired externally, not by fabricating legacy session receipts.
+
+## Follow-up: release branch predates the merged product
+
+Lainny #92 reached final-review, harvest, product PR #101 and release PR #102.
+Both PRs and post-merge CI passed. Native tag creation then failed because the
+release verifier required the entire PR head tree to equal the squash tree.
+The release branch had started from the old local main, before product PR #101.
+GitHub correctly retained that product while merging only release metadata.
+
+Observed release head: `58b706a94a2f9f2d38c60f89e7bec2a6fa9def4f`; immutable
+merge base: `7d6ea4026b2296f78132b58541cb67d043458e85`; release merge:
+`f3f42a34f969ed2ed146180931f0a5dbd8d9a854`. Git's merge of the first two produces
+tree `a87b7794f8788f1c57eba4f6eb4c311813f4e2a3`, exactly the release merge tree.
+The old head tree is `e82a8962c528fdb4068e8dc30a0553d0be70826b` and lacks the
+already merged product, so full head-tree equality was a false rejection.
+
+Preserve the nominal equal-tree fast path. Otherwise compare with Git's actual
+merge tree, retaining PR/CI/base identity and version/changelog-only checks.
+Conflicts and modified squash contents still fail. `merge-tree --write-tree`
+may create Git objects but does not edit checkout files, refs or session receipts.
+The shipper prose also explicitly fetches main before preparing the next release.
+The new fixture was RED on v3.0.2; the corrected verifier accepts the real release
+proof, but publication remains pending until independently confirmed remotely.

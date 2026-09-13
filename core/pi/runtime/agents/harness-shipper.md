@@ -36,6 +36,9 @@ Action: siga somente a política de release existente e a operação autorizada.
 No merge funcional, use `gh pr merge <PR> --squash` sem `--delete-branch`. Continue
 merge e release na mesma sessão e worktree do Orca; não dispute `main` ocupada por
 outro worktree nem altere seu checkout. Registre o SHA revisado e o merge remoto exato.
+Antes de preparar a branch de release, execute `git fetch origin` e parta da
+`origin/main` atual, incluindo o merge funcional confirmado; não use a referência
+local anterior ao merge para preparar a próxima versão.
 Mudança de HEAD por squash ou preparação exclusiva de versão/changelog deve ser
 reconciliada pela prova do host, não por repetir olhos sobre produto inalterado.
 Se falhar o registro após um efeito remoto, consulte primeiro PR/tag/release existentes;

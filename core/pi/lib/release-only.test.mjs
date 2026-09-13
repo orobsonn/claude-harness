@@ -258,6 +258,66 @@ test("classifica o commit release-only já mergeado em main pelo PR e CI exatos"
   }
 });
 
+test("release metadata from an older main preserves the product in the actual squash", async () => {
+  const f = releaseFixture();
+  try {
+    git(f.root, ["switch", "-q", "main"]);
+    writeFileSync(join(f.root, "delivered-product.mjs"), "export const delivered = true;\n");
+    git(f.root, ["add", "delivered-product.mjs"]);
+    git(f.root, ["commit", "-q", "-m", "feat: delivered product"]);
+    const currentBase = git(f.root, ["rev-parse", "HEAD"]);
+    const merged = mergeReleaseFixture(f);
+    merged.evidence.baseRefOid = currentBase;
+    const { classifyPiPostMergeRelease } = await subject();
+    const proof = classifyPiPostMergeRelease(f.root, merged.evidence);
+    assert.equal(proof.ok, true, proof.reason);
+    assert.equal(proof.contentTreeSha, git(f.root, ["rev-parse", "HEAD^{tree}"]));
+    assert.notEqual(proof.contentTreeSha, git(f.root, ["rev-parse", `${f.headSha}^{tree}`]));
+    assert.equal(git(f.root, ["show", "HEAD:delivered-product.mjs"]), "export const delivered = true;");
+    for (const tamper of ["product", "notes"]) {
+      writeFileSync(join(f.root, "delivered-product.mjs"), tamper === "product"
+        ? "export const delivered = false;\n" : "export const delivered = true;\n");
+      if (tamper === "notes") writeFileSync(join(f.root, "CHANGELOG.md"),
+        git(f.root, ["show", "HEAD:CHANGELOG.md"]).replace("New fix.", "Unreviewed release note.") + "\n");
+      git(f.root, ["add", "."]);
+      git(f.root, ["commit", "-q", "--amend", "--no-edit"]);
+      const tamperedSha = git(f.root, ["rev-parse", "HEAD"]);
+      git(f.root, ["update-ref", "refs/remotes/origin/main", tamperedSha]);
+      const rejected = classifyPiPostMergeRelease(f.root, { ...merged.evidence, mergeCommit: { oid: tamperedSha } });
+      assert.equal(rejected.ok, false, `${tamper} changed beyond the verified merge`);
+      assert.match(rejected.reason, tamper === "product" ? /outside the release manifest/ : /does not match the verified Git merge/);
+    }
+  } finally { f.close(); }
+});
+
+test("release merge conflicts remain denied even when the resolved commit is metadata-only", async () => {
+  const f = releaseFixture();
+  try {
+    const metadataCommit = f.headSha;
+    git(f.root, ["switch", "-q", "-c", "stale-release-history", f.baseSha]);
+    writeFileSync(join(f.root, "conflict.mjs"), "export const side = 'release';\n");
+    git(f.root, ["add", "."]);
+    git(f.root, ["commit", "-q", "-m", "unreviewed side history"]);
+    git(f.root, ["cherry-pick", metadataCommit]);
+    f.headSha = git(f.root, ["rev-parse", "HEAD"]);
+    git(f.root, ["switch", "-q", "main"]);
+    writeFileSync(join(f.root, "conflict.mjs"), "export const side = 'main';\n");
+    git(f.root, ["add", "."]);
+    git(f.root, ["commit", "-q", "-m", "delivered main product"]);
+    f.baseSha = git(f.root, ["rev-parse", "HEAD"]);
+    for (const file of ["package.json", "package-lock.json", "CHANGELOG.md"])
+      writeFileSync(join(f.root, file), git(f.root, ["show", `${f.headSha}:${file}`]) + "\n");
+    git(f.root, ["add", "."]);
+    git(f.root, ["commit", "-q", "-m", "chore: release v1.2.4 (#42)"]);
+    const headSha = git(f.root, ["rev-parse", "HEAD"]);
+    git(f.root, ["update-ref", "refs/remotes/origin/main", headSha]);
+    const { classifyPiPostMergeRelease } = await subject();
+    const rejected = classifyPiPostMergeRelease(f.root, mergeReleaseFixtureEvidence(f, headSha));
+    assert.equal(rejected.ok, false);
+    assert.match(rejected.reason, /post-merge release proof unavailable.*merge-tree/);
+  } finally { f.close(); }
+});
+
 test("prova o squash remoto no mesmo WT mesmo quando main está ocupada em outro worktree", async (t) => {
   const f = releaseFixture();
   const other = mkdtempSync(join(tmpdir(), "pi-release-main-wt-"));
