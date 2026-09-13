@@ -54,7 +54,15 @@ plano exige outra entrega, não uma task inventada no fechamento.
 
 Em release manual exclusivamente de versão/changelog, o host reconhece a branch
 `chore/release-X.Y.Z` e, depois do merge, o commit exato associado ao PR mergeado com
-CI verde. O nome da branch local não é uma prova de entrega. Antes de criar uma tag
+CI verde. Antes de abrir/mergear esse PR, confira o diff de versão e changelog:
+como no Claude Code, mova o conteúdo de `## [Unreleased]` para
+`## [X.Y.Z] - YYYY-MM-DD` e deixe um novo Unreleased vazio, preservando as seções
+anteriores. A seção X.Y.Z deve existir e conter as notas da release; aumentar
+package.json e acrescentar uma nota somente em Unreleased não prepara uma release.
+Não mergeie preparação inválida para tentar corrigir depois da tag. Se o erro já
+foi mergeado, reporte o SHA e o defeito documental exato ao pai; não peça repetição
+de tasks funcionais ou olhos de produto para consertar metadados de release.
+O nome da branch local não é uma prova de entrega. Antes de criar uma tag
 sem alvo explícito, confirme que HEAD é o SHA mergeado verificado; se necessário,
 posicione somente este worktree limpo nesse SHA, inclusive em detached, sem trocar
 `main` de outro worktree. Não repita tarefas antigas por mudança de ancestralidade

@@ -499,7 +499,18 @@ export function inspectTaskRun(entry, dependencies = {}) {
     if (!identity.ok || violations.scope.length || violations.frozen.length || typeof hand.capturedVerifiedAt !== "string" || !hand.capturedVerifiedAt ||
         !COMMIT_SHA.test(hand.freezeCommitSha ?? "") || !ancestor(worktree, hand.freezeCommitSha, head)) return failure("current child hand capture is invalid", contextDiagnostics);
     const reconciliation = entry.reconciliations?.at(-1);
-    if (reconciliation && !ancestor(worktree, reconciliation.merged_head, hand.freezeCommitSha))
+    // A native replay captures the current clean HEAD without rewriting the
+    // original producer's SHA. Host reconciliation alone needs no no-op writer.
+    const reconciledCapture = reconciliation && native.events.some((event) => {
+      if (event.launchIndex < reconciliation.launch_count || event.tool !== "mark" ||
+          event.args?.action !== "capture-verified" || event.args?.task_id !== entry.task_id || !markerSucceeded(event)) return false;
+      let metadata = event.end.result?.details;
+      if (!metadata?.capture_origin) { try { metadata = JSON.parse(eventText(event.end.result)); } catch { return false; } }
+      const origin = metadata?.capture_origin;
+      return origin?.task_id === entry.task_id && origin.producer_call_id === hand.producerCallId &&
+        origin.worktree_clean === true && origin.head_sha === head && ancestor(worktree, reconciliation.merged_head, head);
+    });
+    if (reconciliation && !reconciledCapture && !ancestor(worktree, reconciliation.merged_head, hand.freezeCommitSha))
       return failure("current hand requires a new capture after dependency reconciliation");
     const isImplementationForTask = (event) => event.tool === "subagent" &&
       !abandonedWriters.has(event.launchIndex) &&
@@ -510,7 +521,7 @@ export function inspectTaskRun(entry, dependencies = {}) {
       event.args?.subagent_type === hand.agent && taskFromPrompt(event.args?.prompt) === entry.task_id &&
       eventSucceeded(event) && (recovery || isImplementationForTask(event)));
     if (producerIndex < 0) return failure("current hand producer is not bound to a successful native call by an implementation agent");
-    if (reconciliation && native.events[producerIndex].launchIndex < reconciliation.launch_count)
+    if (reconciliation && !reconciledCapture && native.events[producerIndex].launchIndex < reconciliation.launch_count)
       return failure("current hand requires an implementation producer after dependency reconciliation");
     const fidelity = validateFidelity({
       events: native.events,
@@ -553,7 +564,7 @@ export function inspectTaskRun(entry, dependencies = {}) {
           producer_launch_index: native.events[implementationIndex].launchIndex };
         break;
       }
-      if (!recoveryOrigin) return failure("test-only recovery requires a clean captured implementation before the first test-author; commit then capture before correcting tests");
+      if (!recoveryOrigin) return failure("test-only recovery requires a clean captured implementation before the first test-author; commit then capture before correcting tests", contextDiagnostics);
       if (producerIndex !== fidelity.authorIndex || native.events.some((event, index) => index > producerIndex && isWriter(event)))
         return failure("test-only recovery requires the latest fidelity author without a later writing hand");
       if (!fidelity.freezeSha || !ancestor(worktree, hand.freezeCommitSha, fidelity.freezeSha) ||

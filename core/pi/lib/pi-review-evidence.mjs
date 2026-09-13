@@ -271,8 +271,17 @@ export function parsePiReviewCompletion({ role, result, isError, nativeRecord, s
       stable(snapshotStart) !== stable(snapshotEnd)) {
     return { ok: false, reason: "review input snapshot changed after dispatch" };
   }
-  const report = strictReport(nativeRecord.result);
+  let report = strictReport(nativeRecord.result);
   if (!report) return { ok: false, reason: "review result is not one canonical JSON report" };
+  // Some parent briefs redundantly request the plan-review verdict on code eyes.
+  // Normalize only a consistent value; issues remain the sole approval authority.
+  if (Object.hasOwn(report, "verdict")) {
+    if (!Array.isArray(report.issues) || report.verdict !== (report.issues.length ? "REVISE" : "APPROVE")) {
+      return { ok: false, reason: "review verdict conflicts with issues; return the canonical issues/follow_ups report" };
+    }
+    const { verdict: _verdict, ...canonicalReport } = report;
+    report = canonicalReport;
+  }
   const logicalRole = role.replace("harness-", "");
   const validated = validateReviewReport(logicalRole, report);
   if (!validated.ok) return { ok: false, reason: validated.reason };
@@ -339,6 +348,24 @@ export function beginPiReviewReceipt({ projectRoot, sessionId, featureId, phase,
     return replaceReviewReceipt(state, { written_by: "host-subagent-dispatch", parent_session_id: sessionId,
       feature_id: featureId, phase, ...(phase === "task" ? { task_id: taskId } : {}), role,
       active_dispatch_call_id: dispatchCallId, status: "running", accepted: false });
+  });
+}
+
+/** Preserve a failed completion's reason without approving it or superseding another dispatch. */
+export function recordPiReviewFailure({ projectRoot, sessionId, featureId, phase, taskId, role, dispatchCallId, reason } = {}) {
+  if (!isSafeSessionId(sessionId) || !isSafeFeatureId(featureId) || !isParallelReviewRole(role) ||
+      typeof dispatchCallId !== "string" || !dispatchCallId || typeof reason !== "string" || !reason) {
+    return { ok: false, reason: "exact failed review identity required" };
+  }
+  const statePath = piGateStatePath({ projectRoot, sessionId });
+  if (!statePath.ok) return statePath;
+  return withGateStateLock(statePath.path, (state) => {
+    const receipt = findPiReviewReceipt(state, { featureId, taskId, role, phase });
+    if (state.session_id !== sessionId || state.feature_id !== featureId ||
+        receipt?.active_dispatch_call_id !== dispatchCallId || receipt.status !== "running") {
+      return { ok: false, reason: "failed review dispatch is not current" };
+    }
+    return replaceReviewReceipt(state, { ...receipt, status: "invalid", accepted: false, reason });
   });
 }
 

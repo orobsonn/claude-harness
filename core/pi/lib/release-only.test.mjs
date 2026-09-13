@@ -529,6 +529,16 @@ test("aceita release sem package-lock quando o projeto não possui esse arquivo"
   }
 });
 
+test("nega release com versão aumentada mas notas somente em Unreleased antes e depois do merge", async () => {
+  const f = releaseFixture({ changelog: "# Changelog\n\n## [Unreleased]\n\n### Added\n\n- New feature.\n\n## [1.2.3] - 2026-09-01\n\n### Fixed\n\n- Old fix.\n" });
+  try {
+    const { classifyPiReleaseOnly, classifyPiPostMergeRelease } = await subject();
+    assert.match(classifyPiReleaseOnly(f.root).reason, /CHANGELOG.*preserving insertion/);
+    const merged = mergeReleaseFixture(f);
+    assert.match(classifyPiPostMergeRelease(f.root, merged.evidence).reason, /CHANGELOG.*preserving insertion/);
+  } finally { f.close(); }
+});
+
 test("aceita a rotação Keep a Changelog com Unreleased vazio e conteúdo movido", async () => {
   const old = `# Changelog
 

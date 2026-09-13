@@ -805,7 +805,7 @@ test("adversary de tarefa grava recibo host-owned preso ao marcador e ao HEAD", 
   } finally { f.close(); }
 });
 
-test("olhos finais gravam recibos host-owned no HEAD agregado", async () => {
+test("olhos finais gravam recibos host-owned no HEAD agregado mesmo com verdict redundante", async () => {
   const f = fixture();
   try {
     execFileSync("git", ["init"], { cwd: f.root });
@@ -825,7 +825,7 @@ test("olhos finais gravam recibos host-owned no HEAD agregado", async () => {
       h.get("tool_execution_start")({ toolName: "subagent", toolCallId: callId, args });
       assert.equal(await h.get("tool_call")({ toolName: "subagent", toolCallId: callId, input: args }, ctxOf(f.root)), undefined);
       events.emit("subagents:child:session-created", { sessionId: `${CHILD_SESSION}-${callId}`, parentSessionId: SESSION });
-      const body = '{"issues":[]}';
+      const body = '{"verdict":"APPROVE","issues":[]}';
       const unpublish = publishNativeRecord({ agentId, role, body });
       h.get("tool_execution_end")({
         toolName: "subagent", toolCallId: callId,
@@ -888,6 +888,8 @@ test("mudança unstaged durante o olho final invalida o recibo mesmo quando o HE
     unpublish();
     const saved = JSON.parse(readFileSync(statePath, "utf8"));
     assert.equal(saved.final_review_evidence.adversary.accepted, false, "the adapter must compare the full review input, not HEAD alone");
+    assert.equal(saved.final_review_evidence.adversary.status, "invalid");
+    assert.match(saved.final_review_evidence.adversary.reason, /input|snapshot|changed/i);
   } finally { f.close(); }
 });
 

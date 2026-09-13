@@ -30,6 +30,7 @@ import {
   checkPiReviewPreparation,
   parsePiReviewCompletion,
   recordPiReviewReceipt,
+  recordPiReviewFailure,
 } from "../lib/pi-review-evidence.mjs";
 import { capturePlanReviewInput, parsePlanReviewCompletion } from "../lib/task-run.mjs";
 import { attachPiReviewEvidencePacket } from "../lib/pi-command-evidence.mjs";
@@ -374,7 +375,7 @@ export default function harnessEntryGate(pi: ExtensionAPI) {
             nativeRecord,
             snapshotStart: reviewInput.snapshot,
             snapshotEnd: capturedEnd.snapshot,
-          }) : { ok: false };
+          }) : { ok: false, reason: capturedEnd.reason ?? "review input snapshot unavailable at completion" };
           if (parsed.ok) {
             recordPiReviewReceipt({
               projectRoot,
@@ -382,6 +383,9 @@ export default function harnessEntryGate(pi: ExtensionAPI) {
               completion: parsed.completion,
               binding: { dispatchCallId: callId, childSessionId: bound.childSessionId, agentId: outcome?.agentId },
             });
+          } else {
+            recordPiReviewFailure({ projectRoot, sessionId, featureId, phase: reviewInput.phase,
+              taskId: reviewInput.taskId, role: args.subagent_type, dispatchCallId: callId, reason: parsed.reason });
           }
         } else if (outcome && featureId && statePath.ok && args.subagent_type === "harness-adversary") {
           const draft: any = readPiSpecDraft({ projectRoot, sessionId, featureId });

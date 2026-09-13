@@ -305,7 +305,20 @@ separadas. Extraia para esse arquivo regular o bloco exato de `CHANGELOG.md`, in
 o título `## [X.Y.Z]` e todas as quebras de linha até antes da próxima versão.
 Use o diretório temporário do sistema para manter o checkout limpo. O host confere
 conteúdo das notas, avanço de versão, tag e commit exatos e nega a exceção manual em
-projetos release-please. Não reabra a implementação funcional.
+projetos release-please. Não reabra a implementação funcional. Na preparação manual,
+o shipper deve mover Unreleased para uma seção X.Y.Z preenchida e preservar o histórico
+antes de abrir/mergear o PR; versão aumentada com notas só em Unreleased é inválida.
+Se isso já foi mergeado, diagnostique o delta documental e o estado remoto antes de
+recuperar a publicação; repetir tasks funcionais ou olhos de produto não corrige o changelog.
+
+Ao consultar `harness_tasks status`, leia também `diagnostics[task_id].context_return`
+quando houver bloqueio de captura. Esse contexto descreve achados e dependências reais,
+não concede aprovação: corrija primeiro a task dona do defeito upstream e reconcilie
+no host antes de retomar a dependente. Não reduza todo retorno BLOCKED a um pedido de
+capture/re-gate repetido quando o filho reportou testes RED ou defeito de produto.
+Em `harness_reviews`, um recibo `invalid` traz o motivo em `diagnostics`; ele não está
+mais executando. Nos briefs de olhos de código peça apenas o schema `issues` e
+`follow_ups`, sem acrescentar `verdict` (esse campo pertence ao plan-reviewer).
 
 Antes de marcar `final-review`, colete compliance e adversary sobre esse diff inteiro já commitado. Reutilize as revisões finais existentes quando seus recibos host-owned ainda forem válidos para a sessão, feature, escopo e HEAD atuais; um pedido posterior de merge/release não reinicia sozinho os olhos finais. HEAD diferente, mudança real de conteúdo ou evidência insuficiente exige reconciliar e revisar o que ficou inválido; não substitua hashes nem aceite a alegação de que é o mesmo conteúdo. Nos despachos finais, a primeira linha é exatamente `[HARNESS_FINAL_REVIEW]`; compliance e adversary, junto com security quando aplicável, podem rodar em paralelo sobre os mesmos arquivos e HEAD imutáveis, respeitando o limite configurado. Com `task_pipeline_version: 1`, o marcador só fecha se os dois olhos tiverem recibos host-owned saudáveis no HEAD atual e se o recibo de integração host-owned de **cada** tarefa do plano canônico validar o hand-finished, capture-verified e hand-record atuais da sessão local, sem violação de escopo/teste congelado e com SHA ancestral ao HEAD; o pai global não copia nem sintetiza hand-records locais. Em sessão legada sem essa versão, continue exigindo diretamente os hand-records e markers locais atuais de cada tarefa. Falta de evidência é bloqueio, não conclusão parcial.
 

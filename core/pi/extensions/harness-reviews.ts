@@ -93,7 +93,13 @@ export default function harnessReviews(pi: ExtensionAPI) {
             missing: taskRequired.filter((role) => unavailable.includes(role)),
           };
       const preparation = checkPiReviewPreparation(input);
-      const status = preparation.ok ? result : { ...result, preparation };
+      const diagnostics = unavailable.flatMap((role) => {
+        const receipt = findPiReviewReceipt(loaded.state, { featureId: loaded.state.feature_id,
+          taskId: params.task_id, role, phase: params.phase });
+        return receipt?.status === "invalid" && typeof receipt.reason === "string"
+          ? [{ role, reason: receipt.reason, dispatch_call_id: receipt.active_dispatch_call_id }] : [];
+      });
+      const status = { ...result, ...(preparation.ok ? {} : { preparation }), ...(diagnostics.length ? { diagnostics } : {}) };
       return { content: [{ type: "text" as const, text: JSON.stringify(status) }], details: status };
     },
   });

@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { capturePiReviewInput, parsePiReviewCompletion, recordPiReviewReceipt } from "../lib/pi-review-evidence.mjs";
+import { capturePiReviewInput, parsePiReviewCompletion, recordPiReviewReceipt, beginPiReviewReceipt, recordPiReviewFailure } from "../lib/pi-review-evidence.mjs";
 import { PARALLEL_REVIEW_ROLES } from "../lib/roles.mjs";
 import { runNativeToolCall } from "./pi-native-tool.test.mjs";
 
@@ -81,6 +81,23 @@ function implementationCompleted(f) {
       details: { status: "completed" }, isError: false, content: [] },
   });
 }
+
+test("final status exposes invalid completion after restart without granting approval", async (t) => {
+  const f = fixture(t);
+  const input = { projectRoot: f.root, sessionId: SESSION, featureId: FEATURE,
+    phase: "final", role: "harness-security", dispatchCallId: "invalid-security" };
+  assert.equal(beginPiReviewReceipt(input).ok, true);
+  assert.equal(recordPiReviewFailure({ ...input, reason: "review verdict conflicts with issues" }).ok, true);
+  const before = readFileSync(f.statePath, "utf8");
+  for (let restart = 0; restart < 2; restart++) {
+    const result = await (await tool()).execute("status", { phase: "final" }, undefined, undefined, f.ctx);
+    assert.ok(result.details.missing.includes("harness-security"));
+    assert.ok(!result.details.accepted.includes("harness-security"));
+    assert.deepEqual(result.details.diagnostics, [{ role: "harness-security",
+      reason: "review verdict conflicts with issues", dispatch_call_id: "invalid-security" }]);
+  }
+  assert.equal(readFileSync(f.statePath, "utf8"), before);
+});
 
 test("LIGHT task status has no implementation eyes and ancestral positives never become missing", async (t) => {
   const f = fixture(t);

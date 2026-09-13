@@ -669,6 +669,22 @@ test("test-only recovery cannot cover an uncaptured implementation, product drif
   }
 });
 
+test("uncaptured recovery reports a current upstream blocker without authorizing integration", () => {
+  const f = testOnlyRecovery({ capturedImplementation: false });
+  const head = run(f.root, "git", "rev-parse", "HEAD");
+  const content = "BLOCKED: current RED requires correction in upstream task-3 before this task can finish.";
+  const context = { version: 1, kind: "task-context-return", session_id: CHILD, task_id: TASK,
+    head_sha: head, content, sha256: crypto.createHash("sha256").update(content).digest("hex") };
+  f.dependencies.readTaskContextReturnFn = () => context;
+  const inspected = inspectTaskRun(f.entry, f.dependencies);
+  assert.equal(inspected.ok, false);
+  assert.match(inspected.reason, /clean captured implementation/);
+  assert.deepEqual(inspected.details?.context_return, context);
+  assert.equal(inspected.result, undefined);
+  f.dependencies.readTaskContextReturnFn = () => ({ ...context, head_sha: f.base });
+  assert.equal(inspectTaskRun(f.entry, f.dependencies).details?.context_return, undefined);
+});
+
 test("inspectTaskRun issues a child-bound receipt from native lifecycle, fidelity, capture and strong reviews", () => {
   const fixture = inspectionFixture({ historicFailure: true });
   const inspected = inspectTaskRun(fixture.entry, fixture.dependencies);
@@ -845,6 +861,31 @@ test("reconciled dependencies keep original audit paths but require fresh review
   assert.equal(current.result.scope_base_sha, parent);
   assert.match(current.result.reconciliation_sha256, /^[a-f0-9]{64}$/);
   assert.ok(current.result.changed_paths.includes("upstream.mjs"), "audit retains inherited changes");
+  // Real #237: the host merged upstream; the child recaptured its unchanged
+  // producer at the merged HEAD. Replaying capture does not rewrite freezeCommitSha.
+  const beforeReplay = fs.readFileSync(launch.events_path, "utf8");
+  write(handPath, hand);
+  state.capture_verified = [`${bare}@${hand.freezeCommitSha}`];
+  write(f.statePath, state);
+  write(launch.events_path, [event("session", { id: CHILD }),
+    event("tool_execution_start", { toolCallId: "recapture", toolName: "mark", args: { action: "capture-verified", task_id: TASK } }),
+    event("tool_execution_end", { toolCallId: "recapture", toolName: "mark", result: { details: {
+      ok: true, capture_origin: { task_id: TASK, producer_call_id: hand.producerCallId, head_sha: head, worktree_clean: true },
+    }, content: [{ type: "text", text: JSON.stringify({ ok: true }) }] } }), ""].join("\n"));
+  const recaptured = inspectTaskRun(f.entry, f.dependencies);
+  assert.equal(recaptured.ok, true, recaptured.reason);
+  assert.equal(recaptured.result.hand_capture.producer_call_id, hand.producerCallId);
+  const validReplay = fs.readFileSync(launch.events_path, "utf8");
+  for (const override of [{ head_sha: f.head }, { worktree_clean: false }, { producer_call_id: "foreign" }, { task_id: "other-task" }]) {
+    const rows = validReplay.trim().split("\n").map(JSON.parse);
+    Object.assign(rows.find((row) => row.type === "tool_execution_end").result.details.capture_origin, override);
+    write(launch.events_path, rows.map(JSON.stringify).join("\n") + "\n");
+    assert.equal(inspectTaskRun(f.entry, f.dependencies).ok, false, JSON.stringify(override));
+  }
+  write(launch.events_path, beforeReplay);
+  write(handPath, { ...hand, freezeCommitSha: head, producerCallId: "recovered-producer" });
+  state.capture_verified = [`${bare}@${head}`];
+  write(f.statePath, state);
   const unregistered = structuredClone(f.entry);
   unregistered.reconciliations[0].upstreams[0].task_id = "unregistered";
   unregistered.reconciliations[0].upstreams[0].receipt.task_id = "unregistered";
