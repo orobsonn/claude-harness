@@ -325,6 +325,11 @@ export default function harnessEntryGate(pi: ExtensionAPI) {
       if (!isPiDispatchTool(event?.toolName)) return;
       const args = piSubagentArgs(dispatched);
       const sessionId = piSessionId(ctx);
+      if (!bound && reviewInput && sessionId && callId) {
+        recordPiReviewFailure({ projectRoot, sessionId, featureId: reviewInput.snapshot?.feature_id,
+          phase: reviewInput.phase, taskId: reviewInput.taskId, role: args.subagent_type,
+          dispatchCallId: callId, reason: "review ended without an admitted child session; inspect the spawn/admission error before retrying" });
+      }
       if (bound && sessionId && callId) {
         const outcome = successfulForegroundOutcome(event?.result, event?.isError);
         const loaded: any = loadPiGateStateFromDisk(projectRoot, { sessionId });
