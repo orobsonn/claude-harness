@@ -935,9 +935,13 @@ test("reconciled dependencies keep original audit paths but require fresh review
   const interruptedFinal = readFinal();
   assert.equal(interruptedFinal.ok, true, interruptedFinal.reason);
   delete interruptedEntry.result.launches[1].interrupted;
+  Object.assign(interruptedEntry.result.launches[1], { exit_code: 0, signal: null,
+    ended_at: result.launches[0].ended_at });
   interruptedEntry.integration.result_sha256 = hashTaskReceipt(interruptedEntry.result);
   write(registryPath, registry);
-  assert.equal(readFinal().ok, false, "missing ordinary launch events still fail closed");
+  const missingOrdinary = readFinal();
+  assert.equal(missingOrdinary.ok, false, "missing ordinary launch events still fail closed");
+  assert.match(missingOrdinary.reason, /ENOENT/);
   registry.tasks[TASK] = { ...f.entry, grant, status: "integrated", result, integration };
   write(registryPath, registry);
   write(launch.events_path, beforeReplay);
