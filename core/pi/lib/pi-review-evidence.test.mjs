@@ -178,6 +178,58 @@ function wrappedResult(body, options = {}) {
   return nativeResult(`Agent completed in 1s (1 tool uses).\nAgent ID: ${agentId}\n\n${body}`, options);
 }
 
+test("Pi accepts a redundant consistent final verdict without dropping issues or follow-ups", (t) => {
+  const snapshot = capture(fixture(t));
+  for (const role of ROLES) {
+    const body = JSON.stringify({ verdict: "APPROVE", issues: [], follow_ups: [] });
+    const parsed = api("parsePiReviewCompletion", { role, result: wrappedResult(body),
+      nativeRecord: nativeRecord(body, { type: role }), snapshotStart: snapshot, snapshotEnd: snapshot });
+    assert.equal(parsed.ok, true, parsed.reason);
+    assert.deepEqual(parsed.completion.report, { issues: [], follow_ups: [] });
+    assert.equal(parsed.completion.accepted, true);
+  }
+});
+
+test("Pi never turns a contradictory or unknown explicit final verdict into approval", (t) => {
+  const snapshot = capture(fixture(t));
+  for (const verdict of ["REVISE", "BLOCKED", "approve", null]) {
+    const body = JSON.stringify({ verdict, issues: [] });
+    const parsed = api("parsePiReviewCompletion", { role: ROLES[0], result: wrappedResult(body),
+      nativeRecord: nativeRecord(body), snapshotStart: snapshot, snapshotEnd: snapshot });
+    assert.equal(parsed.ok, false, String(verdict));
+  }
+});
+
+test("failed review diagnostics survive reload and cannot overwrite another dispatch", (t) => {
+  const root = fixture(t);
+  const identity = { projectRoot: root, sessionId: SESSION, featureId: FEATURE, phase: "final", role: ROLES[0] };
+  assert.equal(subject.beginPiReviewReceipt({ ...identity, dispatchCallId: "old" }).ok, true);
+  assert.equal(subject.beginPiReviewReceipt({ ...identity, dispatchCallId: "current" }).ok, true);
+  assert.equal(subject.recordPiReviewFailure({ ...identity, dispatchCallId: "old", reason: "invalid report" }).ok, false);
+  assert.equal(subject.recordPiReviewFailure({ ...identity, dispatchCallId: "current", reason: "invalid report" }).ok, true);
+  const state = JSON.parse(readFileSync(join(root, ".pi/harness/state", SESSION, "gate-state.json")));
+  assert.equal(state.final_review_evidence.adversary.status, "invalid");
+  assert.equal(state.final_review_evidence.adversary.reason, "invalid report");
+  assert.equal(state.final_review_evidence.adversary.accepted, false);
+  assert.deepEqual(subject.missingPiReviewRoles({ ...identity, roles: [ROLES[0]] }), [ROLES[0]]);
+});
+
+test("redundant verdict never drops blocking issues or diagnostic follow-ups", (t) => {
+  const snapshot = capture(fixture(t));
+  const finding = { description: "Current race", category: "race", severity: "high", scope: "src/feature.ts",
+    evidence: "Concurrent writes", fix_hint: "Serialize the update" };
+  for (const verdict of ["REVISE", "APPROVE"]) {
+    const body = JSON.stringify({ verdict, issues: [finding], follow_ups: [finding] });
+    const parsed = subject.parsePiReviewCompletion({ role: ROLES[0], result: wrappedResult(body),
+      nativeRecord: nativeRecord(body), snapshotStart: snapshot, snapshotEnd: snapshot });
+    assert.equal(parsed.ok, verdict === "REVISE");
+    if (parsed.ok) {
+      assert.equal(parsed.completion.accepted, false);
+      assert.deepEqual(parsed.completion.report, { issues: [finding], follow_ups: [finding] });
+    }
+  }
+});
+
 function parseAccepted(role, snapshot, overrides = {}) {
   const suffix = overrides.suffix ?? role.replace("harness-", "");
   const agentId = `agent-${suffix}`;

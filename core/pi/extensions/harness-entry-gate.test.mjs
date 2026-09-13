@@ -805,7 +805,7 @@ test("adversary de tarefa grava recibo host-owned preso ao marcador e ao HEAD", 
   } finally { f.close(); }
 });
 
-test("olhos finais gravam recibos host-owned no HEAD agregado", async () => {
+test("olhos finais gravam recibos host-owned no HEAD agregado mesmo com verdict redundante", async () => {
   const f = fixture();
   try {
     execFileSync("git", ["init"], { cwd: f.root });
@@ -825,7 +825,7 @@ test("olhos finais gravam recibos host-owned no HEAD agregado", async () => {
       h.get("tool_execution_start")({ toolName: "subagent", toolCallId: callId, args });
       assert.equal(await h.get("tool_call")({ toolName: "subagent", toolCallId: callId, input: args }, ctxOf(f.root)), undefined);
       events.emit("subagents:child:session-created", { sessionId: `${CHILD_SESSION}-${callId}`, parentSessionId: SESSION });
-      const body = '{"issues":[]}';
+      const body = '{"verdict":"APPROVE","issues":[]}';
       const unpublish = publishNativeRecord({ agentId, role, body });
       h.get("tool_execution_end")({
         toolName: "subagent", toolCallId: callId,
@@ -854,6 +854,29 @@ test("olhos finais gravam recibos host-owned no HEAD agregado", async () => {
       assert.match(receipt.report_digest, /^[0-9a-f]{64}$/);
       assert.equal(receipt.reviewed_head_sha, head);
     }
+  } finally { f.close(); }
+});
+
+test("review que termina sem child admission não fica running nem aprova", async () => {
+  const f = fixture();
+  try {
+    execFileSync("git", ["init", "-q"], { cwd: f.root });
+    execFileSync("git", ["add", "."], { cwd: f.root });
+    execFileSync("git", ["-c", "user.name=Pi", "-c", "user.email=pi@example.test", "commit", "-qm", "fixture"], { cwd: f.root });
+    const statePath = join(f.root, ".pi/harness/state", SESSION, "gate-state.json");
+    const state = JSON.parse(readFileSync(statePath, "utf8"));
+    writeFileSync(statePath, JSON.stringify({ ...state, spec_status: "adversary-reviewed", adversary_fired: true }));
+    const h = handlers();
+    const args = { subagent_type: "harness-adversary", prompt: "[HARNESS_FINAL_REVIEW] review aggregate diff", description: "final review" };
+    h.get("session_start")({}, ctxOf(f.root));
+    h.get("tool_execution_start")({ toolName: "subagent", toolCallId: "spawn-failed", args });
+    assert.equal(await h.get("tool_call")({ toolName: "subagent", toolCallId: "spawn-failed", input: args }, ctxOf(f.root)), undefined);
+    h.get("tool_execution_end")({ toolName: "subagent", toolCallId: "spawn-failed",
+      result: { content: [{ type: "text", text: "child spawn failed" }] }, isError: true }, ctxOf(f.root));
+    const receipt = JSON.parse(readFileSync(statePath, "utf8")).final_review_evidence.adversary;
+    assert.equal(receipt.accepted, false);
+    assert.equal(receipt.status, "invalid");
+    assert.match(receipt.reason, /without an admitted child session/);
   } finally { f.close(); }
 });
 
@@ -888,6 +911,8 @@ test("mudança unstaged durante o olho final invalida o recibo mesmo quando o HE
     unpublish();
     const saved = JSON.parse(readFileSync(statePath, "utf8"));
     assert.equal(saved.final_review_evidence.adversary.accepted, false, "the adapter must compare the full review input, not HEAD alone");
+    assert.equal(saved.final_review_evidence.adversary.status, "invalid");
+    assert.match(saved.final_review_evidence.adversary.reason, /input|snapshot|changed/i);
   } finally { f.close(); }
 });
 
