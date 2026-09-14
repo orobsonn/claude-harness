@@ -5,6 +5,17 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [3.0.4](https://github.com/orobsonn/claude-harness/compare/v3.0.3...v3.0.4) (2026-09-14)
+
+
+### Bug Fixes
+
+* **pi:** continue pending delivery after premature agent exit ([#979](https://github.com/orobsonn/claude-harness/issues/979)) ([bfbcfb0](https://github.com/orobsonn/claude-harness/commit/bfbcfb0fcc01c53355b7203e16725d13aa391915))
+* **pi:** port Claude Code scope recovery into the same run ([#977](https://github.com/orobsonn/claude-harness/issues/977)) ([979e9ed](https://github.com/orobsonn/claude-harness/commit/979e9ed3f4826b10ce1955723c6dcfc3f807247f))
+* **pi:** preserve implementation during frozen fixture repair ([#981](https://github.com/orobsonn/claude-harness/issues/981)) ([98059bc](https://github.com/orobsonn/claude-harness/commit/98059bc11157832b0b374bfead904182b30da9e0))
+* **pi:** require current declared checks before final reviews ([#982](https://github.com/orobsonn/claude-harness/issues/982)) ([3da2440](https://github.com/orobsonn/claude-harness/commit/3da2440eb67dbd95b233d2e68c92911a1a04ca86))
+* **pi:** synchronize plan progress from native task receipts ([#980](https://github.com/orobsonn/claude-harness/issues/980)) ([48fead9](https://github.com/orobsonn/claude-harness/commit/48fead975ec12aaa4b252ef76837feae57fd15e5))
+
 ## [3.0.3](https://github.com/orobsonn/claude-harness/compare/v3.0.2...v3.0.3) (2026-09-13)
 
 
