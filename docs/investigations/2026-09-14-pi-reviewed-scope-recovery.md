@@ -38,4 +38,22 @@ Os testes usam projetos temporários fora do repositório fonte.
 - Histórico de processos aceita troca de runtime e rejeita troca de identidade forjada.
 - Vendor real em fixture retoma a tarefa com o launcher atualizado do pai.
 
-A suíte completa e o teste na run original ainda estão em andamento.
+A suíte completa final passou: 3.769/3.769, sem skips, em 572 s. O CI do
+commit `aa9777e` também passou. O teste na run original segue em andamento.
+
+## Teste na run original
+
+- `c7f941c`: instalado no pai; launcher `--verify` passou. Hashes do registry,
+  gate-state, plano, spec, grants e claims permaneceram iguais após o vendor.
+- Às 11:56 UTC, o pai tentou chamar o planner, mas o hook anterior de
+  `harness-tasks` ainda negava planner/plan-reviewer depois da admissão.
+- `aa9777e`: retirou essa proibição antiga; spec/classificação continuam
+  preservadas. A regressão agora executa os hooks de tasks e entry na ordem real
+  com uma tarefa admitida. Os 81 testes desse ajuste passaram.
+- Às 11:59 UTC, a mesma sessão despachou o planner com sucesso e o host capturou
+  `plan_snapshot` no registry. Nenhuma tarefa, tentativa ou sessão foi substituída.
+
+- Às 12:05 UTC, o planner concluiu. Comparação estrutural confirmou que somente
+  `scope_paths` mudou: `src/db/superficie-camada.spec.ts` para task-1;
+  `src/db/registrar-decisao.ts` e `src/db/registrar-decisao.spec.ts` para task-3.
+  O pai despachou o plan-reviewer na própria sessão.
