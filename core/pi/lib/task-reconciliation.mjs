@@ -1,5 +1,5 @@
 /** Verify host merges separately from a task's immutable admission base. */
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
@@ -16,6 +16,19 @@ const ancestor = (root, before, after) => git(root, "merge-base", "--is-ancestor
 function scoped(root, base, head, scopes) {
   const changed = git(root, "diff", "--name-only", "-z", base, head).split("\0").filter(Boolean);
   if (checkScope(changed, scopes).length) throw new Error("task changed paths outside canonical scope");
+}
+
+/** Git exit 1 is a usable conflict preview, not an execution failure. */
+export function taskMergePreview(root, before, after) {
+  const result = spawnSync("git", ["merge-tree", "--write-tree", "--name-only", "-z", before, after],
+    { cwd: root, encoding: "utf8", maxBuffer: 8 * 1024 * 1024 });
+  if (result.error || ![0, 1].includes(result.status))
+    throw new Error(`task merge-tree failed: ${result.error?.message ?? result.stderr}`);
+  const [tree, ...fields] = result.stdout.split("\0");
+  const conflicts = result.status === 1 ? fields.slice(0, fields.indexOf("")) : [];
+  if (!sha.test(tree) || (result.status === 1 && !conflicts.length))
+    throw new Error("task merge-tree returned an invalid preview");
+  return { tree, conflicts: [...new Set(conflicts)].sort() };
 }
 
 export function taskReconciliationDigest(entry) {
@@ -82,8 +95,13 @@ export function taskScopeBase(entry, root, head, scopes) {
         ![proof.pre_child_head, proof.parent_head, proof.merged_head, proof.tree].every((value) => sha.test(value ?? "")) ||
         !Number.isInteger(proof.launch_count) || proof.launch_count < 1 || proof.launch_count > entry.launches.length)
       throw new Error("invalid task reconciliation identity");
-    if (!Array.isArray(proof.upstreams) || !proof.upstreams.length)
+    if (!Array.isArray(proof.upstreams) || (!proof.upstreams.length && proof.kind !== "integration-conflict"))
       throw new Error("task reconciliation requires corrected dependency receipts");
+    if (proof.kind === "integration-conflict") {
+      if (!proof.conflicts?.length || proof.upstreams.length)
+        throw new Error("invalid integration conflict recovery");
+      ancestor(entry.parent_root, proof.parent_head, "HEAD");
+    }
     const ids = new Set();
     for (const upstream of proof.upstreams) {
       const receipt = upstream?.receipt;
@@ -106,10 +124,22 @@ export function taskScopeBase(entry, root, head, scopes) {
     ancestor(root, priorHead, proof.pre_child_head);
     ancestor(root, base, proof.parent_head);
     const parents = git(root, "rev-list", "--parents", "-n", "1", proof.merged_head).split(" ").slice(1);
-    const tree = git(root, "merge-tree", "--write-tree", proof.pre_child_head, proof.parent_head).split("\n")[0];
+    const preview = taskMergePreview(root, proof.pre_child_head, proof.parent_head);
+    const tree = git(root, "rev-parse", `${proof.merged_head}^{tree}`);
     if (parents.length !== 2 || parents[0] !== proof.pre_child_head || parents[1] !== proof.parent_head ||
-        tree !== proof.tree || git(root, "rev-parse", `${proof.merged_head}^{tree}`) !== tree)
+        preview.tree !== proof.tree)
       throw new Error("task reconciliation merge differs from its reserved parents or tree");
+    if (preview.conflicts.length) {
+      if (JSON.stringify(preview.conflicts) !== JSON.stringify(proof.conflicts))
+        throw new Error("task reconciliation conflicts differ from the Git preview");
+      // The host imports the clean merge. The native writer resolves only its
+      // conflicts; subsequent scoped fixes retain their ordinary producer proof.
+      scoped(root, preview.tree, tree, proof.conflicts);
+      if (scopes && checkScope(proof.conflicts, scopes).length)
+        throw new Error("task merge conflicts outside canonical scope");
+    } else if (tree !== preview.tree || proof.conflicts?.length) {
+      throw new Error("task reconciliation merge differs from its reserved parents or tree");
+    }
     if (scopes) {
       scoped(root, base, proof.pre_child_head, scopes);
       scoped(root, proof.parent_head, proof.merged_head, scopes);

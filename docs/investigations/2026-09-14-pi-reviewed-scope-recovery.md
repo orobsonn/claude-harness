@@ -78,3 +78,27 @@ consideravam somente `scope_paths` e testes congelados. Duas regressões reprodu
 concorrência com ownership sobreposto e rejeição da integração de um arquivo
 explicitamente autorizado. A correção inclui a lista nas três verificações de
 escopo; as regressões e a retomada combinando os dois campos passaram (3/3).
+
+## Conflito entre tarefas após correção
+
+Às 12:48 UTC a task-4-durable-runtime terminou em
+`f28f3c5a54015bb0e27d417df285a8bc77a3e09d`, mas a integração no pai
+`e6658546a394aad1b95595e42606afbb9c541c63` falhou com conflito em
+`src/disparo-global.ts` e `src/worker.ts`. O runtime anterior retomou a task
+sem incorporar o pai e retornou o mesmo HEAD. Isso reproduz outra limitação
+do coordenador Pi, independente do bloqueio de escopo já resolvido.
+
+A recuperação usa o `resume` existente. O host inicia o merge na worktree da
+mesma tarefa; o sniper resolve os conflitos e o pai local commita, captura e
+revalida. O journal existente preserva os pais e a árvore do preview Git;
+somente os paths conflitantes podem mudar no commit de resolução. A inspeção
+exige produtor e captura após o merge. A base de admissão permanece imutável e
+o conteúdo importado do pai não é atribuído à mão local. Resoluções parciais
+permanecem disponíveis após restart. Nenhuma role, ação ou aprovação foi criada.
+
+Essa é uma adaptação do fluxo Claude de correção por sniper e gates afetados ao
+coordenador de worktrees do Pi; não é alegação de identidade entre os runtimes.
+Os 161 testes focais passaram, incluindo conflito real Git, sessão/grant
+preservados, retomada parcial, rejeição de alteração fora dos conflitos e
+rejeição de produtor/captura anteriores à resolução. A validação na run real
+segue pendente até instalar e observar sua nova integração.

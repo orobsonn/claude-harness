@@ -9,6 +9,8 @@ import {
   taskScopesOverlap,
   decideTaskCoordinatorEdit,
 } from "./task-coordinator.mjs";
+import { taskScopeBase } from "./task-reconciliation.mjs";
+import { snapshotWorktreeBaseline, pathsChangedSinceBaseline } from "../../opencode/lib/worktree-baseline.mjs";
 import { hashTaskArtifact, admitTaskRun, readTaskRunBinding } from "./task-run.mjs";
 import { preserveTaskPlanForPlanner, readTaskPlanAuthority, validateTaskScopeRecovery } from "./task-plan-recovery.mjs";
 import { canonicalPiDispatchFromPlan } from "./pi-state-records.mjs";
@@ -1138,9 +1140,8 @@ test("dependent recovery requires the corrected upstream receipt in the current 
   }
 });
 
-test("dependent merge conflicts preserve work and do not launch a task", async (t) => {
+test("dependent conflicts resume the same task, preserve partial work, and validate the resolved merge", async (t) => {
   const f = await pendingCorrectionFixture(t, { overlap: true });
-  // A and C may own the same path when they are ordered by a dependency.
   fs.writeFileSync(path.join(f.c.worktree, "src/a.mjs"), "conflicting child change");
   git(f.c.worktree, "add", "src/a.mjs");
   git(f.c.worktree, "commit", "-qm", "conflicting work");
@@ -1148,12 +1149,102 @@ test("dependent merge conflicts preserve work and do not launch a task", async (
   await f.correct();
   const launches = f.launches();
   const result = await f.resumeC();
-  assert.equal(result.ok, false);
-  assert.match(result.reason, /merge-tree/);
+  assert.equal(result.ok, true, result.reason);
   assert.equal(git(f.c.worktree, "rev-parse", "HEAD"), before);
-  assert.equal(git(f.c.worktree, "status", "--porcelain", "--untracked-files=no"), "");
-  assert.equal(f.launches(), launches);
-  assert.equal(f.registry().tasks.c.reconciliation_intent, undefined);
+  assert.equal(f.launches(), launches + 1);
+  const intent = f.registry().tasks.c.reconciliation_intent;
+  assert.deepEqual(intent.conflicts, ["src/a.mjs"]);
+  assert.equal(git(f.c.worktree, "rev-parse", "MERGE_HEAD"), intent.parent_head);
+  const baseline = snapshotWorktreeBaseline(f.c.worktree);
+  fs.writeFileSync(path.join(f.c.worktree, "src/a.mjs"), "export const a=2; // retain child behavior too\n");
+  assert.deepEqual(pathsChangedSinceBaseline(f.c.worktree, baseline), ["src/a.mjs"]);
+  const partial = fs.readFileSync(path.join(f.c.worktree, "src/a.mjs"), "utf8");
+  const status = await f.action({ action: "status", task_id: "c" });
+  assert.equal(status.ok, true, status.reason);
+  assert.equal(status.tasks[0].status, "blocked");
+  assert.match(status.tasks[0].reason, /resume/);
+  assert.equal((await f.resumeC()).ok, true);
+  assert.equal(fs.readFileSync(path.join(f.c.worktree, "src/a.mjs"), "utf8"), partial);
+  git(f.c.worktree, "add", "src/a.mjs");
+  git(f.c.worktree, "commit", "--no-edit");
+  const merged = git(f.c.worktree, "rev-parse", "HEAD");
+  // A subsequent ordinary fix must not be mistaken for the reserved merge.
+  fs.appendFileSync(path.join(f.c.worktree, "src/c.mjs"), "\n// separate fix\n");
+  git(f.c.worktree, "add", "src/c.mjs");
+  git(f.c.worktree, "commit", "-qm", "separate fix");
+  const completed = await f.action({ action: "status", task_id: "c" });
+  assert.equal(completed.ok, true, completed.reason);
+  const recovered = f.registry().tasks.c;
+  assert.equal(recovered.reconciliation_intent, undefined);
+  assert.equal(recovered.reconciliations.at(-1).merged_head, merged);
+  assert.equal(taskScopeBase(recovered, f.c.worktree, "HEAD", ["src/a.mjs", "src/c.mjs"]), intent.parent_head);
+});
+
+async function conflictingIntegrationFixture(t) {
+  const f = fixture(t, [task("a")]);
+  const action = (params) => executeTaskAction(params, f.context, f.deps);
+  await action({ action: "dispatch", task_ids: ["a"] });
+  const entry = f.registry().tasks.a;
+  assert.equal(admitTaskRun(entry.grant_path, { cwd: entry.worktree, sessionId: "local-a" }).ok, true);
+  for (const [root, text] of [[entry.worktree, "task"], [f.dir, "parent"]]) {
+    fs.mkdirSync(path.join(root, "src"));
+    fs.writeFileSync(path.join(root, "src/a.mjs"), text);
+    git(root, "add", "src/a.mjs");
+    git(root, "commit", "-qm", text);
+  }
+  return { ...f, entry, action,
+    resume: () => action({ action: "resume", task_id: "a", attempt_id: entry.attempt_id }) };
+}
+
+test("integration conflicts recover without replacing the session, grant or parent work", async (t) => {
+  const f = await conflictingIntegrationFixture(t);
+  const parent = git(f.dir, "rev-parse", "HEAD");
+  const grant = fs.readFileSync(f.entry.grant_path, "utf8");
+  const claim = fs.readFileSync(`${f.entry.grant_path}.claim`, "utf8");
+  let prompt;
+  const start = f.deps.startProcess;
+  f.deps.startProcess = (input) => { prompt = input.args.at(-1); return start(input); };
+  const resumed = await f.resume();
+  assert.equal(resumed.ok, true, resumed.reason);
+  assert.match(prompt, /harness-sniper/);
+  assert.match(prompt, /capture-verified.*tests.*affected reviewers/s);
+  assert.equal(readTaskRunBinding(f.entry.worktree, "local-a").ok, true, "native task binding accepts the host's pending merge");
+  const terminal = f.deps.readProcess;
+  f.deps.readProcess = () => ({ ok: true, terminal: false, running: true });
+  const live = await f.action({ action: "status" });
+  assert.equal(live.ok, true, live.reason);
+  assert.equal(live.tasks[0].status, "running");
+  f.deps.readProcess = terminal;
+  assert.equal(git(f.dir, "rev-parse", "HEAD"), parent);
+  assert.equal(fs.readFileSync(f.entry.grant_path, "utf8"), grant);
+  assert.equal(fs.readFileSync(`${f.entry.grant_path}.claim`, "utf8"), claim);
+  fs.writeFileSync(path.join(f.entry.worktree, "src/a.mjs"), "parent and task correction\n");
+  git(f.entry.worktree, "add", "src/a.mjs");
+  git(f.entry.worktree, "commit", "--no-edit");
+  const head = git(f.entry.worktree, "rev-parse", "HEAD");
+  const inspected = await f.action({ action: "status" });
+  assert.equal(inspected.ok, true, inspected.reason);
+  const entry = f.registry().tasks.a;
+  assert.equal(entry.reconciliations[0].kind, "integration-conflict");
+  assert.equal(taskScopeBase(entry, entry.worktree, head, ["src/a.mjs"]), parent);
+  const merged = await f.action({ action: "integrate", task_id: "a", attempt_id: entry.attempt_id, expected_head: head });
+  assert.equal(merged.ok, true, merged.reason);
+  assert.equal(f.registry().tasks.a.status, "integrated");
+  assert.equal(fs.readFileSync(path.join(f.dir, "src/a.mjs"), "utf8"), "parent and task correction\n");
+});
+
+test("conflict recovery rejects changes outside the reserved conflict resolution", async (t) => {
+  const f = await conflictingIntegrationFixture(t);
+  assert.equal((await f.resume()).ok, true);
+  fs.writeFileSync(path.join(f.entry.worktree, "src/a.mjs"), "resolution");
+  fs.writeFileSync(path.join(f.entry.worktree, "base.txt"), "unrelated overwrite");
+  git(f.entry.worktree, "add", "src/a.mjs", "base.txt");
+  git(f.entry.worktree, "commit", "--no-edit");
+  const result = await f.action({ action: "status" });
+  assert.equal(result.ok, false);
+  assert.match(result.reason, /outside canonical scope/);
+  assert.ok(f.registry().tasks.a.reconciliation_intent);
+  assert.equal(f.registry().tasks.a.integration, null);
 });
 
 test("dependent reconciliation recovers failed commit hooks and a committed merge before journal completion", async (t) => {

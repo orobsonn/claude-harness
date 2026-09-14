@@ -22,7 +22,7 @@ import { capturePlanReviewInput } from "./task-run.mjs";
 import { captureTaskContext } from "./task-context.mjs";
 import { readTaskPlanAuthority } from "./task-plan-recovery.mjs";
 import { checkScope } from "../../shared/lib/capture-oracle.mjs";
-import { taskScopeBase } from "./task-reconciliation.mjs";
+import { taskScopeBase, taskMergePreview } from "./task-reconciliation.mjs";
 import { resolveOrcaTaskBackend } from "./task-orca.mjs";
 import {
   TASK_PIPELINE_VERSION,
@@ -356,6 +356,16 @@ function reconcileDependentMerge(entry, persist, scopes) {
   if (head === intent.pre_child_head) {
     let merging;
     try { merging = git(root, "rev-parse", "--verify", "MERGE_HEAD"); } catch {}
+    if (intent.conflicts?.length) {
+      if (!merging) {
+        requireTaskIdentity(entry);
+        beginConflictMerge(entry);
+        return;
+      }
+      if (merging !== intent.parent_head)
+        throw new Error("task conflict merge is missing or changed; preserve the worktree and journal");
+      return; // Keep native resolution work across status, restarts and resumes.
+    }
     if (merging) {
       if (merging !== intent.parent_head || git(root, "write-tree") !== intent.tree ||
           git(root, "diff", "--name-only") || git(root, "ls-files", "--others", "--exclude-standard", "-z")
@@ -369,7 +379,8 @@ function reconcileDependentMerge(entry, persist, scopes) {
     return;
   }
   requireTaskIdentity(entry);
-  const proof = { ...intent, merged_head: head };
+  const mergedHead = git(root, "rev-list", "--first-parent", "--reverse", `${intent.pre_child_head}..${head}`).split("\n")[0];
+  const proof = { ...intent, merged_head: mergedHead };
   const proposed = { ...entry, reconciliations: [...(entry.reconciliations ?? []), proof] };
   delete proposed.reconciliation_intent;
   delete proposed.reconciliation_required;
@@ -383,6 +394,7 @@ function reconcileDependentMerge(entry, persist, scopes) {
   persist();
 }
 async function reconcileDependent(entry, task, owner, registry, persist, deps) {
+  if (entry.reconciliation_intent?.conflicts?.length) return;
   if (!entry.reconciliation_required) return;
   requireTaskIdentity(entry);
   requireClean(owner.root);
@@ -413,19 +425,63 @@ async function reconcileDependent(entry, task, owner, registry, persist, deps) {
       previous_receipt_sha256: prior.receipt_sha256, receipt: upstream.integration });
   }
   if (!upstreams.length) throw new Error("corrected dependency identity is missing from the recovery request");
-  const tree = git(entry.worktree, "merge-tree", "--write-tree", head, parentHead).split("\n")[0];
+  const { tree, conflicts } = taskMergePreview(entry.worktree, head, parentHead);
   const mergedChanges = git(entry.worktree, "diff", "--name-only", "-z", parentHead, tree).split("\0").filter(Boolean);
-  if (checkScope(mergedChanges, scopes).length) throw new Error("dependent merge changes paths outside canonical scope");
+  if (checkScope([...mergedChanges, ...conflicts], scopes).length) throw new Error("dependent merge changes paths outside canonical scope");
   entry.reconciliation_intent = {
     written_by: "host-task-reconciliation", task_id: entry.task_id, attempt_id: entry.attempt_id,
     scope_base_sha: base, pre_child_head: head, parent_head: parentHead, tree, launch_count: entry.launches.length, upstreams,
+    ...(conflicts.length ? { conflicts } : {}),
   };
   persist();
+  if (conflicts.length) {
+    beginConflictMerge(entry);
+    return;
+  }
   git(entry.worktree, "merge", "--no-ff", "--no-edit", "-m",
     `Reconcile harness dependency correction for ${entry.task_id}`, parentHead);
   reconcileDependentMerge(entry, persist, scopes);
   if (entry.reconciliation_required)
     throw new Error("dependent reconciliation did not produce the reserved merge; preserve the worktree and journal");
+}
+
+function beginConflictMerge(entry) {
+  const intent = entry.reconciliation_intent;
+  try {
+    git(entry.worktree, "merge", "--no-ff", "--no-commit", intent.parent_head);
+  } catch (error) {
+    if (git(entry.worktree, "rev-parse", "--verify", "MERGE_HEAD") !== intent.parent_head)
+      throw error;
+  }
+  const unresolved = git(entry.worktree, "diff", "--name-only", "--diff-filter=U", "-z").split("\0").filter(Boolean).sort();
+  if (JSON.stringify(unresolved) !== JSON.stringify(intent.conflicts))
+    throw new Error("task conflict merge differs from its preview; preserve worktree and journal");
+}
+
+function prepareIntegrationConflict(entry, task, owner, persist) {
+  if (entry.reconciliation_intent || entry.reconciliation_required) return;
+  const head = git(entry.worktree, "rev-parse", "HEAD");
+  const parentHead = git(owner.root, "rev-parse", "HEAD");
+  const preview = taskMergePreview(entry.worktree, head, parentHead);
+  if (!preview.conflicts.length) return;
+  requireTaskIdentity(entry);
+  requireClean(owner.root);
+  if (!fs.existsSync(`${entry.grant_path}.claim`))
+    throw new Error("complete initial task admission before resolving integration conflicts");
+  const scopes = scopeOf(task);
+  const base = taskScopeBase(entry, entry.worktree, head, scopes);
+  const changed = git(entry.worktree, "diff", "--name-only", "-z", parentHead, preview.tree).split("\0").filter(Boolean);
+  if (checkScope([...preview.conflicts, ...changed], scopes).length)
+    throw new Error("task merge conflicts outside canonical scope; correct the reviewed plan before resume");
+  entry.reconciliation_intent = {
+    written_by: "host-task-reconciliation", kind: "integration-conflict",
+    task_id: entry.task_id, attempt_id: entry.attempt_id, scope_base_sha: base,
+    pre_child_head: head, parent_head: parentHead, tree: preview.tree,
+    conflicts: preview.conflicts, launch_count: entry.launches.length, upstreams: [],
+  };
+  entry.result = null;
+  persist();
+  beginConflictMerge(entry);
 }
 async function prepareWorktree(entry, artifacts, deps, persist) {
   if (deps.orcaBackend) await deps.orcaBackend.prepareWorktree(entry, persist);
@@ -541,7 +597,10 @@ async function launchTask(entry, context, persist, deps, instruction) {
   const feedback = instruction ||
     "Execute the admitted task using the task pipeline. Complete the native TDD, applicable reviewers and current capture. Return only after the task is ready for host integration.";
   const reconciliation = entry.reconciliations?.at(-1);
-  const prompt = reconciliation
+  const conflict = entry.reconciliation_intent;
+  const prompt = conflict?.conflicts?.length
+    ? `The host has already started the task merge with parent ${conflict.parent_head}. Resolve the existing conflicts in ${conflict.conflicts.join(", ")} through harness-sniper in this same task. Preserve both the task correction and the parent's already integrated behavior. Do not start another merge, rebase or cherry-pick. Resolve only the listed conflicts, stage those paths and commit the existing merge in the local parent; clean merged paths are already staged. Do not edit unrelated paths in that merge commit. Then use the existing capture-verified, tests and affected reviewers on the resolved HEAD. Any further product fix uses a separate ordinary fix commit. Preserve frozen tests and valid unaffected evidence. This merge is not approval.\n\nBehavioral feedback:\n${feedback}`
+    : reconciliation
     ? `The host merged a dependency correction at ${reconciliation.merged_head}; dependency integration is already complete. Preserve the original task, scope and frozen tests. Before choosing a hand, compare the current HEAD, capture and producer receipt. If they already prove the reconciled implementation and no product delta is requested, do not dispatch executor/sniper just for freshness; resolve only affected test/evidence obligations. If provenance after this merge is still missing, obtain it through the existing task pipeline; a launch alone is not validation. A real product finding requires the appropriate implementation hand, commit, capture and affected eyes. Preserve valid unaffected reviews.\n\nBehavioral feedback:\n${feedback}\n\nDependency integration remains host-owned. Any upstream integration request in that feedback is already fulfilled; never ask a child to merge, rebase or cherry-pick.`
     : feedback;
   const args = [
@@ -676,8 +735,10 @@ export async function executeTaskAction(params, context = {}, injected = {}) {
     if (registry) reconcileMerge(owner, registry, persist);
     if (registry) for (const entry of Object.values(registry.tasks)) {
       if (entry.reconciliation_intent) {
-        if (entry.launches.some((launch) => !deps.readProcess(launch).terminal))
+        if (entry.launches.some((launch) => !deps.readProcess(launch).terminal)) {
+          if (entry.reconciliation_intent.conflicts?.length) continue;
           throw new Error("dependent process must terminate before reconciliation");
+        }
         const task = approvedPlan(owner).plan.tasks.find((task) => task.id === entry.task_id);
         reconcileDependentMerge(entry, persist, scopeOf(task));
       }
@@ -692,7 +753,12 @@ export async function executeTaskAction(params, context = {}, injected = {}) {
       const diagnostics = {};
       for (const entry of entries) {
         if (entry.status === "integrated") continue;
-        if (entry.reconciliation_required) {
+        if (entry.reconciliation_intent?.conflicts?.length && entry.launches.every((launch) => deps.readProcess(launch).terminal)) {
+          entry.status = "blocked";
+          entry.reason = `merge conflicts require resolution in the same task; use resume: ${entry.reconciliation_intent.conflicts.join(", ")}`;
+          continue;
+        }
+        if (entry.reconciliation_required && !entry.reconciliation_intent?.conflicts?.length) {
           entry.status = "blocked";
           entry.reason = `dependency correction (${Object.keys(entry.reconciliation_required.upstreams ?? {}).join(", ")}) requires reconciliation; integrate the corrected owner, then resume this dependent for current capture and reviews`;
           continue;
@@ -1053,6 +1119,7 @@ export async function executeTaskAction(params, context = {}, injected = {}) {
         invalidateAggregate(owner, registry, persist);
       }
       await reconcileDependent(entry, artifacts.plan.tasks.find((task) => task.id === entry.task_id), owner, registry, persist, deps);
+      prepareIntegrationConflict(entry, artifacts.plan.tasks.find((task) => task.id === entry.task_id), owner, persist);
       await prepareWorktree(entry, artifacts, deps, persist);
       await launchTask(entry, context, persist, deps, params.instruction);
       return { ok: true, tasks: [summary(entry)] };
@@ -1076,13 +1143,9 @@ export async function executeTaskAction(params, context = {}, injected = {}) {
     const parentHead = git(owner.root, "rev-parse", "HEAD");
     if (!isAncestor(owner.root, entry.base_sha, parentHead))
       throw new Error("task base is no longer an ancestor of parent HEAD");
-    const tree = git(
-      owner.root,
-      "merge-tree",
-      "--write-tree",
-      parentHead,
-      params.expected_head,
-    ).split("\n")[0];
+    const { tree, conflicts } = taskMergePreview(owner.root, parentHead, params.expected_head);
+    if (conflicts.length)
+      throw new Error(`task merge conflicts in ${conflicts.join(", ")}; use resume on this same task/attempt to resolve with sniper, capture and affected reviews`);
     requireFrozen(owner.root, tree, [
       entry.result,
       ...Object.values(registry.tasks)

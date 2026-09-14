@@ -172,6 +172,14 @@ repita olhos ou re-gate enquanto o mesmo defeito segue aberto. Depois de um merg
 de recuperação feito pelo host, obtenha captura de uma mão e revisões atuais no
 novo HEAD conforme as obrigações afetadas, preservando a fidelidade válida e sem
 edições cosméticas para gerar recibo.
+Se o host retomar a tarefa com um merge em conflito já iniciado, preserve esse
+merge e despache sniper para resolver somente os arquivos indicados, combinando
+o comportamento da tarefa com as correções já integradas no pai. O pai local
+adiciona os arquivos resolvidos e commita o merge existente; os arquivos sem
+conflito já estão staged pelo Git. Não inicie outro merge/rebase/cherry-pick nem
+altere arquivos sem conflito nesse commit. Faça eventuais outras correções em
+commits separados. Capture o HEAD resolvido, execute os testes e repita os olhos
+afetados antes de retornar. Resolução parcial pode continuar na mesma tentativa.
 No brief de implementação, entregue o contrato, diff e arquivos atuais, com os
 comandos/resultados necessários acessíveis. O host verifica a linhagem de captura
 e freeze; não peça aos olhos reconstruir histórico de SHAs ou provar paths intactos.

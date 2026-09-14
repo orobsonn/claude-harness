@@ -6,6 +6,7 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 import test from "node:test";
 
+import { taskMergePreview } from "./task-reconciliation.mjs";
 import { hashTaskReceipt } from "./task-contract.mjs";
 import { createPiMarkerAuthority } from "./marker-authority.mjs";
 import { inspectTaskRun, readIntegratedTaskEvidence, inspectTaskResumeAbandonment } from "./task-receipts.mjs";
@@ -2157,4 +2158,65 @@ test("inspection accepts product writes explicitly granted through allowed_write
     return { ...binding, task: { ...binding.task, scope_paths: ["src/unrelated.mjs"], allowed_writes: ["src/different.mjs"] } };
   };
   assert.equal(inspectTaskRun(f.entry, f.dependencies).ok, false);
+});
+
+
+test("resolved integration conflicts require a current native producer and capture before inspection", () => {
+  const f = inspectionFixture();
+  appendImplementationReviews(f);
+  archiveInspectedIntegration(f);
+  const registryPath = path.join(f.root, ".pi/harness/state", PARENT, "task-runs/index.json");
+  write(registryPath, { version: 1, parent_session_id: PARENT, feature_id: FEATURE,
+    plan_sha256: f.entry.plan_sha256, spec_sha256: f.entry.spec_sha256, tasks: {} });
+  run(f.root, "git", "checkout", "-b", "parent-correction", f.base);
+  write(path.join(f.root, "src/task.mjs"), "export const parent = true;\n");
+  write(path.join(f.root, "upstream.mjs"), "export const upstream = true;\n");
+  run(f.root, "git", "add", "src/task.mjs", "upstream.mjs");
+  run(f.root, "git", "commit", "-m", "parent behavior");
+  const parent = run(f.root, "git", "rev-parse", "HEAD");
+  run(f.root, "git", "checkout", "-b", "task-resolution", f.head);
+  const preview = taskMergePreview(f.root, f.head, parent);
+  assert.deepEqual(preview.conflicts, ["src/task.mjs"]);
+  assert.throws(() => run(f.root, "git", "merge", "--no-ff", "--no-commit", parent));
+  write(path.join(f.root, "src/task.mjs"), "export const actual = 1;\nexport const parent = true;\n");
+  run(f.root, "git", "add", "src/task.mjs");
+  run(f.root, "git", "commit", "--no-edit");
+  const head = run(f.root, "git", "rev-parse", "HEAD");
+  f.entry.reconciliations = [{ written_by: "host-task-reconciliation", kind: "integration-conflict",
+    task_id: TASK, attempt_id: ATTEMPT, scope_base_sha: f.base, pre_child_head: f.head,
+    parent_head: parent, merged_head: head, tree: preview.tree, conflicts: preview.conflicts,
+    upstreams: [], launch_count: 1 }];
+  f.dependencies.captureReviewInputFn = () => ({ ok: true, snapshot: { head_sha: head, input_digest: DIGEST } });
+  const stale = inspectTaskRun(f.entry, f.dependencies);
+  assert.equal(stale.ok, false);
+  assert.match(stale.reason, /capture after dependency reconciliation/);
+  const handPath = path.join(f.root, ".pi/harness/state/hand-records", FEATURE, CHILD, `${TASK}.json`);
+  const hand = JSON.parse(fs.readFileSync(handPath));
+  write(handPath, { ...hand, freezeCommitSha: head });
+  assert.match(inspectTaskRun(f.entry, f.dependencies).reason, /producer after dependency reconciliation/);
+  const calls = [
+    event("tool_execution_start", { toolCallId: "conflict-sniper", toolName: "subagent", args: {
+      subagent_type: "harness-sniper", prompt: `[HARNESS_TASK_CONTEXT]{"task_id":"${TASK}"}[/HARNESS_TASK_CONTEXT]` } }),
+    event("tool_execution_end", { toolCallId: "conflict-sniper", toolName: "subagent", isError: false,
+      result: { details: { status: "completed" } } }), "",
+  ];
+  fs.appendFileSync(f.entry.launches.at(-1).events_path, calls.join("\n"));
+  write(handPath, { ...hand, agent: "harness-sniper", freezeCommitSha: head, producerCallId: "conflict-sniper" });
+  const missingCapture = inspectTaskRun(f.entry, f.dependencies);
+  assert.equal(missingCapture.ok, false);
+  assert.match(missingCapture.reason, /capture markers/);
+  const state = JSON.parse(fs.readFileSync(f.statePath));
+  const bare = `${FEATURE}/${TASK}`;
+  state.capture_verified = [`${bare}@${head}`];
+  state.task_adversary_evidence[bare] = review("harness-adversary", head);
+  state.task_review_evidence[bare] = { compliance: review("harness-compliance", head), security: review("harness-security", head) };
+  write(f.statePath, state);
+  appendImplementationReviews(f);
+  const current = inspectTaskRun(f.entry, f.dependencies);
+  assert.equal(current.ok, true, current.reason);
+  assert.equal(current.result.base_sha, f.base);
+  assert.equal(current.result.scope_base_sha, parent);
+  assert.equal(current.result.hand_capture.agent, "harness-sniper");
+  assert.ok(current.result.changed_paths.includes("upstream.mjs"));
+  assert.equal(current.result.reconciliation_sha256, hashTaskReceipt(f.entry.reconciliations));
 });

@@ -100,7 +100,12 @@ pronta sem causa. Integre somente o SHA exato validado pelo coordenador.
 Correção de dependência pertence ao host: integre a correção da tarefa dona e use
 `harness_tasks resume` na tentativa dependente quando for necessário revalidá-la,
 inclusive se ela já estiver integrada. O host incorpora o upstream e registra a
-prova antes de lançar o filho. No feedback, descreva o comportamento afetado;
+prova antes de lançar o filho. Se houver conflito de merge, use o mesmo `resume`:
+o host inicia o merge na worktree da tarefa e preserva o pai global. O pai local
+despacha sniper para resolver os paths indicados, preservando o comportamento de
+ambos os lados, commita o merge já iniciado e executa captura, testes e olhos
+afetados. Conflito não exige nova task, tentativa ou cerimônia. Trabalho parcial
+de resolução é preservado em outra retomada. No feedback, descreva o comportamento afetado;
 nunca mande executor/sniper fazer merge, rebase, cherry-pick ou integração global.
 Uma dependência já reconciliada não deve ser apresentada como integração pendente.
 Isso não autoriza reabrir tasks concluídas sem impacto nem repetir olhos não afetados.
