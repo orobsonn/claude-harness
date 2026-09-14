@@ -9,6 +9,7 @@ import {
   taskScopesOverlap,
   decideTaskCoordinatorEdit,
 } from "./task-coordinator.mjs";
+import { captureTaskRuntime, verifyTaskRuntime } from "./task-runtime-assets.mjs";
 import { taskScopeBase } from "./task-reconciliation.mjs";
 import { snapshotWorktreeBaseline, pathsChangedSinceBaseline } from "../../opencode/lib/worktree-baseline.mjs";
 import { hashTaskArtifact, admitTaskRun, readTaskRunBinding } from "./task-run.mjs";
@@ -1347,4 +1348,48 @@ test("vendored parent resumes existing task with installed harness and retains p
   assert.equal(second.ok, true, second.reason);
   assert.equal(f.registry().tasks.a.runtime.sha256, installedDigest);
   assert.deepEqual(f.registry().tasks.a.launches.slice(0, 2), updated.launches);
+});
+
+
+for (const mergedUpdate of [false, true]) test(`consumer resume selects the installed parent runtime after host merge: ${mergedUpdate}`, async (t) => {
+  const f = fixture(t, [task("a")], { vendored: true });
+  git(f.dir, "add", ".");
+  git(f.dir, "commit", "-qm", "vendor fixture");
+  const coordinator = await import(pathToFileURL(path.join(f.dir, ".pi/harness/lib/task-coordinator.mjs")));
+  const action = (params) => coordinator.executeTaskAction(params, f.context, f.deps);
+  f.deps.captureRuntime = captureTaskRuntime;
+  f.deps.verifyRuntime = verifyTaskRuntime;
+  assert.equal((await action({ action: "dispatch", task_ids: ["a"] })).ok, true);
+  const original = f.registry().tasks.a;
+  assert.equal(admitTaskRun(original.grant_path, { cwd: original.worktree, sessionId: "runtime-recovery" }).ok, true);
+  const claim = fs.readFileSync(original.grant_path + ".claim", "utf8");
+  if (mergedUpdate) {
+    fs.appendFileSync(path.join(f.dir, ".pi/harness/prompts/harness-runtime.md"), "\nUpdated installed runtime.\n");
+    git(f.dir, "add", ".pi/harness/prompts/harness-runtime.md");
+    git(f.dir, "commit", "-qm", "update runtime");
+    // Same filesystem transition as host dependency reconciliation, including
+    // a retry after that merge was committed but resume failed before launch.
+    git(original.worktree, "merge", "--no-ff", "--no-edit", git(f.dir, "rev-parse", "HEAD"));
+    assert.equal(verifyTaskRuntime(original.runtime).ok, false);
+  }
+  const parentLauncher = path.join(f.dir, ".pi/harness/bin/pi-harness.mjs");
+  const current = captureTaskRuntime(parentLauncher);
+  assert.equal(current.ok, true);
+  const resumed = await action({ action: "resume", task_id: "a", attempt_id: original.attempt_id });
+  assert.equal(resumed.ok, true, resumed.reason);
+  const updated = f.registry().tasks.a;
+  assert.deepEqual(updated.runtime, current.runtime);
+  assert.deepEqual(updated.launches[0], original.launches[0]);
+  assert.deepEqual(updated.grant, original.grant);
+  assert.equal(fs.readFileSync(original.grant_path + ".claim", "utf8"), claim);
+  assert.deepEqual(updated.launches.at(-1).runtime, current.runtime);
+  // A consumer upgrade still has to capture a valid current runtime.
+  const prompt = path.join(f.dir, ".pi/harness/prompts/harness-runtime.md");
+  fs.unlinkSync(prompt);
+  fs.symlinkSync(path.join(f.dir, "base.txt"), prompt);
+  const launches = f.launches();
+  const invalid = await action({ action: "resume", task_id: "a", attempt_id: original.attempt_id });
+  assert.equal(invalid.ok, false);
+  assert.match(invalid.reason, /symlink/);
+  assert.equal(f.launches(), launches);
 });

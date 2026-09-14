@@ -142,7 +142,28 @@ originais. A evidência resumida está em
 | Continuar a própria run | Pai avançou autonomamente para paginação D1 e depois API, com as mesmas tarefas. |
 | Validar a fonte | 161 testes focais, 3.774 testes completos e CI verdes no código `4e86cec`. |
 
-O goal de recuperação está comprovado. Os requisitos restantes do produto seguem
-na run original. Não se declara aqui conclusão da entrega inteira nem paridade
-irrestrita entre Pi e Claude Code: adicionar tarefas ou mudar dependências depois
-da admissão continua fora da correção de escopo implementada.
+Essa auditoria comprovou os casos de escopo e conflito exercitados. Os requisitos
+restantes do produto seguem na run original. Não se declara aqui conclusão da
+entrega inteira nem paridade irrestrita entre Pi e Claude Code: adicionar tarefas
+ou mudar dependências depois da admissão continua fora da correção implementada.
+
+## Regressão: runtime antigo depois do merge de dependências
+
+Às 13:39 UTC a task-5-crm-queue-ui ficou bloqueada com
+`task runtime assets: managed assets changed since task admission`. O host já
+havia incorporado as correções das dependências em `1d55a9a`; esse merge trouxe
+também o harness atualizado para a worktree da UI. A primeira retomada após a
+atualização ainda tentava validar a cópia antiga do filho pelo hash da admissão,
+antes de selecionar o runtime instalado no pai. A auditoria anterior não cobria
+essa combinação e não demonstrava ausência de novos bloqueios.
+
+A retomada de consumidor agora captura e seleciona o runtime que vai executar
+no pai. Não valida a cópia histórica substituída pelo merge. Cada lançamento
+anterior mantém seu recibo; checkouts de desenvolvimento da fonte continuam
+fixados e verificados. Mesmo com hashes iguais, a retomada seleciona o caminho
+do pai, evitando continuar presa à cópia que um merge posterior pode atualizar.
+
+Duas regressões com vendor e Git reais falharam antes da correção: caminho antigo
+com hash igual e rejeição depois do merge que atualizou o runtime. Ambas passaram
+após o ajuste; também verificam preservação de grant/claim e lançamentos antigos
+e rejeição de symlink no runtime atual antes de lançar processo.

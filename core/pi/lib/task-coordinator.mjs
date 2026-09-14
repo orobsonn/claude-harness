@@ -552,18 +552,19 @@ async function prepareWorktree(entry, artifacts, deps, persist) {
     entry.runtime = captured.runtime;
   }
   // A resumed consumer uses the harness the operator installed in its parent.
-  // Each historic launch retains its own runtime receipt. Validate pinned child
-  // assets, but allow a terminal parent runtime to have been updated again.
+  // Each historic launch retains its own runtime receipt. A host merge may have
+  // updated the old child copy; validate the installed runtime we will actually
+  // execute instead. Source-development checkouts remain pinned and verified.
   const installedResume = entry.launches.length &&
     path.relative(entry.parent_root, TASK_LAUNCHER) === ".pi/harness/bin/pi-harness.mjs";
-  if (!installedResume || entry.runtime.launcher_path !== TASK_LAUNCHER) {
+  if (!installedResume) {
     const checkedRuntime = deps.verifyRuntime(entry.runtime);
     if (!checkedRuntime.ok) throw new Error(checkedRuntime.reason);
   }
   if (installedResume) {
     const installed = deps.captureRuntime(TASK_LAUNCHER);
     if (!installed.ok) throw new Error(installed.reason);
-    if (installed.runtime.sha256 !== entry.runtime.sha256) entry.runtime = installed.runtime;
+    entry.runtime = installed.runtime;
   }
 }
 async function launchTask(entry, context, persist, deps, instruction) {
