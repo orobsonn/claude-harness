@@ -6,9 +6,11 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 import test from "node:test";
 
+import { taskMergePreview } from "./task-reconciliation.mjs";
 import { hashTaskReceipt } from "./task-contract.mjs";
 import { createPiMarkerAuthority } from "./marker-authority.mjs";
 import { inspectTaskRun, readIntegratedTaskEvidence, inspectTaskResumeAbandonment } from "./task-receipts.mjs";
+import { preserveTaskPlanForPlanner } from "./task-plan-recovery.mjs";
 import { validateTaskFidelityFreeze } from "./task-run.mjs";
 
 const FEATURE = "receipt-feature";
@@ -411,7 +413,7 @@ test("resume abandonment refuses drift, live processes, invalid history, and new
 function testOnlyRecovery({ capturedImplementation = true, productDelta = false, laterWriter = false,
   extraAuthor = false, earlierAuthorProductDrift = false, lateCapture = false, failedWriter = false,
   overlappingCapture = false, dirtyCaptureFirst = false, originOverride = {},
-  fixture = inspectionFixture(), integrated = false, suffix = "" } = {}) {
+  fixture = inspectionFixture(), integrated = false, freshImplementation = false, suffix = "" } = {}) {
   const f = fixture;
   if (integrated) archiveInspectedIntegration(f);
   let baseline = f.head;
@@ -423,8 +425,17 @@ function testOnlyRecovery({ capturedImplementation = true, productDelta = false,
     extra.push(event("tool_execution_end", { toolCallId: id, toolName: tool, isError: false, result }));
   };
   const prompt = '[HARNESS_TASK_CONTEXT]{"task_id":"' + TASK + '"}[/HARNESS_TASK_CONTEXT]';
+  if (freshImplementation) {
+    assert.equal(integrated, true);
+    write(path.join(f.root, "src/task.mjs"), "export const actual = 'new requested behavior';\n");
+    run(f.root, "git", "add", "src/task.mjs");
+    run(f.root, "git", "commit", "-m", "new implementation after integration");
+    f.head = baseline = run(f.root, "git", "rev-parse", "HEAD");
+    add("fresh-producer", "subagent", { subagent_type: "harness-executor", prompt }, { details: { status: "completed" } });
+  }
+  const implementationCallId = freshImplementation ? "fresh-producer" + suffix : "producer";
   const capture = () => add("prior-capture", "mark", { action: "capture-verified", task_id: TASK },
-    { details: { ok: true, capture_origin: { task_id: TASK, producer_call_id: "producer", head_sha: f.head,
+    { details: { ok: true, capture_origin: { task_id: TASK, producer_call_id: implementationCallId, head_sha: f.head,
       worktree_clean: true, ...originOverride } } });
   if (dirtyCaptureFirst) add("dirty-capture", "mark", { action: "capture-verified", task_id: TASK },
     { details: { ok: true, capture_origin: { task_id: TASK, producer_call_id: "producer", head_sha: f.freeze, worktree_clean: false } } });
@@ -1336,6 +1347,29 @@ test("inspectTaskRun binds every launch and the receipt to the admitted runtime 
   assert.match(changed.reason, /runtime identity/i);
 });
 
+test("runtime update keeps previous process evidence bound to its original runtime", () => {
+  const fixture = inspectionFixture({ historicFailure: true });
+  const previous = { launcher_path: path.join(fixture.root, "old/bin/pi-harness.mjs"), sha256: "8".repeat(64) };
+  const installed = { launcher_path: path.join(fixture.root, "new/bin/pi-harness.mjs"), sha256: "9".repeat(64) };
+  fixture.entry.runtime = installed;
+  for (const [index, launch] of fixture.entry.launches.entries()) {
+    launch.runtime = index === fixture.entry.launches.length - 1 ? installed : previous;
+    for (const file of [launch.process_path, launch.result_path]) {
+      const record = JSON.parse(fs.readFileSync(file, "utf8"));
+      write(file, { ...record, run_runtime_sha256: launch.runtime.sha256 });
+    }
+  }
+  const inspected = inspectTaskRun(fixture.entry, fixture.dependencies);
+  assert.equal(inspected.ok, true, inspected.reason);
+  assert.deepEqual(inspected.result.runtime, installed);
+  assert.equal(inspected.result.launches[0].run_runtime_sha256, previous.sha256);
+  assert.equal(inspected.result.launches.at(-1).run_runtime_sha256, installed.sha256);
+  fixture.entry.launches[0].runtime = installed;
+  const forged = inspectTaskRun(fixture.entry, fixture.dependencies);
+  assert.equal(forged.ok, false);
+  assert.match(forged.reason, /runtime|process/i);
+});
+
 test("inspectTaskRun accepts the registered worker PID for an Orca terminal launch", () => {
   const fixture = inspectionFixture();
   const launch = fixture.entry.launches.at(-1);
@@ -1692,11 +1726,11 @@ test("inspectTaskRun rejects a frozen test modified after the event-proven freez
   assert.match(inspected.reason, /frozen file changed/i);
 });
 
-function integratedFixture({ lockedPaths = [], mode = "full" } = {}) {
+function integratedFixture({ lockedPaths = [], mode = "full", plan } = {}) {
   const { root, base } = repo();
   const planPath = path.join(root, ".pi", "harness", "plans", FEATURE, "execution-plan.json");
   const specPath = path.join(root, ".pi", "harness", "plans", FEATURE, "spec.md");
-  write(planPath, { feature_id: FEATURE, mode, tasks: [{ id: TASK,
+  write(planPath, plan ?? { feature_id: FEATURE, mode, tasks: [{ id: TASK,
     locked_tests: lockedPaths.map((file, index) => ({ id: "locked-" + index, path: file })) }] });
   write(specPath, "approved task spec\n");
   const planSha = crypto.createHash("sha256").update(fs.readFileSync(planPath)).digest("hex");
@@ -1764,6 +1798,34 @@ function integratedFixture({ lockedPaths = [], mode = "full" } = {}) {
   write(registryPath, registry);
   return { root, base, planPath, specPath, statePath, registryPath, registry, entry, integration };
 }
+
+test("reviewed scope correction preserves other integrated tasks and requires affected task revalidation", () => {
+  const task = (id) => ({ id, depends_on: [], severity: "medium", scope_paths: [`src/${id}.mjs`],
+    criterion_refs: ["ac-1"], locked_tests: [{ id: `${id}-test`, path: `tests/${id}.test.mjs`,
+      assertion: "Given input When invoked Then output is correct" }] });
+  const plan = { feature_id: FEATURE, kind: "full", mode: "full",
+    model_strategy: { hand_tiers: { low: "test/model", medium: "test/model", high: "test/model" },
+      ...Object.fromEntries(["planner", "plan-reviewer", "compliance", "adversary", "security", "shipper", "harvester"].map((role) => [role, "test/model"])) },
+    tasks: [task(TASK), task("other-task")] };
+  for (const affected of [false, true]) {
+    const f = integratedFixture({ plan });
+    const originalResult = structuredClone(f.entry.result);
+    preserveTaskPlanForPlanner({ projectRoot: f.root, sessionId: PARENT, featureId: FEATURE },
+      { readProcess: () => ({ terminal: true }) });
+    const revised = structuredClone(plan);
+    revised.tasks[affected ? 0 : 1].scope_paths.push("src/missing-file.mjs");
+    write(f.planPath, revised);
+    const state = JSON.parse(fs.readFileSync(f.statePath, "utf8"));
+    state.plan_review_evidence = { ...state.plan_review_evidence, dispatch_call_id: "corrected-plan-review",
+      plan_sha256: crypto.createHash("sha256").update(fs.readFileSync(f.planPath)).digest("hex") };
+    write(f.statePath, state);
+    const evidence = readIntegratedTaskEvidence({ projectRoot: f.root, sessionId: PARENT,
+      featureId: FEATURE, taskId: TASK, headSha: f.base });
+    assert.equal(evidence.ok, !affected, evidence.reason);
+    if (affected) assert.match(evidence.reason, /resume the same task/);
+    else assert.deepEqual(evidence.entry.result, originalResult);
+  }
+});
 
 test("readIntegratedTaskEvidence preserves the child session and accepts ancestry at a later global HEAD", () => {
   const fixture = integratedFixture();
@@ -2015,5 +2077,184 @@ test("only the exact blocked dependent can read its corrected upstream during re
     corrupt(registry);
     write(f.registryPath, registry);
     assert.equal(readIntegratedTaskEvidence({ ...input, reconciliationFor: context }).ok, false);
+  }
+});
+
+
+test("uncaptured corrective hand exposes its conflict and current findings without approving the task", () => {
+  const f = inspectionFixture();
+  const handPath = path.join(f.root, ".pi", "harness", "state", "hand-records", FEATURE, CHILD, `${TASK}.json`);
+  const hand = JSON.parse(fs.readFileSync(handPath, "utf8"));
+  write(handPath, { ...hand, outcome: "DONE_WITH_CONCERNS", capturedVerifiedAt: null });
+  const report = "Fix suggestion contradicts recovery test; 12/13 passed. Status: DONE_WITH_CONCERNS";
+  const eventsPath = f.entry.launches.at(-1).events_path;
+  write(eventsPath, replaceEventText(fs.readFileSync(eventsPath, "utf8"), "producer", report));
+  const state = JSON.parse(fs.readFileSync(f.statePath, "utf8"));
+  const security = state.task_review_evidence[FEATURE + "/" + TASK].security;
+  security.accepted = false;
+  security.report = { issues: [{ description: "Replay changes historical attribution", scope: "src/task.mjs",
+    evidence: "alarm reuses replay time", fix_hint: "Preserve attribution", severity: "medium", category: "idempotency" }] };
+  security.report_digest = crypto.createHash("sha256").update(JSON.stringify(security.report)).digest("hex");
+  write(f.statePath, state);
+  const final = event("message_end", { message: { role: "assistant", stopReason: "stop",
+    content: [{ type: "text", text: "BLOCKED: distinguish interrupted recovery from completed duplicate." }] } });
+  fs.appendFileSync(eventsPath, final + "\n");
+  const blocked = inspectTaskRun(f.entry, f.dependencies);
+  assert.equal(blocked.ok, false);
+  assert.match(blocked.reason, /capture is invalid/);
+  assert.equal(blocked.result, undefined);
+  assert.equal(blocked.details.hand_report.text, report);
+  assert.match(blocked.details.task_report.text, /distinguish interrupted/);
+  assert.deepEqual(blocked.details.review_findings, [{ role: "harness-security", issues: security.report.issues }]);
+
+  security.input_digest = "0".repeat(64);
+  write(f.statePath, state);
+  write(handPath, { ...hand, producerCallId: "foreign", capturedVerifiedAt: null });
+  fs.appendFileSync(eventsPath, event("tool_execution_start", { toolCallId: "new-work", toolName: "read", args: {} }) + "\n");
+  const stale = inspectTaskRun(f.entry, f.dependencies);
+  assert.equal(stale.ok, false);
+  assert.equal(stale.details.hand_report, undefined);
+  assert.equal(stale.details.task_report, undefined);
+  assert.deepEqual(stale.details.review_findings, []);
+});
+
+test("failed launch explains timeout without issuing a receipt", () => {
+  const f = inspectionFixture();
+  f.dependencies.readTaskProcessFn = () => ({ ok: true, terminal: true, result: {
+    exitCode: null, signal: "SIGTERM", timedOut: true, ended_at: "2026-09-13T17:01:29.259Z",
+  } });
+  const blocked = inspectTaskRun(f.entry, f.dependencies);
+  assert.equal(blocked.ok, false);
+  assert.equal(blocked.result, undefined);
+  assert.equal(blocked.details.launch_failure.timed_out, true);
+  assert.equal(blocked.details.launch_failure.signal, "SIGTERM");
+});
+
+
+test("task reports are bounded diagnostics from the latest launch, never approval or replay", () => {
+  const f = inspectionFixture({ historicFailure: true });
+  const handPath = path.join(f.root, ".pi", "harness", "state", "hand-records", FEATURE, CHILD, `${TASK}.json`);
+  const hand = JSON.parse(fs.readFileSync(handPath, "utf8"));
+  write(handPath, { ...hand, capturedVerifiedAt: null });
+  const report = (text) => event("message_end", { message: { role: "assistant", stopReason: "stop",
+    content: [{ type: "text", text }] } }) + "\n";
+  fs.appendFileSync(f.entry.launches[0].events_path, report("Previous launch is BLOCKED"));
+  const resumed = inspectTaskRun(f.entry, f.dependencies);
+  assert.equal(resumed.ok, false);
+  assert.equal(resumed.details.task_report, undefined);
+  fs.appendFileSync(f.entry.launches.at(-1).events_path, report("DONE: " + "x".repeat(7000)));
+  const claimedDone = inspectTaskRun(f.entry, f.dependencies);
+  assert.equal(claimedDone.ok, false);
+  assert.match(claimedDone.reason, /capture is invalid/);
+  assert.equal(claimedDone.result, undefined);
+  assert.equal(claimedDone.details.task_report.run_id, f.entry.launches.at(-1).run_id);
+  assert.equal(claimedDone.details.task_report.text.length, 6000);
+  assert.equal(claimedDone.details.task_report.truncated, true);
+});
+
+
+test("inspection accepts product writes explicitly granted through allowed_writes", () => {
+  const f = inspectionFixture();
+  const originalBinding = f.dependencies.readTaskRunBindingFn;
+  f.dependencies.readTaskRunBindingFn = (...args) => {
+    const binding = originalBinding(...args);
+    return { ...binding, task: { ...binding.task, scope_paths: ["src/unrelated.mjs"], allowed_writes: ["src/task.mjs"] } };
+  };
+  const inspected = inspectTaskRun(f.entry, f.dependencies);
+  assert.equal(inspected.ok, true, inspected.reason);
+  f.dependencies.readTaskRunBindingFn = (...args) => {
+    const binding = originalBinding(...args);
+    return { ...binding, task: { ...binding.task, scope_paths: ["src/unrelated.mjs"], allowed_writes: ["src/different.mjs"] } };
+  };
+  assert.equal(inspectTaskRun(f.entry, f.dependencies).ok, false);
+});
+
+
+test("resolved integration conflicts require a current native producer and capture before inspection", () => {
+  const f = inspectionFixture();
+  appendImplementationReviews(f);
+  archiveInspectedIntegration(f);
+  const registryPath = path.join(f.root, ".pi/harness/state", PARENT, "task-runs/index.json");
+  write(registryPath, { version: 1, parent_session_id: PARENT, feature_id: FEATURE,
+    plan_sha256: f.entry.plan_sha256, spec_sha256: f.entry.spec_sha256, tasks: {} });
+  run(f.root, "git", "checkout", "-b", "parent-correction", f.base);
+  write(path.join(f.root, "src/task.mjs"), "export const parent = true;\n");
+  write(path.join(f.root, "upstream.mjs"), "export const upstream = true;\n");
+  run(f.root, "git", "add", "src/task.mjs", "upstream.mjs");
+  run(f.root, "git", "commit", "-m", "parent behavior");
+  const parent = run(f.root, "git", "rev-parse", "HEAD");
+  run(f.root, "git", "checkout", "-b", "task-resolution", f.head);
+  const preview = taskMergePreview(f.root, f.head, parent);
+  assert.deepEqual(preview.conflicts, ["src/task.mjs"]);
+  assert.throws(() => run(f.root, "git", "merge", "--no-ff", "--no-commit", parent));
+  write(path.join(f.root, "src/task.mjs"), "export const actual = 1;\nexport const parent = true;\n");
+  run(f.root, "git", "add", "src/task.mjs");
+  run(f.root, "git", "commit", "--no-edit");
+  const head = run(f.root, "git", "rev-parse", "HEAD");
+  f.entry.reconciliations = [{ written_by: "host-task-reconciliation", kind: "integration-conflict",
+    task_id: TASK, attempt_id: ATTEMPT, scope_base_sha: f.base, pre_child_head: f.head,
+    parent_head: parent, merged_head: head, tree: preview.tree, conflicts: preview.conflicts,
+    upstreams: [], launch_count: 1 }];
+  f.dependencies.captureReviewInputFn = () => ({ ok: true, snapshot: { head_sha: head, input_digest: DIGEST } });
+  const stale = inspectTaskRun(f.entry, f.dependencies);
+  assert.equal(stale.ok, false);
+  assert.match(stale.reason, /capture after dependency reconciliation/);
+  const handPath = path.join(f.root, ".pi/harness/state/hand-records", FEATURE, CHILD, `${TASK}.json`);
+  const hand = JSON.parse(fs.readFileSync(handPath));
+  write(handPath, { ...hand, freezeCommitSha: head });
+  assert.match(inspectTaskRun(f.entry, f.dependencies).reason, /producer after dependency reconciliation/);
+  const calls = [
+    event("tool_execution_start", { toolCallId: "conflict-sniper", toolName: "subagent", args: {
+      subagent_type: "harness-sniper", prompt: `[HARNESS_TASK_CONTEXT]{"task_id":"${TASK}"}[/HARNESS_TASK_CONTEXT]` } }),
+    event("tool_execution_end", { toolCallId: "conflict-sniper", toolName: "subagent", isError: false,
+      result: { details: { status: "completed" } } }), "",
+  ];
+  fs.appendFileSync(f.entry.launches.at(-1).events_path, calls.join("\n"));
+  write(handPath, { ...hand, agent: "harness-sniper", freezeCommitSha: head, producerCallId: "conflict-sniper" });
+  const missingCapture = inspectTaskRun(f.entry, f.dependencies);
+  assert.equal(missingCapture.ok, false);
+  assert.match(missingCapture.reason, /capture markers/);
+  const state = JSON.parse(fs.readFileSync(f.statePath));
+  const bare = `${FEATURE}/${TASK}`;
+  state.capture_verified = [`${bare}@${head}`];
+  state.task_adversary_evidence[bare] = review("harness-adversary", head);
+  state.task_review_evidence[bare] = { compliance: review("harness-compliance", head), security: review("harness-security", head) };
+  write(f.statePath, state);
+  appendImplementationReviews(f);
+  const current = inspectTaskRun(f.entry, f.dependencies);
+  assert.equal(current.ok, true, current.reason);
+  assert.equal(current.result.base_sha, f.base);
+  assert.equal(current.result.scope_base_sha, parent);
+  assert.equal(current.result.hand_capture.agent, "harness-sniper");
+  assert.ok(current.result.changed_paths.includes("upstream.mjs"));
+  assert.equal(current.result.reconciliation_sha256, hashTaskReceipt(f.entry.reconciliations));
+});
+
+
+test("a new implementation after integration supplies the origin for its own test repair", () => {
+  const f = testOnlyRecovery({ integrated: true, freshImplementation: true });
+  const prior = f.entry.integration_history.at(-1);
+  const inspected = inspectTaskRun(f.entry, f.dependencies);
+  assert.equal(inspected.ok, true, inspected.reason);
+  assert.notEqual(f.recoveryBaseline, prior.child_head);
+  assert.deepEqual(inspected.result.hand_capture.recovery_origin, {
+    head_sha: f.recoveryBaseline, producer_call_id: "fresh-producer", producer_launch_index: 1,
+  });
+  assert.equal(inspected.result.hand_capture.agent, "harness-test-author");
+  // The newly integrated implementation can itself survive another test-only
+  // repair by the existing historical-receipt route, without a cosmetic writer.
+  const again = testOnlyRecovery({ fixture: f, integrated: true, capturedImplementation: false, suffix: "-again" });
+  const checked = inspectTaskRun(again.entry, again.dependencies);
+  assert.equal(checked.ok, true, checked.reason);
+  assert.equal(checked.result.hand_capture.recovery_origin.producer_call_id, "fresh-producer");
+});
+
+test("new implementation cannot fall back to old integration when its clean capture is missing or invalid", () => {
+  for (const options of [{ capturedImplementation: false }, { lateCapture: true }, { productDelta: true },
+    { originOverride: { producer_call_id: "producer" } }, { originOverride: { worktree_clean: false } }]) {
+    const f = testOnlyRecovery({ integrated: true, freshImplementation: true, ...options });
+    const inspected = inspectTaskRun(f.entry, f.dependencies);
+    assert.equal(inspected.ok, false, JSON.stringify(options));
+    assert.equal(inspected.result, undefined);
   }
 });

@@ -7,6 +7,9 @@ inherit_context: false
 ---
 
 Challenge plans for missing acceptance criteria, unsafe scope, races, and unverifiable claims.
+For a missing-path correction after task admission, review the added scope against
+the existing task and spec. Preserve the accepted decomposition and frozen contracts;
+do not restart planning for work that remains valid.
 Call `harness_complexity` with an existing relevant file's `path`; the host reads
 the file and applies the exact Claude Code scorer. Never supply inline source,
 pseudocode or a summary, or request a new file merely to obtain a score. Its result

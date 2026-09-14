@@ -13,6 +13,7 @@ import { parseTestReviewVerdict } from "../../shared/lib/test-review-verdict.mjs
 import { validateOcCaptureEligibleHandRecord } from "../../opencode/lib/hand-records.mjs";
 import { hashTaskReceipt, unsupportedTaskScopePattern } from "./task-contract.mjs";
 import { readTaskContextReturn, validateTaskContextReturn } from "./task-context.mjs";
+import { readTaskPlanAuthority, recoveredTaskContractHash } from "./task-plan-recovery.mjs";
 import { capturePiReviewInput, currentPiReviewIssues, findPiReviewReceipt, isSatisfiedPiTaskReviewReceipt, readPiReviewPlan } from "./pi-review-evidence.mjs";
 import { PARALLEL_REVIEW_ROLES, requiredPiTaskReviewRoles } from "./roles.mjs";
 import { classifyPiReviewDispatch } from "./pi-review-concurrency.mjs";
@@ -155,7 +156,9 @@ function readEvents(launches, jobRoot, interruptedIndexes = new Set()) {
   const events = [];
   const calls = new Map();
   const sessionIds = new Set();
+  let report = null;
   launches.forEach((launch, launchIndex) => {
+    report = null; // Never replay a report from an earlier launch after resume.
     let file;
     try { file = regularFile(launch.events_path, jobRoot, MAX_EVENTS_BYTES); }
     catch (error) {
@@ -170,7 +173,12 @@ function readEvents(launches, jobRoot, interruptedIndexes = new Set()) {
       let native;
       try { native = JSON.parse(raw); } catch { continue; }
       if (native?.type === "session" && typeof native.id === "string") sessionIds.add(native.id);
+      if (native?.type === "message_end" && native.message?.role === "assistant") {
+        report = native.message.stopReason === "stop"
+          ? { launchIndex, line, text: eventText(native.message) } : null;
+      }
       if (native?.type === "tool_execution_start" && typeof native.toolCallId === "string") {
+        report = null; // An intermediate answer is not the task's final report.
         const event = { launchIndex, line, callId: native.toolCallId, tool: native.toolName, args: object(native.args) ?? {}, end: null };
         calls.set(`${launchIndex}:${native.toolCallId}`, event);
         events.push(event);
@@ -180,7 +188,7 @@ function readEvents(launches, jobRoot, interruptedIndexes = new Set()) {
       }
     }
   });
-  return { events, sessionIds };
+  return { events, sessionIds, report };
 }
 
 // Capture replay observes the reconciled HEAD without rewriting the producer's
@@ -287,8 +295,9 @@ function validateLaunches(entry, jobRoot, readTaskProcessFn = readTaskProcess, a
       return failure(`launch ${index} identity is invalid`);
     }
     if (entry.runtime !== undefined) {
-      if (!validRuntime(entry.runtime) || !validRuntime(launch.runtime) || launch.runtime.sha256 !== entry.runtime.sha256 ||
-          launch.runtime.launcher_path !== entry.runtime.launcher_path) return failure(`launch ${index} runtime identity is invalid`);
+      if (!validRuntime(entry.runtime) || !validRuntime(launch.runtime) || !historical &&
+          (launch.runtime.sha256 !== entry.runtime.sha256 || launch.runtime.launcher_path !== entry.runtime.launcher_path))
+        return failure(`launch ${index} runtime identity is invalid`);
     }
     const observed = readTaskProcessFn(launch);
     if (observed?.running || !observed?.terminal) return failure(`launch ${index} is not terminal: ${observed?.reason ?? "worker process group remains active"}`);
@@ -306,7 +315,10 @@ function validateLaunches(entry, jobRoot, readTaskProcessFn = readTaskProcess, a
     lifecycles.push(lifecycle);
   }
   const last = lifecycles.at(-1);
-  if (!allowFailedLatest && (last.exitCode !== 0 || last.timedOut || last.signal !== null)) return failure("latest task launch did not exit successfully");
+  if (!allowFailedLatest && (last.exitCode !== 0 || last.timedOut || last.signal !== null)) return failure("latest task launch did not exit successfully", {
+    launch_failure: { run_id: entry.launches.at(-1).run_id, exit_code: last.exitCode,
+      signal: last.signal, timed_out: last.timedOut === true, ended_at: last.ended_at },
+  });
   return { ok: true, lifecycles, interruptedIndexes };
 }
 
@@ -383,6 +395,11 @@ function integratedRecoveryOrigin(entry, { sessionId, task, events, implementati
   if (!validated.ok) return failure("test-only recovery historical receipt is invalid: " + validated.reason);
   if (JSON.stringify(frozenPaths(task).sort()) !== JSON.stringify(Object.keys(result.frozen_blobs).sort()))
     return failure("test-only recovery historical frozen paths must match the canonical task");
+  // A resumed task can implement new behavior and then repair its tests. That
+  // implementation needs its own clean capture; the old integration cannot
+  // supply or replace it merely because this task has integration history.
+  if (events[implementationIndex].launchIndex >= result.launches.length)
+    return { ok: true, origin: null };
   const hand = result.hand_capture;
   const historicalProducerIndex = events.findIndex((event) => event.callId === hand.producer_call_id &&
     event.launchIndex === hand.producer_launch_index && event.tool === "subagent" &&
@@ -481,6 +498,7 @@ export function inspectTaskRun(entry, dependencies = {}) {
     const changed = splitZero(git(worktree, ["diff", "--name-only", "-z", entry.base_sha, head]));
     const scopes = [
       ...(Array.isArray(binding.task?.scope_paths) ? binding.task.scope_paths : []),
+      ...(Array.isArray(binding.task?.allowed_writes) ? binding.task.allowed_writes : []),
       ...frozenPaths(binding.task),
     ];
     const unsupportedScope = scopes.find(unsupportedTaskScopePattern);
@@ -509,11 +527,38 @@ export function inspectTaskRun(entry, dependencies = {}) {
     const handPath = piHandRecordPath({ projectRoot: worktree, sessionId: claim.session_id, featureId: entry.feature_id }, entry.task_id);
     const state = readJson(statePath.path, worktree);
     const hand = readJson(handPath.path, worktree);
-    if (!isCaptureEligibleHandRecord(hand)) return failure("current child hand record is not capture-eligible", contextDiagnostics);
+    const blockedDiagnostics = (currentReviews) => {
+      const details = { ...contextDiagnostics };
+      const observedReport = native.report?.text;
+      if (observedReport?.trim()) details.task_report = {
+        session_id: claim.session_id, run_id: entry.launches.at(-1).run_id,
+        head_sha: head, text: observedReport.slice(0, 6000), truncated: observedReport.length > 6000,
+      };
+      const producer = native.events.findLast((event) => event.callId === hand?.producerCallId &&
+        event.tool === "subagent" && event.args?.subagent_type === hand.agent &&
+        taskFromPrompt(event.args?.prompt) === entry.task_id && eventSucceeded(event));
+      if (hand?.sessionId === claim.session_id && hand.featureId === entry.feature_id &&
+          hand.taskId === entry.task_id && producer?.launchIndex === entry.launches.length - 1) {
+        const text = eventText(producer.end.result);
+        if (text.trim()) details.hand_report = { producer_call_id: producer.callId,
+          agent: hand.agent, text: text.slice(0, 6000), truncated: text.length > 6000 };
+      }
+      // These are explanations only. Capture/fidelity/review failures below retain
+      // their authority; a DONE sentence must never produce a ready receipt.
+      try {
+        const reviews = currentReviews ?? validateCurrentReviews({ state, events: native.events, plan: binding.plan,
+          task: binding.task, projectRoot: worktree, sessionId: claim.session_id,
+          featureId: entry.feature_id, taskId: entry.task_id, head,
+          captureReviewInputFn: dependencies.captureReviewInputFn ?? capturePiReviewInput });
+        details.review_findings = reviews.details?.review_findings ?? [];
+      } catch { /* Unavailable review evidence cannot hide the original capture failure. */ }
+      return details;
+    };
+    if (!isCaptureEligibleHandRecord(hand)) return failure("current child hand record is not capture-eligible", blockedDiagnostics());
     const identity = validateOcCaptureEligibleHandRecord(hand, { featureId: entry.feature_id, taskId: entry.task_id, sessionId: claim.session_id });
     const violations = recordViolations(hand);
     if (!identity.ok || violations.scope.length || violations.frozen.length || typeof hand.capturedVerifiedAt !== "string" || !hand.capturedVerifiedAt ||
-        !COMMIT_SHA.test(hand.freezeCommitSha ?? "") || !ancestor(worktree, hand.freezeCommitSha, head)) return failure("current child hand capture is invalid", contextDiagnostics);
+        !COMMIT_SHA.test(hand.freezeCommitSha ?? "") || !ancestor(worktree, hand.freezeCommitSha, head)) return failure("current child hand capture is invalid", blockedDiagnostics());
     const reconciliation = entry.reconciliations?.at(-1);
     // A native replay captures the current clean HEAD without rewriting the
     // original producer's SHA. Host reconciliation alone needs no no-op writer.
@@ -560,7 +605,8 @@ export function inspectTaskRun(entry, dependencies = {}) {
           events: native.events, implementationIndex, producerIndex });
         if (!previous.ok) return previous;
         recoveryOrigin = previous.origin;
-      } else for (const event of native.events.slice(implementationIndex + 1, firstAuthorIndex)) {
+      }
+      if (!recoveryOrigin) for (const event of native.events.slice(implementationIndex + 1, firstAuthorIndex)) {
         if (event.tool !== "mark" || event.args?.action !== "capture-verified" || event.args?.task_id !== entry.task_id || !markerSucceeded(event)) continue;
         const firstAuthor = native.events[firstAuthorIndex];
         if (event.launchIndex === firstAuthor.launchIndex && event.endLine >= firstAuthor.line) continue;
@@ -595,11 +641,11 @@ export function inspectTaskRun(entry, dependencies = {}) {
       return failure("event-proven latest freeze lacks its persisted fidelity marker");
     }
     const capturePayload = formatFeatureTaskEntry(entry.feature_id, entry.task_id, hand.freezeCommitSha);
-    if (!Array.isArray(state.hand_finished) || !state.hand_finished.includes(bare) || !Array.isArray(state.capture_verified) || !state.capture_verified.includes(capturePayload)) return failure("current child capture markers are incomplete");
+    if (!Array.isArray(state.hand_finished) || !state.hand_finished.includes(bare) || !Array.isArray(state.capture_verified) || !state.capture_verified.includes(capturePayload)) return failure("current child capture markers are incomplete", blockedDiagnostics());
     const regatePending = (Array.isArray(state.regate_pending) ? state.regate_pending : []).filter((pending) =>
       typeof pending === "string" && (pending === bare || pending.startsWith(`${bare}@`)));
     const reviews = validateCurrentReviews({ state, events: native.events, plan: binding.plan, task: binding.task, projectRoot: worktree, sessionId: claim.session_id, featureId: entry.feature_id, taskId: entry.task_id, head, captureReviewInputFn: dependencies.captureReviewInputFn ?? capturePiReviewInput });
-    const diagnostics = { ...(contextReturn === null ? {} : { context_return: contextReturn }), review_findings: reviews.details?.review_findings ?? [] };
+    const diagnostics = { ...blockedDiagnostics(reviews), review_findings: reviews.details?.review_findings ?? [] };
     // Older LIGHT runtimes armed this marker after every executor although they have
     // no implementation-review obligation. Keep the historical marker untouched;
     // actual required/dispatched receipts (including negatives) still govern above.
@@ -626,6 +672,7 @@ export function inspectTaskRun(entry, dependencies = {}) {
         worktree,
         session_id: claim.session_id,
         plan_sha256: entry.plan_sha256,
+        ...(binding.recovered_task_contract_sha256 ? { recovered_task_contract_sha256: binding.recovered_task_contract_sha256 } : {}),
         spec_sha256: entry.spec_sha256,
         base_sha: entry.base_sha,
         scope_base_sha: scopeBase,
@@ -712,7 +759,7 @@ function validateIntegration(entry, integration, { projectRoot, sessionId, featu
     }).ok;
   const launchesValid = Array.isArray(result.launches) && result.launches.length === entry.launches?.length &&
     result.launches.every((launch, index) => launch?.run_id === entry.launches[index]?.run_id && launch.pid === entry.launches[index]?.pid &&
-      (!entry.runtime || launch.run_runtime_sha256 === entry.runtime.sha256) &&
+      (!entry.runtime || validRuntime(entry.launches[index].runtime) && launch.run_runtime_sha256 === entry.launches[index].runtime.sha256) &&
       (Number.isInteger(launch.exit_code) || index < result.launches.length - 1 && launch.exit_code === null) &&
       typeof launch.timed_out === "boolean" && (typeof launch.ended_at === "string" && launch.ended_at ||
         index < result.launches.length - 1 && launch.interrupted === true && launch.ended_at === null) &&
@@ -725,10 +772,15 @@ function validateIntegration(entry, integration, { projectRoot, sessionId, featu
     result.base_sha === entry.base_sha && COMMIT_SHA.test(result.child_head ?? "") && typeof result.latest_run_id === "string" &&
     result.latest_run_id.length > 0 && entry.launches?.at?.(-1)?.run_id === result.latest_run_id && changedPathsValid && frozenReceiptValid &&
     handCaptureValid && recoveryOriginValid && SHA256.test(result.review_input_digest ?? "") && reviewReceiptsValid && regateValid && contextReturnValid && launchesValid &&
-    (entry.runtime === undefined || validRuntime(entry.runtime) && validRuntime(result.runtime) && result.runtime.sha256 === entry.runtime.sha256 &&
-      result.runtime.launcher_path === entry.runtime.launcher_path);
+    (entry.runtime === undefined || validRuntime(result.runtime) && result.runtime.sha256 === entry.launches.at(-1)?.runtime?.sha256 &&
+      result.runtime.launcher_path === entry.launches.at(-1)?.runtime?.launcher_path);
   if (!resultValid) return failure("task inspection receipt is incomplete or does not match the registry entry");
-  const canonical = readPiReviewPlan({ projectRoot, featureId, expectedSha256: result.plan_sha256 });
+  let canonical = readPiReviewPlan({ projectRoot, featureId, expectedSha256: result.plan_sha256 });
+  if (!canonical.ok) {
+    const recovered = readTaskPlanAuthority({ projectRoot, sessionId, featureId,
+      planSha256: entry.plan_sha256, specSha256: entry.spec_sha256, originCallId: entry.grant?.origin?.plan_review_call_id });
+    canonical = { ok: true, plan: recovered.plan };
+  }
   const canonicalTask = canonical.ok && canonical.plan.tasks.find((item) => item.id === taskId);
   if (!canonicalTask || requiredPiTaskReviewRoles(canonical.plan, canonicalTask).some((role) =>
     !reviewReceiptKeys.includes(role.replace("harness-", "")))) return failure("task receipt lacks a canonical required task review");
@@ -788,9 +840,17 @@ function validateIntegration(entry, integration, { projectRoot, sessionId, featu
 
 function validateCurrentIntegrationAuthority(entry, registry, { projectRoot, sessionId, featureId }) {
   const captured = capturePlanReviewInput({ projectRoot, sessionId, featureId });
-  if (!captured.ok || captured.snapshot.plan_sha256 !== registry.plan_sha256 ||
-      captured.snapshot.spec_sha256 !== registry.spec_sha256) {
+  if (!captured.ok || captured.snapshot.spec_sha256 !== registry.spec_sha256) {
     return failure("integrated task plan/spec hashes do not match the current canonical artifacts");
+  }
+  let recovered;
+  if (captured.snapshot.plan_sha256 !== registry.plan_sha256) {
+    try {
+      recovered = readTaskPlanAuthority({ projectRoot, sessionId, featureId, planSha256: registry.plan_sha256,
+        specSha256: registry.spec_sha256, originCallId: entry.grant?.origin?.plan_review_call_id });
+    } catch (error) { return failure(`integrated task plan/spec hashes do not match the current canonical artifacts: ${error.message}`); }
+    if (recoveredTaskContractHash(recovered, entry.task_id) !== (entry.result?.recovered_task_contract_sha256 ?? null))
+      return failure("task requires correction and revalidation against its reviewed scope; resume the same task");
   }
   const approvedSpec = readPiSpecApproval({ projectRoot, sessionId, featureId });
   if (!approvedSpec.ok || approvedSpec.sha256 !== registry.spec_sha256) {
@@ -798,7 +858,7 @@ function validateCurrentIntegrationAuthority(entry, registry, { projectRoot, ses
   }
   const grant = object(entry.grant);
   const origin = object(grant?.origin);
-  const approval = object(approvedSpec.state?.plan_review_evidence);
+  const approval = object(recovered ? registry.plan_snapshot.approval : approvedSpec.state?.plan_review_evidence);
   if (!grant || grant.version !== 1 || grant.kind !== "task-run" ||
       grant.parent_session_id !== sessionId || grant.feature_id !== featureId || grant.task_id !== entry.task_id ||
       grant.plan_sha256 !== registry.plan_sha256 || grant.spec_sha256 !== registry.spec_sha256 ||

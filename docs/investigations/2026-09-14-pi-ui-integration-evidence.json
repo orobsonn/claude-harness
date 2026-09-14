@@ -1,0 +1,57 @@
+{
+  "auditedAt": "2026-09-14T14:31:11.224Z",
+  "session": "528d7635-1763-49c5-a9e4-35eace30e43b",
+  "head": "c6ee1b8047659166c031f9c2767885e449706794",
+  "taskStatuses": {
+    "task-1-outbound-d1": "integrated",
+    "task-2-provider-boundaries": "integrated",
+    "task-3-inbound-d1": "integrated",
+    "task-4-durable-runtime": "running",
+    "task-4-inbound-runtime": "integrated",
+    "task-5-crm-queue-ui": "integrated"
+  },
+  "task": "task-5-crm-queue-ui",
+  "attempt": "30bfbd48-56ca-4c16-be1f-b5845287e8b8",
+  "childSession": "ded377f9-1b4d-4fa9-9992-a9929323bcde",
+  "launches": 4,
+  "runtimeSha256": "2e8d764155ee8fe2e52c6eb0ab2d0738ca957b838188d07b7e148fdf10110eaf",
+  "integration": {
+    "version": 1,
+    "written_by": "host-task-integration",
+    "parent_session_id": "528d7635-1763-49c5-a9e4-35eace30e43b",
+    "feature_id": "issue-22",
+    "task_id": "task-5-crm-queue-ui",
+    "attempt_id": "30bfbd48-56ca-4c16-be1f-b5845287e8b8",
+    "parent_root": "/home/orca/orca/workspaces/proj-lainny/harness-motor-disparo-zapi-email",
+    "worktree": "/home/orca/orca/workspaces/proj-lainny/harness-task-task-5-crm-queue-ui-30bfbd48-56ca-4c16-be1f-b5845287e8b8",
+    "session_id": "ded377f9-1b4d-4fa9-9992-a9929323bcde",
+    "plan_sha256": "8a77a8d4f620e2b543f3a75ba149286af7e429cf1fefe167cc3ed6e79befa2b7",
+    "spec_sha256": "ad803da5e472242c86990961975360b8ce7227f3da9bd6487699e4cfaeb6623d",
+    "base_sha": "0392f25a5e0c904f94d6ce9b44c2c29db7ea0f4f",
+    "child_head": "98fa5e076ca3b0c53eeb105b2f1466d73888b5af",
+    "integrated_head": "c6ee1b8047659166c031f9c2767885e449706794",
+    "result_sha256": "c3c51a97709823d7297fe20ba29638a21e6ee95a37d87c5a9c97e7f81579a3fd"
+  },
+  "recoveryOrigin": {
+    "head_sha": "9a0e447cd72d7098c105fe40e202c2fa413f603b",
+    "producer_call_id": "call_Vnu0tgCZfUAqcdCsDVGVZgtR|fc_034bb919820c6c2b016aa7fc3d057087d2b115543dddf9169c",
+    "producer_launch_index": 2
+  },
+  "checks": [
+    {
+      "command": "npm test",
+      "head": "c6ee1b8047659166c031f9c2767885e449706794",
+      "outputSha256": "c39d4be100c739c12f9ae22b8f0d7addb2360779b74e3cdd0fb4584e1b623954"
+    },
+    {
+      "command": "npm run typecheck",
+      "head": "c6ee1b8047659166c031f9c2767885e449706794",
+      "outputSha256": "d5cf738e592f23b210674bcd1c39c6f42c2fa3b4f6d436ceb7b6e5aeb0c1d947"
+    },
+    {
+      "command": "npm run build",
+      "head": "c6ee1b8047659166c031f9c2767885e449706794",
+      "outputSha256": "abeab85ecee8a8facd42938e0b8dfff9234c1bb897051bc529769693d6804694"
+    }
+  ]
+}

@@ -19,6 +19,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import harnessEntryGate from "./harness-entry-gate.ts";
+import harnessTasks from "./harness-tasks.ts";
 import { readPiChildIdentity } from "../lib/pi-child-identity.mjs";
 import { claimPiDispatchForRuntime, readPiDispatchRecord } from "../lib/pi-state-records.mjs";
 import { writePiSpecDraft } from "../lib/spec-approval.mjs";
@@ -1037,4 +1038,41 @@ test("veredito textual do plan-reviewer não se transforma em recibo de aprovaç
       } finally { f.close(); }
     });
   }
+});
+
+
+test("native planner dispatch preserves admitted task plan before scope correction", async () => {
+  const f = fixture();
+  try {
+    const planPath = join(f.root, ".pi/harness/plans", FEATURE, "execution-plan.json");
+    const statePath = join(f.root, ".pi/harness/state", SESSION, "gate-state.json");
+    const specPath = join(f.root, ".pi/harness/plans", FEATURE, "spec.md");
+    const planText = readFileSync(planPath, "utf8");
+    const planSha = createHash("sha256").update(planText).digest("hex");
+    const specSha = createHash("sha256").update(readFileSync(specPath)).digest("hex");
+    const approval = { written_by: "host-subagent-completion", parent_session_id: SESSION,
+      feature_id: FEATURE, role: "harness-plan-reviewer", status: "completed", verdict: "APPROVE",
+      dispatch_call_id: "original-plan-review", child_session_id: "original-plan-review-child",
+      agent_id: "original-plan-review-agent", plan_sha256: planSha, spec_sha256: specSha };
+    const state = JSON.parse(readFileSync(statePath, "utf8"));
+    writeFileSync(statePath, JSON.stringify({ ...state, triaged: true, brainstormed: true,
+      spec_status: "adversary-reviewed", reviewed_spec_sha256: specSha, adversary_fired: true,
+      adversary_spec_sha256: specSha, plan_review_evidence: approval }));
+    const registryDir = join(f.root, ".pi/harness/state", SESSION, "task-runs");
+    mkdirSync(registryDir, { recursive: true });
+    const registryPath = join(registryDir, "index.json");
+    writeFileSync(registryPath, JSON.stringify({ version: 1, parent_session_id: SESSION, feature_id: FEATURE,
+      plan_sha256: planSha, spec_sha256: specSha, tasks: { "task-1": { launches: [] } } }));
+    const h = handlers();
+    const taskHooks = new Map();
+    harnessTasks({ on: (name, fn) => taskHooks.set(name, fn), registerTool() {} });
+    const event = { toolName: "subagent", toolCallId: "scope-planner",
+      input: { subagent_type: "harness-planner", prompt: "Correct the missing task scope", description: "plan" } };
+    assert.equal(taskHooks.get("tool_call")(event, ctxOf(f.root)), undefined);
+    const result = await h.get("tool_call")(event, ctxOf(f.root));
+    assert.equal(result, undefined, result?.reason);
+    const saved = JSON.parse(readFileSync(registryPath, "utf8"));
+    assert.equal(saved.plan_snapshot.text, planText);
+    assert.deepEqual(saved.plan_snapshot.approval, approval);
+  } finally { f.close(); }
 });

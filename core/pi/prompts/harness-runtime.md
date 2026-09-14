@@ -100,7 +100,12 @@ pronta sem causa. Integre somente o SHA exato validado pelo coordenador.
 Correção de dependência pertence ao host: integre a correção da tarefa dona e use
 `harness_tasks resume` na tentativa dependente quando for necessário revalidá-la,
 inclusive se ela já estiver integrada. O host incorpora o upstream e registra a
-prova antes de lançar o filho. No feedback, descreva o comportamento afetado;
+prova antes de lançar o filho. Se houver conflito de merge, use o mesmo `resume`:
+o host inicia o merge na worktree da tarefa e preserva o pai global. O pai local
+despacha sniper para resolver os paths indicados, preservando o comportamento de
+ambos os lados, commita o merge já iniciado e executa captura, testes e olhos
+afetados. Conflito não exige nova task, tentativa ou cerimônia. Trabalho parcial
+de resolução é preservado em outra retomada. No feedback, descreva o comportamento afetado;
 nunca mande executor/sniper fazer merge, rebase, cherry-pick ou integração global.
 Uma dependência já reconciliada não deve ser apresentada como integração pendente.
 Isso não autoriza reabrir tasks concluídas sem impacto nem repetir olhos não afetados.
@@ -244,13 +249,18 @@ obter recibos.
 **Finding após implementação é correção da tarefa existente.** Ao receber um achado
 na validação agregada, nos olhos finais ou no shipping, localize a tarefa dona dos paths
 e encaminhe a correção a ela: pai global v1 usa `harness_tasks` para retomar a mesma
-tarefa; pai local/legado despacha `harness-sniper` no escopo aprovado. Preserve IDs,
-spec e plano; depois valide, faça o commit seletivo, registre `capture-verified` com a
+tarefa; pai local/legado despacha `harness-sniper` no escopo aprovado. Preserve IDs
+e spec; depois valide, faça o commit seletivo, registre `capture-verified` com a
 árvore limpa e revalide as evidências afetadas antes de
-continuar a finalização. Não acrescente tarefas, não chame planner/plan-reviewer e não reinicie
-a cerimônia para corrigir uma entrega implementada. Se faltar ownership ou a solução
-mudar o contrato aprovado, reporte o bloqueio concreto para outra entrega; não amplie
-o plano durante o fechamento nem declare a entrega concluída com esse achado pendente.
+continuar a finalização. Como no Claude Code, se a correção exigir um arquivo que ficou
+fora do escopo, inclua-o deliberadamente no plano antes da escrita: aguarde os processos
+em execução encerrarem, encaminhe ao planner somente a correção de `scope_paths`/`allowed_writes`
+das tarefas existentes e submeta o plano corrigido ao plan-reviewer. Preserve IDs,
+dependências, testes congelados e contrato aprovado. Depois de APPROVE, retome a mesma
+tarefa/tentativa com `harness_tasks resume`; o host conserva a admissão original e usa o
+escopo revisado. Não repita spec, tarefas prontas ou testes intactos. Achados finais seguem
+ao sniper e aos gates afetados, como os achados locais. Mudança real de comportamento
+aprovado exige tratar essa decisão, mas uma lacuna de arquivo no plano não exige outra run.
 
 **Colheita durável — depois dos olhos finais.** Com as tarefas funcionais verificadas e
 commitadas, colete os olhos finais sobre o agregado. Resolva os achados aplicáveis,
@@ -415,3 +425,12 @@ pendentes continuam protegidas. Ela apaga o `shared_context.md` e os payloads de
 e entrega da própria sessão, mantendo apenas um marcador de finalização sem o diário.
 Shutdown, abort ou entrega incompleta preserva esse buffer para retomada.
 Nunca apague buffers de outra sessão.
+
+Ao receber uma task bloqueada, leia os diagnósticos atuais de `harness_tasks status`
+(`task_report`, `hand_report`, `review_findings`, `context_return`, `launch_failure`)
+antes de decidir a retomada. São relatos/evidências para conferir, nunca aprovação.
+Reporte a causa concreta junto da pendência de gate; "capture is invalid" não prova
+que só falta um marker. Timeout com signal/ended_at é falha operacional, não finding
+de produto. Um conflito entre fix_hint e critério aprovado exige resolução focal,
+não outro "retome" com as mesmas instruções. Encaminhe um brief consistente à mesma
+tentativa e preserve a fidelidade/revisões ainda válidas, sem falsificar captura.

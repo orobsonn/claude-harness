@@ -9,8 +9,15 @@ import {
   taskScopesOverlap,
   decideTaskCoordinatorEdit,
 } from "./task-coordinator.mjs";
-import { hashTaskArtifact } from "./task-run.mjs";
+import { captureTaskRuntime, verifyTaskRuntime } from "./task-runtime-assets.mjs";
+import { taskScopeBase } from "./task-reconciliation.mjs";
+import { snapshotWorktreeBaseline, pathsChangedSinceBaseline } from "../../opencode/lib/worktree-baseline.mjs";
+import { hashTaskArtifact, admitTaskRun, readTaskRunBinding } from "./task-run.mjs";
+import { preserveTaskPlanForPlanner, readTaskPlanAuthority, validateTaskScopeRecovery } from "./task-plan-recovery.mjs";
+import { canonicalPiDispatchFromPlan } from "./pi-state-records.mjs";
 import { taskRegistryPath } from "./task-contract.mjs";
+import { vendorPi } from "../../claude-code/skills/initializing-projects/references/vendor-core.mjs";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { readIntegratedTaskEvidence } from "./task-receipts.mjs";
 const git = (cwd, ...args) =>
   execFileSync("git", args, {
@@ -50,7 +57,7 @@ const task = (id, depends_on = []) => ({
     },
   ],
 });
-function fixture(t, tasks = [task("a"), task("b"), task("c", ["a"])]) {
+function fixture(t, tasks = [task("a"), task("b"), task("c", ["a"])], { vendored = false } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-task-coordinator-"));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   git(dir, "init", "-b", "feature/test");
@@ -59,6 +66,8 @@ function fixture(t, tasks = [task("a"), task("b"), task("c", ["a"])]) {
   fs.writeFileSync(path.join(dir, "base.txt"), "base");
   git(dir, "add", ".");
   git(dir, "commit", "-qm", "base");
+  if (vendored) vendorPi({ coreDir: fileURLToPath(new URL("../../", import.meta.url)), targetDir: dir,
+    version: "test-scope-port", stampDate: "2026-09-14" });
   const plans = path.join(dir, ".pi/harness/plans/feature");
   fs.mkdirSync(plans, { recursive: true });
   const plan = {
@@ -157,6 +166,86 @@ test("scope overlap includes tests and fixtures, with component boundaries", () 
     { ...task("slug"), scope_paths: ["src/app/[slug]/page.mjs"] },
     { ...task("id"), scope_paths: ["src/app/[id]/page.mjs"] },
   ), false, "Next.js bracket segments are literal paths");
+});
+
+test("task scheduling includes allowed_writes in overlapping write ownership", () => {
+  const a = task("a");
+  const b = task("b");
+  b.allowed_writes = ["src/a.mjs"];
+  assert.equal(taskScopesOverlap(a, b), true);
+  assert.throws(() => taskScopesOverlap(a, { ...b, allowed_writes: ["../outside.mjs"] }), /scope/);
+});
+
+test("Claude Code scope correction flows through planner review and the same Pi task resume", async (t) => {
+  const f = fixture(t);
+  const action = (params) => executeTaskAction(params, f.context, f.deps);
+  assert.equal((await action({ action: "dispatch", task_ids: ["a", "b"] })).ok, true);
+  const original = f.registry();
+  const a = original.tasks.a;
+  const b = original.tasks.b;
+  assert.equal(admitTaskRun(a.grant_path, { cwd: a.worktree, sessionId: "local-a" }).ok, true);
+  assert.equal(admitTaskRun(b.grant_path, { cwd: b.worktree, sessionId: "local-b" }).ok, true);
+  const grant = fs.readFileSync(a.grant_path, "utf8");
+  const claim = fs.readFileSync(`${a.grant_path}.claim`, "utf8");
+  const identity = { projectRoot: f.dir, sessionId: "parent", featureId: "feature" };
+  preserveTaskPlanForPlanner(identity, f.deps);
+  const corrected = structuredClone(f.plan);
+  corrected.tasks[0].scope_paths.push("src/audit.mjs");
+  corrected.tasks[0].allowed_writes = ["src/audit-helper.mjs"];
+  const planPath = path.join(f.dir, ".pi/harness/plans/feature/execution-plan.json");
+  write(planPath, corrected);
+  const resume = { action: "resume", task_id: "a", attempt_id: a.attempt_id,
+    instruction: "Fix the existing atomic audit contract through its shared builder." };
+  assert.equal((await action(resume)).ok, false, "planner writing the plan does not approve it");
+  write(path.join(f.dir, ".pi/harness/state/parent/gate-state.json"), { ...f.state,
+    plan_review_evidence: { ...f.state.plan_review_evidence, dispatch_call_id: "review-corrected-scope",
+      plan_sha256: hashTaskArtifact(planPath) } });
+  assert.equal(readTaskRunBinding(a.worktree, "local-a").ok, false, "changed task must load the reviewed scope on resume");
+  const unaffected = readTaskRunBinding(b.worktree, "local-b");
+  assert.equal(unaffected.ok, true, unaffected.reason);
+  assert.deepEqual(unaffected.task, f.plan.tasks[1]);
+  const resumed = await action(resume);
+  assert.equal(resumed.ok, true, resumed.reason);
+  const binding = readTaskRunBinding(a.worktree, "local-a");
+  assert.equal(binding.ok, true, binding.reason);
+  assert.ok(binding.task.scope_paths.includes("src/audit.mjs"));
+  assert.ok(binding.recovered_task_contract_sha256);
+  const writer = canonicalPiDispatchFromPlan(a.worktree, "feature", "a", "harness-sniper");
+  assert.equal(writer.ok, true, writer.reason);
+  assert.ok(writer.scopePaths.includes("src/audit.mjs"));
+  assert.ok(writer.allowedWrites.includes("src/audit-helper.mjs"));
+  assert.equal(fs.readFileSync(a.grant_path, "utf8"), grant);
+  assert.equal(fs.readFileSync(`${a.grant_path}.claim`, "utf8"), claim);
+  assert.equal(f.registry().tasks.a.attempt_id, a.attempt_id);
+  assert.equal(f.registry().tasks.a.launches.length, a.launches.length + 1);
+  assert.deepEqual(f.registry().tasks.b, b, "unaffected task and all its evidence are untouched");
+});
+
+test("scope port preserves contracts and refuses changing plans underneath a running task", async (t) => {
+  const f = fixture(t);
+  await executeTaskAction({ action: "dispatch", task_ids: ["a"] }, f.context, f.deps);
+  assert.throws(() => preserveTaskPlanForPlanner({ projectRoot: f.dir, sessionId: "parent", featureId: "feature" },
+    { readProcess: () => ({ running: true, terminal: false }) }), /wait for active task/);
+  assert.equal(f.registry().plan_snapshot, undefined);
+  for (const change of [
+    (plan) => plan.tasks.pop(),
+    (plan) => { plan.tasks[0].scope_paths = []; },
+    (plan) => { plan.tasks[0].locked_tests[0].assertion = "Given less When less Then less"; },
+    (plan) => { plan.tasks[0].depends_on = ["b"]; },
+    (plan) => { plan.feature_id = "different"; },
+  ]) {
+    const altered = structuredClone(f.plan);
+    change(altered);
+    assert.throws(() => validateTaskScopeRecovery(f.plan, altered));
+  }
+  const current = structuredClone(f.plan);
+  current.tasks[0].scope_paths.push("src/audit.mjs");
+  write(path.join(f.dir, ".pi/harness/plans/feature/execution-plan.json"), current);
+  const planSha256 = hashTaskArtifact(path.join(f.dir, ".pi/harness/plans/feature/execution-plan.json"));
+  write(path.join(f.dir, ".pi/harness/state/parent/gate-state.json"), { ...f.state,
+    plan_review_evidence: { ...f.state.plan_review_evidence, plan_sha256: planSha256 } });
+  assert.throws(() => readTaskPlanAuthority({ projectRoot: f.dir, sessionId: "parent", featureId: "feature",
+    planSha256: f.registry().plan_sha256, specSha256: f.registry().spec_sha256 }), /original host-owned admission snapshot/);
 });
 
 test("parent explicitly abandons an unchanged resume while retaining launches, history and invalid final eyes", async (t) => {
@@ -435,6 +524,9 @@ test("blocked status returns fresh diagnostics without persisting or replaying t
     ok: false,
     reason: "implementation review rejected the current HEAD",
     details: {
+      task_report: { text: "BLOCKED: conflicting contract", run_id: "current" },
+      hand_report: { text: "12/13 passed" },
+      launch_failure: { timed_out: true, signal: "SIGTERM" },
       context_return: contextReturn,
       review_findings: [{ severity: "high", finding: "Missing boundary check" }],
     },
@@ -447,6 +539,9 @@ test("blocked status returns fresh diagnostics without persisting or replaying t
   );
   assert.deepEqual(blocked.diagnostics, {
     a: {
+      task_report: { text: "BLOCKED: conflicting contract", run_id: "current" },
+      hand_report: { text: "12/13 passed" },
+      launch_failure: { timed_out: true, signal: "SIGTERM" },
       context_return: contextReturn,
       review_findings: [{ severity: "high", finding: "Missing boundary check" }],
     },
@@ -653,7 +748,7 @@ test("missing plan-review receipt blocks launch and points to the foreground can
   assert.equal(persistedState.plan_verdict, "APPROVE");
 });
 
-test("active task grants freeze parent planning, but task observation remains available", async (t) => {
+test("task grants preserve spec while existing planner and reviewer can correct scope", async (t) => {
   const f = fixture(t);
   assert.equal(
     decideTaskCoordinatorEdit({ toolName: "harness_spec_write" }, f.context),
@@ -676,9 +771,11 @@ test("active task grants freeze parent planning, but task observation remains av
         input: { subagent_type: "harness-plan-reviewer" },
       },
       f.context,
-    ).block,
-    true,
+    ),
+    null,
   );
+  assert.equal(decideTaskCoordinatorEdit({ toolName: "subagent",
+    input: { subagent_type: "harness-planner" } }, f.context), null);
   assert.equal(
     decideTaskCoordinatorEdit(
       { toolName: "harness_tasks", input: { action: "status" } },
@@ -1044,9 +1141,8 @@ test("dependent recovery requires the corrected upstream receipt in the current 
   }
 });
 
-test("dependent merge conflicts preserve work and do not launch a task", async (t) => {
+test("dependent conflicts resume the same task, preserve partial work, and validate the resolved merge", async (t) => {
   const f = await pendingCorrectionFixture(t, { overlap: true });
-  // A and C may own the same path when they are ordered by a dependency.
   fs.writeFileSync(path.join(f.c.worktree, "src/a.mjs"), "conflicting child change");
   git(f.c.worktree, "add", "src/a.mjs");
   git(f.c.worktree, "commit", "-qm", "conflicting work");
@@ -1054,12 +1150,102 @@ test("dependent merge conflicts preserve work and do not launch a task", async (
   await f.correct();
   const launches = f.launches();
   const result = await f.resumeC();
-  assert.equal(result.ok, false);
-  assert.match(result.reason, /merge-tree/);
+  assert.equal(result.ok, true, result.reason);
   assert.equal(git(f.c.worktree, "rev-parse", "HEAD"), before);
-  assert.equal(git(f.c.worktree, "status", "--porcelain", "--untracked-files=no"), "");
-  assert.equal(f.launches(), launches);
-  assert.equal(f.registry().tasks.c.reconciliation_intent, undefined);
+  assert.equal(f.launches(), launches + 1);
+  const intent = f.registry().tasks.c.reconciliation_intent;
+  assert.deepEqual(intent.conflicts, ["src/a.mjs"]);
+  assert.equal(git(f.c.worktree, "rev-parse", "MERGE_HEAD"), intent.parent_head);
+  const baseline = snapshotWorktreeBaseline(f.c.worktree);
+  fs.writeFileSync(path.join(f.c.worktree, "src/a.mjs"), "export const a=2; // retain child behavior too\n");
+  assert.deepEqual(pathsChangedSinceBaseline(f.c.worktree, baseline), ["src/a.mjs"]);
+  const partial = fs.readFileSync(path.join(f.c.worktree, "src/a.mjs"), "utf8");
+  const status = await f.action({ action: "status", task_id: "c" });
+  assert.equal(status.ok, true, status.reason);
+  assert.equal(status.tasks[0].status, "blocked");
+  assert.match(status.tasks[0].reason, /resume/);
+  assert.equal((await f.resumeC()).ok, true);
+  assert.equal(fs.readFileSync(path.join(f.c.worktree, "src/a.mjs"), "utf8"), partial);
+  git(f.c.worktree, "add", "src/a.mjs");
+  git(f.c.worktree, "commit", "--no-edit");
+  const merged = git(f.c.worktree, "rev-parse", "HEAD");
+  // A subsequent ordinary fix must not be mistaken for the reserved merge.
+  fs.appendFileSync(path.join(f.c.worktree, "src/c.mjs"), "\n// separate fix\n");
+  git(f.c.worktree, "add", "src/c.mjs");
+  git(f.c.worktree, "commit", "-qm", "separate fix");
+  const completed = await f.action({ action: "status", task_id: "c" });
+  assert.equal(completed.ok, true, completed.reason);
+  const recovered = f.registry().tasks.c;
+  assert.equal(recovered.reconciliation_intent, undefined);
+  assert.equal(recovered.reconciliations.at(-1).merged_head, merged);
+  assert.equal(taskScopeBase(recovered, f.c.worktree, "HEAD", ["src/a.mjs", "src/c.mjs"]), intent.parent_head);
+});
+
+async function conflictingIntegrationFixture(t) {
+  const f = fixture(t, [task("a")]);
+  const action = (params) => executeTaskAction(params, f.context, f.deps);
+  await action({ action: "dispatch", task_ids: ["a"] });
+  const entry = f.registry().tasks.a;
+  assert.equal(admitTaskRun(entry.grant_path, { cwd: entry.worktree, sessionId: "local-a" }).ok, true);
+  for (const [root, text] of [[entry.worktree, "task"], [f.dir, "parent"]]) {
+    fs.mkdirSync(path.join(root, "src"));
+    fs.writeFileSync(path.join(root, "src/a.mjs"), text);
+    git(root, "add", "src/a.mjs");
+    git(root, "commit", "-qm", text);
+  }
+  return { ...f, entry, action,
+    resume: () => action({ action: "resume", task_id: "a", attempt_id: entry.attempt_id }) };
+}
+
+test("integration conflicts recover without replacing the session, grant or parent work", async (t) => {
+  const f = await conflictingIntegrationFixture(t);
+  const parent = git(f.dir, "rev-parse", "HEAD");
+  const grant = fs.readFileSync(f.entry.grant_path, "utf8");
+  const claim = fs.readFileSync(`${f.entry.grant_path}.claim`, "utf8");
+  let prompt;
+  const start = f.deps.startProcess;
+  f.deps.startProcess = (input) => { prompt = input.args.at(-1); return start(input); };
+  const resumed = await f.resume();
+  assert.equal(resumed.ok, true, resumed.reason);
+  assert.match(prompt, /harness-sniper/);
+  assert.match(prompt, /capture-verified.*tests.*affected reviewers/s);
+  assert.equal(readTaskRunBinding(f.entry.worktree, "local-a").ok, true, "native task binding accepts the host's pending merge");
+  const terminal = f.deps.readProcess;
+  f.deps.readProcess = () => ({ ok: true, terminal: false, running: true });
+  const live = await f.action({ action: "status" });
+  assert.equal(live.ok, true, live.reason);
+  assert.equal(live.tasks[0].status, "running");
+  f.deps.readProcess = terminal;
+  assert.equal(git(f.dir, "rev-parse", "HEAD"), parent);
+  assert.equal(fs.readFileSync(f.entry.grant_path, "utf8"), grant);
+  assert.equal(fs.readFileSync(`${f.entry.grant_path}.claim`, "utf8"), claim);
+  fs.writeFileSync(path.join(f.entry.worktree, "src/a.mjs"), "parent and task correction\n");
+  git(f.entry.worktree, "add", "src/a.mjs");
+  git(f.entry.worktree, "commit", "--no-edit");
+  const head = git(f.entry.worktree, "rev-parse", "HEAD");
+  const inspected = await f.action({ action: "status" });
+  assert.equal(inspected.ok, true, inspected.reason);
+  const entry = f.registry().tasks.a;
+  assert.equal(entry.reconciliations[0].kind, "integration-conflict");
+  assert.equal(taskScopeBase(entry, entry.worktree, head, ["src/a.mjs"]), parent);
+  const merged = await f.action({ action: "integrate", task_id: "a", attempt_id: entry.attempt_id, expected_head: head });
+  assert.equal(merged.ok, true, merged.reason);
+  assert.equal(f.registry().tasks.a.status, "integrated");
+  assert.equal(fs.readFileSync(path.join(f.dir, "src/a.mjs"), "utf8"), "parent and task correction\n");
+});
+
+test("conflict recovery rejects changes outside the reserved conflict resolution", async (t) => {
+  const f = await conflictingIntegrationFixture(t);
+  assert.equal((await f.resume()).ok, true);
+  fs.writeFileSync(path.join(f.entry.worktree, "src/a.mjs"), "resolution");
+  fs.writeFileSync(path.join(f.entry.worktree, "base.txt"), "unrelated overwrite");
+  git(f.entry.worktree, "add", "src/a.mjs", "base.txt");
+  git(f.entry.worktree, "commit", "--no-edit");
+  const result = await f.action({ action: "status" });
+  assert.equal(result.ok, false);
+  assert.match(result.reason, /outside canonical scope/);
+  assert.ok(f.registry().tasks.a.reconciliation_intent);
+  assert.equal(f.registry().tasks.a.integration, null);
 });
 
 test("dependent reconciliation recovers failed commit hooks and a committed merge before journal completion", async (t) => {
@@ -1131,4 +1317,79 @@ test("a failing merge hook preserves the intent and exact interrupted merge is s
   assert.equal(f.registry().integration_intent, undefined);
   assert.equal(git(f.dir, "diff", "--name-only"), "");
   assert.throws(() => git(f.dir, "rev-parse", "--verify", "MERGE_HEAD"));
+});
+
+
+test("vendored parent resumes existing task with installed harness and retains previous runtime", async (t) => {
+  const f = fixture(t, [task("a")], { vendored: true });
+  git(f.dir, "add", ".");
+  git(f.dir, "commit", "-qm", "vendor fixture");
+  const coordinator = await import(pathToFileURL(path.join(f.dir, ".pi/harness/lib/task-coordinator.mjs")));
+  const parentLauncher = path.join(f.dir, ".pi/harness/bin/pi-harness.mjs");
+  let installedDigest = "b".repeat(64);
+  f.deps.captureRuntime = (launcher) => ({ ok: true, runtime: { launcher_path: launcher,
+    sha256: launcher === parentLauncher ? installedDigest : "a".repeat(64) } });
+  f.deps.verifyRuntime = (runtime) => ({ ok: runtime.launcher_path !== parentLauncher || runtime.sha256 === installedDigest,
+    reason: "managed assets changed since task admission" });
+  const action = (params) => coordinator.executeTaskAction(params, f.context, f.deps);
+  const dispatched = await action({ action: "dispatch", task_ids: ["a"] });
+  assert.equal(dispatched.ok, true, dispatched.reason);
+  const original = f.registry().tasks.a;
+  const resumed = await action({ action: "resume", task_id: "a", attempt_id: original.attempt_id });
+  assert.equal(resumed.ok, true, resumed.reason);
+  const updated = f.registry().tasks.a;
+  assert.equal(updated.runtime.launcher_path, parentLauncher);
+  assert.equal(updated.runtime.sha256, "b".repeat(64));
+  assert.deepEqual(updated.launches[0], original.launches[0]);
+  assert.equal(updated.launches.at(-1).runtime.sha256, "b".repeat(64));
+  assert.deepEqual(updated.grant, original.grant);
+  installedDigest = "c".repeat(64);
+  const second = await action({ action: "resume", task_id: "a", attempt_id: original.attempt_id });
+  assert.equal(second.ok, true, second.reason);
+  assert.equal(f.registry().tasks.a.runtime.sha256, installedDigest);
+  assert.deepEqual(f.registry().tasks.a.launches.slice(0, 2), updated.launches);
+});
+
+
+for (const mergedUpdate of [false, true]) test(`consumer resume selects the installed parent runtime after host merge: ${mergedUpdate}`, async (t) => {
+  const f = fixture(t, [task("a")], { vendored: true });
+  git(f.dir, "add", ".");
+  git(f.dir, "commit", "-qm", "vendor fixture");
+  const coordinator = await import(pathToFileURL(path.join(f.dir, ".pi/harness/lib/task-coordinator.mjs")));
+  const action = (params) => coordinator.executeTaskAction(params, f.context, f.deps);
+  f.deps.captureRuntime = captureTaskRuntime;
+  f.deps.verifyRuntime = verifyTaskRuntime;
+  assert.equal((await action({ action: "dispatch", task_ids: ["a"] })).ok, true);
+  const original = f.registry().tasks.a;
+  assert.equal(admitTaskRun(original.grant_path, { cwd: original.worktree, sessionId: "runtime-recovery" }).ok, true);
+  const claim = fs.readFileSync(original.grant_path + ".claim", "utf8");
+  if (mergedUpdate) {
+    fs.appendFileSync(path.join(f.dir, ".pi/harness/prompts/harness-runtime.md"), "\nUpdated installed runtime.\n");
+    git(f.dir, "add", ".pi/harness/prompts/harness-runtime.md");
+    git(f.dir, "commit", "-qm", "update runtime");
+    // Same filesystem transition as host dependency reconciliation, including
+    // a retry after that merge was committed but resume failed before launch.
+    git(original.worktree, "merge", "--no-ff", "--no-edit", git(f.dir, "rev-parse", "HEAD"));
+    assert.equal(verifyTaskRuntime(original.runtime).ok, false);
+  }
+  const parentLauncher = path.join(f.dir, ".pi/harness/bin/pi-harness.mjs");
+  const current = captureTaskRuntime(parentLauncher);
+  assert.equal(current.ok, true);
+  const resumed = await action({ action: "resume", task_id: "a", attempt_id: original.attempt_id });
+  assert.equal(resumed.ok, true, resumed.reason);
+  const updated = f.registry().tasks.a;
+  assert.deepEqual(updated.runtime, current.runtime);
+  assert.deepEqual(updated.launches[0], original.launches[0]);
+  assert.deepEqual(updated.grant, original.grant);
+  assert.equal(fs.readFileSync(original.grant_path + ".claim", "utf8"), claim);
+  assert.deepEqual(updated.launches.at(-1).runtime, current.runtime);
+  // A consumer upgrade still has to capture a valid current runtime.
+  const prompt = path.join(f.dir, ".pi/harness/prompts/harness-runtime.md");
+  fs.unlinkSync(prompt);
+  fs.symlinkSync(path.join(f.dir, "base.txt"), prompt);
+  const launches = f.launches();
+  const invalid = await action({ action: "resume", task_id: "a", attempt_id: original.attempt_id });
+  assert.equal(invalid.ok, false);
+  assert.match(invalid.reason, /symlink/);
+  assert.equal(f.launches(), launches);
 });

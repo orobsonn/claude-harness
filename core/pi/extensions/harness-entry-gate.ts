@@ -33,6 +33,7 @@ import {
   recordPiReviewFailure,
 } from "../lib/pi-review-evidence.mjs";
 import { capturePlanReviewInput, parsePlanReviewCompletion } from "../lib/task-run.mjs";
+import { preserveTaskPlanForPlanner } from "../lib/task-plan-recovery.mjs";
 import { attachPiReviewEvidencePacket } from "../lib/pi-command-evidence.mjs";
 
 const SUBAGENTS_SERVICE_KEY = Symbol.for("@gotgenes/pi-subagents:service");
@@ -258,6 +259,11 @@ export default function harnessEntryGate(pi: ExtensionAPI) {
       toolCallId: event?.toolCallId,
     });
     if (decision.decision === "deny") return { block: true, reason: decision.reason };
+    if (args.subagent_type === "harness-planner") {
+      const loaded: any = loadPiGateStateFromDisk(projectRoot, { sessionId });
+      try { preserveTaskPlanForPlanner({ projectRoot, sessionId, featureId: loaded.state.feature_id }); }
+      catch (error) { return { block: true, reason: error instanceof Error ? error.message : String(error) }; }
+    }
     const review = classifyPiReviewDispatch(args.subagent_type, args.prompt);
     if (review && (typeof event?.toolCallId !== "string" || !event.toolCallId)) {
       return { block: true, reason: "Implementation or final review requires an exact native tool call ID before dispatch." };

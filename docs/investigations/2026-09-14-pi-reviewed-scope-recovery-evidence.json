@@ -1,0 +1,46 @@
+{
+  "auditedAt": "2026-09-14T13:30:13.736Z",
+  "session": "528d7635-1763-49c5-a9e4-35eace30e43b",
+  "originalPlanSha256": "8a77a8d4f620e2b543f3a75ba149286af7e429cf1fefe167cc3ed6e79befa2b7",
+  "currentReviewedPlanSha256": "6dc9f7e7551e06653872bbeb801619e21be30d2e130a61bf3f0b6fa9a1d8eaa0",
+  "affectedTasks": [
+    "task-1-outbound-d1",
+    "task-3-inbound-d1"
+  ],
+  "preservedFiles": 14,
+  "installedVersion": "3.0.3-pi-scope-port.4e86cec",
+  "runtimeSha256": "e9712402c07a54294b51829fa761ea1cc66a084beffbd9232093165b39cdbdcb",
+  "proofs": [
+    {
+      "task": "task-3-inbound-d1",
+      "attempt": "9e071284-0b30-4b7a-be2f-1233a154ad88",
+      "session": "965e1b00-8b0a-4078-a8e1-0b0a35fbd381",
+      "childHead": "8c2f83f9f3be0b276de44b1d34982b6ab4003bd4",
+      "integratedHead": "e6658546a394aad1b95595e42606afbb9c541c63",
+      "resultSha256": "6a978fe9ef6c8b0d81f45025386faac098339286a884cd00549bf4915389f3df",
+      "reviewRoles": [
+        "adversary",
+        "compliance",
+        "security"
+      ],
+      "scopeBase": "58921446df7d8b2ea98530049879682bbdd4c579",
+      "reconciliationSha256": null
+    },
+    {
+      "task": "task-4-durable-runtime",
+      "attempt": "0ffcee20-9b14-42de-bf52-52ab18f830ea",
+      "session": "19b39b03-e634-4bd7-9cbf-0117fb442183",
+      "childHead": "dafaee3c20e786ec00c84440c35344b81fc70283",
+      "integratedHead": "e5650edb4bdc899c66658c6b294eccf7e5431fd4",
+      "resultSha256": "6bedb9ed4b33ef87e8dddcdb392d849b1e4301c519bfb92454d455c441b49834",
+      "reviewRoles": [
+        "adversary",
+        "compliance",
+        "security"
+      ],
+      "scopeBase": "f8a9c1b65fd823e33832d0e3a9a0020d76623456",
+      "reconciliationSha256": "cd9cd799b176a42141668a4054bc45507dba083f397e5287d3818a3a1a9f4d08"
+    }
+  ],
+  "continuationTask": "task-4-durable-runtime"
+}

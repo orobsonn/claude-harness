@@ -133,6 +133,23 @@ comandos de `final_review.parent_verification`; a suite global pertence ao pai f
 Despache adversary, compliance e security
 aplicáveis como um lote consolidado sobre esse HEAD imutável e aguarde todos antes de
 corrigir. Consolide os defeitos concretos e peça a menor correção necessária.
+Antes de despachar uma correção, separe o defeito demonstrado da sugestão `fix_hint`.
+Um achado válido não torna sua solução sugerida parte do contrato. Confronte a sugestão
+com a spec, o Given/When/Then e as precondições do teste congelado. Se ela conserta um
+cenário quebrando outro obrigatório, resolva a distinção entre os estados antes de
+chamar outra mão; entregue um único brief que preserve ambos os comportamentos.
+Quando a divergência for uma precondição comprovadamente ausente na fixture congelada,
+primeiro despache test-author para corrigir essa fixture autorizada e revalide a fidelidade;
+não envie o executor/sniper implementar contra o mesmo teste sabidamente incorreto.
+Preserve as asserções que representam o contrato e acrescente somente a precondição real.
+Não alterne ordens incompatíveis nem trate "não alterar testes" como solução para
+uma contradição. Teste incorreto usa a recuperação focal existente; defeito real com
+teste fiel exige outra solução de produto. Se faltarem fatos para decidir, investigue
+somente essa fronteira. Se não houver solução no escopo aprovado, retorne BLOCKED com
+o critério, o teste, o finding e a decisão ou dependência exata que falta.
+Registre esse diagnóstico também no diário local via harness_memory update antes de
+encerrar. Não reverta todo o delta apenas porque uma parte foi rejeitada: preserve a
+correção independente que satisfaz o contrato, com verificação focal pela mão autorizada.
 Os receipts identificam o HEAD/input digest revisado. Um positivo ancestral por task
 pode manter satisfeita a obrigação daquele olho após correção de outro finding,
 mas não certifica o novo HEAD. Após um finding, revalide o olho que o produziu e somente outros olhos
@@ -155,6 +172,14 @@ repita olhos ou re-gate enquanto o mesmo defeito segue aberto. Depois de um merg
 de recuperação feito pelo host, obtenha captura de uma mão e revisões atuais no
 novo HEAD conforme as obrigações afetadas, preservando a fidelidade válida e sem
 edições cosméticas para gerar recibo.
+Se o host retomar a tarefa com um merge em conflito já iniciado, preserve esse
+merge e despache sniper para resolver somente os arquivos indicados, combinando
+o comportamento da tarefa com as correções já integradas no pai. O pai local
+adiciona os arquivos resolvidos e commita o merge existente; os arquivos sem
+conflito já estão staged pelo Git. Não inicie outro merge/rebase/cherry-pick nem
+altere arquivos sem conflito nesse commit. Faça eventuais outras correções em
+commits separados. Capture o HEAD resolvido, execute os testes e repita os olhos
+afetados antes de retornar. Resolução parcial pode continuar na mesma tentativa.
 No brief de implementação, entregue o contrato, diff e arquivos atuais, com os
 comandos/resultados necessários acessíveis. O host verifica a linhagem de captura
 e freeze; não peça aos olhos reconstruir histórico de SHAs ou provar paths intactos.

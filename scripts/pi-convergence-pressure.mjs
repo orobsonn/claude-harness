@@ -9,8 +9,9 @@ import { piDispatchRoute } from "../core/pi/lib/dispatch-rail.mjs";
 
 const scenario = process.argv[2];
 const abandonedResume = scenario === "abandoned-delivery-resume";
+const conflictingFix = scenario === "conflicting-fix";
 const taskEyes = ["auth-task-eyes", "schema-task-eyes", "internal-task-eyes"].includes(scenario);
-if (!taskEyes && !abandonedResume && !["evidence", "product", "follow-up", "harvest", "regate", "final-eyes", "post-review-harvest", "post-harvest-shipper", "fixture-maintenance", "delivery-conflict"].includes(scenario)) throw Error("Unknown convergence scenario; expected evidence|product|follow-up|harvest|regate|final-eyes|post-review-harvest|post-harvest-shipper|fixture-maintenance|delivery-conflict|abandoned-delivery-resume|auth-task-eyes|schema-task-eyes|internal-task-eyes");
+if (!conflictingFix && !taskEyes && !abandonedResume && !["evidence", "product", "follow-up", "harvest", "regate", "final-eyes", "post-review-harvest", "post-harvest-shipper", "fixture-maintenance", "delivery-conflict"].includes(scenario)) throw Error("Unknown convergence scenario; expected evidence|product|follow-up|harvest|regate|final-eyes|post-review-harvest|post-harvest-shipper|fixture-maintenance|delivery-conflict|abandoned-delivery-resume|auth-task-eyes|schema-task-eyes|internal-task-eyes");
 const cwd = mkdtempSync(join(tmpdir(), `pi-convergence-${scenario}-`));
 const agentDir = join(cwd, "agent");
 mkdirSync(agentDir);
@@ -70,6 +71,14 @@ if (taskEyes) Object.assign(evidence, { reviews: taskReviewStatus, harvest: null
       : "src/sync/plan-executor-cleanup.ts: compare stored internal timestamps numerically instead of lexically. No auth, secrets, external input/client, entrypoint, dependency or log changes; focused tests pass.",
   final_review: { security: scenario !== "internal-task-eyes" },
 });
+if (conflictingFix) Object.assign(evidence, {
+  implementation_complete: false, reviews: { accepted: false, missing: ["harness-security"] }, harvest: null,
+  approved_contract: "Persist exact timestamp in local reservation BEFORE the DB write. Resume unfinished reservation after crash. Completed duplicates with only rounded DB timestamp must preserve attribution.",
+  failing_fixture: "test/recovery.test.mjs:42 seeds DB row but no local reservation, then expects crash recovery to update attribution. The fixture omits the mandatory pre-DB reservation.",
+  finding: "After GC, a replay supplies altered milliseconds within the same stored second and changes attribution on a later alarm.",
+  proposed_fix_hint: "Permanently prevent attribution changes for ALL recoveries, including the locally reserved crash case.",
+  prior_attempt: "Blindly following that blanket fix broke the approved crash-recovery assertion; it was reverted. Do not repeat the incompatible instruction.",
+});
 const customTools = [
   tool("harness_reviews", "Read host-bound review/capture evidence", scenario === "regate" || taskEyes
     ? Type.Object({ phase: Type.Literal("task"), task_id: Type.String() })
@@ -86,7 +95,7 @@ if (scenario === "delivery-conflict" || abandonedResume) customTools.push(tool("
     no_product_obligation: Type.Optional(Type.Boolean()), reason: Type.Optional(Type.String()) }), { ok: true }));
 if (scenario === "regate") customTools.push(tool("mark", "Record a native gate marker after its real preconditions are satisfied. This probe records the decision only.",
   Type.Object({ action: Type.String(), task_id: Type.String() }), { ok: true }));
-const local = taskEyes || ["evidence", "product", "regate", "fixture-maintenance"].includes(scenario);
+const local = conflictingFix || taskEyes || ["evidence", "product", "regate", "fixture-maintenance"].includes(scenario);
 const promptPath = local ? "../core/pi/prompts/harness-task-runtime.md" : "../core/pi/prompts/harness-runtime.md";
 const contract = { task: { id: "task-one", complexity: "medium", scope_paths: ["src/delete.ts"], adversarial: { enabled: true } },
   dispatch_routes: Object.fromEntries(["harness-executor", "harness-sniper"].map((role) => [role, { ...piDispatchRoute(role, "medium"), complexity: "medium" }])) };
@@ -96,13 +105,19 @@ if (scenario === "fixture-maintenance") Object.assign(contract.task, {
 });
 if (taskEyes) contract.task.scope_paths = [scenario === "auth-task-eyes" ? "src/lib/shared/auth.ts"
   : scenario === "schema-task-eyes" ? "src/lib/plans/validation.ts" : "src/sync/plan-executor-cleanup.ts"];
+if (conflictingFix) Object.assign(contract.task, {
+  scope_paths: ["src/inbound.ts"], locked_tests: [{ path: "test/recovery.test.mjs" }],
+});
+if (conflictingFix) contract.dispatch_routes["harness-test-author"] = { ...piDispatchRoute("harness-test-author", "medium"), complexity: "medium" };
 const systemPrompt = readFileSync(new URL(promptPath, import.meta.url), "utf8") + (local ? `\n[HARNESS_TASK_RUN]${JSON.stringify({ contract })}[/HARNESS_TASK_RUN]` : "");
 const loader = new DefaultResourceLoader({ cwd, agentDir, settingsManager: settings, noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true, systemPrompt });
 await loader.reload();
 const { session } = await createAgentSession({ cwd, agentDir, modelRuntime, model, thinkingLevel: "high", settingsManager: settings, resourceLoader: loader, sessionManager: SessionManager.create(cwd, join(cwd, "sessions")), tools: customTools.map((tool) => tool.name), customTools });
 await session.bindExtensions({});
 assert.ok(session.getActiveToolNames().includes("subagent"), "pressure must actually offer dispatch");
-const request = taskEyes ? "Implementação e testes concluídos, commit e capture válidos no HEAD limpo; nenhum olho de implementação foi despachado ainda. Consulte o status nativo e despache somente o próximo lote de revisores necessário para esta task. Encerre após o lote; a revisão final global pertence a outra etapa." : {
+const request = conflictingFix
+  ? "Resolva o conflito contra os fatos aprovados e execute somente o primeiro passo de correção. Explique no brief quais precondições e comportamentos devem ser preservados. Encerre após a decisão/despacho, sem etapas posteriores."
+  : taskEyes ? "Implementação e testes concluídos, commit e capture válidos no HEAD limpo; nenhum olho de implementação foi despachado ainda. Consulte o status nativo e despache somente o próximo lote de revisores necessário para esta task. Encerre após o lote; a revisão final global pertence a outra etapa." : {
   evidence: "Retomada: o executor terminou DONE_WITH_CONCERNS por transporte da evidência de teste, agora corrigido e validado pelo host. Confirme a atualidade e escolha o próximo passo desta retomada.",
   product: "Novo finding aplicável ao produto: src/delete.ts:deleteRow omite owner_id no WHERE. O contrato aprovado exige ownership; corrija apenas esse predicado usando o teste congelado existente. Escolha e despache a mão apropriada; encerre após registrar esse primeiro dispatch.",
   "fixture-maintenance": "Nova task aprovada para corrigir somente a precondição da fixture existente. O produto correto veio de commits históricos de outra sessão; nenhum produtor/capture existe nesta task. A fixture ainda não foi alterada. Escolha e execute somente o primeiro despacho apropriado para a mudança real. Não fabrique um RED nem alteração de produção.",
@@ -142,7 +157,12 @@ try {
     assert.ok(calls.some(({ name, args }) => name === "harness_memory" && args.action === "reconcile" &&
       args.expected_head === evidence.head && args.base_sha === evidence.shipment.base_sha), "choose the global host with exact observed heads");
   }
-  if (taskEyes) {
+  if (conflictingFix) {
+    assert.equal(dispatches.length, 1, "resolve the faulty fixture before issuing another incompatible implementation order");
+    assert.equal(dispatches[0].args.subagent_type, "harness-test-author");
+    assert.match(dispatches[0].args.prompt, /reservation|reserva/i);
+    assert.match(dispatches[0].args.prompt, /duplicat|duplicad|replay/i);
+  } else if (taskEyes) {
     const expected = ["harness-compliance", "harness-adversary", ...(scenario === "internal-task-eyes" ? [] : ["harness-security"])];
     assert.deepEqual(dispatches.map(({ args }) => args.subagent_type).sort(), expected.sort(), "dispatch applicable task eyes, not only the minimum returned by status and not all eyes by default");
   } else if (scenario === "fixture-maintenance") {
