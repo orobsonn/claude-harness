@@ -492,22 +492,6 @@ export function inspectTaskRun(entry, dependencies = {}) {
     if (!dependencyCheck.ok) return dependencyCheck;
     const head = String(git(worktree, ["rev-parse", "HEAD"])).trim();
     if (!COMMIT_SHA.test(head) || !ancestor(worktree, entry.base_sha, head)) return failure("task HEAD is not descended from its granted base");
-    const tracked = String(git(worktree, ["status", "--porcelain", "--untracked-files=no"])).trim();
-    const untracked = tracked ? "" : String(git(worktree, ["status", "--porcelain", "--untracked-files=all", "--", ".", ":(exclude).pi/harness/runtime/", ":(exclude).pi/harness/state/", ":(exclude).pi/harness/sessions/", ":(exclude)node_modules/"])).trim();
-    if (tracked || untracked) return failure("task worktree must be clean before inspection");
-    const changed = splitZero(git(worktree, ["diff", "--name-only", "-z", entry.base_sha, head]));
-    const scopes = [
-      ...(Array.isArray(binding.task?.scope_paths) ? binding.task.scope_paths : []),
-      ...(Array.isArray(binding.task?.allowed_writes) ? binding.task.allowed_writes : []),
-      ...frozenPaths(binding.task),
-    ];
-    const unsupportedScope = scopes.find(unsupportedTaskScopePattern);
-    if (unsupportedScope !== undefined) {
-      return failure(`task scope ${JSON.stringify(unsupportedScope)} uses unsupported glob syntax`);
-    }
-    const scopeBase = taskScopeBase(entry, worktree, head, scopes);
-    const scopedChanges = splitZero(git(worktree, ["diff", "--name-only", "-z", scopeBase, head]));
-    if (scopedChanges.some((item) => !covered(item, scopes))) return failure("task changed paths outside canonical scope", { changed: scopedChanges });
     const native = readEvents(entry.launches, jobRoot, launches.interruptedIndexes);
     const abandonedWriters = abandonedWriterLaunches(entry, jobRoot);
     if (native.sessionIds.size !== 1 || !native.sessionIds.has(claim.session_id)) return failure("native event session does not match the claimed child session");
@@ -521,6 +505,31 @@ export function inspectTaskRun(entry, dependencies = {}) {
       if (!checkedContext.ok) return failure("task context return is invalid: " + checkedContext.reason);
     }
     const contextDiagnostics = contextReturn === null ? {} : { context_return: contextReturn };
+    const observedReport = native.report?.text;
+    if (observedReport?.trim()) contextDiagnostics.task_report = {
+      session_id: claim.session_id, run_id: entry.launches.at(-1).run_id,
+      head_sha: head, text: observedReport.slice(0, 6000), truncated: observedReport.length > 6000,
+    };
+    const tracked = String(git(worktree, ["status", "--porcelain", "--untracked-files=no"])).trim();
+    const untracked = tracked ? "" : String(git(worktree, ["status", "--porcelain", "--untracked-files=all", "--", ".", ":(exclude).pi/harness/runtime/", ":(exclude).pi/harness/state/", ":(exclude).pi/harness/sessions/", ":(exclude)node_modules/"])).trim();
+    if (tracked || untracked) return failure("task worktree must be clean before inspection", {
+      ...contextDiagnostics,
+      worktree_changes: { task_id: entry.task_id, worktree,
+        status: (tracked || untracked).slice(0, 6000), truncated: (tracked || untracked).length > 6000 },
+    });
+    const changed = splitZero(git(worktree, ["diff", "--name-only", "-z", entry.base_sha, head]));
+    const scopes = [
+      ...(Array.isArray(binding.task?.scope_paths) ? binding.task.scope_paths : []),
+      ...(Array.isArray(binding.task?.allowed_writes) ? binding.task.allowed_writes : []),
+      ...frozenPaths(binding.task),
+    ];
+    const unsupportedScope = scopes.find(unsupportedTaskScopePattern);
+    if (unsupportedScope !== undefined) {
+      return failure(`task scope ${JSON.stringify(unsupportedScope)} uses unsupported glob syntax`);
+    }
+    const scopeBase = taskScopeBase(entry, worktree, head, scopes);
+    const scopedChanges = splitZero(git(worktree, ["diff", "--name-only", "-z", scopeBase, head]));
+    if (scopedChanges.some((item) => !covered(item, scopes))) return failure("task changed paths outside canonical scope", { changed: scopedChanges });
     const implementationObserved = native.events.some((event) => event.tool === "subagent" && ["harness-executor", "harness-sniper"].includes(event.args?.subagent_type) && eventSucceeded(event));
     if (!implementationObserved) return failure("successful native implementation call was not observed", contextDiagnostics);
     const statePath = piGateStatePath({ projectRoot: worktree, sessionId: claim.session_id });
@@ -529,11 +538,6 @@ export function inspectTaskRun(entry, dependencies = {}) {
     const hand = readJson(handPath.path, worktree);
     const blockedDiagnostics = (currentReviews) => {
       const details = { ...contextDiagnostics };
-      const observedReport = native.report?.text;
-      if (observedReport?.trim()) details.task_report = {
-        session_id: claim.session_id, run_id: entry.launches.at(-1).run_id,
-        head_sha: head, text: observedReport.slice(0, 6000), truncated: observedReport.length > 6000,
-      };
       const producer = native.events.findLast((event) => event.callId === hand?.producerCallId &&
         event.tool === "subagent" && event.args?.subagent_type === hand.agent &&
         taskFromPrompt(event.args?.prompt) === entry.task_id && eventSucceeded(event));

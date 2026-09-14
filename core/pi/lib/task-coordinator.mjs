@@ -69,10 +69,10 @@ const volatile = (name) =>
   /^\.pi\/harness\/(?:state|runtime|sessions|plans)\//.test(name) ||
   name.startsWith("node_modules/") ||
   /^\.pi\/\.harness-version-check-cache(?:\.tmp)?$/.test(name);
-function requireClean(root) {
+function requireClean(root, label = "parent") {
   const changes = [
-    ...git(root, "diff", "--name-only", "--").split("\n"),
-    ...git(root, "diff", "--cached", "--name-only", "--").split("\n"),
+    ...git(root, "diff", "--name-only", "-z", "--").split("\0"),
+    ...git(root, "diff", "--cached", "--name-only", "-z", "--").split("\0"),
   ].filter(Boolean);
   const untracked = git(
     root,
@@ -83,9 +83,10 @@ function requireClean(root) {
   )
     .split("\0")
     .filter(Boolean);
-  if ([...changes, ...untracked].some((name) => !volatile(name)))
+  const pending = [...new Set([...changes, ...untracked])].filter((name) => !volatile(name));
+  if (pending.length)
     throw new Error(
-      "parent worktree must be clean before task admission or integration",
+      `${label} worktree must be clean before task admission or integration: ${root}; pending paths: ${JSON.stringify(pending).slice(0, 2000)}. Preserve the changes and resolve this task’s reported blocker before retrying.`,
     );
 }
 function scopeOf(task) {
@@ -340,7 +341,7 @@ function invalidateAggregate(owner, registry, persist) {
   }
 }
 function requireTaskIdentity(entry) {
-  requireClean(entry.worktree);
+  requireClean(entry.worktree, `task ${entry.task_id}`);
   if (git(entry.worktree, "branch", "--show-current") !== entry.branch ||
       !isAncestor(entry.worktree, entry.base_sha, "HEAD"))
     throw new Error("reserved task worktree changed identity");
@@ -789,7 +790,7 @@ export async function executeTaskAction(params, context = {}, injected = {}) {
               current.context_return = inspected.details.context_return;
             if (inspected.details.review_findings !== undefined)
               current.review_findings = inspected.details.review_findings;
-            for (const field of ["task_report", "hand_report", "launch_failure"]) {
+            for (const field of ["task_report", "hand_report", "launch_failure", "worktree_changes"]) {
               if (inspected.details[field] !== undefined) current[field] = inspected.details[field];
             }
             if (Object.keys(current).length > 0)

@@ -265,8 +265,9 @@ test("o plano aprovado alimenta o tracker tanto em LIGHT quanto em FULL", () => 
   assert.match(tracker, /plan-reviewer approval for the exact current plan/i);
 });
 
-test("o pai recupera uma única vez dependência declarada com npm ci antes de bloquear a validação", () => {
-  const prompt = readFileSync(promptPath, "utf8");
+test("o pai global e o pai local recuperam dependência declarada com npm ci antes de bloquear a validação", () => {
+  for (const file of [promptPath, taskPromptPath]) {
+  const prompt = readFileSync(file, "utf8");
 
   assert.match(prompt, /Recuperação de dependência declarada/i);
   assert.match(prompt, /pai — nunca uma mão/i);
@@ -277,6 +278,7 @@ test("o pai recupera uma única vez dependência declarada com npm ci antes de b
   assert.match(prompt, /Não use `npm install`/i);
   assert.match(prompt, /não abra um novo `harness-test-author` apenas para instalar/i);
   assert.match(prompt, /marque `BLOCKED`/i);
+  }
 });
 
 test("a fidelidade segue o contrato aprovado sem burocracia por rodada", () => {
