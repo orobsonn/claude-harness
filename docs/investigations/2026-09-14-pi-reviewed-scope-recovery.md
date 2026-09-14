@@ -188,3 +188,23 @@ passaram, incluindo segunda recuperação posterior, captura ausente/tardia,
 produtor incorreto, árvore suja e drift. A inspeção somente de leitura na run real
 passou para `98fa5e0`, usando a captura `9a0e447` e o produtor executor nativo
 do terceiro lançamento. Nenhum estado ou recibo foi escrito nessa conferência.
+
+
+## Integração nativa da UI após a correção de captura
+
+Às 14:23 UTC o host integrou `98fa5e076ca3b0c53eeb105b2f1466d73888b5af`
+em `c6ee1b8047659166c031f9c2767885e449706794`. A quarta retomada preservou
+a tentativa `30bfbd48...` e a sessão `ded377f9...`; usou o runtime instalado
+`2e8d7641...`, aproveitando a implementação, captura e compliance anteriores.
+Não precisou repetir a implementação. As seis tarefas chegaram a integradas.
+
+No agregado `c6ee1b8`, o próprio Pi executou 1.264 testes (156 arquivos),
+typecheck e build, todos aprovados com árvore limpa. A auditoria em
+`2026-09-14-pi-ui-integration-evidence.json` conferiu o hash do resultado nativo,
+ancestralidade da integração, runtime da retomada e hashes das três saídas.
+O CI do código `5c6be1a` passou na run GitHub Actions `34855057628`.
+
+A revisão final encontrou uma varredura não limitada em `haHazardDeSaida`.
+Às 14:28 UTC o pai retomou autonomamente a mesma task-4 para corrigir esse
+finding de produto; a UI permanece integrada. Portanto, a correção do bloqueio
+de inspeção está demonstrada, mas a entrega completa ainda está em revisão.
