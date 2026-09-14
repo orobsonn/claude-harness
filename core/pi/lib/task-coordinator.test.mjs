@@ -165,6 +165,14 @@ test("scope overlap includes tests and fixtures, with component boundaries", () 
   ), false, "Next.js bracket segments are literal paths");
 });
 
+test("task scheduling includes allowed_writes in overlapping write ownership", () => {
+  const a = task("a");
+  const b = task("b");
+  b.allowed_writes = ["src/a.mjs"];
+  assert.equal(taskScopesOverlap(a, b), true);
+  assert.throws(() => taskScopesOverlap(a, { ...b, allowed_writes: ["../outside.mjs"] }), /scope/);
+});
+
 test("Claude Code scope correction flows through planner review and the same Pi task resume", async (t) => {
   const f = fixture(t);
   const action = (params) => executeTaskAction(params, f.context, f.deps);
@@ -180,6 +188,7 @@ test("Claude Code scope correction flows through planner review and the same Pi 
   preserveTaskPlanForPlanner(identity, f.deps);
   const corrected = structuredClone(f.plan);
   corrected.tasks[0].scope_paths.push("src/audit.mjs");
+  corrected.tasks[0].allowed_writes = ["src/audit-helper.mjs"];
   const planPath = path.join(f.dir, ".pi/harness/plans/feature/execution-plan.json");
   write(planPath, corrected);
   const resume = { action: "resume", task_id: "a", attempt_id: a.attempt_id,
@@ -201,6 +210,7 @@ test("Claude Code scope correction flows through planner review and the same Pi 
   const writer = canonicalPiDispatchFromPlan(a.worktree, "feature", "a", "harness-sniper");
   assert.equal(writer.ok, true, writer.reason);
   assert.ok(writer.scopePaths.includes("src/audit.mjs"));
+  assert.ok(writer.allowedWrites.includes("src/audit-helper.mjs"));
   assert.equal(fs.readFileSync(a.grant_path, "utf8"), grant);
   assert.equal(fs.readFileSync(`${a.grant_path}.claim`, "utf8"), claim);
   assert.equal(f.registry().tasks.a.attempt_id, a.attempt_id);

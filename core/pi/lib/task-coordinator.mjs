@@ -91,6 +91,7 @@ function requireClean(root) {
 function scopeOf(task) {
   const entries = [
     ...task.scope_paths,
+    ...(Array.isArray(task.allowed_writes) ? task.allowed_writes : []),
     ...(task.locked_tests ?? []).flatMap((test) => [
       test.path,
       ...(test.fixture_paths ?? []),

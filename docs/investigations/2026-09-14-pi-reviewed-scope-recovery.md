@@ -69,3 +69,12 @@ commit `aa9777e` também passou. O teste na run original segue em andamento.
   runtime atualizado do pai. O bloqueio de escopo foi resolvido de ponta a ponta.
 - O pai seguiu autonomamente para a correção do finding de armazenamento da
   task-4-durable-runtime. Os findings finais da entrega continuam em validação.
+
+## Coerência de `allowed_writes`
+
+A checagem adicional encontrou outra divergência do mesmo contrato: o dispatch
+canônico já autorizava `allowed_writes`, mas o coordenador e a inspeção de tarefas
+consideravam somente `scope_paths` e testes congelados. Duas regressões reproduziram
+concorrência com ownership sobreposto e rejeição da integração de um arquivo
+explicitamente autorizado. A correção inclui a lista nas três verificações de
+escopo; as regressões e a retomada combinando os dois campos passaram (3/3).

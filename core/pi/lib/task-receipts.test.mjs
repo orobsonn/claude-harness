@@ -2141,3 +2141,20 @@ test("task reports are bounded diagnostics from the latest launch, never approva
   assert.equal(claimedDone.details.task_report.text.length, 6000);
   assert.equal(claimedDone.details.task_report.truncated, true);
 });
+
+
+test("inspection accepts product writes explicitly granted through allowed_writes", () => {
+  const f = inspectionFixture();
+  const originalBinding = f.dependencies.readTaskRunBindingFn;
+  f.dependencies.readTaskRunBindingFn = (...args) => {
+    const binding = originalBinding(...args);
+    return { ...binding, task: { ...binding.task, scope_paths: ["src/unrelated.mjs"], allowed_writes: ["src/task.mjs"] } };
+  };
+  const inspected = inspectTaskRun(f.entry, f.dependencies);
+  assert.equal(inspected.ok, true, inspected.reason);
+  f.dependencies.readTaskRunBindingFn = (...args) => {
+    const binding = originalBinding(...args);
+    return { ...binding, task: { ...binding.task, scope_paths: ["src/unrelated.mjs"], allowed_writes: ["src/different.mjs"] } };
+  };
+  assert.equal(inspectTaskRun(f.entry, f.dependencies).ok, false);
+});

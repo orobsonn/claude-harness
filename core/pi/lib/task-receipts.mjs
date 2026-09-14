@@ -493,6 +493,7 @@ export function inspectTaskRun(entry, dependencies = {}) {
     const changed = splitZero(git(worktree, ["diff", "--name-only", "-z", entry.base_sha, head]));
     const scopes = [
       ...(Array.isArray(binding.task?.scope_paths) ? binding.task.scope_paths : []),
+      ...(Array.isArray(binding.task?.allowed_writes) ? binding.task.allowed_writes : []),
       ...frozenPaths(binding.task),
     ];
     const unsupportedScope = scopes.find(unsupportedTaskScopePattern);

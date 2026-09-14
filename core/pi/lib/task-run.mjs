@@ -185,6 +185,7 @@ function inspectGrant(grantPath, cwd, { allowHistoricalDeps = false } = {}) {
     throw new Error("task scope changed in the reviewed plan; resume the same task to load its corrected scope");
   const taskScope = [
     ...task.scope_paths,
+    ...(Array.isArray(task.allowed_writes) ? task.allowed_writes : []),
     ...(task.locked_tests ?? []).flatMap((test) => [
       test.path,
       ...(test.fixture_paths ?? []),
