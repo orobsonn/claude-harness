@@ -222,6 +222,12 @@ Antes de olhos de implementação/finais, resolva qualquer `preparation` informa
 `harness_reviews` e faça o commit seletivo. O despacho nega alterações pendentes antes
 de iniciar os revisores. Forneça os SHAs e paths observados dos commits aos olhos;
 fidelidade dos testes continua antes do freeze e não entra nessa restrição.
+Na fase final, `preparation.commands` identifica apenas os comandos declarados em
+`final_review.verification_commands` que ainda precisam passar no HEAD atual.
+Execute-os antes dos olhos, depois do commit, usando o shell nativo; resolva falhas
+e reaproveite os resultados atuais já aprovados pelo processo. Saída de outra sessão,
+HEAD anterior ou execução iniciada com árvore suja não satisfaz essa preparação.
+Essa verificação não aprova revisores nem autoriza publicação.
 
 Antes de redespachar executor/sniper, compare HEAD, captura e recibo produtor vigentes
 com o delta de produto solicitado. Se a implementação já está comprovada e não há

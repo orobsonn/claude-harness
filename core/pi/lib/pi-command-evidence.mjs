@@ -7,7 +7,7 @@ import path from "node:path";
 import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { isPiBashTool, piSessionId } from "./pi-adapter-map.mjs";
-import { isSafeSessionId } from "../../shared/lib/feature-id.mjs";
+import { isSafeSessionId, isSafeFeatureId } from "../../shared/lib/feature-id.mjs";
 import { parseTaskDispatchIdentity } from "../../opencode/lib/task-dispatch-identity.mjs";
 import { classifyPiReviewDispatch } from "./pi-review-concurrency.mjs";
 import { readTaskRunBinding } from "./task-run.mjs";
@@ -21,12 +21,12 @@ function hash(value) {
   return createHash("sha256").update(value).digest("hex");
 }
 
-function evidenceDirectory(cwd, sessionId) {
+function evidenceDirectory(cwd, sessionId, create = true) {
   if (!isSafeSessionId(sessionId)) throw new Error("invalid session");
   let directory = fs.realpathSync(cwd);
   for (const part of [".pi", "harness", "state", sessionId, "evidence"]) {
     directory = path.join(directory, part);
-    try { fs.mkdirSync(directory, { mode: 0o700 }); }
+    try { if (create) fs.mkdirSync(directory, { mode: 0o700 }); }
     catch (error) { if (error.code !== "EEXIST") throw error; }
     const info = fs.lstatSync(directory);
     if (info.isSymbolicLink() || !info.isDirectory()) throw new Error("redirected evidence directory");
@@ -277,6 +277,7 @@ function evidenceRecord(evidenceRoot, metadataPath, currentIdentity, sessionId, 
     : "different-head-or-status";
   return {
     command: metadata.command,
+    started_identity: metadata.started_identity,
     original_status: metadata.original_status,
     observed_head_sha: metadata.head_sha,
     observed_worktree_status_sha256: metadata.worktree_status_sha256,
@@ -331,6 +332,46 @@ function commandEvidenceManifest(evidenceRoot, prompt, currentIdentity, sessionI
       reason: "explicitly referenced command evidence is inaccessible or changed",
     }));
   return { exact_current: exactCurrent, supplied, supplied_unavailable: suppliedUnavailable };
+}
+
+/** Read existing native output for declared final checks; never execute or approve a command. */
+export function checkPiFinalCommands({ projectRoot, sessionId, commands } = {}) {
+  if (commands === undefined) return { ok: true };
+  if (!Array.isArray(commands) || commands.length > 100 || commands.some((command) =>
+    typeof command !== "string" || !command.trim() || command.length > COMMAND_MAX_BYTES || sensitiveCommand(command))) {
+    return { ok: false, reason: "final_review.verification_commands must contain bounded, non-sensitive command strings" };
+  }
+  if (!commands.length) return { ok: true };
+  const missing = new Set(commands);
+  try {
+    const identity = worktreeIdentity(projectRoot);
+    if (identity.worktree_identity_status !== "available" || identity.worktree_dirty) throw new Error("clean HEAD required");
+    const directory = evidenceDirectory(projectRoot, sessionId, false);
+    const latest = new Map();
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      if (!entry.isFile() || !/^[0-9a-f-]{36}\.json$/.test(entry.name)) continue;
+      try {
+        const metadataPath = path.join(directory, entry.name);
+        const record = evidenceRecord(directory, metadataPath, identity, sessionId, false);
+        if (record.freshness !== "exact-current" || !missing.has(record.command)) continue;
+        const modified = fs.statSync(metadataPath, { bigint: true }).mtimeNs;
+        if (!latest.has(record.command) || latest.get(record.command).modified < modified) latest.set(record.command, { metadataPath, modified });
+      } catch { /* altered, foreign or stale evidence cannot satisfy preparation */ }
+    }
+    for (const { metadataPath } of latest.values()) {
+      try {
+        const record = evidenceRecord(directory, metadataPath, identity, sessionId);
+        const start = record.started_identity;
+        if (record.freshness === "exact-current" && record.original_status?.kind === "success" &&
+          record.original_status.is_error === false && record.original_status.exit_code === 0 &&
+          start?.worktree_identity_status === "available" && start.worktree_dirty === false &&
+          start.worktree_root === identity.worktree_root && start.head_sha === identity.head_sha &&
+          start.worktree_status_sha256 === identity.worktree_status_sha256) missing.delete(record.command);
+      } catch { /* unreadable latest output cannot fall back to an older success */ }
+    }
+  } catch { /* missing native evidence is reported with the exact next commands */ }
+  return missing.size ? { ok: false, commands: [...missing], reason:
+    `Run the pending final verification commands on the current committed HEAD before final eyes: ${JSON.stringify([...missing])}. Reuse passing current evidence; fix failures before retrying. This does not approve reviews or shipping.` } : { ok: true };
 }
 
 function reviewPacketDirectory(evidenceRoot) {
@@ -411,6 +452,22 @@ function automaticReviewCommand(command) {
   return shortEvidenceCommand(command) && !/^(?:git|rg)\b/.test(command.trim());
 }
 
+function declaredVerificationCommand(cwd, sessionId, command) {
+  try {
+    if (!isSafeSessionId(sessionId)) return false;
+    const root = fs.realpathSync(cwd);
+    const stateDirectory = path.join(root, ".pi/harness/state", sessionId);
+    if (fs.realpathSync(stateDirectory) !== stateDirectory) return false;
+    const state = readRegularJson(path.join(stateDirectory, "gate-state.json"));
+    if (state.session_id !== sessionId || !isSafeFeatureId(state.feature_id)) return false;
+    const planDirectory = path.join(root, ".pi/harness/plans", state.feature_id);
+    if (fs.realpathSync(planDirectory) !== planDirectory) return false;
+    const plan = readRegularJson(path.join(planDirectory, "execution-plan.json"));
+    return plan.feature_id === state.feature_id && Array.isArray(plan.final_review?.verification_commands) &&
+      plan.final_review.verification_commands.includes(command);
+  } catch { return false; }
+}
+
 function publicFailureReason(error) {
   const message = error instanceof Error ? error.message : "";
   return new Set([
@@ -422,7 +479,7 @@ function publicFailureReason(error) {
   ]).has(message) ? message : "evidence persistence failed";
 }
 
-async function persistEvidence({ source, output, cwd, sessionId, event }) {
+async function persistEvidence({ source, output, cwd, sessionId, event, startedIdentity }) {
   const command = event?.input?.command;
   if (typeof command !== "string" || command.length === 0 || Buffer.byteLength(command) > COMMAND_MAX_BYTES) {
     throw new Error("originating command unavailable");
@@ -450,6 +507,7 @@ async function persistEvidence({ source, output, cwd, sessionId, event }) {
       tool_name: event.toolName,
       command,
       original_status: originalStatus(event),
+      ...(startedIdentity ? { started_identity: startedIdentity } : {}),
       ...identity,
       output_path: outputPath,
       ...outputIdentity,
@@ -490,14 +548,18 @@ export function attachPiReviewEvidencePacket({ projectRoot, sessionId, event } =
 
 export function registerPiCommandEvidence(pi) {
   const pending = new Map();
+  const starts = new Map();
   const key = (event, ctx) => JSON.stringify([ctx?.cwd, piSessionId(ctx), event?.toolCallId]);
+  pi.on("tool_execution_start", (event, ctx) => {
+    if (isPiBashTool(event?.toolName)) starts.set(key(event, ctx), worktreeIdentity(ctx.cwd));
+  });
   pi.on("tool_execution_update", (event, ctx) => {
     if (!isPiBashTool(event?.toolName)) return;
     const output = event?.partialResult?.details?.fullOutputPath;
     if (typeof output === "string") pending.set(key(event, ctx), output);
   });
-  pi.on("session_start", () => pending.clear());
-  pi.on("session_shutdown", () => pending.clear());
+  pi.on("session_start", () => { pending.clear(); starts.clear(); });
+  pi.on("session_shutdown", () => { pending.clear(); starts.clear(); });
   pi.on("tool_result", async (event, ctx) => {
     if (!isPiBashTool(event?.toolName)) return;
     // Pi's nonzero/abort/timeout exception drops final details, but the last native
@@ -505,6 +567,8 @@ export function registerPiCommandEvidence(pi) {
     const callKey = key(event, ctx);
     const source = event?.details?.fullOutputPath ?? pending.get(callKey);
     pending.delete(callKey);
+    const startedIdentity = starts.get(callKey);
+    starts.delete(callKey);
     let evidence, note;
     if (typeof event?.input?.command === "string" && sensitiveCommand(event.input.command)) {
       evidence = { status: "not-archived", reason: "credential-or-diary-command" };
@@ -514,7 +578,8 @@ export function registerPiCommandEvidence(pi) {
         details: { ...event.details, command_evidence: evidence },
       };
     }
-    if (typeof source !== "string" && typeof event?.input?.command === "string" && !shortEvidenceCommand(event.input.command)) {
+    if (typeof source !== "string" && typeof event?.input?.command === "string" && !shortEvidenceCommand(event.input.command) &&
+        !declaredVerificationCommand(ctx.cwd, piSessionId(ctx), event.input.command)) {
       return {
         content: [...event.content, { type: "text", text: "[harness-evidence] Short output was not automatically archived for this command. The native result is unchanged; include complete safe inline evidence when relevant." }],
         details: { ...event.details, command_evidence: { status: "not-archived", reason: "not-verification-or-inspection" } },
@@ -532,6 +597,7 @@ export function registerPiCommandEvidence(pi) {
           cwd: ctx?.cwd ?? process.cwd(),
           sessionId: piSessionId(ctx),
           event,
+          startedIdentity,
         })),
       };
       note = "[harness-evidence] Exact command evidence: metadata " + evidence.metadata_path +
