@@ -5,6 +5,7 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import { checkScope } from "../../shared/lib/capture-oracle.mjs";
 import { hashTaskReceipt, taskRegistryPath } from "./task-contract.mjs";
+import { readTaskPlanAuthority } from "./task-plan-recovery.mjs";
 import { isSafeFeatureId, isSafeSessionId, isSafeTaskId } from "../../shared/lib/feature-id.mjs";
 
 const sha = /^[a-f0-9]{40}$/;
@@ -29,9 +30,12 @@ function reconciliationAuthority(entry) {
   const plan = JSON.parse(bytes);
   if (registry.version !== 1 || registry.parent_session_id !== entry.parent_session_id ||
       registry.feature_id !== entry.feature_id || registry.plan_sha256 !== entry.plan_sha256 ||
-      registry.spec_sha256 !== entry.spec_sha256 ||
-      createHash("sha256").update(bytes).digest("hex") !== entry.plan_sha256)
+      registry.spec_sha256 !== entry.spec_sha256)
     throw new Error("reconciliation owner plan or registry changed");
+  if (createHash("sha256").update(bytes).digest("hex") !== entry.plan_sha256)
+    readTaskPlanAuthority({ projectRoot: entry.parent_root, sessionId: entry.parent_session_id,
+      featureId: entry.feature_id, planSha256: entry.plan_sha256, specSha256: entry.spec_sha256,
+      originCallId: entry.grant?.origin?.plan_review_call_id });
   const tasks = new Map(plan.tasks.map((task) => [task.id, task]));
   const ancestors = new Set();
   const pending = [...(tasks.get(entry.task_id)?.depends_on ?? [])];

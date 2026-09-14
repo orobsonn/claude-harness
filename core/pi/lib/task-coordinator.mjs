@@ -20,6 +20,7 @@ import {
 import { readPiSpecApproval } from "./spec-approval.mjs";
 import { capturePlanReviewInput } from "./task-run.mjs";
 import { captureTaskContext } from "./task-context.mjs";
+import { readTaskPlanAuthority } from "./task-plan-recovery.mjs";
 import { checkScope } from "../../shared/lib/capture-oracle.mjs";
 import { taskScopeBase } from "./task-reconciliation.mjs";
 import { resolveOrcaTaskBackend } from "./task-orca.mjs";
@@ -493,8 +494,20 @@ async function prepareWorktree(entry, artifacts, deps, persist) {
     if (!captured.ok) throw new Error(captured.reason);
     entry.runtime = captured.runtime;
   }
-  const checkedRuntime = deps.verifyRuntime(entry.runtime);
-  if (!checkedRuntime.ok) throw new Error(checkedRuntime.reason);
+  // A resumed consumer uses the harness the operator installed in its parent.
+  // Each historic launch retains its own runtime receipt. Validate pinned child
+  // assets, but allow a terminal parent runtime to have been updated again.
+  const installedResume = entry.launches.length &&
+    path.relative(entry.parent_root, TASK_LAUNCHER) === ".pi/harness/bin/pi-harness.mjs";
+  if (!installedResume || entry.runtime.launcher_path !== TASK_LAUNCHER) {
+    const checkedRuntime = deps.verifyRuntime(entry.runtime);
+    if (!checkedRuntime.ok) throw new Error(checkedRuntime.reason);
+  }
+  if (installedResume) {
+    const installed = deps.captureRuntime(TASK_LAUNCHER);
+    if (!installed.ok) throw new Error(installed.reason);
+    if (installed.runtime.sha256 !== entry.runtime.sha256) entry.runtime = installed.runtime;
+  }
 }
 async function launchTask(entry, context, persist, deps, instruction) {
   const runId = randomUUID();
@@ -735,13 +748,17 @@ export async function executeTaskAction(params, context = {}, injected = {}) {
         tasks: {},
       };
     }
-    if (
-      registry.plan_sha256 !== artifacts.plan_sha256 ||
-      registry.spec_sha256 !== artifacts.spec_sha256
-    )
+    if (registry.spec_sha256 !== artifacts.spec_sha256)
       throw new Error(
         "canonical plan/spec changed after task admission; reconcile the plan before dispatch",
       );
+    if (registry.plan_sha256 !== artifacts.plan_sha256) {
+      readTaskPlanAuthority({ projectRoot: owner.root, sessionId: owner.sessionId, featureId: owner.featureId,
+        planSha256: registry.plan_sha256, specSha256: registry.spec_sha256 });
+      // Preserve admission identities; only the current reviewed plan supplies dispatch scope.
+      artifacts.plan_sha256 = registry.plan_sha256;
+      artifacts.receipt = registry.plan_snapshot.approval;
+    }
     if (["dispatch", "resume"].includes(params.action) && (context.orca || registry.orca_parent)) {
       if (!context.orca?.worktreeId)
         throw new Error("resume this global parent in its Orca workspace before launching task work");

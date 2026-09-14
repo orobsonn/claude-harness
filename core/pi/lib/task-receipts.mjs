@@ -13,6 +13,7 @@ import { parseTestReviewVerdict } from "../../shared/lib/test-review-verdict.mjs
 import { validateOcCaptureEligibleHandRecord } from "../../opencode/lib/hand-records.mjs";
 import { hashTaskReceipt, unsupportedTaskScopePattern } from "./task-contract.mjs";
 import { readTaskContextReturn, validateTaskContextReturn } from "./task-context.mjs";
+import { readTaskPlanAuthority, recoveredTaskContractHash } from "./task-plan-recovery.mjs";
 import { capturePiReviewInput, currentPiReviewIssues, findPiReviewReceipt, isSatisfiedPiTaskReviewReceipt, readPiReviewPlan } from "./pi-review-evidence.mjs";
 import { PARALLEL_REVIEW_ROLES, requiredPiTaskReviewRoles } from "./roles.mjs";
 import { classifyPiReviewDispatch } from "./pi-review-concurrency.mjs";
@@ -294,8 +295,9 @@ function validateLaunches(entry, jobRoot, readTaskProcessFn = readTaskProcess, a
       return failure(`launch ${index} identity is invalid`);
     }
     if (entry.runtime !== undefined) {
-      if (!validRuntime(entry.runtime) || !validRuntime(launch.runtime) || launch.runtime.sha256 !== entry.runtime.sha256 ||
-          launch.runtime.launcher_path !== entry.runtime.launcher_path) return failure(`launch ${index} runtime identity is invalid`);
+      if (!validRuntime(entry.runtime) || !validRuntime(launch.runtime) || !historical &&
+          (launch.runtime.sha256 !== entry.runtime.sha256 || launch.runtime.launcher_path !== entry.runtime.launcher_path))
+        return failure(`launch ${index} runtime identity is invalid`);
     }
     const observed = readTaskProcessFn(launch);
     if (observed?.running || !observed?.terminal) return failure(`launch ${index} is not terminal: ${observed?.reason ?? "worker process group remains active"}`);
@@ -663,6 +665,7 @@ export function inspectTaskRun(entry, dependencies = {}) {
         worktree,
         session_id: claim.session_id,
         plan_sha256: entry.plan_sha256,
+        ...(binding.recovered_task_contract_sha256 ? { recovered_task_contract_sha256: binding.recovered_task_contract_sha256 } : {}),
         spec_sha256: entry.spec_sha256,
         base_sha: entry.base_sha,
         scope_base_sha: scopeBase,
@@ -749,7 +752,7 @@ function validateIntegration(entry, integration, { projectRoot, sessionId, featu
     }).ok;
   const launchesValid = Array.isArray(result.launches) && result.launches.length === entry.launches?.length &&
     result.launches.every((launch, index) => launch?.run_id === entry.launches[index]?.run_id && launch.pid === entry.launches[index]?.pid &&
-      (!entry.runtime || launch.run_runtime_sha256 === entry.runtime.sha256) &&
+      (!entry.runtime || validRuntime(entry.launches[index].runtime) && launch.run_runtime_sha256 === entry.launches[index].runtime.sha256) &&
       (Number.isInteger(launch.exit_code) || index < result.launches.length - 1 && launch.exit_code === null) &&
       typeof launch.timed_out === "boolean" && (typeof launch.ended_at === "string" && launch.ended_at ||
         index < result.launches.length - 1 && launch.interrupted === true && launch.ended_at === null) &&
@@ -762,10 +765,15 @@ function validateIntegration(entry, integration, { projectRoot, sessionId, featu
     result.base_sha === entry.base_sha && COMMIT_SHA.test(result.child_head ?? "") && typeof result.latest_run_id === "string" &&
     result.latest_run_id.length > 0 && entry.launches?.at?.(-1)?.run_id === result.latest_run_id && changedPathsValid && frozenReceiptValid &&
     handCaptureValid && recoveryOriginValid && SHA256.test(result.review_input_digest ?? "") && reviewReceiptsValid && regateValid && contextReturnValid && launchesValid &&
-    (entry.runtime === undefined || validRuntime(entry.runtime) && validRuntime(result.runtime) && result.runtime.sha256 === entry.runtime.sha256 &&
-      result.runtime.launcher_path === entry.runtime.launcher_path);
+    (entry.runtime === undefined || validRuntime(result.runtime) && result.runtime.sha256 === entry.launches.at(-1)?.runtime?.sha256 &&
+      result.runtime.launcher_path === entry.launches.at(-1)?.runtime?.launcher_path);
   if (!resultValid) return failure("task inspection receipt is incomplete or does not match the registry entry");
-  const canonical = readPiReviewPlan({ projectRoot, featureId, expectedSha256: result.plan_sha256 });
+  let canonical = readPiReviewPlan({ projectRoot, featureId, expectedSha256: result.plan_sha256 });
+  if (!canonical.ok) {
+    const recovered = readTaskPlanAuthority({ projectRoot, sessionId, featureId,
+      planSha256: entry.plan_sha256, specSha256: entry.spec_sha256, originCallId: entry.grant?.origin?.plan_review_call_id });
+    canonical = { ok: true, plan: recovered.plan };
+  }
   const canonicalTask = canonical.ok && canonical.plan.tasks.find((item) => item.id === taskId);
   if (!canonicalTask || requiredPiTaskReviewRoles(canonical.plan, canonicalTask).some((role) =>
     !reviewReceiptKeys.includes(role.replace("harness-", "")))) return failure("task receipt lacks a canonical required task review");
@@ -825,9 +833,17 @@ function validateIntegration(entry, integration, { projectRoot, sessionId, featu
 
 function validateCurrentIntegrationAuthority(entry, registry, { projectRoot, sessionId, featureId }) {
   const captured = capturePlanReviewInput({ projectRoot, sessionId, featureId });
-  if (!captured.ok || captured.snapshot.plan_sha256 !== registry.plan_sha256 ||
-      captured.snapshot.spec_sha256 !== registry.spec_sha256) {
+  if (!captured.ok || captured.snapshot.spec_sha256 !== registry.spec_sha256) {
     return failure("integrated task plan/spec hashes do not match the current canonical artifacts");
+  }
+  let recovered;
+  if (captured.snapshot.plan_sha256 !== registry.plan_sha256) {
+    try {
+      recovered = readTaskPlanAuthority({ projectRoot, sessionId, featureId, planSha256: registry.plan_sha256,
+        specSha256: registry.spec_sha256, originCallId: entry.grant?.origin?.plan_review_call_id });
+    } catch (error) { return failure(`integrated task plan/spec hashes do not match the current canonical artifacts: ${error.message}`); }
+    if (recoveredTaskContractHash(recovered, entry.task_id) !== (entry.result?.recovered_task_contract_sha256 ?? null))
+      return failure("task requires correction and revalidation against its reviewed scope; resume the same task");
   }
   const approvedSpec = readPiSpecApproval({ projectRoot, sessionId, featureId });
   if (!approvedSpec.ok || approvedSpec.sha256 !== registry.spec_sha256) {
@@ -835,7 +851,7 @@ function validateCurrentIntegrationAuthority(entry, registry, { projectRoot, ses
   }
   const grant = object(entry.grant);
   const origin = object(grant?.origin);
-  const approval = object(approvedSpec.state?.plan_review_evidence);
+  const approval = object(recovered ? registry.plan_snapshot.approval : approvedSpec.state?.plan_review_evidence);
   if (!grant || grant.version !== 1 || grant.kind !== "task-run" ||
       grant.parent_session_id !== sessionId || grant.feature_id !== featureId || grant.task_id !== entry.task_id ||
       grant.plan_sha256 !== registry.plan_sha256 || grant.spec_sha256 !== registry.spec_sha256 ||

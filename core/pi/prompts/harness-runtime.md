@@ -244,13 +244,18 @@ obter recibos.
 **Finding após implementação é correção da tarefa existente.** Ao receber um achado
 na validação agregada, nos olhos finais ou no shipping, localize a tarefa dona dos paths
 e encaminhe a correção a ela: pai global v1 usa `harness_tasks` para retomar a mesma
-tarefa; pai local/legado despacha `harness-sniper` no escopo aprovado. Preserve IDs,
-spec e plano; depois valide, faça o commit seletivo, registre `capture-verified` com a
+tarefa; pai local/legado despacha `harness-sniper` no escopo aprovado. Preserve IDs
+e spec; depois valide, faça o commit seletivo, registre `capture-verified` com a
 árvore limpa e revalide as evidências afetadas antes de
-continuar a finalização. Não acrescente tarefas, não chame planner/plan-reviewer e não reinicie
-a cerimônia para corrigir uma entrega implementada. Se faltar ownership ou a solução
-mudar o contrato aprovado, reporte o bloqueio concreto para outra entrega; não amplie
-o plano durante o fechamento nem declare a entrega concluída com esse achado pendente.
+continuar a finalização. Como no Claude Code, se a correção exigir um arquivo que ficou
+fora do escopo, inclua-o deliberadamente no plano antes da escrita: aguarde os processos
+em execução encerrarem, encaminhe ao planner somente a correção de `scope_paths`/`allowed_writes`
+das tarefas existentes e submeta o plano corrigido ao plan-reviewer. Preserve IDs,
+dependências, testes congelados e contrato aprovado. Depois de APPROVE, retome a mesma
+tarefa/tentativa com `harness_tasks resume`; o host conserva a admissão original e usa o
+escopo revisado. Não repita spec, tarefas prontas ou testes intactos. Achados finais seguem
+ao sniper e aos gates afetados, como os achados locais. Mudança real de comportamento
+aprovado exige tratar essa decisão, mas uma lacuna de arquivo no plano não exige outra run.
 
 **Colheita durável — depois dos olhos finais.** Com as tarefas funcionais verificadas e
 commitadas, colete os olhos finais sobre o agregado. Resolva os achados aplicáveis,

@@ -9,6 +9,7 @@ import test from "node:test";
 import { hashTaskReceipt } from "./task-contract.mjs";
 import { createPiMarkerAuthority } from "./marker-authority.mjs";
 import { inspectTaskRun, readIntegratedTaskEvidence, inspectTaskResumeAbandonment } from "./task-receipts.mjs";
+import { preserveTaskPlanForPlanner } from "./task-plan-recovery.mjs";
 import { validateTaskFidelityFreeze } from "./task-run.mjs";
 
 const FEATURE = "receipt-feature";
@@ -1336,6 +1337,29 @@ test("inspectTaskRun binds every launch and the receipt to the admitted runtime 
   assert.match(changed.reason, /runtime identity/i);
 });
 
+test("runtime update keeps previous process evidence bound to its original runtime", () => {
+  const fixture = inspectionFixture({ historicFailure: true });
+  const previous = { launcher_path: path.join(fixture.root, "old/bin/pi-harness.mjs"), sha256: "8".repeat(64) };
+  const installed = { launcher_path: path.join(fixture.root, "new/bin/pi-harness.mjs"), sha256: "9".repeat(64) };
+  fixture.entry.runtime = installed;
+  for (const [index, launch] of fixture.entry.launches.entries()) {
+    launch.runtime = index === fixture.entry.launches.length - 1 ? installed : previous;
+    for (const file of [launch.process_path, launch.result_path]) {
+      const record = JSON.parse(fs.readFileSync(file, "utf8"));
+      write(file, { ...record, run_runtime_sha256: launch.runtime.sha256 });
+    }
+  }
+  const inspected = inspectTaskRun(fixture.entry, fixture.dependencies);
+  assert.equal(inspected.ok, true, inspected.reason);
+  assert.deepEqual(inspected.result.runtime, installed);
+  assert.equal(inspected.result.launches[0].run_runtime_sha256, previous.sha256);
+  assert.equal(inspected.result.launches.at(-1).run_runtime_sha256, installed.sha256);
+  fixture.entry.launches[0].runtime = installed;
+  const forged = inspectTaskRun(fixture.entry, fixture.dependencies);
+  assert.equal(forged.ok, false);
+  assert.match(forged.reason, /runtime|process/i);
+});
+
 test("inspectTaskRun accepts the registered worker PID for an Orca terminal launch", () => {
   const fixture = inspectionFixture();
   const launch = fixture.entry.launches.at(-1);
@@ -1692,11 +1716,11 @@ test("inspectTaskRun rejects a frozen test modified after the event-proven freez
   assert.match(inspected.reason, /frozen file changed/i);
 });
 
-function integratedFixture({ lockedPaths = [], mode = "full" } = {}) {
+function integratedFixture({ lockedPaths = [], mode = "full", plan } = {}) {
   const { root, base } = repo();
   const planPath = path.join(root, ".pi", "harness", "plans", FEATURE, "execution-plan.json");
   const specPath = path.join(root, ".pi", "harness", "plans", FEATURE, "spec.md");
-  write(planPath, { feature_id: FEATURE, mode, tasks: [{ id: TASK,
+  write(planPath, plan ?? { feature_id: FEATURE, mode, tasks: [{ id: TASK,
     locked_tests: lockedPaths.map((file, index) => ({ id: "locked-" + index, path: file })) }] });
   write(specPath, "approved task spec\n");
   const planSha = crypto.createHash("sha256").update(fs.readFileSync(planPath)).digest("hex");
@@ -1764,6 +1788,34 @@ function integratedFixture({ lockedPaths = [], mode = "full" } = {}) {
   write(registryPath, registry);
   return { root, base, planPath, specPath, statePath, registryPath, registry, entry, integration };
 }
+
+test("reviewed scope correction preserves other integrated tasks and requires affected task revalidation", () => {
+  const task = (id) => ({ id, depends_on: [], severity: "medium", scope_paths: [`src/${id}.mjs`],
+    criterion_refs: ["ac-1"], locked_tests: [{ id: `${id}-test`, path: `tests/${id}.test.mjs`,
+      assertion: "Given input When invoked Then output is correct" }] });
+  const plan = { feature_id: FEATURE, kind: "full", mode: "full",
+    model_strategy: { hand_tiers: { low: "test/model", medium: "test/model", high: "test/model" },
+      ...Object.fromEntries(["planner", "plan-reviewer", "compliance", "adversary", "security", "shipper", "harvester"].map((role) => [role, "test/model"])) },
+    tasks: [task(TASK), task("other-task")] };
+  for (const affected of [false, true]) {
+    const f = integratedFixture({ plan });
+    const originalResult = structuredClone(f.entry.result);
+    preserveTaskPlanForPlanner({ projectRoot: f.root, sessionId: PARENT, featureId: FEATURE },
+      { readProcess: () => ({ terminal: true }) });
+    const revised = structuredClone(plan);
+    revised.tasks[affected ? 0 : 1].scope_paths.push("src/missing-file.mjs");
+    write(f.planPath, revised);
+    const state = JSON.parse(fs.readFileSync(f.statePath, "utf8"));
+    state.plan_review_evidence = { ...state.plan_review_evidence, dispatch_call_id: "corrected-plan-review",
+      plan_sha256: crypto.createHash("sha256").update(fs.readFileSync(f.planPath)).digest("hex") };
+    write(f.statePath, state);
+    const evidence = readIntegratedTaskEvidence({ projectRoot: f.root, sessionId: PARENT,
+      featureId: FEATURE, taskId: TASK, headSha: f.base });
+    assert.equal(evidence.ok, !affected, evidence.reason);
+    if (affected) assert.match(evidence.reason, /resume the same task/);
+    else assert.deepEqual(evidence.entry.result, originalResult);
+  }
+});
 
 test("readIntegratedTaskEvidence preserves the child session and accepts ancestry at a later global HEAD", () => {
   const fixture = integratedFixture();

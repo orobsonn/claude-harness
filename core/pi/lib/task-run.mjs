@@ -24,6 +24,7 @@ import {
 } from "./task-contract.mjs";
 
 export { TASK_PIPELINE_VERSION, TASK_RUN_ENV } from "./task-contract.mjs";
+import { readTaskPlanAuthority, recoveredTaskContractHash } from "./task-plan-recovery.mjs";
 
 const TASK_ROLES = new Set([
   "harness-test-author",
@@ -83,19 +84,6 @@ function planAndSpec(root, featureId) {
     specSha256: createHash("sha256").update(specText).digest("hex"),
     plan: JSON.parse(planText),
   };
-}
-
-function validPlanApproval(receipt, grant) {
-  return receipt && typeof receipt === "object" && !Array.isArray(receipt) &&
-    receipt.written_by === "host-subagent-completion" &&
-    receipt.parent_session_id === grant.parent_session_id &&
-    receipt.feature_id === grant.feature_id &&
-    receipt.role === "harness-plan-reviewer" &&
-    receipt.dispatch_call_id === grant.origin.plan_review_call_id &&
-    typeof receipt.child_session_id === "string" && receipt.child_session_id.length > 0 &&
-    typeof receipt.agent_id === "string" && receipt.agent_id.length > 0 &&
-    receipt.status === "completed" && receipt.plan_sha256 === grant.plan_sha256 &&
-    receipt.spec_sha256 === grant.spec_sha256 && receipt.verdict === "APPROVE";
 }
 
 function validateDependencyReceipt(receipt, expected, grant) {
@@ -183,12 +171,18 @@ function inspectGrant(grantPath, cwd, { allowHistoricalDeps = false } = {}) {
     if (!context.ok) throw new Error(context.reason);
   }
   const artifacts = planAndSpec(root, grant.feature_id);
-  if (artifacts.planSha256 !== grant.plan_sha256 || artifacts.specSha256 !== grant.spec_sha256) throw new Error("plan/spec hash mismatch");
+  const authority = readTaskPlanAuthority({ projectRoot: parentRoot, sessionId: grant.parent_session_id,
+    featureId: grant.feature_id, planSha256: grant.plan_sha256, specSha256: grant.spec_sha256,
+    originCallId: grant.origin.plan_review_call_id });
+  if (![grant.plan_sha256, authority.planHash].includes(artifacts.planSha256) || artifacts.specSha256 !== grant.spec_sha256)
+    throw new Error("plan/spec hash mismatch");
   const valid = validatePlan(artifacts.plan, { expect: "full", expectedModelStrategy: artifacts.plan.model_strategy });
   if (!valid.ok) throw new Error(`invalid canonical plan: ${valid.errors.join("; ")}`);
   if (artifacts.plan.feature_id !== grant.feature_id || !["light", "full"].includes(artifacts.plan.mode)) throw new Error("plan identity mismatch");
-  const task = artifacts.plan.tasks.find((candidate) => candidate.id === grant.task_id);
+  const task = authority.plan.tasks.find((candidate) => candidate.id === grant.task_id);
   if (!task) throw new Error("task missing from canonical plan");
+  if (stableTaskJson(artifacts.plan.tasks.find((candidate) => candidate.id === grant.task_id)) !== stableTaskJson(task))
+    throw new Error("task scope changed in the reviewed plan; resume the same task to load its corrected scope");
   const taskScope = [
     ...task.scope_paths,
     ...(task.locked_tests ?? []).flatMap((test) => [
@@ -204,14 +198,14 @@ function inspectGrant(grantPath, cwd, { allowHistoricalDeps = false } = {}) {
   }
 
   const parentArtifacts = planAndSpec(parentRoot, grant.feature_id);
-  if (parentArtifacts.planSha256 !== grant.plan_sha256 || parentArtifacts.specSha256 !== grant.spec_sha256) {
+  if (parentArtifacts.planSha256 !== authority.planHash || parentArtifacts.specSha256 !== grant.spec_sha256) {
     throw new Error("parent canonical plan/spec changed after grant");
   }
 
   const parentStatePath = path.join(parentRoot, ".pi", "harness", "state", grant.parent_session_id, "gate-state.json");
   const parentState = JSON.parse(readArtifact(parentStatePath, parentRoot));
   if (parentState.session_id !== grant.parent_session_id || parentState.feature_id !== grant.feature_id ||
-      parentState.task_pipeline_version !== TASK_PIPELINE_VERSION || !validPlanApproval(parentState.plan_review_evidence, grant)) {
+      parentState.task_pipeline_version !== TASK_PIPELINE_VERSION) {
     throw new Error("current host-owned plan approval does not match grant");
   }
   const sealedSpec = readPiSpecApproval({ projectRoot: parentRoot, sessionId: grant.parent_session_id, featureId: grant.feature_id });
@@ -225,7 +219,8 @@ function inspectGrant(grantPath, cwd, { allowHistoricalDeps = false } = {}) {
     grant,
     root,
     parentRoot,
-    plan: artifacts.plan,
+    plan: authority.plan,
+    recovered_task_contract_sha256: recoveredTaskContractHash(authority, grant.task_id),
     task,
     planPath: artifacts.planPath,
     specPath: artifacts.specPath,

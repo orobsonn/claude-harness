@@ -69,6 +69,7 @@ const REQUIRED_LIBS = [
   "core/pi/lib/task-coordinator.mjs",
   "core/pi/lib/task-orca.mjs",
   "core/pi/lib/task-process.mjs",
+  "core/pi/lib/task-plan-recovery.mjs",
   "core/pi/lib/task-receipts.mjs",
   "core/pi/lib/task-reconciliation.mjs",
   "core/pi/lib/task-runtime-assets.mjs",
