@@ -77,6 +77,12 @@ Quando uma assinatura TypeScript ou fixture compartilhada mudar em path autoriza
 confira todos os call sites e fixtures dependentes naquele path. Forneça o typecheck
 necessário ao reviewer: erro de tipo esperado no SUT pode ser RED; erro local de
 fixture, import quebrado ou zero testes coletados não podem.
+Antes de reabrir test-author com implementação pendente, faça commit seletivo dos
+paths de produto autorizados que já foram implementados. O gate preserva esse delta
+contra descarte e exige esse checkpoint antes do reparo. Esse commit não aprova
+captura nem revisão. Mantenha o produto aplicado, corrija a fixture, execute o
+typecheck necessário antes da fidelidade e faça o novo freeze somente dos testes.
+Não remova produto para fabricar RED na manutenção de uma fixture existente.
 O test-author só pode alterar paths literais presentes em `locked_tests[].path` ou
 `locked_tests[].fixture_paths`. Um teste que aparece apenas em `scope_paths` não pertence
 a essa mão: trate sua atualização compatível como delta da implementação, ou reporte
