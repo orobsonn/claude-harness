@@ -100,6 +100,7 @@ const REQUIRED_LIBS = [
   "core/pi/lib/plan-gate.mjs",
   "core/pi/lib/plan-tracker.mjs",
   "core/pi/lib/task-progress.mjs",
+  "core/pi/lib/delivery-continuation.mjs",
   "core/pi/lib/plan-write-decide.mjs",
   "core/pi/lib/policy.mjs",
   "core/pi/lib/roles.mjs",

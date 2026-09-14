@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { installDeliveryContinuation } from "../lib/delivery-continuation.mjs";
 
 import {
   isChildSession,
@@ -21,9 +22,13 @@ function errorText(error: unknown): string {
 }
 
 /** Record the native Pi event stream for a host-owned TUI job. */
-export default function harnessTaskEvents(pi: ExtensionAPI) {
+export default function harnessTaskEvents(pi: ExtensionAPI, continuationDependencies = {}) {
   const jobFile = process.env[TUI_JOB_ENV];
-  if (!jobFile) return;
+  const continueDelivery = installDeliveryContinuation(pi, { local: Boolean(jobFile), ...continuationDependencies });
+  if (!jobFile) {
+    pi.on("agent_end", continueDelivery);
+    return;
+  }
 
   let recorder: Recorder | null = null;
   let disabled = false;
@@ -199,11 +204,12 @@ export default function harnessTaskEvents(pi: ExtensionAPI) {
     }
   });
 
-  pi.on("agent_end", (_event, ctx: any) => {
+  pi.on("agent_end", async (event, ctx: any) => {
     if (isChildSession(ctx) || ctx?.mode !== "tui" || disabled) return;
     try {
       assertOwner(ctx);
       fs.fsyncSync(recorder!.fd);
+      if (await continueDelivery(event, ctx)) return;
       ctx.shutdown();
     } catch (error) {
       reportFailure(ctx, error);

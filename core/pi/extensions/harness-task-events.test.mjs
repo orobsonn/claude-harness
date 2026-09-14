@@ -9,7 +9,7 @@ import harnessTaskEvents from "./harness-task-events.ts";
 const ENV = "PI_HARNESS_TUI_JOB_FILE";
 const SESSION = "tui-session";
 
-function install(jobFile) {
+function install(jobFile, continuationDependencies = {}) {
   const previous = process.env[ENV];
   if (jobFile === undefined) delete process.env[ENV];
   else process.env[ENV] = jobFile;
@@ -19,7 +19,10 @@ function install(jobFile) {
       on(name, handler) {
         handlers.set(name, handler);
       },
+      sendMessage: async () => {},
+      appendEntry: () => {},
     }),
+    continuationDependencies,
   );
   return {
     handlers,
@@ -50,7 +53,7 @@ function fixture(t, overrides = {}) {
   if (overrides.rawJob !== undefined)
     fs.writeFileSync(jobFile, overrides.rawJob, { mode: 0o600 });
   else fs.writeFileSync(jobFile, JSON.stringify(job), { mode: 0o600 });
-  const extension = install(overrides.jobFile ?? jobFile);
+  const extension = install(overrides.jobFile ?? jobFile, overrides.continuationDependencies);
   t.after(() => {
     extension.restore();
     fs.rmSync(root, { recursive: true, force: true });
@@ -98,10 +101,10 @@ function fixture(t, overrides = {}) {
   };
 }
 
-test("missing env and legacy non-TUI mode are inert", (t) => {
+test("missing env and legacy non-TUI mode are inert", async (t) => {
   const absent = install(undefined);
   t.after(() => absent.restore());
-  assert.equal(absent.handlers.size, 0);
+  assert.ok(absent.handlers.has("agent_end"));
 
   const f = fixture(t, { rawJob: "not json" });
   const legacy = { ...f.ctx, mode: "json" };
@@ -111,13 +114,24 @@ test("missing env and legacy non-TUI mode are inert", (t) => {
     legacy,
   );
   f.handlers.get("message_end")({ message: { role: "assistant", stopReason: "stop", content: [{ type: "text", text: "legacy" }] } }, legacy);
-  f.handlers.get("agent_end")({}, legacy);
+  await f.handlers.get("agent_end")({}, legacy);
   assert.equal(f.shutdowns(), 0);
   assert.deepEqual(f.notifications, []);
   assert.deepEqual(f.lines(), []);
 });
 
-test("native child session never opens evidence or requests shutdown", (t) => {
+test("TUI flushes evidence but stays alive for one pending-review continuation", async t => {
+  let pending = { sessionId: SESSION, key: "captured-no-review", stage: "task-reviews", content: "Finish reviews." };
+  const f = fixture(t, { continuationDependencies: { readPending: () => pending } });
+  f.handlers.get("session_start")({}, f.ctx);
+  await f.handlers.get("agent_end")({ messages: [{ role: "assistant", stopReason: "stop" }] }, f.ctx);
+  assert.equal(f.shutdowns(), 0, "queued follow-up must survive task recorder shutdown");
+  pending = null;
+  await f.handlers.get("agent_end")({ messages: [{ role: "assistant", stopReason: "stop" }] }, f.ctx);
+  assert.equal(f.shutdowns(), 1, "ready task returns to its native worker");
+});
+
+test("native child session never opens evidence or requests shutdown", async (t) => {
   const f = fixture(t, { rawJob: "not json", tail: '{"existing":true}\n' });
   const child = {
     ...f.ctx,
@@ -136,14 +150,14 @@ test("native child session never opens evidence or requests shutdown", (t) => {
     child,
   );
   f.handlers.get("message_end")({ message: { role: "assistant", stopReason: "stop", content: [{ type: "text", text: "nested report" }] } }, child);
-  f.handlers.get("agent_end")({}, child);
+  await f.handlers.get("agent_end")({}, child);
   f.handlers.get("session_shutdown")({}, child);
   assert.equal(f.shutdowns(), 0);
   assert.deepEqual(f.notifications, []);
   assert.deepEqual(f.lines(), [{ existing: true }]);
 });
 
-test("records one native header and complete native tool events without losing an existing tail", (t) => {
+test("records one native header and complete native tool events without losing an existing tail", async (t) => {
   const f = fixture(t, { tail: '{"type":"existing-tail","n":1}\n' });
   const start = {
     type: "tool_execution_start",
@@ -182,7 +196,7 @@ test("records one native header and complete native tool events without losing a
     return nativeFsync(fd);
   };
   try {
-    f.handlers.get("agent_end")({}, f.ctx);
+    await f.handlers.get("agent_end")({}, f.ctx);
   } finally {
     fs.fsyncSync = nativeFsync;
   }
@@ -197,7 +211,7 @@ test("records one native header and complete native tool events without losing a
   assert.equal(fs.readFileSync(f.eventsPath, "utf8"), before);
 });
 
-test("job path, descriptor and events-file violations fail closed before tools proceed", (t) => {
+test("job path, descriptor and events-file violations fail closed before tools proceed", async (t) => {
   const cases = [
     {
       name: "relative job path",
@@ -268,7 +282,7 @@ test("job path, descriptor and events-file violations fail closed before tools p
   }
 });
 
-test("symlink, non-regular and permissive events files are rejected", (t) => {
+test("symlink, non-regular and permissive events files are rejected", async (t) => {
   for (const kind of ["symlink", "directory", "mode"]) {
     const f = fixture(t);
     fs.rmSync(f.eventsPath);
@@ -288,7 +302,7 @@ test("symlink, non-regular and permissive events files are rejected", (t) => {
   }
 });
 
-test("a bound owner mismatch closes evidence and shuts down fail closed", (t) => {
+test("a bound owner mismatch closes evidence and shuts down fail closed", async (t) => {
   const f = fixture(t);
   f.handlers.get("session_start")({}, f.ctx);
   const before = fs.readFileSync(f.eventsPath, "utf8");
@@ -308,7 +322,7 @@ test("a bound owner mismatch closes evidence and shuts down fail closed", (t) =>
   assert.equal(fs.readFileSync(f.eventsPath, "utf8"), before);
 });
 
-test("the first parent start requires matching native header and runtime session ids", (t) => {
+test("the first parent start requires matching native header and runtime session ids", async (t) => {
   const f = fixture(t);
   const mismatch = {
     ...f.ctx,
@@ -324,7 +338,7 @@ test("the first parent start requires matching native header and runtime session
 });
 
 
-test("TUI persists the local assistant report before shutdown without private thinking or nested reports", (t) => {
+test("TUI persists the local assistant report before shutdown without private thinking or nested reports", async (t) => {
   const f = fixture(t);
   f.handlers.get("session_start")({}, f.ctx);
   const message = { role: "assistant", stopReason: "stop", content: [
@@ -338,6 +352,6 @@ test("TUI persists the local assistant report before shutdown without private th
   const before = f.lines().length;
   f.handlers.get("message_end")({ message: { role: "user", content: [{ type: "text", text: "DONE" }] } }, f.ctx);
   assert.equal(f.lines().length, before);
-  f.handlers.get("agent_end")({}, f.ctx);
+  await f.handlers.get("agent_end")({}, f.ctx);
   assert.equal(f.lines().at(-1).message.content[0].text, message.content[1].text);
 });

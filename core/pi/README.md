@@ -72,6 +72,16 @@ Ao iniciar o pai num terminal Orca, `ORCA_WORKTREE_ID` vincula o despacho àquel
 
 O launcher carrega explicitamente a extensão oficial `orca-agent-status.ts` instalada pelo Orca para publicar o estado do pai Pi no terminal correspondente. Novas tasks usam a TUI nativa do Pi nesse terminal, com a implementação como prompt inicial. A extensão `harness-task-events` registra o header real da sessão e os eventos nativos de ferramentas no job; ao fim da execução, solicita o encerramento normal do Pi para o pai verificar o resultado. Os filhos nativos continuam usando os recursos do harness. Retomadas conservam a apresentação original da tentativa, inclusive JSON em runtimes antigos. Não abra outra sessão Pi sobre o arquivo de uma task em andamento.
 
+Antes de encerrar uma resposta de trabalho, o host confere as obrigações pendentes da
+mesma sessão: tarefa em andamento, captura sem fechamento das revisões ou integração
+sem finalização global. Ele enfileira uma continuação nativa, sem nova mensagem do
+operador e sem aprovar gates. A mesma obrigação sem progresso recebe somente uma
+continuação, registrada na sessão; nova evidência pode permitir o próximo passo.
+Aborto, erro do provedor e pausa explícita não são reiniciados. Shipping comprovado
+encerra essa continuação: um PR draft não autoriza merge ou publicação automaticamente.
+Esse mecanismo é uma adaptação do ciclo de vida do Pi; o fluxo de revisão e reparo
+continua usando as ferramentas existentes do harness.
+
 O comando CLI segue `ORCA_CLI_COMMAND` ou `orca`; `PI_HARNESS_ORCA_CLI` permite selecionar um executável alternativo do host. Esse valor é um caminho/comando executável, sem argumentos de shell e sem credenciais.
 
 O despacho aceita `task_contexts: [{task_id, content}]` opcional: até 2 KiB UTF-8 de contexto curado por task. O snapshot pertence àquela tarefa e permanece imutável após a admissão; não herda o diário completo nem concede aprovação. Ao terminar, `context_return` devolve o diário da sessão local vinculado ao HEAD e ao resultado verificado. O pai global lê, revalida o que importa e incorpora explicitamente ao próprio `shared_context` usando `harness_memory update`. Não há concatenação automática de diários entre tasks.
