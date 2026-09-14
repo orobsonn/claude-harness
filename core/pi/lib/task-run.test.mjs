@@ -9,6 +9,7 @@ import { execFileSync } from "node:child_process";
 import {
   admitTaskRun,
   capturePlanReviewInput,
+  checkTaskRepairPreservation,
   decideTaskRunTool,
   hashTaskArtifact,
   parsePlanReviewCompletion,
@@ -164,6 +165,50 @@ function fixture(t, { dependent = false, complexity = "low" } = {}) {
   save();
   return { root, git, planPath, specPath, grantPath, grant, dependency, save };
 }
+
+test("fixture repair preserves tracked, staged and new product work through the same task", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-fixture-preservation-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const git = (...args) => execFileSync("git", args, { cwd: root, encoding: "utf8" }).trim();
+  git("init", "-q");
+  git("config", "user.name", "Test");
+  git("config", "user.email", "test@example.test");
+  fs.mkdirSync(path.join(root, "src"));
+  fs.writeFileSync(path.join(root, "src/product.ts"), "export const implemented = false;\n");
+  fs.writeFileSync(path.join(root, "src/product.spec.ts"), "// initial frozen test\n");
+  fs.writeFileSync(path.join(root, "unrelated.txt"), "keep\n");
+  git("add", "."); git("commit", "-qm", "freeze");
+  const binding = { ok: true, root, grant: { task_id: "task-one" }, task: {
+    scope_paths: ["src/"], locked_tests: [{ path: "src/product.spec.ts" }],
+  } };
+  const check = (command) => decideTaskRunTool(binding, { toolName: "bash", input: { command } });
+  const author = { toolName: "subagent", input: { subagent_type: "harness-test-author" } };
+  assert.equal(checkTaskRepairPreservation(binding, author).ok, true);
+  const product = "export const implemented = true;\n";
+  fs.writeFileSync(path.join(root, "src/product.ts"), product);
+  fs.writeFileSync(path.join(root, "src/new.ts"), "export const helper = true;\n");
+  git("add", "src/product.ts");
+  fs.writeFileSync(path.join(root, "src/product.spec.ts"), "// broken fixture needs maintenance\n");
+  for (const command of [
+    "git restore -- src/product.ts && git status --short && npm run typecheck",
+    "git restore -- src/product.ts", "git checkout -- src", "git reset --hard HEAD", "git clean -fd",
+  ]) assert.equal(check(command).block, true, command);
+  const repair = checkTaskRepairPreservation(binding, author);
+  assert.equal(repair.ok, false);
+  assert.deepEqual(new Set(repair.paths), new Set(["src/product.ts", "src/new.ts"]));
+  assert.match(repair.reason, /selective implementation checkpoint/);
+  assert.equal(check("git restore --staged -- src/product.ts").block, false);
+  assert.equal(check("git restore -- unrelated.txt").block, false, "out-of-scope cleanup remains possible");
+  assert.equal(check("npm run typecheck").block, false);
+  assert.equal(check("git add src/product.ts src/new.ts").block, false);
+  git("add", "src/product.ts", "src/new.ts"); git("commit", "-qm", "implementation checkpoint");
+  assert.equal(checkTaskRepairPreservation(binding, author).ok, true, "same task can repair with production in place");
+  fs.writeFileSync(path.join(root, "src/product.spec.ts"), "// corrected fixture, assertions preserved\n");
+  git("add", "src/product.spec.ts"); git("commit", "-qm", "fixture repair freeze");
+  assert.equal(fs.readFileSync(path.join(root, "src/product.ts"), "utf8"), product);
+  assert.equal(git("diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD"), "src/product.spec.ts");
+  assert.equal(git("status", "--porcelain"), "");
+});
 
 test("stable receipt JSON is key-order independent", () => {
   assert.equal(stableTaskJson({ b: 1, a: { d: 2, c: 3 } }), stableTaskJson({ a: { c: 3, d: 2 }, b: 1 }));

@@ -9,6 +9,7 @@ import { parseReviewReportText, validateReviewReport } from "../../shared/lib/re
 import { validatePlan } from "../../shared/lib/validate-plan.mjs";
 import { parseTaskDispatchIdentity } from "../../opencode/lib/task-dispatch-identity.mjs";
 import { parseTestReviewVerdict } from "../../shared/lib/test-review-verdict.mjs";
+import { checkScope } from "../../shared/lib/capture-oracle.mjs";
 import { piSubagentArgs } from "./pi-adapter-map.mjs";
 import { piDispatchRoute } from "./dispatch-rail.mjs";
 import { readPiSpecApproval } from "./spec-approval.mjs";
@@ -439,6 +440,8 @@ export function validateTaskFidelityFreeze({ projectRoot, sessionId, taskId, ses
 export function decideTaskRunTool(binding, event) {
   const deny = (reason) => ({ block: true, reason: `[task-run] ${reason}` });
   if (!binding?.ok) return deny(binding?.reason ?? "validated task binding required");
+  const preservation = checkTaskRepairPreservation(binding, event);
+  if (!preservation.ok) return deny(preservation.reason);
   const input = event?.input ?? {};
   const name = event?.toolName;
   if (["classify", "harness_spec_write", "seal_spec_review", "harness_plan", "harness_tasks", "run_hand"].includes(name)) {
@@ -469,6 +472,40 @@ export function decideTaskRunTool(binding, event) {
     }
   }
   return { block: false };
+}
+
+/** A fixture repair must not erase the implementation already produced by this task. */
+export function checkTaskRepairPreservation(binding, event) {
+  const command = String(event?.input?.command ?? "");
+  const author = event?.toolName === "subagent" && event.input?.subagent_type === "harness-test-author";
+  const discard = ["bash", "powershell"].includes(event?.toolName) &&
+    /\bgit\s+(?:restore|checkout|reset|clean|stash\s+(?:drop|clear|pop))\b/.test(command);
+  if (!author && !discard) return { ok: true };
+  const frozen = (binding.task?.locked_tests ?? []).flatMap((test) => [test.path, ...(test.fixture_paths ?? [])]);
+  if (!frozen.length) return { ok: true };
+  try {
+    const root = binding.root;
+    const scopes = [...(binding.task.scope_paths ?? []), ...(binding.task.allowed_writes ?? [])];
+    const dirty = [...new Set([
+      ...git(root, "diff", "--no-ext-diff", "--no-textconv", "--name-only", "-z", "--cached", "HEAD", "--").split("\0"),
+      ...git(root, "diff", "--no-ext-diff", "--no-textconv", "--name-only", "-z", "--").split("\0"),
+      ...git(root, "ls-files", "--others", "--exclude-standard", "-z").split("\0"),
+    ].filter((file) => file && !frozen.includes(file) && checkScope([file], scopes).length === 0))];
+    if (!dirty.length) return { ok: true };
+    // Unstaging preserves worktree bytes. A literal, standalone cleanup of other
+    // paths is also allowed; chains and broad resets cannot discard the task delta.
+    if (discard && /^\s*git\s+restore\s+--staged\s+--\s+[A-Za-z0-9_./ -]+\s*$/.test(command)) return { ok: true };
+    const restore = command.match(/^\s*git\s+(?:restore|checkout)\s+--\s+([A-Za-z0-9_./ -]+)\s*$/);
+    if (restore) {
+      const targets = restore[1].trim().split(/\s+/).map((file) => path.posix.normalize(file).replace(/\/$/, ""));
+      if (targets.every((target) => target !== "." && !target.startsWith("../") && !path.isAbsolute(target) &&
+        dirty.every((file) => file !== target && !file.startsWith(`${target}/`)))) return { ok: true };
+    }
+    return { ok: false, paths: dirty, reason:
+      `Preserve the existing task implementation before fixture repair or discard: ${JSON.stringify(dirty)}. Make a selective implementation checkpoint commit containing only these authorized product paths; it is not capture or review approval. Then repair the locked fixture with test-author, revalidate fidelity and commit only the repaired tests. Keep the product in place; do not restore it merely to manufacture RED. If product code is wrong, correct it with sniper and rerun the affected checks in this same task.` };
+  } catch {
+    return { ok: false, reason: "Cannot inspect the task delta before fixture repair/discard. Restore readable Git evidence; preserve implementation and retry in the same task." };
+  }
 }
 
 /** Build the task brief from a stable task-runtime source and the one assigned contract. */
