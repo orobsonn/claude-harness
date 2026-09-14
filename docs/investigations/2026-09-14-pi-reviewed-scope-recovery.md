@@ -100,5 +100,49 @@ Essa é uma adaptação do fluxo Claude de correção por sniper e gates afetado
 coordenador de worktrees do Pi; não é alegação de identidade entre os runtimes.
 Os 161 testes focais passaram, incluindo conflito real Git, sessão/grant
 preservados, retomada parcial, rejeição de alteração fora dos conflitos e
-rejeição de produtor/captura anteriores à resolução. A validação na run real
-segue pendente até instalar e observar sua nova integração.
+rejeição de produtor/captura anteriores à resolução. A validação na run real está registrada abaixo.
+
+- A suíte completa do commit `4e86cec` passou: 3.774 testes, 52 suites, zero
+  falhas e zero skips (`/tmp/pi-conflict-full.log`, 581 s). O CI do mesmo commit
+  também passou: run `34845747485`, job `103981147733`.
+- O vendor `3.0.3-pi-scope-port.4e86cec` foi instalado no pai original e commitado
+  em `f8a9c1b`, sem mudar registry, gate-state, plano, spec, grants ou claims.
+- Às 12:52 UTC, o pai retomou task-4-durable-runtime na mesma tentativa
+  `0ffcee20-9b14-42de-bf52-52ab18f830ea` e sessão
+  `19b39b03-e634-4bd7-9cbf-0117fb442183`. O host iniciou o merge, o sniper
+  resolveu os dois conflitos e o pai local criou `245ed3d`.
+- Os testes detectaram quatro regressões inbound. A tarefa marcou o re-gate
+  pendente e despachou outro sniper. Às 13:04 UTC, os cinco arquivos de teste
+  inbound/outbound passaram (25/25), sem alteração dos testes congelados.
+  Em seguida, a tarefa capturou o resultado e revalidou os olhos afetados.
+
+- Às 13:11 UTC, a retomada da mesma tarefa resolveu a obrigação de compliance
+  pendente sem outro escritor de produto. O host aceitou `dafaee3` e integrou
+  em `e5650ed`, mantendo o merge `245ed3d` e a resolução posterior em sua
+  ancestralidade. O recibo de inspeção inclui `scope_base_sha=f8a9c1b...` e o
+  digest da reconciliação `cd9cd799...`.
+- O pai seguiu sozinho para task-1. Às 13:29 UTC sua correção de paginação D1
+  já estava integrada e o pai retomou task-4 para a paginação da API. Isso é
+  continuação da entrega na mesma run, não a declaração de entrega concluída.
+
+## Auditoria de conclusão da recuperação
+
+Em 2026-09-14 13:30 UTC, a auditoria leu novamente os arquivos e objetos Git
+originais. A evidência resumida está em
+`2026-09-14-pi-reviewed-scope-recovery-evidence.json`.
+
+| Requisito | Evidência verificada |
+| --- | --- |
+| Complemento de escopo revisado | Aprovação nativa do plan-reviewer para o hash atual; snapshot e aprovação originais preservados; somente task-1/task-3 afetadas. |
+| Preservar identidade e trabalho | Mesmo pai `528d7635...`; mesmas tentativas e sessões das tasks 3/4; hashes de plano/spec/grants/claims preservados após o vendor. |
+| Usar o harness atualizado | Runtime instalado `3.0.3-pi-scope-port.4e86cec`; digest atual igual ao usado nas retomadas. |
+| Resolver o bloqueio de escopo real | Task-3 corrigida e integrada; hash do contrato corrigido confere com o plano aprovado. |
+| Resolver o conflito que impedia continuidade | Task-4 resolvida por sniper, testada, capturada e integrada; prova confere pais, árvore Git, escopo e digest da reconciliação. |
+| Não substituir evidências válidas | Recibos históricos e testes congelados conferem por hash; integrações continuam ancestrais do pai atual. |
+| Continuar a própria run | Pai avançou autonomamente para paginação D1 e depois API, com as mesmas tarefas. |
+| Validar a fonte | 161 testes focais, 3.774 testes completos e CI verdes no código `4e86cec`. |
+
+O goal de recuperação está comprovado. Os requisitos restantes do produto seguem
+na run original. Não se declara aqui conclusão da entrega inteira nem paridade
+irrestrita entre Pi e Claude Code: adicionar tarefas ou mudar dependências depois
+da admissão continua fora da correção de escopo implementada.
