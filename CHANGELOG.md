@@ -5,6 +5,13 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [3.0.5](https://github.com/orobsonn/claude-harness/compare/v3.0.4...v3.0.5) (2026-09-14)
+
+
+### Bug Fixes
+
+* **pi:** recover missing task dependencies and expose blocked diagnostics ([#983](https://github.com/orobsonn/claude-harness/issues/983)) ([851d6ce](https://github.com/orobsonn/claude-harness/commit/851d6ce5759a06832fb38520dbb40c0b959041bc))
+
 ## [3.0.4](https://github.com/orobsonn/claude-harness/compare/v3.0.3...v3.0.4) (2026-09-14)
 
 
