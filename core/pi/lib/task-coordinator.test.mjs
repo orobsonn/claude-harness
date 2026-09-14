@@ -735,7 +735,7 @@ test("missing plan-review receipt blocks launch and points to the foreground can
   assert.equal(persistedState.plan_verdict, "APPROVE");
 });
 
-test("active task grants freeze parent planning, but task observation remains available", async (t) => {
+test("task grants preserve spec while existing planner and reviewer can correct scope", async (t) => {
   const f = fixture(t);
   assert.equal(
     decideTaskCoordinatorEdit({ toolName: "harness_spec_write" }, f.context),
@@ -758,9 +758,11 @@ test("active task grants freeze parent planning, but task observation remains av
         input: { subagent_type: "harness-plan-reviewer" },
       },
       f.context,
-    ).block,
-    true,
+    ),
+    null,
   );
+  assert.equal(decideTaskCoordinatorEdit({ toolName: "subagent",
+    input: { subagent_type: "harness-planner" } }, f.context), null);
   assert.equal(
     decideTaskCoordinatorEdit(
       { toolName: "harness_tasks", input: { action: "status" } },

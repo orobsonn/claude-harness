@@ -19,6 +19,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import harnessEntryGate from "./harness-entry-gate.ts";
+import harnessTasks from "./harness-tasks.ts";
 import { readPiChildIdentity } from "../lib/pi-child-identity.mjs";
 import { claimPiDispatchForRuntime, readPiDispatchRecord } from "../lib/pi-state-records.mjs";
 import { writePiSpecDraft } from "../lib/spec-approval.mjs";
@@ -1061,10 +1062,14 @@ test("native planner dispatch preserves admitted task plan before scope correcti
     mkdirSync(registryDir, { recursive: true });
     const registryPath = join(registryDir, "index.json");
     writeFileSync(registryPath, JSON.stringify({ version: 1, parent_session_id: SESSION, feature_id: FEATURE,
-      plan_sha256: planSha, spec_sha256: specSha, tasks: {} }));
+      plan_sha256: planSha, spec_sha256: specSha, tasks: { "task-1": { launches: [] } } }));
     const h = handlers();
-    const result = await h.get("tool_call")({ toolName: "subagent", toolCallId: "scope-planner",
-      input: { subagent_type: "harness-planner", prompt: "Correct the missing task scope", description: "plan" } }, ctxOf(f.root));
+    const taskHooks = new Map();
+    harnessTasks({ on: (name, fn) => taskHooks.set(name, fn), registerTool() {} });
+    const event = { toolName: "subagent", toolCallId: "scope-planner",
+      input: { subagent_type: "harness-planner", prompt: "Correct the missing task scope", description: "plan" } };
+    assert.equal(taskHooks.get("tool_call")(event, ctxOf(f.root)), undefined);
+    const result = await h.get("tool_call")(event, ctxOf(f.root));
     assert.equal(result, undefined, result?.reason);
     const saved = JSON.parse(readFileSync(registryPath, "utf8"));
     assert.equal(saved.plan_snapshot.text, planText);

@@ -1115,16 +1115,12 @@ export async function executeTaskAction(params, context = {}, injected = {}) {
   }
 }
 
-/** Freeze the approved plan/spec while their task grants exist. Read-only host rail. */
+/** Keep spec/classification fixed; existing planner/reviewer handle deliberate scope correction. */
 export function decideTaskCoordinatorEdit(event, context = {}) {
   const planningMutation =
     ["classify", "harness_spec_write", "seal_spec_review"].includes(
       event?.toolName,
-    ) ||
-    (event?.toolName === "subagent" &&
-      ["harness-planner", "harness-plan-reviewer"].includes(
-        event?.input?.subagent_type,
-      ));
+    );
   if (!planningMutation || context.isChild) return null;
   try {
     const loaded = loadPiGateStateFromDisk(context.projectRoot, {
@@ -1143,7 +1139,7 @@ export function decideTaskCoordinatorEdit(event, context = {}) {
       return {
         block: true,
         reason:
-          "[harness_tasks] Plan and spec are fixed for this session after the first task admission, including completed tasks. Correct implementation within the approved plan via resume. A changed plan requires a new session and fresh approval; preserve the existing worktrees and evidence.",
+          "[harness_tasks] Spec and classification remain fixed after task admission. Correct missing task scope through the planner and plan-reviewer, then resume the same task; preserve existing contracts and evidence.",
       };
     }
     return null;
