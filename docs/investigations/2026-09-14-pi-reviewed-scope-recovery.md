@@ -57,3 +57,15 @@ commit `aa9777e` também passou. O teste na run original segue em andamento.
   `scope_paths` mudou: `src/db/superficie-camada.spec.ts` para task-1;
   `src/db/registrar-decisao.ts` e `src/db/registrar-decisao.spec.ts` para task-3.
   O pai despachou o plan-reviewer na própria sessão.
+
+- Às 12:07 UTC, o plan-reviewer aprovou e o pai retomou a task-3 na mesma
+  tentativa `9e071284-0b30-4b7a-be2f-1233a154ad88` e sessão filha
+  `965e1b00-8b0a-4078-a8e1-0b0a35fbd381`. O sniper conseguiu alterar o arquivo
+  anteriormente bloqueado e preservou os testes congelados.
+- Às 12:15 UTC, a correção `8c2f83f9f3be0b276de44b1d34982b6ab4003bd4`
+  foi integrada em `e6658546a394aad1b95595e42606afbb9c541c63`, com recibo
+  `host-task-integration` e hash do contrato de escopo corrigido na inspeção.
+  Os dois lançamentos antigos mantiveram o runtime original; o terceiro usou o
+  runtime atualizado do pai. O bloqueio de escopo foi resolvido de ponta a ponta.
+- O pai seguiu autonomamente para a correção do finding de armazenamento da
+  task-4-durable-runtime. Os findings finais da entrega continuam em validação.
