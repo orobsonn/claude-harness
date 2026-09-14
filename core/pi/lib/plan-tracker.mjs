@@ -127,6 +127,10 @@ export function applyPlanAction(snapshot, action, { now = Date.now } = {}) {
 export function restorePlanSnapshot(entries) {
   let snapshot;
   for (const entry of entries ?? []) {
+    if (entry?.type === "custom" && entry.customType === "harness-plan-snapshot" && isPlanSnapshot(entry.data?.snapshot)) {
+      snapshot = clone(entry.data.snapshot);
+      continue;
+    }
     if (entry?.type !== "message") continue;
     const message = entry.message;
     if (message?.role !== "toolResult" || message.toolName !== "harness_plan") continue;
@@ -139,7 +143,8 @@ export function restorePlanSnapshot(entries) {
 export function formatPlanProgress(snapshot) {
   if (!snapshot || !isPlanSnapshot(snapshot)) return ["Sem plano ativo"];
   const completed = snapshot.tasks.filter((task) => task.status === "completed").length;
-  const current = snapshot.tasks.filter((task) => task.status === "in_progress");
+  const current = snapshot.tasks.filter((task) => task.status === "in_progress" && !task.activity);
+  const waiting = snapshot.tasks.filter((task) => task.status === "in_progress" && task.activity);
   const blocked = snapshot.tasks.find((task) => task.status === "blocked");
   const implementation = blocked
     ? `Plano ${completed}/${snapshot.tasks.length} · bloqueado: ${blocked.title}`
@@ -147,6 +152,8 @@ export function formatPlanProgress(snapshot) {
       ? `Plano ${completed}/${snapshot.tasks.length} · atual: ${current[0].title}`
       : current.length > 1
         ? `Plano ${completed}/${snapshot.tasks.length} · em andamento (${current.length}): ${current.map((task) => task.title).join(", ")}`
+      : waiting.length
+        ? `Plano ${completed}/${snapshot.tasks.length} · aguardando ${waiting.some(t => t.activity === "awaiting_inspection") ? "inspeção do resultado" : "integração"}: ${waiting.map(t => t.title).join(", ")}`
       : completed === snapshot.tasks.length
         ? `Plano ${completed}/${snapshot.tasks.length} · concluído`
         : `Plano ${completed}/${snapshot.tasks.length} · pendente`;
@@ -189,7 +196,9 @@ export function formatPlanResult(snapshot) {
     `planId: ${snapshot.planId}`,
     `revision: ${snapshot.revision}`,
     ...snapshot.tasks.map((task) => [
-      `${task.id}: ${task.title} · ${taskLabels[task.status]}`,
+      `${task.id}: ${task.title} · ${task.activity === "awaiting_inspection" ? "processo encerrado; aguardando inspeção" : task.activity === "awaiting_integration" ? "pronta para integrar" : taskLabels[task.status]}`,
+      task.canonicalTaskId ? `task: ${task.canonicalTaskId}` : undefined,
+      task.note,
       task.validationStatus === undefined ? undefined : `validação: ${validationLabels[task.validationStatus]}`,
     ].filter(Boolean).join(" · ")),
   ].join("\n");

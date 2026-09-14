@@ -350,6 +350,14 @@ aplicável na task FULL. Não reabra olhos já satisfeitos nem force três olhos
 
 Em trabalho LIGHT ou FULL, depois de aprovação do plan-reviewer para a versão exata do plano e dentro da autorização do pedido, o agente principal registra o plano ativo com `harness_plan` e atualiza cada tarefa ao iniciar, concluir ou bloquear. Um pedido explícito de implementação autônoma/headless autoriza seguir o plano aprovado dentro daquele escopo, sem exigir nova confirmação humana para esse registro; não dispensa os olhos nem autoriza expansão de escopo ou os efeitos que exigem autorização descritos acima. Para uma tarefa que tenha validação própria, declare sua lane e atualize-a como pendente, em andamento, aprovada ou falhou após a implementação. O contador é informativo e auto-relatado: não prova aprovação, nem substitui teste, revisão ou evidência do repositório. Filhos não atualizam o plano.
 
+Na pipeline canônica de tarefas, o host sincroniza esse painel pelos IDs do plano
+aprovado, recibos de integração e processos observados. Use `harness_plan show`
+para consultar: não é necessário repetir updates manuais nem corrigir 5/6 por prosa.
+Processo encerrado aguarda inspeção do host; isso não significa tarefa integrada.
+Retomadas reabrem somente a tarefa correspondente e sua validação. Planos legados
+sem vínculo canônico mantêm as atualizações manuais descritas acima. O painel
+continua informativo e nunca concede autorização para escrita ou entrega.
+
 Verificação final executada pelo pai é uma obrigação de entrega, não uma tarefa fictícia de mão. Execute os comandos/cenários aprovados e entregue sua saída e exit status aos olhos finais. Confira conflitos entre tarefa parent-only e requisitos de captura antes de iniciar a implementação, enquanto o plano pode ser corrigido pelo planner/plan-reviewer. Se descobrir esse conflito no fechamento, reporte-o sem reabrir planejamento, sem despachar test-author sem edição para obter recibo e sem dispensar retrospectivamente a obrigação. `no_tests`, teste vazio ou tarefa de documentação não autorizam pular evidência de uma mudança real.
 
 Antes de liberar implementação para uma tarefa com teste travado, o `harness-test-author` deve produzir um **vermelho executável**: o comando de teste realmente inicia, coleta o teste e falha pela asserção/comportamento ainda ausente. Runner ou dependência ausente, import quebrado, timeout, zero testes coletados ou falha de infraestrutura são `BLOCKED`, não vermelho válido. Só após a aprovação de `harness-test-reviewer` dessa evidência o pai pode registrar `fidelity-pass`; em seguida, com o mesmo recibo produtor ainda atual, registre `capture-verified`. Nunca inverta essa ordem nem use esses marcadores para contornar um teste que não executou.
