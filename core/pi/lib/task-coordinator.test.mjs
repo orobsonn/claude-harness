@@ -1106,6 +1106,12 @@ test("upstream correction refuses active, dirty, unclaimed or switched dependent
     if (variant === "branch") git(f.c.worktree, "checkout", "-b", "different-branch");
     const result = await f.resumeA();
     assert.equal(result.ok, false, variant);
+    if (variant === "dirty") {
+      assert.match(result.reason, /task c worktree must be clean/);
+      assert.ok(result.reason.includes(f.c.worktree));
+      assert.match(result.reason, /src\/c\.mjs/);
+      assert.doesNotMatch(result.reason, /parent worktree/);
+    }
     assert.deepEqual(f.registry(), before, variant);
   }
 });

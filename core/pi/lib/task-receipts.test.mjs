@@ -2258,3 +2258,34 @@ test("new implementation cannot fall back to old integration when its clean capt
     assert.equal(inspected.result, undefined);
   }
 });
+
+
+test("dirty pre-implementation task returns its dependency blocker without a receipt", () => {
+  const f = inspectionFixture();
+  const eventsPath = f.entry.launches.at(-1).events_path;
+  const events = fs.readFileSync(eventsPath, "utf8").trim().split("\n")
+    .filter((line) => JSON.parse(line).toolCallId !== "producer");
+  write(eventsPath, events.join("\n") + "\n");
+  fs.appendFileSync(f.root + "/src/task.spec.mjs", "// pending authored test\n");
+  const report = "BLOCKED: npm test -- src/task.spec.mjs exited 127: vitest: not found; test not frozen.";
+  fs.appendFileSync(eventsPath, event("message_end", { message: { role: "assistant", stopReason: "stop",
+    content: [{ type: "text", text: report }] } }) + "\n");
+  const dirty = inspectTaskRun(f.entry, f.dependencies);
+  assert.equal(dirty.ok, false);
+  assert.match(dirty.reason, /clean before inspection/);
+  assert.equal(dirty.result, undefined);
+  assert.equal(dirty.details.task_report.text, report);
+  assert.equal(dirty.details.worktree_changes.worktree, f.root);
+  assert.equal(dirty.details.worktree_changes.task_id, TASK);
+  assert.match(dirty.details.worktree_changes.status, /src\/task\.spec\.mjs/);
+  run(f.root, "git", "restore", "src/task.spec.mjs");
+  const clean = inspectTaskRun(f.entry, f.dependencies);
+  assert.equal(clean.ok, false);
+  assert.match(clean.reason, /implementation call was not observed/);
+  assert.equal(clean.details.task_report.text, report);
+  assert.equal(clean.result, undefined);
+  // A resumed tool call invalidates the previous narrative even while dirty.
+  fs.appendFileSync(f.root + "/src/task.spec.mjs", "// pending again\n");
+  fs.appendFileSync(eventsPath, event("tool_execution_start", { toolCallId: "retry", toolName: "bash", args: { command: "npm ci" } }) + "\n");
+  assert.equal(inspectTaskRun(f.entry, f.dependencies).details.task_report, undefined);
+});

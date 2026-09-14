@@ -70,6 +70,8 @@ O marker de fidelity
 antes do freeze commit é inválido e não autoriza o executor. Não passe `sha` aos markers:
 a autoridade deriva o commit do estado host-owned. Ao relatar um SHA, leia o valor
 completo com `git log -1 --format=%H`; nunca complete por inferência um SHA abreviado.
+**Recuperação de dependência declarada.** Se a validação focal não inicia porque uma dependência já declarada não está instalada, o pai — nunca uma mão — deve primeiro confirmar que `package.json` e `package-lock.json` existem e que `git diff --exit-code -- package.json package-lock.json` não mostra mudança. Execute então `npm ci` em uma única chamada permitida e repita exatamente uma vez o mesmo comando de validação. Não use `npm install`, não altere manifests, não adicione dependências e não abra um novo `harness-test-author` apenas para instalar. Registre o resultado do `npm ci`, a checagem dos manifests e a repetição do teste. Se a segunda execução ainda falhar por infraestrutura ou dependência, preserve o erro e marque `BLOCKED`; se ela coletar o teste, prossiga normalmente com a evidência observada.
+
 Falha de infraestrutura não é RED. Execute as verificações de tipagem/sintaxe
 exigidas pelo contrato ou necessárias para esclarecer um erro concreto; o reviewer
 de fidelidade não acrescenta uma etapa de typecheck por rotina.
