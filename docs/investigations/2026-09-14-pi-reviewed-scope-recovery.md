@@ -167,3 +167,24 @@ Duas regressões com vendor e Git reais falharam antes da correção: caminho an
 com hash igual e rejeição depois do merge que atualizou o runtime. Ambas passaram
 após o ajuste; também verificam preservação de grant/claim e lançamentos antigos
 e rejeição de symlink no runtime atual antes de lançar processo.
+
+## Regressão: implementação nova seguida de reparo de teste
+
+Às 13:59 UTC, a UI já estava implementada (`9a0e447`), capturada com árvore
+limpa e corrigida apenas no mock de URL do teste (`98fa5e0`). Os cinco testes
+da fila, sete testes da API e o typecheck passaram; compliance aprovou. Mesmo
+assim, a inspeção retornou `test-only recovery historical producer is not bound
+to the native implementation lineage`.
+
+A presença de uma integração antiga fazia a inspeção procurar sempre o produtor
+antigo. Agora, depois de revalidar o par histórico, uma implementação nativa
+posterior aos lançamentos daquela integração precisa de sua própria captura
+limpa anterior ao primeiro autor corretivo. Captura ausente/inválida não recua
+para a integração antiga. O reparo só pode alterar os testes congelados desde
+essa nova captura; escritores posteriores e drift de produto continuam negados.
+
+A reprodução falhou com a mesma mensagem antes do ajuste. Os 112 testes focais
+passaram, incluindo segunda recuperação posterior, captura ausente/tardia,
+produtor incorreto, árvore suja e drift. A inspeção somente de leitura na run real
+passou para `98fa5e0`, usando a captura `9a0e447` e o produtor executor nativo
+do terceiro lançamento. Nenhum estado ou recibo foi escrito nessa conferência.

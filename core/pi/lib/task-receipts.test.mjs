@@ -413,7 +413,7 @@ test("resume abandonment refuses drift, live processes, invalid history, and new
 function testOnlyRecovery({ capturedImplementation = true, productDelta = false, laterWriter = false,
   extraAuthor = false, earlierAuthorProductDrift = false, lateCapture = false, failedWriter = false,
   overlappingCapture = false, dirtyCaptureFirst = false, originOverride = {},
-  fixture = inspectionFixture(), integrated = false, suffix = "" } = {}) {
+  fixture = inspectionFixture(), integrated = false, freshImplementation = false, suffix = "" } = {}) {
   const f = fixture;
   if (integrated) archiveInspectedIntegration(f);
   let baseline = f.head;
@@ -425,8 +425,17 @@ function testOnlyRecovery({ capturedImplementation = true, productDelta = false,
     extra.push(event("tool_execution_end", { toolCallId: id, toolName: tool, isError: false, result }));
   };
   const prompt = '[HARNESS_TASK_CONTEXT]{"task_id":"' + TASK + '"}[/HARNESS_TASK_CONTEXT]';
+  if (freshImplementation) {
+    assert.equal(integrated, true);
+    write(path.join(f.root, "src/task.mjs"), "export const actual = 'new requested behavior';\n");
+    run(f.root, "git", "add", "src/task.mjs");
+    run(f.root, "git", "commit", "-m", "new implementation after integration");
+    f.head = baseline = run(f.root, "git", "rev-parse", "HEAD");
+    add("fresh-producer", "subagent", { subagent_type: "harness-executor", prompt }, { details: { status: "completed" } });
+  }
+  const implementationCallId = freshImplementation ? "fresh-producer" + suffix : "producer";
   const capture = () => add("prior-capture", "mark", { action: "capture-verified", task_id: TASK },
-    { details: { ok: true, capture_origin: { task_id: TASK, producer_call_id: "producer", head_sha: f.head,
+    { details: { ok: true, capture_origin: { task_id: TASK, producer_call_id: implementationCallId, head_sha: f.head,
       worktree_clean: true, ...originOverride } } });
   if (dirtyCaptureFirst) add("dirty-capture", "mark", { action: "capture-verified", task_id: TASK },
     { details: { ok: true, capture_origin: { task_id: TASK, producer_call_id: "producer", head_sha: f.freeze, worktree_clean: false } } });
@@ -2219,4 +2228,33 @@ test("resolved integration conflicts require a current native producer and captu
   assert.equal(current.result.hand_capture.agent, "harness-sniper");
   assert.ok(current.result.changed_paths.includes("upstream.mjs"));
   assert.equal(current.result.reconciliation_sha256, hashTaskReceipt(f.entry.reconciliations));
+});
+
+
+test("a new implementation after integration supplies the origin for its own test repair", () => {
+  const f = testOnlyRecovery({ integrated: true, freshImplementation: true });
+  const prior = f.entry.integration_history.at(-1);
+  const inspected = inspectTaskRun(f.entry, f.dependencies);
+  assert.equal(inspected.ok, true, inspected.reason);
+  assert.notEqual(f.recoveryBaseline, prior.child_head);
+  assert.deepEqual(inspected.result.hand_capture.recovery_origin, {
+    head_sha: f.recoveryBaseline, producer_call_id: "fresh-producer", producer_launch_index: 1,
+  });
+  assert.equal(inspected.result.hand_capture.agent, "harness-test-author");
+  // The newly integrated implementation can itself survive another test-only
+  // repair by the existing historical-receipt route, without a cosmetic writer.
+  const again = testOnlyRecovery({ fixture: f, integrated: true, capturedImplementation: false, suffix: "-again" });
+  const checked = inspectTaskRun(again.entry, again.dependencies);
+  assert.equal(checked.ok, true, checked.reason);
+  assert.equal(checked.result.hand_capture.recovery_origin.producer_call_id, "fresh-producer");
+});
+
+test("new implementation cannot fall back to old integration when its clean capture is missing or invalid", () => {
+  for (const options of [{ capturedImplementation: false }, { lateCapture: true }, { productDelta: true },
+    { originOverride: { producer_call_id: "producer" } }, { originOverride: { worktree_clean: false } }]) {
+    const f = testOnlyRecovery({ integrated: true, freshImplementation: true, ...options });
+    const inspected = inspectTaskRun(f.entry, f.dependencies);
+    assert.equal(inspected.ok, false, JSON.stringify(options));
+    assert.equal(inspected.result, undefined);
+  }
 });

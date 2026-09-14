@@ -395,6 +395,11 @@ function integratedRecoveryOrigin(entry, { sessionId, task, events, implementati
   if (!validated.ok) return failure("test-only recovery historical receipt is invalid: " + validated.reason);
   if (JSON.stringify(frozenPaths(task).sort()) !== JSON.stringify(Object.keys(result.frozen_blobs).sort()))
     return failure("test-only recovery historical frozen paths must match the canonical task");
+  // A resumed task can implement new behavior and then repair its tests. That
+  // implementation needs its own clean capture; the old integration cannot
+  // supply or replace it merely because this task has integration history.
+  if (events[implementationIndex].launchIndex >= result.launches.length)
+    return { ok: true, origin: null };
   const hand = result.hand_capture;
   const historicalProducerIndex = events.findIndex((event) => event.callId === hand.producer_call_id &&
     event.launchIndex === hand.producer_launch_index && event.tool === "subagent" &&
@@ -600,7 +605,8 @@ export function inspectTaskRun(entry, dependencies = {}) {
           events: native.events, implementationIndex, producerIndex });
         if (!previous.ok) return previous;
         recoveryOrigin = previous.origin;
-      } else for (const event of native.events.slice(implementationIndex + 1, firstAuthorIndex)) {
+      }
+      if (!recoveryOrigin) for (const event of native.events.slice(implementationIndex + 1, firstAuthorIndex)) {
         if (event.tool !== "mark" || event.args?.action !== "capture-verified" || event.args?.task_id !== entry.task_id || !markerSucceeded(event)) continue;
         const firstAuthor = native.events[firstAuthorIndex];
         if (event.launchIndex === firstAuthor.launchIndex && event.endLine >= firstAuthor.line) continue;
