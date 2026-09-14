@@ -336,6 +336,8 @@ test("native Pi agent event pipeline preserves a long RED through tool_result", 
   assert.equal(result?.isError, true);
   assert.match(result.content[0].text, /Command exited with code 1$/);
   assert.equal(result.details?.command_evidence?.status, "available");
+  assert.equal(result.details.command_evidence.started_identity.head_sha, f.head);
+  assert.equal(result.details.command_evidence.started_identity.worktree_identity_status, "available");
   assert.equal(readFileSync(result.details.command_evidence.path, "utf8"), f.raw);
 });
 

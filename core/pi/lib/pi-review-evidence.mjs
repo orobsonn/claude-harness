@@ -11,6 +11,7 @@ import { isSafeFeatureId, isSafeSessionId, isSafeTaskId } from "../../shared/lib
 import { piExecutionPlanPath, piGateStatePath, piSpecPath } from "./pi-paths.mjs";
 import { isPiReviewSecretPath } from "./policy.mjs";
 import { isParallelReviewRole } from "./roles.mjs";
+import { checkPiFinalCommands } from "./pi-command-evidence.mjs";
 import { postHarvestReviewSnapshot } from "./memory-cycle.mjs";
 
 const HEX_256 = /^[0-9a-f]{64}$/;
@@ -54,7 +55,7 @@ function excluded(root, relativePath) {
 export { excluded as isPiReviewExcludedPath };
 
 /** Ensure product input is committed before implementation or final review dispatch. */
-export function checkPiReviewPreparation({ projectRoot, featureId } = {}) {
+export function checkPiReviewPreparation({ projectRoot, featureId, sessionId, phase } = {}) {
   try {
     if (typeof projectRoot !== "string" || !projectRoot) return { ok: false, reason: "review projectRoot required" };
     if (!isSafeFeatureId(featureId)) return { ok: false, reason: "safe review featureId required" };
@@ -70,7 +71,13 @@ export function checkPiReviewPreparation({ projectRoot, featureId } = {}) {
       if (!excluded(root, relativePath) && !relativePath.startsWith(".pi/harness/plans/")) changed.add(relativePath);
     }
     const paths = [...changed].sort((a, b) => a.localeCompare(b));
-    return paths.length ? { ok: false, reason: PREPARATION_REASON, paths } : { ok: true };
+    if (paths.length) return { ok: false, reason: PREPARATION_REASON, paths };
+    if (phase === "final") {
+      const declared = readPiReviewPlan({ projectRoot: root, featureId });
+      if (!declared.ok) return declared;
+      return checkPiFinalCommands({ projectRoot: root, sessionId, commands: declared.plan.final_review?.verification_commands });
+    }
+    return { ok: true };
   } catch {
     return { ok: false, reason: "Review preparation could not inspect Git inputs and HEAD. Restore readable repository evidence before dispatching implementation or final eyes." };
   }

@@ -271,7 +271,7 @@ export default function harnessEntryGate(pi: ExtensionAPI) {
     if (review && typeof event?.toolCallId === "string") {
       const loaded: any = loadPiGateStateFromDisk(projectRoot, { sessionId });
       const featureId = loaded?.ok === true && typeof loaded.state?.feature_id === "string" ? loaded.state.feature_id : "";
-      const preparation = checkPiReviewPreparation({ projectRoot, featureId });
+      const preparation = checkPiReviewPreparation({ projectRoot, featureId, sessionId, phase: review.phase });
       if (!preparation.ok) return { block: true, reason: preparation.reason + (preparation.paths ? ` Pending paths: ${JSON.stringify(preparation.paths)}.` : "") };
       const captured = capturePiReviewInput({
         projectRoot,

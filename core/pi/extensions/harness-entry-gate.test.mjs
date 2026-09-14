@@ -24,6 +24,7 @@ import { readPiChildIdentity } from "../lib/pi-child-identity.mjs";
 import { claimPiDispatchForRuntime, readPiDispatchRecord } from "../lib/pi-state-records.mjs";
 import { writePiSpecDraft } from "../lib/spec-approval.mjs";
 import { missingPiReviewRoles } from "../lib/pi-review-evidence.mjs";
+import { registerPiCommandEvidence } from "../lib/pi-command-evidence.mjs";
 
 /** @description Fake do barramento de eventos do Pi (pi.events), por canal. */
 function fakeEvents() {
@@ -803,6 +804,36 @@ test("adversary de tarefa grava recibo host-owned preso ao marcador e ao HEAD", 
     assert.deepEqual(receipt.report, { issues: [] });
     assert.match(receipt.input_digest, /^[0-9a-f]{64}$/);
     assert.equal(receipt.reviewed_head_sha, execFileSync("git", ["rev-parse", "HEAD"], { cwd: f.root, encoding: "utf8" }).trim());
+  } finally { f.close(); }
+});
+
+test("final dispatch waits for the declared native check before creating a review receipt", async () => {
+  const f = fixture();
+  try {
+    const planPath = join(f.root, ".pi/harness/plans", FEATURE, "execution-plan.json");
+    const plan = JSON.parse(readFileSync(planPath, "utf8"));
+    plan.final_review = { compliance: true, adversary: true, verification_commands: ["npm run build"] };
+    writeFileSync(planPath, JSON.stringify(plan));
+    execFileSync("git", ["init", "-q"], { cwd: f.root });
+    execFileSync("git", ["add", "."], { cwd: f.root });
+    execFileSync("git", ["-c", "user.name=Pi", "-c", "user.email=pi@example.test", "commit", "-qm", "fixture"], { cwd: f.root });
+    const statePath = join(f.root, ".pi/harness/state", SESSION, "gate-state.json");
+    const state = JSON.parse(readFileSync(statePath, "utf8"));
+    writeFileSync(statePath, JSON.stringify({ ...state, spec_status: "adversary-reviewed", adversary_fired: true }));
+    const h = handlers(); const ctx = ctxOf(f.root);
+    h.get("session_start")({}, ctx);
+    const event = { toolName: "subagent", toolCallId: "final-after-check", input: {
+      subagent_type: "harness-adversary", prompt: "[HARNESS_FINAL_REVIEW] aggregate", description: "final",
+    } };
+    const denied = await h.get("tool_call")(event, ctx);
+    assert.equal(denied.block, true); assert.match(denied.reason, /npm run build/);
+    assert.equal(JSON.parse(readFileSync(statePath, "utf8")).final_review_evidence, undefined);
+    const evidence = new Map(); registerPiCommandEvidence({ on: (name, fn) => evidence.set(name, fn) });
+    const command = { toolName: "bash", toolCallId: "build", input: { command: "npm run build" } };
+    evidence.get("tool_execution_start")(command, ctx);
+    await evidence.get("tool_result")({ ...command, isError: false, content: [{ type: "text", text: "Build passed" }] }, ctx);
+    assert.equal(await h.get("tool_call")(event, ctx), undefined);
+    assert.equal(JSON.parse(readFileSync(statePath, "utf8")).final_review_evidence.adversary.status, "running");
   } finally { f.close(); }
 });
 
