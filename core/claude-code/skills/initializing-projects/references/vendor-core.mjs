@@ -250,6 +250,7 @@ const REQUIRED_PI_SOURCE = [
   ].map((role) => ({ rel: `runtime/agents/${role}.md`, kind: "file" })),
   { rel: "lib/classify.mjs", kind: "file" },
   { rel: "lib/ceremony-mode.mjs", kind: "file" },
+  { rel: "lib/task-progress.mjs", kind: "file" },
   { rel: "lib/context-files.mjs", kind: "file" },
   { rel: "lib/dispatch-rail.mjs", kind: "file" },
   { rel: "lib/entry-gate.mjs", kind: "file" },
