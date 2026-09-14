@@ -2067,3 +2067,25 @@ test("failed launch explains timeout without issuing a receipt", () => {
   assert.equal(blocked.details.launch_failure.timed_out, true);
   assert.equal(blocked.details.launch_failure.signal, "SIGTERM");
 });
+
+
+test("task reports are bounded diagnostics from the latest launch, never approval or replay", () => {
+  const f = inspectionFixture({ historicFailure: true });
+  const handPath = path.join(f.root, ".pi", "harness", "state", "hand-records", FEATURE, CHILD, `${TASK}.json`);
+  const hand = JSON.parse(fs.readFileSync(handPath, "utf8"));
+  write(handPath, { ...hand, capturedVerifiedAt: null });
+  const report = (text) => event("message_end", { message: { role: "assistant", stopReason: "stop",
+    content: [{ type: "text", text }] } }) + "\n";
+  fs.appendFileSync(f.entry.launches[0].events_path, report("Previous launch is BLOCKED"));
+  const resumed = inspectTaskRun(f.entry, f.dependencies);
+  assert.equal(resumed.ok, false);
+  assert.equal(resumed.details.task_report, undefined);
+  fs.appendFileSync(f.entry.launches.at(-1).events_path, report("DONE: " + "x".repeat(7000)));
+  const claimedDone = inspectTaskRun(f.entry, f.dependencies);
+  assert.equal(claimedDone.ok, false);
+  assert.match(claimedDone.reason, /capture is invalid/);
+  assert.equal(claimedDone.result, undefined);
+  assert.equal(claimedDone.details.task_report.run_id, f.entry.launches.at(-1).run_id);
+  assert.equal(claimedDone.details.task_report.text.length, 6000);
+  assert.equal(claimedDone.details.task_report.truncated, true);
+});

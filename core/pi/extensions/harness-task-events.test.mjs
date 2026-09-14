@@ -110,6 +110,7 @@ test("missing env and legacy non-TUI mode are inert", (t) => {
     { type: "tool_execution_start", toolCallId: "legacy", toolName: "read", args: {} },
     legacy,
   );
+  f.handlers.get("message_end")({ message: { role: "assistant", stopReason: "stop", content: [{ type: "text", text: "legacy" }] } }, legacy);
   f.handlers.get("agent_end")({}, legacy);
   assert.equal(f.shutdowns(), 0);
   assert.deepEqual(f.notifications, []);
@@ -134,6 +135,7 @@ test("native child session never opens evidence or requests shutdown", (t) => {
     { type: "tool_execution_end", toolCallId: "child", toolName: "read", result: "x", isError: false },
     child,
   );
+  f.handlers.get("message_end")({ message: { role: "assistant", stopReason: "stop", content: [{ type: "text", text: "nested report" }] } }, child);
   f.handlers.get("agent_end")({}, child);
   f.handlers.get("session_shutdown")({}, child);
   assert.equal(f.shutdowns(), 0);

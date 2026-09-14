@@ -53,3 +53,23 @@ ambos gravados antes do D1. Simulações de settlement devem atualizar o índice
 pessoa como o writer real. D1-only sem reserva preserva a atribuição, sem criar
 lifecycle a partir de milissegundos não comprováveis. O backfill usa um cursor
 compartilhado e processa no máximo 20 recibos mais uma sondagem por evento.
+
+## Retomada real
+
+A mesma tentativa foi retomada com a distinção de contrato e os commits da solução
+isolada como referência. O pai local despachou test-author e test-reviewer, fez o
+novo freeze, executou a correção, capturou o HEAD e revalidou os olhos afetados.
+Inbound/Worker: 14/14; outbound/runtime/Worker: 9/9; typecheck verde;
+adversary, security e compliance retornaram `issues: []`.
+
+- Freeze: `be23cfd1bde30e8eb93fa00caeb47469ba5ce2a9`.
+- Implementação: `717f4887547e95a3fdd7ee9635dbf8b82796bb68`.
+- Integração host da task: `0392f25a5e0c904f94d6ce9b44c2c29db7ea0f4f`.
+
+A feature avançou até a revisão final. Ela continua bloqueada por outros achados,
+incluindo a task-3 precisar de `src/db/registrar-decisao.ts`, fora do escopo
+atribuído pelo plano. A recuperação acima não declara a feature inteira aprovada.
+
+Depois da suíte completa foram acrescentadas contraprovas de relatório antigo,
+relatório DONE sem captura, truncamento e exclusão de sessão filha no TUI:
+as duas suítes focais executadas novamente passaram em 76/76 testes.
