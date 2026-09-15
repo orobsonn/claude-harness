@@ -135,6 +135,70 @@ test("task capture without re-gate continues locally, while ready and LIGHT comp
   assert.equal(readDeliveryContinuation(f.ctx, dependencies), null, "do not invent reviews in LIGHT");
 });
 
+test("uncommitted task RED is progress once, including restart, not a new approval", async t => {
+  const f = fixture(t);
+  f.state.task_run = { task_id: "one" }; f.write("gate-state.json", f.state);
+  const dependencies = { readBinding: () => ({ ok: true, grant: { task_id: "one" },
+    task: { scope_paths: ["src"], locked_tests: [{ path: "tests/one.spec.ts" }] } }) };
+  const pending = () => readDeliveryContinuation(f.ctx, dependencies);
+  const c = controller({ readPending: pending });
+  assert.equal(await c.end(stopped, c.ctx), true);
+  const before = pending();
+  const file = path.join(f.ctx.cwd, "tests/one.spec.ts");
+  fs.mkdirSync(path.dirname(file)); fs.writeFileSync(file, "new RED assertion\n");
+  const after = pending();
+  assert.notEqual(after.key, before.key, "new test bytes must renew the pending obligation without a commit");
+  assert.equal(await c.end(stopped, c.ctx), true);
+  assert.equal(await c.create()(stopped, c.ctx), false, "same dirty content cannot loop after reload");
+  fs.writeFileSync(file, "new RED assertion\n");
+  assert.equal(pending().key, after.key, "rewriting identical bytes is not progress");
+  execFileSync("git", ["add", "--", "tests/one.spec.ts"], { cwd: f.ctx.cwd });
+  assert.equal(pending().key, after.key, "staging alone is not another implementation step");
+  fs.writeFileSync(path.join(f.ctx.cwd, "outside.txt"), "unrelated\n");
+  f.write("evidence/noise.json", { timestamp: Date.now() });
+  assert.equal(pending().key, after.key, "unrelated files and runtime churn do not renew continuation");
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(f.directory, "gate-state.json"))), f.state);
+});
+
+test("dirty task content prevents stale ready return; symlinks do not read outside the worktree", t => {
+  const f = fixture(t), key = `issue-22/one@${f.head}`;
+  Object.assign(f.state, { task_run: { task_id: "one" }, hand_finished: ["issue-22/one"],
+    capture_verified: [key], regate_passed: [key] });
+  f.write("gate-state.json", f.state);
+  const dependencies = { readBinding: () => ({ ok: true, grant: { task_id: "one" },
+    task: { scope_paths: ["src"] } }) };
+  assert.equal(readDeliveryContinuation(f.ctx, dependencies), null);
+  fs.mkdirSync(path.join(f.ctx.cwd, "src"));
+  fs.writeFileSync(path.join(f.ctx.cwd, "src/product.ts"), "pending correction\n");
+  assert.equal(readDeliveryContinuation(f.ctx, dependencies).stage, "task-implementation");
+  const secret = path.join(f.ctx.cwd, "outside.txt"); fs.writeFileSync(secret, "first\n");
+  fs.symlinkSync(secret, path.join(f.ctx.cwd, "src/link"));
+  const before = readDeliveryContinuation(f.ctx, dependencies).key;
+  fs.writeFileSync(secret, "second\n");
+  assert.equal(readDeliveryContinuation(f.ctx, dependencies).key, before, "symlink target content must not be followed");
+});
+
+test("tracked edits and deletion are progress, not stat changes or reverted content", t => {
+  const f = fixture(t), file = path.join(f.ctx.cwd, "one.spec.ts");
+  const git = (...args) => execFileSync("git", args, { cwd: f.ctx.cwd });
+  fs.writeFileSync(file, "baseline\n"); git("add", "one.spec.ts");
+  git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", "test baseline");
+  f.state.task_run = { task_id: "one" }; f.write("gate-state.json", f.state);
+  const dependencies = { readBinding: () => ({ ok: true, grant: { task_id: "one" },
+    task: { locked_tests: [{ path: "one.spec.ts" }], allowed_writes: ["moved.spec.ts"] } }) };
+  const pending = () => readDeliveryContinuation(f.ctx, dependencies).key;
+  const clean = pending();
+  fs.writeFileSync(file, "new RED\n"); const dirty = pending();
+  assert.notEqual(dirty, clean);
+  fs.utimesSync(file, new Date(), new Date()); assert.equal(pending(), dirty);
+  fs.unlinkSync(file); assert.notEqual(pending(), dirty);
+  fs.writeFileSync(file, "new RED\n"); assert.equal(pending(), dirty);
+  fs.writeFileSync(file, "baseline\n"); assert.equal(pending(), clean);
+  fs.renameSync(file, path.join(f.ctx.cwd, "moved.spec.ts"));
+  const renamed = pending(); git("add", "--", "one.spec.ts", "moved.spec.ts");
+  assert.equal(pending(), renamed, "rename detection must not turn staging into progress");
+});
+
 test("pinned native Pi drains agent_end follow-up without a new operator prompt", { timeout: 20000 }, async t => {
   const sdk = await import("@earendil-works/pi-coding-agent");
   const { fauxProvider, fauxAssistantMessage } = await import("@earendil-works/pi-ai");

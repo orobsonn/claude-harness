@@ -6,6 +6,7 @@ import { execFileSync } from "node:child_process";
 import { isSafeSessionId, isSafeFeatureId } from "../../shared/lib/feature-id.mjs";
 import { isChildSession, piSessionId } from "./pi-adapter-map.mjs";
 import { readTaskRunBinding } from "./task-run.mjs";
+import { checkScope } from "../../shared/lib/capture-oracle.mjs";
 
 const ENTRY = "harness-delivery-continuation";
 const hash = value => createHash("sha256").update(JSON.stringify(value)).digest("hex");
@@ -16,6 +17,33 @@ const read = (root, file) => {
     return JSON.parse(fs.readFileSync(absolute, "utf8"));
   } catch { return null; }
 };
+
+// A RED/fixture can advance before freeze commits it. Hash only the admitted
+// task's pending bytes: staging, timestamps and runtime files are not progress.
+// This is a continuation hint, never capture, fidelity or write authority.
+function pendingTaskContent(root, task = {}) {
+  const git = args => execFileSync("git", args, { cwd: root, encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"], timeout: 10000, maxBuffer: 4 * 1024 * 1024 });
+  const scopes = [...(task.scope_paths ?? []), ...(task.allowed_writes ?? []),
+    ...(task.locked_tests ?? []).flatMap(t => [t.path, ...(t.fixture_paths ?? [])])];
+  const files = [...new Set([
+    ...git(["diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--name-only", "-z", "HEAD", "--"]).split("\0"),
+    ...git(["ls-files", "--others", "--exclude-standard", "-z"]).split("\0"),
+  ])].filter(file => file && checkScope([file], scopes).length === 0 &&
+    !/^(?:\.git|\.pi|\.claude|\.codex|\.opencode)(?:\/|$)/.test(file)).sort();
+  return files.map(file => {
+    const absolute = path.join(root, file);
+    try {
+      if (fs.realpathSync(path.dirname(absolute)) !== path.dirname(absolute)) return [file, "indirect-path"];
+      const stat = fs.lstatSync(absolute);
+      if (stat.isSymbolicLink()) return [file, "symlink", hash(fs.readlinkSync(absolute))];
+      if (!stat.isFile() || stat.size > 4 * 1024 * 1024) return [file, "unreadable"];
+      return [file, stat.mode & 0o111, createHash("sha256").update(fs.readFileSync(absolute)).digest("hex")];
+    } catch (error) {
+      return [file, error.code === "ENOENT" ? "deleted" : "unreadable"];
+    }
+  });
+}
 
 /** Read-only hints. Existing tools remain the sole approval and scheduling authority. */
 export function readDeliveryContinuation(ctx, { readBinding = readTaskRunBinding } = {}) {
@@ -35,13 +63,14 @@ export function readDeliveryContinuation(ctx, { readBinding = readTaskRunBinding
     if (!binding.ok) return null;
     const taskId = binding.grant.task_id;
     const key = `${feature}/${taskId}`;
-    const captured = (state.hand_finished ?? []).includes(key) && (state.capture_verified ?? []).includes(`${key}@${head}`);
+    const pendingContent = pendingTaskContent(root, binding.task);
+    const captured = pendingContent.length === 0 && (state.hand_finished ?? []).includes(key) && (state.capture_verified ?? []).includes(`${key}@${head}`);
     const reviews = { ...(state.task_review_evidence?.[key] ?? {}), adversary: state.task_adversary_evidence?.[key] };
     const reviewRequired = state.mode.toUpperCase() === "FULL" || Object.values(reviews).some(Boolean);
     const regated = (state.regate_passed ?? []).includes(`${key}@${head}`);
     if (captured && (!reviewRequired || regated)) return null;
     stage = captured ? "task-reviews" : "task-implementation";
-    progress = { taskId, head, captured, fidelity: state.fidelity_pass?.at(-1),
+    progress = { taskId, head, captured, pendingContent, fidelity: state.fidelity_pass?.at(-1),
       reviews: Object.fromEntries(Object.entries(reviews).map(([role, r]) => [role, r ? [r.status, r.accepted, r.report_digest, r.reviewed_head_sha] : null])) };
   } else {
     const registry = read(root, `${directory}/task-runs/index.json`);
@@ -60,7 +89,7 @@ export function readDeliveryContinuation(ctx, { readBinding = readTaskRunBinding
       reviews: Object.fromEntries(Object.entries(state.final_review_evidence ?? {}).map(([role, r]) => [role, [r.status, r.accepted, r.report_digest, r.reviewed_head_sha]])) };
   }
   const instructions = {
-    "task-implementation": "Continue this same task through the remaining implementation, verification, capture and applicable reviews. Repair an incorrect frozen fixture with the existing test-author/reviewer recovery. Preserve valid product work. If an external dependency or authority is genuinely missing, report that exact blocker; do not repeat an unchanged failed action.",
+    "task-implementation": "Continue this same task through the remaining implementation, verification, capture and applicable reviews. Inspect existing pending work first. If the author already produced the required RED or fixture repair, review its fidelity and freeze/commit the authorized tests, then continue the required implementation; do not redispatch authorship just to repeat that work. Repair an incorrect frozen fixture with the existing test-author/reviewer recovery. Preserve valid product work. If an external dependency or authority is genuinely missing, report that exact blocker; do not repeat an unchanged failed action.",
     "task-reviews": "The task has a capture but its local review closure remains pending. Use harness_reviews phase=task, satisfy only affected missing obligations, then record regate-passed. Do not repeat implementation or valid reviews merely to close the task.",
     tasks: "The delivery still has unsettled tasks. Use harness_tasks status to reconcile actual processes and read diagnostics, wait for live tasks, integrate ready results, and recover actionable blockers in the same attempts. Do not end with only a running label.",
     "final-review": "Task integration is not delivery completion. Verify the current aggregate, finish applicable final reviews and final-review marking, then harvest and ship within the existing authorization. Do not reopen integrated tasks without a concrete finding.",
