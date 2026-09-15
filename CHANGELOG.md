@@ -5,6 +5,13 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [3.1.0](https://github.com/orobsonn/claude-harness/compare/v3.0.7...v3.1.0) (2026-09-15)
+
+
+### Features
+
+* **pi:** advisory plan analysis and focused recovery support ([#989](https://github.com/orobsonn/claude-harness/issues/989)) ([7f736dc](https://github.com/orobsonn/claude-harness/commit/7f736dc7ec6d9571b2168cc6fb234a0cec14a1c1))
+
 ## [3.0.7](https://github.com/orobsonn/claude-harness/compare/v3.0.6...v3.0.7) (2026-09-15)
 
 
