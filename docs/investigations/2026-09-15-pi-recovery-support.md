@@ -149,7 +149,9 @@ materializados. Pack final: 654 arquivos, 7505045 bytes, nenhum state/sessions/
 worktrees. Não há script de lint/typecheck separado no package.json.
 Suíte final em sandbox prendeu subprocessos dos hooks; processos de teste
 encerrados explicitamente, sem tocar runs de produto. Reexecução nativa:
-/tmp/pi-recovery-support-repo-final-native.log, ainda em andamento.
+/tmp/pi-recovery-support-repo-final-native.log: 3826/3826 testes, 52 suítes,
+zero falhas/skips/cancelamentos, 400,433s, exit 0. Essa execução inclui o último
+teste de recuperação e os assets/descrições finais.
 
 ### Estratégia de validação em produto autorizada
 
