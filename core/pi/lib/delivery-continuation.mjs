@@ -26,8 +26,10 @@ function pendingTaskContent(root, task = {}) {
     stdio: ["ignore", "pipe", "pipe"], timeout: 10000, maxBuffer: 4 * 1024 * 1024 });
   const scopes = [...(task.scope_paths ?? []), ...(task.allowed_writes ?? []),
     ...(task.locked_tests ?? []).flatMap(t => [t.path, ...(t.fixture_paths ?? [])])];
+  const diff = ["diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--name-only", "-z"];
   const files = [...new Set([
-    ...git(["diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--name-only", "-z", "HEAD", "--"]).split("\0"),
+    ...git([...diff, "--cached", "HEAD", "--"]).split("\0"),
+    ...git([...diff, "--"]).split("\0"),
     ...git(["ls-files", "--others", "--exclude-standard", "-z"]).split("\0"),
   ])].filter(file => file && checkScope([file], scopes).length === 0 &&
     !/^(?:\.git|\.pi|\.claude|\.codex|\.opencode)(?:\/|$)/.test(file)).sort();

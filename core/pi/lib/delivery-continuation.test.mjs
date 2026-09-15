@@ -188,6 +188,10 @@ test("tracked edits and deletion are progress, not stat changes or reverted cont
     task: { locked_tests: [{ path: "one.spec.ts" }], allowed_writes: ["moved.spec.ts"] } }) };
   const pending = () => readDeliveryContinuation(f.ctx, dependencies).key;
   const clean = pending();
+  fs.writeFileSync(file, "staged RED\n"); git("add", "--", "one.spec.ts");
+  fs.writeFileSync(file, "baseline\n");
+  assert.notEqual(pending(), clean, "staged work must remain visible when working bytes match HEAD");
+  git("add", "--", "one.spec.ts"); assert.equal(pending(), clean);
   fs.writeFileSync(file, "new RED\n"); const dirty = pending();
   assert.notEqual(dirty, clean);
   fs.utimesSync(file, new Date(), new Date()); assert.equal(pending(), dirty);
