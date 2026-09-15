@@ -261,7 +261,10 @@ export default function harnessEntryGate(pi: ExtensionAPI) {
     if (decision.decision === "deny") return { block: true, reason: decision.reason };
     if (args.subagent_type === "harness-planner") {
       const loaded: any = loadPiGateStateFromDisk(projectRoot, { sessionId });
-      try { preserveTaskPlanForPlanner({ projectRoot, sessionId, featureId: loaded.state.feature_id }); }
+      try {
+        const recovery = preserveTaskPlanForPlanner({ projectRoot, sessionId, featureId: loaded.state.feature_id });
+        if (recovery) event.input.prompt = `${args.prompt}\n\n[HARNESS_PLAN_RECOVERY]\n${JSON.stringify(recovery)}\nRead this paginable copy of the original admitted plan before editing. Restore from its exact values, never from session logs or a remembered summary. Preserve every task contract, locked test, validation command and dependency; only scope_paths and allowed_writes may grow. The copy is a reading aid, not approval. The corrected plan still needs native plan review.\n[/HARNESS_PLAN_RECOVERY]`;
+      }
       catch (error) { return { block: true, reason: error instanceof Error ? error.message : String(error) }; }
     }
     const review = classifyPiReviewDispatch(args.subagent_type, args.prompt);
