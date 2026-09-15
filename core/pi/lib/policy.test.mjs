@@ -403,7 +403,7 @@ test('cwd da opção resolve caminho relativo que sobe para a home', () => {
 test('todos os olhos restantes usam a mesma leitura ampla com exclusão de segredos', () => {
   const secretPath = ['.', 'pi', 'agent', ['au', 'th.json'].join('')].join('/')
   const evidencePath = ['.', 'pi', 'harness', 'state', 'review', 'evidence.txt'].join('/')
-  for (const reviewerRole of ['harness-plan-reviewer', 'harness-harvester', 'harness-discussion-adversary']) {
+  for (const reviewerRole of ['harness-plan-reviewer', 'harness-harvester', 'harness-discussion-adversary', 'harness-support']) {
     const options = { reviewerRole, cwd: process.cwd(), projectRoot: process.cwd() }
 
     assert.equal(decidePiPolicy({ toolName: 'read', input: { path: secretPath } }, options).block, true, reviewerRole)

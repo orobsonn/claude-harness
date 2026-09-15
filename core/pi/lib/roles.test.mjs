@@ -18,7 +18,7 @@ test("only namespaced harness roles are canonical", () => {
   assert.equal(isCanonicalRole("harness-planner"), true);
   assert.equal(isCanonicalRole("harness-discussion-adversary"), false);
   assert.deepEqual(DISCUSSION_ROLES, ["harness-discussion-adversary"]);
-  assert.equal(RUNTIME_ROLES.length, 12);
+  assert.equal(RUNTIME_ROLES.length, 13);
   assert.equal(isDiscussionRole("harness-discussion-adversary"), true);
   assert.equal(isRuntimeRole("harness-discussion-adversary"), true);
   assert.equal(isCanonicalRole("planner"), false);
@@ -29,6 +29,13 @@ test("only namespaced harness roles are canonical", () => {
 test("discussion adversary is a read-only runtime role outside delivery", () => {
   assert.equal(rolePolicy("harness-discussion-adversary").kind, "discussion");
   assert.deepEqual(rolePolicy("harness-discussion-adversary").tools, EYE_TOOLS);
+});
+
+test("recovery support is read-only and never an approval role", () => {
+  assert.equal(isRuntimeRole("harness-support"), true);
+  assert.equal(isCanonicalRole("harness-support"), false);
+  assert.deepEqual(rolePolicy("harness-support").tools, EYE_TOOLS);
+  assert.equal(rolePolicy("harness-support").kind, "support");
 });
 
 test("role policies preserve the harness split between eyes and hands", () => {

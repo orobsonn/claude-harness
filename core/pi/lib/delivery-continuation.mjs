@@ -109,23 +109,25 @@ export function readDeliveryContinuation(ctx, { readBinding = readTaskRunBinding
   return { sessionId, stage, key: hash({ sessionId, feature, stage, progress, commands: [...new Set(commands)].sort() }), content: instructions[stage] };
 }
 
-/** One nudge per unchanged obligation, durable across compaction/restart. */
+/** Progress-sensitive continuation, then diagnosis; neither repeats for unchanged input. */
 export function installDeliveryContinuation(pi, { readPending = readDeliveryContinuation, local = false } = {}) {
   let active = local;
   let paused = false;
   const seen = new Set();
+  const diagnosed = new Set();
   const owned = ctx => !isChildSession(ctx) && isSafeSessionId(piSessionId(ctx));
   const restore = ctx => {
     for (const e of ctx.sessionManager?.getBranch?.() ?? []) {
       if (e.type === "custom" && e.customType === ENTRY && e.data?.sessionId === piSessionId(ctx)) {
         if (e.data.key) seen.add(e.data.key);
+        if (e.data.diagnosticKey) diagnosed.add(e.data.diagnosticKey);
         if (e.data.paused !== undefined) paused = e.data.paused;
       }
     }
   };
   const reset = (_event, ctx) => {
     if (!owned(ctx)) return;
-    active = local; paused = false; seen.clear(); restore(ctx);
+    active = local; paused = false; seen.clear(); diagnosed.clear(); restore(ctx);
   };
   pi.on("session_start", reset);
   pi.on("session_tree", reset);
@@ -159,13 +161,18 @@ export function installDeliveryContinuation(pi, { readPending = readDeliveryCont
       if (paused) return false;
       const pending = readPending(ctx);
       if (!pending) return false;
-      if (seen.has(pending.key)) {
-        ctx.ui?.notify?.("Harness: a obrigação continua pendente sem progresso. A retomada automática não será repetida; consulte o bloqueio informado.", "warning");
+      const diagnostic = seen.has(pending.key);
+      if (diagnostic && diagnosed.has(pending.key)) {
+        ctx.ui?.notify?.("Harness: obrigação pendente após solicitação de diagnóstico, sem progresso observado. A causa não foi classificada pelo runtime; consulte a evidência da sessão. A mesma ação não será repetida automaticamente.", "warning");
         return false;
       }
-      await pi.sendMessage({ customType: ENTRY, content: pending.content, display: true }, { deliverAs: "followUp", triggerTurn: true });
-      seen.add(pending.key);
-      pi.appendEntry(ENTRY, { sessionId: pending.sessionId, key: pending.key, stage: pending.stage });
+      const content = diagnostic
+        ? "The authorized delivery obligation remains pending, but no new progress was observed. Diagnose instead of repeating the same failed action. Read the current native status, exact failure and existing hand/reviewer evidence. A task status of blocked is not by itself an external blocker. If a safe existing recovery is available, execute it in the owning task and preserve valid work and reviews. Retain every unresolved material concern in the next brief, or explain its inapplicability against the approved contract. If the cause is unclear, use focused read-only investigation rather than another writer. Ask the operator only for a concrete missing decision, authority or resource; explain what was checked and why autonomous recovery cannot proceed. Do not manufacture a receipt, relax a test or repeat an unchanged command to create progress. This diagnosis grants no new authority.\nPending obligation: " + pending.content
+        : pending.content;
+      await pi.sendMessage({ customType: ENTRY, content, display: true }, { deliverAs: "followUp", triggerTurn: true });
+      if (diagnostic) diagnosed.add(pending.key);
+      else seen.add(pending.key);
+      pi.appendEntry(ENTRY, { sessionId: pending.sessionId, ...(diagnostic ? { diagnosticKey: pending.key } : { key: pending.key }), stage: pending.stage });
       return true;
     } catch (error) {
       ctx.ui?.notify?.(`Harness: não foi possível continuar automaticamente: ${error.message}`, "warning");

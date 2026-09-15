@@ -186,7 +186,7 @@ function decorateNativeFactory(nativeFactory: (pi: ExtensionAPI) => unknown) {
           // Keep its role catalog while replacing the instructions that contradict our rail.
           description: tool.description?.replace(
             "- For parallel work, use run_in_background: true on each agent. Foreground calls run sequentially — only one executes at a time.",
-            "- For parallel task/final reviews, submit separate foreground subagent calls in the same tool-call batch for harness-adversary, harness-compliance and harness-security as required. Use the same immutable HEAD/content and wait for all dispatched reviews before corrections. The harness enforces maxParallelEyes; other phases remain serial.",
+            "- For parallel task/final reviews, submit separate foreground subagent calls in the same tool-call batch for harness-adversary, harness-compliance and harness-security as required. Optional harness-support readers with distinct diagnostic objectives may also share this bounded reader batch, at most three per investigation. Support is not an approval role. Use the same immutable HEAD/content and wait for all dispatched readers before corrections. The harness enforces maxParallelEyes; writing and other phases remain serial.",
           ).replace(
             "- Use run_in_background for work you don't need immediately. You will be notified when it completes.",
             "- run_in_background: true is forbidden by the harness; omit it or set false. A background-disabled rejection does not mean foreground review batches are unavailable: retry the pending reviews as foreground calls in the same batch.",

@@ -23,10 +23,10 @@ test("captured task continues in the same turn queue; unchanged state cannot loo
   const f = controller();
   assert.equal(await f.end(stopped, f.ctx), true);
   assert.deepEqual(f.messages[0].delivery, { deliverAs: "followUp", triggerTurn: true });
-  assert.equal(await f.end(stopped, f.ctx), false);
+  assert.equal(await f.end(stopped, f.ctx), true, "diagnose before yielding");
   const reloaded = f.create();
   assert.equal(await reloaded(stopped, f.ctx), false);
-  assert.equal(f.messages.length, 1);
+  assert.equal(f.messages.length, 2);
   f.set({ sessionId: "parent", stage: "task-reviews", key: "capture-b", content: "finish affected review" });
   assert.equal(await reloaded(stopped, f.ctx), true);
   f.set(null);
@@ -40,6 +40,17 @@ test("ordinary tools cannot arm a new workflow; a native task result can", async
   assert.equal(await f.end(stopped, f.ctx), false);
   f.handlers.get("tool_result")({ toolName: "harness_tasks", details: { ok: true, tasks: [{ status: "running" }] } }, f.ctx);
   assert.equal(await f.end(stopped, f.ctx), true);
+});
+
+test("unchanged obligation receives diagnosis before yielding, without an infinite retry or approval", async () => {
+  const f = controller();
+  assert.equal(await f.end(stopped, f.ctx), true);
+  assert.equal(await f.end(stopped, f.ctx), true, "lack of progress must request diagnosis, not assume an external blocker");
+  assert.match(f.messages[1].message.content, /diagnos/i);
+  assert.match(f.messages[1].message.content, /same.*failed action/i);
+  assert.equal(await f.create()(stopped, f.ctx), false, "unchanged diagnosis survives reload and cannot spin");
+  assert.equal(f.messages.length, 2);
+  assert.ok(f.entries.every(e => e.customType === "harness-delivery-continuation"));
 });
 
 test("abort, provider error, explicit pause and nested agents do not trigger continuation", async () => {
@@ -149,7 +160,8 @@ test("uncommitted task RED is progress once, including restart, not a new approv
   const after = pending();
   assert.notEqual(after.key, before.key, "new test bytes must renew the pending obligation without a commit");
   assert.equal(await c.end(stopped, c.ctx), true);
-  assert.equal(await c.create()(stopped, c.ctx), false, "same dirty content cannot loop after reload");
+  assert.equal(await c.create()(stopped, c.ctx), true, "same dirty content requests diagnosis, not repeated authorship");
+  assert.equal(await c.create()(stopped, c.ctx), false, "same dirty content cannot loop after diagnosis/reload");
   fs.writeFileSync(file, "new RED assertion\n");
   assert.equal(pending().key, after.key, "rewriting identical bytes is not progress");
   execFileSync("git", ["add", "--", "tests/one.spec.ts"], { cwd: f.ctx.cwd });

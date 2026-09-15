@@ -19,6 +19,8 @@ import { taskRegistryPath } from "./task-contract.mjs";
 import { vendorPi } from "../../claude-code/skills/initializing-projects/references/vendor-core.mjs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { readIntegratedTaskEvidence } from "./task-receipts.mjs";
+import { installDeliveryContinuation } from "./delivery-continuation.mjs";
+import { startTaskProcess, readTaskProcess } from "./task-process.mjs";
 const git = (cwd, ...args) =>
   execFileSync("git", args, {
     cwd,
@@ -153,6 +155,56 @@ function fixture(t, tasks = [task("a"), task("b"), task("c", ["a"])], { vendored
       JSON.parse(fs.readFileSync(taskRegistryPath(dir, "parent"), "utf8")),
   };
 }
+test("unchanged-stop diagnosis can resume the owning attempt with a real process, without approval", { timeout: 20000 }, async t => {
+  const f = fixture(t, [task("a")]);
+  const action = params => executeTaskAction(params, f.context, f.deps);
+  f.deps.captureRuntime = () => captureTaskRuntime(fileURLToPath(new URL("../bin/pi-harness.mjs", import.meta.url)));
+  f.deps.verifyRuntime = verifyTaskRuntime;
+  f.deps.startProcess = async () => { throw Object.assign(new Error("fixture launcher unavailable"), { before_spawn: true }); };
+  f.deps.readProcess = readTaskProcess;
+  await action({ action: "dispatch", task_ids: ["a"] });
+  const original = structuredClone(f.registry().tasks.a);
+  assert.equal(original.status, "blocked");
+  const marker = path.join(original.worktree, "fixture-resumed.txt");
+  const release = path.join(f.dir, "fixture-release");
+  const entries = [], queued = [];
+  const ctx = { cwd: f.dir, sessionManager: { getSessionId: () => "parent", getHeader: () => ({ id: "parent" }), getBranch: () => entries }, ui: { notify() {} } };
+  const end = installDeliveryContinuation({ on() {},
+    appendEntry: (customType, data) => entries.push({ type: "custom", customType, data }),
+    sendMessage: message => queued.push(message),
+  }, { local: true, readPending: () => ({ sessionId: "parent", stage: "tasks", key: "unchanged-launch-failure", content: "Finish the task." }) });
+  const stopped = { messages: [{ role: "assistant", stopReason: "stop", content: [{ type: "text", text: "Task blocked." }] }] };
+  await end(stopped, ctx);
+  assert.equal(queued.length, 1);
+  assert.equal(fs.existsSync(marker), false, "ordinary reminder alone has not recovered anything");
+  assert.equal(f.registry().tasks.a.launches.length, 1, "control: stopping after the old reminder leaves the failed launch unchanged");
+  await end(stopped, ctx);
+  assert.match(queued[1].content, /diagnos/i);
+  f.deps.startProcess = options => startTaskProcess({ ...options, timeoutMs: 5000,
+    command: process.execPath, args: ["-e", `const fs=require('node:fs'); const timer=setInterval(()=>{if(fs.existsSync(${JSON.stringify(release)})){fs.writeFileSync(${JSON.stringify(marker)}, String(process.pid));clearInterval(timer)}},20)`] });
+  const resume = { action: "resume", task_id: "a", attempt_id: original.attempt_id, instruction: "Launcher is available again; recover this same attempt." };
+  const result = await action(resume);
+  assert.equal(result.ok, true, result.reason);
+  const current = f.registry().tasks.a, launch = current.launches.at(-1);
+  assert.equal(current.attempt_id, original.attempt_id);
+  assert.equal(current.worktree, original.worktree);
+  assert.equal(readTaskProcess(launch).running, true);
+  const duplicate = await action(resume);
+  assert.equal(duplicate.ok, false);
+  assert.match(duplicate.reason, /still running/);
+  fs.writeFileSync(release, "release fixture process");
+  const deadline = Date.now() + 6000;
+  while (!readTaskProcess(launch).terminal && Date.now() < deadline)
+    await new Promise(resolve => setTimeout(resolve, 25));
+  const terminal = readTaskProcess(launch);
+  assert.equal(terminal.terminal, true);
+  assert.equal(terminal.result.exitCode, 0, JSON.stringify(terminal));
+  assert.ok(Number(fs.readFileSync(marker, "utf8")) > 0, "real child executed in its original worktree");
+  assert.equal(f.registry().tasks.a.launches.length, 2);
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(f.dir, ".pi/harness/state/parent/gate-state.json"))), f.state, "diagnosis and resume cannot manufacture capture or approval");
+  assert.equal(await end(stopped, ctx), false, "unchanged diagnostic cannot spin");
+});
+
 test("scope overlap includes tests and fixtures, with component boundaries", () => {
   assert.equal(taskScopesOverlap(task("a"), task("b")), false);
   const b = task("b");
@@ -166,6 +218,16 @@ test("scope overlap includes tests and fixtures, with component boundaries", () 
     { ...task("slug"), scope_paths: ["src/app/[slug]/page.mjs"] },
     { ...task("id"), scope_paths: ["src/app/[id]/page.mjs"] },
   ), false, "Next.js bracket segments are literal paths");
+});
+
+test("invalid resume arguments name the native recovery fields without launching work", async t => {
+  const f = fixture(t);
+  for (const wrong of [{ feedback: "fix fixture" }, { expected_head: "a".repeat(40) }]) {
+    const result = await executeTaskAction({ action: "resume", task_id: "a", ...wrong }, f.context, f.deps);
+    assert.equal(result.ok, false);
+    assert.match(result.reason, /unexpected task parameters for resume; allowed: action, task_id, attempt_id, instruction/);
+    assert.equal(fs.existsSync(taskRegistryPath(f.dir, "parent")), false);
+  }
 });
 
 test("task scheduling includes allowed_writes in overlapping write ownership", () => {

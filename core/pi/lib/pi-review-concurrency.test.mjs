@@ -131,6 +131,26 @@ async function finishToolCall(handlers, event, { isError = false } = {}) {
   });
 }
 
+test("support shares at most three reader slots and never becomes a review or overlaps a writer", { timeout: 5000 }, async t => {
+  const ledger = startLedger();
+  const finishes = new Map(["s1", "s2", "s3", "s4", "writer"].map(id => [id, deferred()]));
+  t.after(() => { for (const d of finishes.values()) d.resolve(); });
+  const { tools } = installBridge({ maxParallelEyes: 3 }, pi => pi.registerTool({
+    name: "subagent", async execute(id) { ledger.record(id); await finishes.get(id).promise; return { content: [] }; },
+  }));
+  const tool = tools.get("subagent");
+  assert.equal(classifyPiReviewDispatch("harness-support", "[HARNESS_FINAL_REVIEW]"), null);
+  const runs = ["s1", "s2", "s3", "s4"].map(id => dispatch(tool, id, "harness-support"));
+  runs.push(dispatch(tool, "writer", "harness-executor"));
+  await ledger.waitFor(3);
+  assert.deepEqual(ledger.started, ["s1", "s2", "s3"]);
+  finishes.get("s1").resolve(); await ledger.waitFor(4);
+  assert.equal(ledger.started.at(-1), "s4");
+  for (const id of ["s2", "s3", "s4"]) finishes.get(id).resolve();
+  await ledger.waitFor(5); assert.equal(ledger.started.at(-1), "writer");
+  finishes.get("writer").resolve(); await Promise.all(runs);
+});
+
 test("regression: reviews share bounded slots while a queued non-review stays FIFO and exclusive", { timeout: 5_000 }, async (t) => {
   const ledger = startLedger();
   const finishes = new Map(["r1", "r2", "r3", "writer", "r4"].map((id) => [id, deferred()]));
