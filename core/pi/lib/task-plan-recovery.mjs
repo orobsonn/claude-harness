@@ -71,14 +71,25 @@ export function preserveTaskPlanForPlanner({ projectRoot, sessionId, featureId }
       if (task.launches.some((launch) => !(dependencies.readProcess ?? readTaskProcess)(launch).terminal))
         throw new Error("wait for active task processes before correcting the plan scope");
     }
-    if (registry.plan_snapshot) return;
-    const text = readText(planFile(projectRoot, featureId));
-    const state = read(stateFile(projectRoot, sessionId));
-    if (hash(text) !== registry.plan_sha256 || !approvalValid(state.plan_review_evidence, sessionId, featureId, registry.plan_sha256, registry.spec_sha256))
-      throw new Error("preserve the admitted plan before the planner changes its scope");
-    registry.plan_snapshot = { written_by: "host-task-plan-snapshot", text, approval: state.plan_review_evidence };
-    registry.revision = (registry.revision ?? 0) + 1;
-    writeTaskJson(registryFile, registry);
+    if (!registry.plan_snapshot) {
+      const text = readText(planFile(projectRoot, featureId));
+      const state = read(stateFile(projectRoot, sessionId));
+      if (hash(text) !== registry.plan_sha256 || !approvalValid(state.plan_review_evidence, sessionId, featureId, registry.plan_sha256, registry.spec_sha256))
+        throw new Error("preserve the admitted plan before the planner changes its scope");
+      registry.plan_snapshot = { written_by: "host-task-plan-snapshot", text, approval: state.plan_review_evidence };
+      registry.revision = (registry.revision ?? 0) + 1;
+      writeTaskJson(registryFile, registry);
+    }
+    const snapshot = registry.plan_snapshot;
+    if (snapshot.written_by !== "host-task-plan-snapshot" || typeof snapshot.text !== "string" ||
+        hash(snapshot.text) !== registry.plan_sha256 ||
+        !approvalValid(snapshot.approval, sessionId, featureId, registry.plan_sha256, registry.spec_sha256))
+      throw new Error("original admitted plan snapshot is invalid");
+    // The escaped text in index.json can exceed Pi read's per-line limit. Give
+    // the planner a paginable projection; the hash-bound snapshot remains authority.
+    const readablePath = path.join(path.dirname(registryFile), "admitted-execution-plan.json");
+    writeTaskJson(readablePath, JSON.parse(snapshot.text));
+    return { path: readablePath, plan_sha256: registry.plan_sha256 };
   } finally { releaseLock(registryFile, lock.token); }
 }
 

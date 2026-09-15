@@ -1105,5 +1105,10 @@ test("native planner dispatch preserves admitted task plan before scope correcti
     const saved = JSON.parse(readFileSync(registryPath, "utf8"));
     assert.equal(saved.plan_snapshot.text, planText);
     assert.deepEqual(saved.plan_snapshot.approval, approval);
+    const readable = join(registryDir, "admitted-execution-plan.json");
+    assert.deepEqual(JSON.parse(readFileSync(readable, "utf8")), JSON.parse(planText));
+    assert.ok(event.input.prompt.includes(readable));
+    assert.match(event.input.prompt, /HARNESS_PLAN_RECOVERY/);
+    assert.match(event.input.prompt, /never from session logs/);
   } finally { f.close(); }
 });

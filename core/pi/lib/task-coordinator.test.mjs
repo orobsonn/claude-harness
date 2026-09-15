@@ -1399,3 +1399,37 @@ for (const mergedUpdate of [false, true]) test(`consumer resume selects the inst
   assert.match(invalid.reason, /symlink/);
   assert.equal(f.launches(), launches);
 });
+
+
+test("large admitted plan stays readable and is rehydrated from authority after cancellation", async (t) => {
+  const f = fixture(t);
+  assert.equal((await executeTaskAction({ action: "dispatch", task_ids: ["a"] }, f.context, f.deps)).ok, true);
+  const planPath = path.join(f.dir, ".pi/harness/plans/feature/execution-plan.json");
+  const registryPath = path.join(f.dir, ".pi/harness/state/parent/task-runs/index.json");
+  const statePath = path.join(f.dir, ".pi/harness/state/parent/gate-state.json");
+  const large = structuredClone(f.plan);
+  large.tasks[0].resolved_judgments = Object.fromEntries(Array.from({ length: 80 }, (_, i) => ["decision" + i, "detail ".repeat(160)]));
+  const text = JSON.stringify(large);
+  assert.ok(Buffer.byteLength(text) > 51200);
+  fs.writeFileSync(planPath, text);
+  const sha = hashTaskArtifact(planPath);
+  write(registryPath, { ...f.registry(), plan_sha256: sha });
+  write(statePath, { ...f.state, plan_review_evidence: { ...f.state.plan_review_evidence, plan_sha256: sha } });
+  const identity = { projectRoot: f.dir, sessionId: "parent", featureId: "feature" };
+  const readable = preserveTaskPlanForPlanner(identity, f.deps);
+  const projection = fs.readFileSync(readable.path, "utf8");
+  assert.deepEqual(JSON.parse(projection), large);
+  assert.ok(projection.split("\n").every((line) => Buffer.byteLength(line) < 51200));
+  assert.equal(f.registry().plan_snapshot.text, text);
+  const before = fs.readFileSync(registryPath, "utf8");
+  // Cancelled/rejected planner output must not replace the admitted baseline.
+  write(planPath, { tasks: [] });
+  write(readable.path, { tasks: [] });
+  assert.deepEqual(preserveTaskPlanForPlanner(identity, f.deps), readable);
+  assert.deepEqual(JSON.parse(fs.readFileSync(readable.path, "utf8")), large);
+  assert.equal(fs.readFileSync(registryPath, "utf8"), before);
+  const corrupt = f.registry();
+  corrupt.plan_snapshot.text += " ";
+  write(registryPath, corrupt);
+  assert.throws(() => preserveTaskPlanForPlanner(identity, f.deps), /snapshot is invalid/);
+});
