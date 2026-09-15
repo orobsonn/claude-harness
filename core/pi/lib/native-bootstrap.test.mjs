@@ -18,6 +18,11 @@ test("materialização já possuída é idempotente e conserva o catálogo runti
   assert.deepEqual(first.roles, RUNTIME_ROLES);
   const planner = join(agentDir, "agents", "harness-planner.md");
   const firstContent = readFileSync(planner, "utf8");
+  for (const role of ['harness-planner', 'harness-plan-reviewer']) {
+    const content = readFileSync(join(agentDir, 'agents', `${role}.md`), 'utf8');
+    assert.match(content, /tools:.*harness_plan_analysis/);
+    assert.match(content, /partial coverage never block/);
+  }
 
   const second = installNativeHarnessAgents({ agentDir });
   assert.equal(second.ok, true, second.reason);

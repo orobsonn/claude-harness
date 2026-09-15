@@ -63,6 +63,7 @@ const EXTENSIONS_AFTER_SUBAGENTS = [
 /** Libs host-agnósticas que as extensões acima importam; ausência de qualquer uma deixa um gate mudo. */
 const REQUIRED_LIBS = [
   "core/pi/lib/planning-tools.mjs",
+  "core/pi/lib/plan-analysis.mjs",
   "core/pi/lib/classify.mjs",
   "core/pi/lib/task-contract.mjs",
   "core/pi/lib/task-context.mjs",

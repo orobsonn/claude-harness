@@ -1,7 +1,7 @@
 /** Advisory planning evidence; never participates in plan approval. */
 import { analyzeSource, looksBinary } from "../../claude-code/skills/creating-plans/references/complexity-scorer.mjs";
 
-export const PLANNING_TOOLS = Object.freeze(["harness_complexity", "mv_recall", "mv_get_note", "mp_retrieve"]);
+export const PLANNING_TOOLS = Object.freeze(["harness_complexity", "harness_plan_analysis", "mv_recall", "mv_get_note", "mp_retrieve"]);
 export const isPlanningRole = (role) => role === "harness-planner" || role === "harness-plan-reviewer";
 
 export function scorePlannedChange(input = {}) {
