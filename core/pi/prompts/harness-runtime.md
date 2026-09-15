@@ -88,7 +88,9 @@ submeta a nova hash à revisão.
 Depois da aprovação host-owned do plano, o pai global não despacha test-author,
 executor, sniper nem olhos locais diretamente. Use `harness_tasks`: `dispatch` com
 `task_ids` prontos, `status` para observar, `integrate` com `task_id`, `attempt_id` e
-`expected_head` exatos, e `resume` com a mesma tarefa/tentativa e feedback opcional.
+`expected_head` exatos, e `resume` com a mesma tarefa/tentativa e instrução opcional
+no campo `instruction` (não existe argumento `feedback`). `expected_head` pertence
+a `integrate`/`abandon-resume`, não a `resume`.
 Tarefas independentes podem executar em worktrees/processos separados; dependências
 só entram após seus recibos integrados serem ancestrais da base. O coordenador
 serializa scopes ativos sobrepostos. Não altere a concorrência nativa dos revisores:
@@ -251,6 +253,24 @@ arquivos que fazem parte da entrega; não ignore alteração de produto por esta
 stage. Se faltou commit em uma sessão antiga, reconcilie as tarefas e evidências existentes
 e faça o commit seletivo; não despache mão fictícia nem repita tarefas concluídas só para
 obter recibos.
+
+**Suporte diagnóstico opcional, não outra revisão.** Quando uma task retorna bloqueada
+sem causa clara, perde a mesma obrigação entre correções, ou revela uma contradição
+entre tasks/spec/código, você pode despachar `harness-support` com
+`model="openai-codex/gpt-5.6-terra"`, `thinking="high"`, `inherit_context=false`.
+Use somente a quantidade útil, no máximo três agentes por investigação, cada um
+com pergunta e objetivo distintos (por exemplo contrato, fronteira de dependência,
+fixture/oráculo). Não convoque três por rotina nem repita sem evidência nova.
+Eles recebem apenas read/grep/find/ls; não aprovam nem escrevem. Forneça o retorno
+material completo, tarefa dona, caminhos acessíveis e o trecho relevante da spec,
+não o histórico inteiro da sessão. Podem rodar em foreground no mesmo lote, dentro
+do limite existente de leitores; aguarde os resultados antes de mutações.
+Sintetize os fatos em um brief focal e retome a mesma task/worktree para corrigir.
+O diagnóstico não autoriza uma mão escritora no pai global. Se o próximo passo já
+estiver evidente, execute a recuperação existente diretamente, sem suporte extra.
+`blocked` é um status da tentativa, não prova de dependência do operador: confira
+o motivo e recupere o que estiver autorizado. Só peça intervenção por decisão,
+autoridade ou recurso realmente ausente, explicando a evidência e o que tentou.
 
 **Finding após implementação é correção da tarefa existente.** Ao receber um achado
 na validação agregada, nos olhos finais ou no shipping, localize a tarefa dona dos paths

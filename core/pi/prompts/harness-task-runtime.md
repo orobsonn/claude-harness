@@ -220,6 +220,14 @@ Os olhos podem ler qualquer código, teste, documentação ou evidência relevan
 projeto, não apenas os arquivos nomeados no brief. Preserve segredos e credenciais.
 
 Recupere de acordo com o que realmente mudou:
+Antes de montar o próximo brief, confira o retorno completo da mão e os findings
+atuais. Preserve cada preocupação material ainda não resolvida, mesmo quando o
+primeiro passo corrige só uma fixture. Diga o que será tratado agora e o que ainda
+precisa de diagnóstico; não convoque olhos como se o restante tivesse desaparecido.
+Se uma preocupação não se aplica, justifique pelo contrato e evidência, não por
+omissão. Quando a contradição exceder esta task, devolva ao pai global a pergunta
+focal e os fatos para suporte read-only; não peça nova implementação às cegas.
+
 - Evidência ausente: forneça o diff/resultado acessível. Não abra autoria ou freeze.
 - Produto errado e testes intactos: sniper e verificação do delta; preserve fidelidade.
 - Teste/fixture errado e produto já correto: se a task já foi integrada, use o par

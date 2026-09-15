@@ -47,6 +47,7 @@ test("the registered native tool teaches foreground review batches instead of fo
   assert.match(tool.description, /foreground.*same (?:tool-call )?batch/is);
   assert.match(tool.description, /run_in_background.*(?:omit|false|forbidden)/is);
   assert.match(tool.description, /harness-adversary.*harness-compliance.*harness-security/s);
+  assert.match(tool.description, /harness-support.*distinct diagnostic objectives/s);
   assert.match(tool.parameters.properties.run_in_background.description, /(?:omit|false|forbidden)/i);
   assert.notEqual(tool.description, native.description, "native guidance is adapted without mutating the native tool");
   assert.match(native.description, /For parallel work, use run_in_background: true/);

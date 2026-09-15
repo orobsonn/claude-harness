@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import { findShadowedCanonicalRoles, validateSubagentDispatch } from "../lib/dispatch-rail.mjs";
-import { isDiscussionRole } from "../lib/roles.mjs";
+import { isDiscussionRole, isSupportRole } from "../lib/roles.mjs";
 import { isChildSession, isPiHeadlessContext, piSessionId, piSubagentArgs } from "../lib/pi-adapter-map.mjs";
 import { loadPiGateStateFromDisk } from "../lib/pi-gate-state.mjs";
 import { decidePiPlanGate } from "../lib/plan-gate.mjs";
@@ -28,6 +28,13 @@ export default function harnessDispatch(pi: ExtensionAPI) {
     if (event.toolName !== "subagent") return;
     shadowedRoles = findShadowedCanonicalRoles(ctx.cwd, existsSync);
     const role = piSubagentArgs(event.input).subagent_type;
+    if (isSupportRole(role)) {
+      const loaded: any = loadPiGateStateFromDisk(ctx.cwd, { sessionId: piSessionId(ctx) });
+      if (isChildSession(ctx) || loaded?.ok !== true || loaded.state?.task_run ||
+          !/^(LIGHT|FULL)$/i.test(String(loaded.state?.mode ?? ""))) {
+        return { block: true, reason: "harness support requires the global LIGHT/FULL parent; no recursive support dispatch" };
+      }
+    }
     if (role === "harness-test-author") {
       const canonical: any = decidePiPlanGate({ projectRoot: ctx.cwd, sessionId: piSessionId(ctx), toolName: event.toolName, input: event.input });
       if (canonical.block) return { block: true, reason: canonical.reason };

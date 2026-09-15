@@ -11,6 +11,14 @@ import {
 
 const role = readFileSync(new URL("./harness-plan-reviewer.md", import.meta.url), "utf8");
 
+test('plan reviewer interprets structural evidence without creating a split gate', () => {
+  assert.match(role, /tools:.*harness_plan_analysis/);
+  assert.match(role, /non-trivial INITIAL review/);
+  assert.match(role, /shared path\/criterion is not\s+a defect by itself/);
+  assert.match(role, /partial coverage never block review/);
+  assert.match(role, /On REVISE, recheck only/);
+});
+
 test("plan-reviewer documents canonical APPROVE and REVISE reports accepted by the host", () => {
   const examples = [...role.matchAll(/```json\s*([\s\S]*?)```/g)].map((match) => parseReviewReportText(match[1]));
   assert.equal(examples.length, 2);

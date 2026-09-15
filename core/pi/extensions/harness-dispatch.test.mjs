@@ -55,3 +55,22 @@ test("discussion refuses unreadable ceremony state or a missing session identity
     assert.equal(handler()({ toolName: "subagent", input: args }, unidentified)?.block, true);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
+
+test("support is a fixed-route global reader, available headless but not recursive or task-local", () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-support-dispatch-"));
+  const input = { subagent_type: "harness-support", model: "openai-codex/gpt-5.6-terra", thinking: "high", prompt: "Diagnose contract boundary", inherit_context: false };
+  const context = { ...ctx({ hasUI: false }), cwd: root };
+  try {
+    const directory = join(root, ".pi/harness/state/ses-discussion");
+    mkdirSync(directory, { recursive: true });
+    const file = join(directory, "gate-state.json");
+    writeFileSync(file, JSON.stringify({ mode: "FULL" }));
+    assert.equal(handler()({ toolName: "subagent", input }, context), undefined);
+    assert.equal(handler()({ toolName: "subagent", input: { ...input, inherit_context: true } }, context)?.block, true);
+    assert.equal(handler()({ toolName: "subagent", input }, { ...ctx({ child: true }), cwd: root })?.block, true);
+    writeFileSync(file, JSON.stringify({ mode: "FULL", task_run: { task_id: "one" } }));
+    assert.equal(handler()({ toolName: "subagent", input }, context)?.block, true);
+    writeFileSync(file, "broken");
+    assert.equal(handler()({ toolName: "subagent", input }, context)?.block, true);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});

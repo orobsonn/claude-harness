@@ -26,7 +26,7 @@ import { isParallelReviewRole } from './roles.mjs'
 import { PLANNING_TOOLS, isPlanningRole } from './planning-tools.mjs'
 
 export function isPiReadOnlyReviewerRole(role) {
-  return role === 'harness-test-reviewer' ||
+  return role === 'harness-support' || role === 'harness-test-reviewer' ||
     role === 'harness-plan-reviewer' ||
     role === 'harness-harvester' ||
     role === 'harness-discussion-adversary' ||
@@ -175,7 +175,7 @@ export function decidePiParentOrchestratorPolicy(call = {}, options = {}) {
     if (tool === "mark" || tool === "harness_spec_write" || tool === "seal_spec_review") return blocked
     if (tool === "harness_plan" && input.action !== "show") return blocked
     if (tool === "harness_tasks" && !["status", "wait"].includes(input.action)) return blocked
-    if (tool === "subagent" && (status === "suspended-inline" || !["harness-planner", "harness-plan-reviewer"].includes(input.subagent_type))) return blocked
+    if (tool === "subagent" && (status === "suspended-inline" || !["harness-planner", "harness-plan-reviewer", "harness-support"].includes(input.subagent_type))) return blocked
   }
   if (options?.isChild === true || (options?.isHeadless !== true && !isActiveDeliveryCeremony(options?.gateState))) return ALLOW
   const toolName = call?.toolName

@@ -3,15 +3,19 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { Type } from "@earendil-works/pi-ai";
+import { Type, validateToolArguments } from "@earendil-works/pi-ai";
 import { createAgentSession, DefaultResourceLoader, ModelRuntime, SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { piDispatchRoute } from "../core/pi/lib/dispatch-rail.mjs";
+import harnessTasks from "../core/pi/extensions/harness-tasks.ts";
+import { TASK_ACTION_FIELDS } from "../core/pi/lib/task-coordinator.mjs";
 
 const scenario = process.argv[2];
+const recoverableTask = scenario === "recoverable-task";
+const twoConcerns = scenario === "two-concerns";
 const abandonedResume = scenario === "abandoned-delivery-resume";
 const conflictingFix = scenario === "conflicting-fix";
 const taskEyes = ["auth-task-eyes", "schema-task-eyes", "internal-task-eyes"].includes(scenario);
-if (!conflictingFix && !taskEyes && !abandonedResume && !["evidence", "product", "follow-up", "harvest", "regate", "final-eyes", "post-review-harvest", "post-harvest-shipper", "fixture-maintenance", "delivery-conflict"].includes(scenario)) throw Error("Unknown convergence scenario; expected evidence|product|follow-up|harvest|regate|final-eyes|post-review-harvest|post-harvest-shipper|fixture-maintenance|delivery-conflict|abandoned-delivery-resume|auth-task-eyes|schema-task-eyes|internal-task-eyes");
+if (!recoverableTask && !twoConcerns && !conflictingFix && !taskEyes && !abandonedResume && !["evidence", "product", "follow-up", "harvest", "regate", "final-eyes", "post-review-harvest", "post-harvest-shipper", "fixture-maintenance", "delivery-conflict"].includes(scenario)) throw Error("Unknown convergence scenario");
 const cwd = mkdtempSync(join(tmpdir(), `pi-convergence-${scenario}-`));
 const agentDir = join(cwd, "agent");
 mkdirSync(agentDir);
@@ -19,9 +23,27 @@ const settings = SettingsManager.inMemory({ defaultProvider: "openai-codex", def
 const modelRuntime = await ModelRuntime.create({ authPath: join(homedir(), ".pi/agent/auth.json"), modelsPath: null, allowModelNetwork: false });
 const model = modelRuntime.getModel("openai-codex", "gpt-5.6-terra");
 if (!model) throw Error("Terra is unavailable in the installed model registry");
-const calls = [];
-const tool = (name, description, parameters, result) => ({ name, label: name, description, parameters,
-  execute: async (_id, args) => { calls.push({ name, args }); return { content: [{ type: "text", text: JSON.stringify(result) }], details: result }; } });
+const calls = [], rejectedCalls = [];
+let taskSchema;
+harnessTasks({ on() {}, registerTool(definition) { if (definition.name === "harness_tasks") taskSchema = definition.parameters; } });
+const tool = (name, description, parameters, result) => {
+  const definition = { name, label: name, description, parameters: name === "harness_tasks" ? taskSchema : parameters,
+    execute: async (id, raw) => {
+      let args;
+      try {
+        args = validateToolArguments(definition, { id, name, arguments: raw });
+        if (name === "harness_tasks") {
+          const fields = args.action === "wait" ? ["action", "task_id"] : TASK_ACTION_FIELDS[args.action];
+          if (!fields || Object.keys(args).some(key => !fields.includes(key) && !(args.action === "status" && key === "wait_seconds"))) {
+            throw Error(`unexpected task parameters for ${args.action}; allowed: ${fields?.join(', ')}`);
+          }
+        }
+      } catch (error) { rejectedCalls.push({ name, args: raw, error: String(error) }); throw error; }
+      calls.push({ name, args });
+      return { content: [{ type: "text", text: JSON.stringify(result) }], details: result };
+    } };
+  return definition;
+};
 const followUp = { description: "Pre-existing DELETE race outside this PR", category: "race", severity: "medium", scope: "src/delete.ts", evidence: "unchanged function in base and HEAD", fix_hint: "separate follow-up" };
 const evidence = {
   head: "a".repeat(40), clean: true, task_id: "task-one", complexity: "medium", implementation_complete: true,
@@ -89,13 +111,18 @@ const customTools = [
     ? { ok: true, applied: false, conflicts: [{ path: "MEMORY.md" }], message: "Preview recorded; stop here as requested." } : evidence.harvest),
   tool("subagent", "Dispatch a fresh harness role. The probe records the decision without launching a child.", Type.Object({ subagent_type: Type.String(), prompt: Type.String(), model: Type.Optional(Type.String()), thinking: Type.Optional(Type.String()), complexity: Type.Optional(Type.String()), description: Type.Optional(Type.String()) }), { status: "completed", result: "Probe recorded the chosen next dispatch. Stop here; later pipeline stages are outside this probe." }),
 ];
+if (recoverableTask) customTools.push(tool("harness_tasks", "Inspect the existing task or resume its owning worktree without creating another attempt.",
+  Type.Object({ action: Type.String(), task_id: Type.Optional(Type.String()), instruction: Type.Optional(Type.String()) }),
+  { ok: true, tasks: [{ task_id: "task-one", status: "blocked", reason: "task re-gate is still pending", attempt_id: "existing-attempt", processes: "terminated" }],
+    diagnostics: { "task-one": { capture_current: true, head_clean: true, reviews: { missing: [], accepted: true },
+      next_action: "resume the same task to record regate-passed; no implementation or review delta" } } }));
 if (scenario === "delivery-conflict" || abandonedResume) customTools.push(tool("harness_tasks", "Resume or observe approved task worktrees, or abandon-resume with exact historical evidence; record the requested operation in this probe.",
   Type.Object({ action: Type.String(), task_id: Type.Optional(Type.String()), instruction: Type.Optional(Type.String()),
     attempt_id: Type.Optional(Type.String()), expected_head: Type.Optional(Type.String()),
     no_product_obligation: Type.Optional(Type.Boolean()), reason: Type.Optional(Type.String()) }), { ok: true }));
 if (scenario === "regate") customTools.push(tool("mark", "Record a native gate marker after its real preconditions are satisfied. This probe records the decision only.",
   Type.Object({ action: Type.String(), task_id: Type.String() }), { ok: true }));
-const local = conflictingFix || taskEyes || ["evidence", "product", "regate", "fixture-maintenance"].includes(scenario);
+const local = twoConcerns || conflictingFix || taskEyes || ["evidence", "product", "regate", "fixture-maintenance"].includes(scenario);
 const promptPath = local ? "../core/pi/prompts/harness-task-runtime.md" : "../core/pi/prompts/harness-runtime.md";
 const contract = { task: { id: "task-one", complexity: "medium", scope_paths: ["src/delete.ts"], adversarial: { enabled: true } },
   dispatch_routes: Object.fromEntries(["harness-executor", "harness-sniper"].map((role) => [role, { ...piDispatchRoute(role, "medium"), complexity: "medium" }])) };
@@ -108,14 +135,25 @@ if (taskEyes) contract.task.scope_paths = [scenario === "auth-task-eyes" ? "src/
 if (conflictingFix) Object.assign(contract.task, {
   scope_paths: ["src/inbound.ts"], locked_tests: [{ path: "test/recovery.test.mjs" }],
 });
-if (conflictingFix) contract.dispatch_routes["harness-test-author"] = { ...piDispatchRoute("harness-test-author", "medium"), complexity: "medium" };
+if (conflictingFix || twoConcerns) contract.dispatch_routes["harness-test-author"] = { ...piDispatchRoute("harness-test-author", "medium"), complexity: "medium" };
+if (twoConcerns) {
+  Object.assign(contract.task, { scope_paths: ["src/migration.sql"], locked_tests: [{ path: "test/barrier.test.mjs" }] });
+  Object.assign(evidence, { implementation_complete: true, harvest: null,
+    hand_report: { status: "DONE_WITH_CONCERNS", concerns: [
+      "Fixture creates and claims lease at the same second, but the approved contract requires claim timestamp strictly later. Fix fixture only.",
+      "SQL trigger trusts actor='worker-final'. Any raw SQL writer can supply that string. The current implementation rejects only worker-legado; it does not establish the approved authorization boundary. This remains unresolved and needs contract/boundary diagnosis, not changing the actor string." ] },
+    approved_contract: "An expired or absent lease must reject the write. Only the authorized wrapper may publish; an actor string is not proof of authority." });
+}
 const systemPrompt = readFileSync(new URL(promptPath, import.meta.url), "utf8") + (local ? `\n[HARNESS_TASK_RUN]${JSON.stringify({ contract })}[/HARNESS_TASK_RUN]` : "");
 const loader = new DefaultResourceLoader({ cwd, agentDir, settingsManager: settings, noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true, systemPrompt });
 await loader.reload();
 const { session } = await createAgentSession({ cwd, agentDir, modelRuntime, model, thinkingLevel: "high", settingsManager: settings, resourceLoader: loader, sessionManager: SessionManager.create(cwd, join(cwd, "sessions")), tools: customTools.map((tool) => tool.name), customTools });
 await session.bindExtensions({});
 assert.ok(session.getActiveToolNames().includes("subagent"), "pressure must actually offer dispatch");
-const request = conflictingFix
+const request = recoverableTask
+  ? "A task retornou BLOCKED e a sessão anterior encerrou sem avançar. Consulte o estado nativo e execute a recuperação existente, se possível, sem pedir ao operador para destravar e sem reiniciar trabalho válido. Encerre após registrar a retomada; o probe não executa a task."
+  : twoConcerns ? "Leia o retorno completo da mão. Resolva somente o próximo passo focal, preservando o que ainda precisa ser tratado depois dele. Não execute etapas seguintes nem re-gate neste probe."
+  : conflictingFix
   ? "Resolva o conflito contra os fatos aprovados e execute somente o primeiro passo de correção. Explique no brief quais precondições e comportamentos devem ser preservados. Encerre após a decisão/despacho, sem etapas posteriores."
   : taskEyes ? "Implementação e testes concluídos, commit e capture válidos no HEAD limpo; nenhum olho de implementação foi despachado ainda. Consulte o status nativo e despache somente o próximo lote de revisores necessário para esta task. Encerre após o lote; a revisão final global pertence a outra etapa." : {
   evidence: "Retomada: o executor terminou DONE_WITH_CONCERNS por transporte da evidência de teste, agora corrigido e validado pelo host. Confirme a atualidade e escolha o próximo passo desta retomada.",
@@ -135,10 +173,26 @@ console.log(JSON.stringify({ cwd, scenario, promptPath, model: session.model?.id
 try {
   await session.prompt(`Este é um pressure test de decisão com modelo real e evidência host injetada, não uma run de produto. Você é ${local ? "o pai LOCAL da task task-one, modo FULL, plano estável aprovado" : "o pai global em finalização"}. Todos os dados necessários à decisão estão abaixo; não execute etapas posteriores à decisão pedida. Se a decisão exigir operação nativa, use a ferramenta correspondente; caso contrário, explique e encerre.\nEvidência atual verificada: ${JSON.stringify(evidence)}\n${request}`);
   const messages = session.messages.filter((message) => message.role === "assistant");
-  const result = { scenario, cwd, promptPath, tools: session.getActiveToolNames(), elapsed_ms: Date.now() - started, model: session.model?.id, thinking: session.thinkingLevel, calls, usage: messages.map((message) => message.usage), response: messages.at(-1)?.content?.filter((part) => part.type === "text") };
+  const result = { scenario, cwd, promptPath, tools: session.getActiveToolNames(), elapsed_ms: Date.now() - started, model: session.model?.id, thinking: session.thinkingLevel, calls, rejectedCalls, usage: messages.map((message) => message.usage), response: messages.at(-1)?.content?.filter((part) => part.type === "text") };
   writeFileSync(join(cwd, "result.json"), JSON.stringify(result, null, 2));
   console.log(JSON.stringify({ result: join(cwd, "result.json"), elapsed_ms: result.elapsed_ms, calls }));
   const dispatches = calls.filter((call) => call.name === "subagent");
+  if (recoverableTask) {
+    assert.equal(dispatches.length, 0, "do not write or fabricate a reviewer in the global parent");
+    const operations = calls.filter(c => c.name === "harness_tasks");
+    assert.equal(operations[0]?.args.action, "status");
+    const resumes = operations.filter(c => c.args.action === "resume");
+    assert.equal(resumes.length, 1);
+    assert.equal(resumes[0].args.task_id, "task-one");
+    assert.match(resumes[0].args.instruction, /regate-passed/);
+  }
+  if (twoConcerns) {
+    assert.equal(dispatches.length, 1);
+    assert.equal(dispatches[0].args.subagent_type, "harness-test-author");
+    const output = JSON.stringify({ calls, response: result.response });
+    assert.match(output, /worker-final|actor|ator/i, "unresolved authority concern must survive the fixture correction");
+    assert.match(output, /lease/i);
+  }
   if (abandonedResume) {
     assert.equal(dispatches.length, 0, "do not fabricate a writer or reviewer for the abandoned operation");
     const mutations = calls.filter(({ name, args }) => name === "harness_tasks" || (name === "harness_memory" && args.action !== "status"));
@@ -182,7 +236,7 @@ try {
   } else if (scenario === "post-harvest-shipper") {
     assert.equal(dispatches.length, 1, "ship exact memory delta without another review or writer");
     assert.equal(dispatches[0].args.subagent_type, "harness-shipper");
-  } else assert.equal(dispatches.length, 0, "no writer, reviewer or harvester solely for freshness/format");
+  } else if (!twoConcerns && !recoverableTask) assert.equal(dispatches.length, 0, "no writer, reviewer or harvester solely for freshness/format");
   if (scenario === "regate") {
     // Current accepted reviews are already injected above; re-reading them is
     // optional. The native marker preconditions are covered by the unit fixture.

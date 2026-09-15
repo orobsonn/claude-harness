@@ -37,8 +37,10 @@ export const HAND_ROLES = Object.freeze([
 export const DELIVERY_ROLES = Object.freeze([...EYE_ROLES, ...HAND_ROLES]);
 /** Olho local de discussão: não pertence à cerimônia de delivery. */
 export const DISCUSSION_ROLES = Object.freeze(["harness-discussion-adversary"]);
+/** Diagnostic readers, never delivery approvals or implementation producers. */
+export const SUPPORT_ROLES = Object.freeze(["harness-support"]);
 /** Tudo que o runtime pode materializar, sombrear e despachar. */
-export const RUNTIME_ROLES = Object.freeze([...DELIVERY_ROLES, ...DISCUSSION_ROLES]);
+export const RUNTIME_ROLES = Object.freeze([...DELIVERY_ROLES, ...DISCUSSION_ROLES, ...SUPPORT_ROLES]);
 /** Revisores independentes que podem rodar em paralelo sobre o mesmo HEAD. */
 export const PARALLEL_REVIEW_ROLES = Object.freeze([
   "harness-adversary",
@@ -58,6 +60,7 @@ const POLICIES = Object.freeze(Object.fromEntries([
     Object.freeze({ tools: name === "harness-shipper" ? SHIPPER_TOOLS : HAND_TOOLS, kind: "hand" }),
   ]),
   ...DISCUSSION_ROLES.map((name) => [name, Object.freeze({ tools: EYE_TOOLS, kind: "discussion" })]),
+  ...SUPPORT_ROLES.map((name) => [name, Object.freeze({ tools: EYE_TOOLS, kind: "support" })]),
 ]));
 
 /** @param {unknown} name */
@@ -68,6 +71,10 @@ export function isCanonicalRole(name) {
 /** @param {unknown} name */
 export function isDiscussionRole(name) {
   return typeof name === "string" && DISCUSSION_ROLES.includes(name);
+}
+
+export function isSupportRole(name) {
+  return typeof name === "string" && SUPPORT_ROLES.includes(name);
 }
 
 /** @param {unknown} name */

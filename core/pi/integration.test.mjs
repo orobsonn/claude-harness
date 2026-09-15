@@ -211,6 +211,7 @@ test("regression: fresh official Pi vendor ships the bridge closure and its veri
   for (const relativePath of [
     "extensions/harness-subagents.ts",
     "lib/pi-review-concurrency.mjs",
+    "lib/plan-analysis.mjs",
     "runtime-defaults/harness.json",
     "vendor/shared/lib/review-report-schema.mjs",
   ]) {
@@ -218,6 +219,11 @@ test("regression: fresh official Pi vendor ships the bridge closure and its veri
   }
 
   const vendoredLauncher = await import(`${pathToFileURL(join(harnessRoot, "bin/pi-harness.mjs")).href}?test=${Date.now()}`);
+  for (const role of ['harness-planner', 'harness-plan-reviewer']) {
+    assert.match(readFileSync(join(harnessRoot, 'runtime-defaults/agents', `${role}.md`), 'utf8'), /tools:.*harness_plan_analysis/);
+  }
+  const analyzer = await import(pathToFileURL(join(harnessRoot, 'lib/plan-analysis.mjs')).href);
+  assert.equal(analyzer.analyzePiPlan({ root: target, featureId: 'absent' }).reason, 'plan missing');
   assert.deepEqual(vendoredLauncher.verifyPiHarness(harnessRoot), {
     ok: true,
     runtimeVersion: "0.84.4",

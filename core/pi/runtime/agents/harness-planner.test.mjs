@@ -5,6 +5,16 @@ import test from "node:test";
 
 const plannerPath = fileURLToPath(new URL("./harness-planner.md", import.meta.url));
 
+test('planner uses structural evidence after writing a draft without an approval dependency', () => {
+  const prompt = readFileSync(plannerPath, 'utf8');
+  assert.match(prompt, /tools:.*harness_plan_analysis/);
+  assert.match(prompt, /After writing a non-trivial draft/);
+  assert.match(prompt, /no prior approval is needed/);
+  assert.match(prompt, /partial coverage never block planning/);
+  assert.match(prompt, /Rollout atomicity does not require/);
+  assert.match(prompt, /Do not rewrite an admitted plan's ownership/);
+});
+
 test("planner Pi recebe o mesmo contrato estrutural de plano validado da lane OpenCode", () => {
   const prompt = readFileSync(plannerPath, "utf8");
 

@@ -4,6 +4,7 @@ import test from "node:test";
 import { findShadowedCanonicalRoles, piDispatchRoute, validateSubagentDispatch } from "./dispatch-rail.mjs";
 
 const INDEPENDENT_REVIEW_ROUTES = Object.freeze({
+  "harness-support": { model: "openai-codex/gpt-5.6-terra", thinking: "high" },
   "harness-adversary": { model: "openai-codex/gpt-5.6-sol", thinking: "medium" },
   "harness-discussion-adversary": { model: "openai-codex/gpt-5.6-sol", thinking: "medium" },
   "harness-plan-reviewer": { model: "openai-codex/gpt-6-astra", thinking: "high" },

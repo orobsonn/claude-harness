@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import harnessPlanningTools from "./harness-planning-tools.ts";
@@ -9,6 +9,41 @@ import { PLANNING_TOOLS } from "../lib/planning-tools.mjs";
 import { decidePiPolicy } from "../lib/policy.mjs";
 import { runNativeToolCall } from "./pi-native-tool.test.mjs";
 import { analyzeSource } from "../../claude-code/skills/creating-plans/references/complexity-scorer.mjs";
+
+test("native plan analysis is advisory, canonical, read-only and delivered to both planning roles", async (t) => {
+  const cwd = mkdtempSync(join(tmpdir(), "pi-plan-analysis-tool-"));
+  t.after(() => rmSync(cwd, { recursive: true, force: true }));
+  const tools = new Map();
+  await harnessPlanningTools({ registerTool: tool => tools.set(tool.name, tool) }, {
+    call: () => { throw Error("plan analysis must not use MCP"); },
+  });
+  mkdirSync(join(cwd, '.pi/harness/plans/demo'), { recursive: true });
+  const path = join(cwd, '.pi/harness/plans/demo/execution-plan.json');
+  const draft = JSON.stringify({ feature_id: 'demo', tasks: [{ id: 'a', scope_paths: ['new.ts'] }] });
+  writeFileSync(path, draft);
+  const tool = tools.get('harness_plan_analysis');
+  assert.deepEqual(tool.parameters.required, ['feature_id']);
+  for (const role of ['harness-planner', 'harness-plan-reviewer']) {
+    const sessionId = `analysis-${role}`;
+    assert.equal(writePiChildIdentity(cwd, { parentSessionId: 'parent', childSessionId: sessionId, role, callId: sessionId }).ok, true);
+    const ctx = { cwd, sessionManager: { getSessionId: () => sessionId, getHeader: () => ({ parentSession: 'parent' }) } };
+    const stateBefore = readdirSync(join(cwd, '.pi/harness'), { recursive: true }).sort();
+    const result = await runNativeToolCall({ tool, input: { feature_id: 'demo' }, ctx });
+    assert.equal(result.result.isError, false);
+    assert.equal(result.result.details.ok, true);
+    assert.equal(result.result.details.validation.ok, false);
+    assert.equal(result.result.details.coverage.paths[0].status, 'missing');
+    assert.equal((await tool.execute('absent', { feature_id: 'missing' }, undefined, undefined, ctx)).details.ok, false);
+    assert.deepEqual(readdirSync(join(cwd, '.pi/harness'), { recursive: true }).sort(), stateBefore);
+    assert.equal(readFileSync(path, 'utf8'), draft);
+  }
+  const denied = await tool.execute('spoof', { feature_id: 'demo' }, undefined, undefined,
+    { cwd, sessionManager: { getSessionId: () => 'unknown' } });
+  assert.equal(denied.details.available, false);
+  for (const role of ['harness-adversary', 'harness-security', 'harness-test-reviewer']) {
+    assert.equal(decidePiPolicy({ toolName: 'harness_plan_analysis' }, { reviewerRole: role }).block, true);
+  }
+});
 
 test("scorer takes an existing file path, not model-supplied pseudocode", async (t) => {
   const cwd = mkdtempSync(join(tmpdir(), "pi-file-scorer-"));

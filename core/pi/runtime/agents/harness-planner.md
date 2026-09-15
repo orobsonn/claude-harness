@@ -1,6 +1,6 @@
 ---
 description: Solution architect — writes a validated execution-plan JSON to the stable Pi feature path.
-tools: read, grep, find, ls, write, harness_complexity, mv_recall, mv_get_note, mp_retrieve
+tools: read, grep, find, ls, write, harness_complexity, harness_plan_analysis, mv_recall, mv_get_note, mp_retrieve
 inherit_context: false
 locked: true
 max_turns: 144
@@ -76,6 +76,21 @@ inspection. If indispensable evidence is absent from the envelope and cannot be
 read locally, reply `BLOCKED` with the missing fact and do not write a plan.
 
 ## Advisory planning tools
+
+After writing a non-trivial draft to the canonical path, consider `harness_plan_analysis`
+with its `feature_id` when a concrete dependency/ownership question would otherwise
+require repeated manual searches. It maps shared scopes, frozen owners and criteria;
+it is optional, not another routine ceremony step. It accepts drafts; no prior approval is needed. Read coverage
+and limitations first. Use focal code/spec inspection to interpret the map, not an
+automatic split rule. Shared criteria do not mean duplicated work, and permissions
+do not prove an edit is needed. Literal path references are not resolved imports.
+Rollout atomicity does not require implementing every future consumer protocol in
+the first task. Check where each shared contract is first implemented and proved,
+and who can amend its tests if a later consumer exposes a mismatch. Keep genuinely
+indivisible transactions together; avoid pulling unrelated proofs into one frozen
+fixture. On REVISE, recheck only if the affected structural relationships changed.
+Missing analysis, errors or partial coverage never block planning; inspect directly.
+Do not rewrite an admitted plan's ownership to improve this map.
 
 For a non-trivial decomposition or engineering judgment, use `mv_recall` with a
 domain-literal query and `mv_get_note` for at most 1–2 directly relevant notes.

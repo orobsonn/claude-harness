@@ -22,7 +22,7 @@ import { readPiSpecDraft } from "../lib/spec-approval.mjs";
 import { removePiChildIdentity, writePiChildIdentity } from "../lib/pi-child-identity.mjs";
 import { bindPiChildSession, removePiDispatchRecord } from "../lib/pi-state-records.mjs";
 import { parseTaskDispatchIdentity } from "../../opencode/lib/task-dispatch-identity.mjs";
-import { isDiscussionRole, isRuntimeRole } from "../lib/roles.mjs";
+import { isDiscussionRole, isSupportRole, isRuntimeRole } from "../lib/roles.mjs";
 import { classifyPiReviewDispatch } from "../lib/pi-review-concurrency.mjs";
 import {
   capturePiReviewInput,
@@ -117,7 +117,7 @@ export default function harnessEntryGate(pi: ExtensionAPI) {
       data.result = { ok: false, reason: "exact pending dispatch call, role, parent, and child required" };
       return;
     }
-    if (!isDiscussionRole(role)) {
+    if (!isDiscussionRole(role) && !isSupportRole(role)) {
       const decision = decidePiDispatchGate({
         projectRoot,
         sessionId: ownSessionId,
@@ -250,7 +250,7 @@ export default function harnessEntryGate(pi: ExtensionAPI) {
     if (!isPiDispatchTool(event?.toolName)) return;
     const args = piSubagentArgs(event?.input);
     // Discussão não inicia cerimônia e não ganha dispatch-record, identidade ou recibo de delivery.
-    if (isDiscussionRole(args.subagent_type)) return;
+    if (isDiscussionRole(args.subagent_type) || isSupportRole(args.subagent_type)) return;
     const decision = decidePiDispatchGate({
       projectRoot,
       sessionId,

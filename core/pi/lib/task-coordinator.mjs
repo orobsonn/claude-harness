@@ -668,6 +668,14 @@ function descendants(plan, taskId) {
 }
 
 /** Tool context supplies the native parent identity; parameters cannot choose paths or sessions. */
+export const TASK_ACTION_FIELDS = Object.freeze({
+  dispatch: Object.freeze(["action", "task_ids", "task_contexts"]),
+  status: Object.freeze(["action", "task_id"]),
+  integrate: Object.freeze(["action", "task_id", "attempt_id", "expected_head"]),
+  resume: Object.freeze(["action", "task_id", "attempt_id", "instruction"]),
+  "abandon-resume": Object.freeze(["action", "task_id", "attempt_id", "expected_head", "no_product_obligation", "reason"]),
+});
+
 export async function executeTaskAction(params, context = {}, injected = {}) {
   let lock;
   let registryPath;
@@ -682,15 +690,9 @@ export async function executeTaskAction(params, context = {}, injected = {}) {
       throw new Error(`task_ids is only valid for dispatch; use task_id for ${params.action}`);
     if (params.action === "dispatch" && params.task_id !== undefined)
       throw new Error("task_id is not valid for dispatch; use task_ids");
-    const allowed = {
-      dispatch: ["action", "task_ids", "task_contexts"],
-      status: ["action", "task_id"],
-      integrate: ["action", "task_id", "attempt_id", "expected_head"],
-      resume: ["action", "task_id", "attempt_id", "instruction"],
-      "abandon-resume": ["action", "task_id", "attempt_id", "expected_head", "no_product_obligation", "reason"],
-    }[params.action];
+    const allowed = TASK_ACTION_FIELDS[params.action];
     if (Object.keys(params).some((key) => !allowed.includes(key)))
-      throw new Error("unexpected task parameters");
+      throw new Error(`unexpected task parameters for ${params.action}; allowed: ${allowed.join(", ")}`);
     if (params.task_id !== undefined && !isSafeTaskId(params.task_id))
       throw new Error("safe task_id required");
     registryPath = taskRegistryPath(owner.root, owner.sessionId);

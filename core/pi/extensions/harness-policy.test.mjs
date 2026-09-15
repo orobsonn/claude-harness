@@ -329,7 +329,7 @@ test("reconciling permits plan reconciliation but no execution, shipping or fina
     writeFileSync(statePath, JSON.stringify({ ...state, ceremony_status: "reconciling" }));
     const run = (toolName, input = {}) => handler()({ toolName, input }, parentCtx(f.root));
     assert.equal(run("write", { path: "src/app.ts" })?.block, true);
-    for (const role of ["harness-planner", "harness-plan-reviewer"]) {
+    for (const role of ["harness-planner", "harness-plan-reviewer", "harness-support"]) {
       assert.equal(run("subagent", { subagent_type: role }), undefined, role);
     }
     for (const role of ["harness-executor", "harness-sniper", "harness-shipper", "harness-harvester", "harness-discussion-adversary", "harness-test-author"]) {

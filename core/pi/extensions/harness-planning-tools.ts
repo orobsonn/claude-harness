@@ -10,6 +10,7 @@ import { readPiChildIdentity } from "../lib/pi-child-identity.mjs";
 import { piSessionId } from "../lib/pi-adapter-map.mjs";
 import { resolveVerifiedPiRuntime } from "../lib/pi-runtime-cache.mjs";
 import { decidePiPolicy } from "../lib/policy.mjs";
+import { analyzePiPlan } from "../lib/plan-analysis.mjs";
 
 /** Reuse the operator-installed adapter; absence is normal, and no MCP mutation tool is registered. */
 export default async function harnessPlanningTools(pi: ExtensionAPI, deps: any = {}) {
@@ -60,6 +61,7 @@ export default async function harnessPlanningTools(pi: ExtensionAPI, deps: any =
     } catch { /* Optional host integration; use the spec and code when absent. */ }
   }
   const schemas: any = {
+    harness_plan_analysis: Type.Object({ feature_id: Type.String({ minLength: 1 }) }, { additionalProperties: false }),
     harness_complexity: Type.Object({ path: Type.String({ minLength: 1 }), responsibilities: Type.Optional(Type.Array(Type.String())) }, { additionalProperties: false }),
     mv_recall: Type.Object({ query: Type.String() }),
     mv_get_note: Type.Object({ id: Type.String() }),
@@ -67,13 +69,14 @@ export default async function harnessPlanningTools(pi: ExtensionAPI, deps: any =
   };
   for (const name of PLANNING_TOOLS) pi.registerTool({
     name, label: name,
-    description: name === "harness_complexity" ? "Pass an existing file path. The host reads the file and returns its complexity using the exact Claude Code scorer. No inline source or pseudocode. File complexity is advisory, not task complexity or an approval gate." : name === "mp_retrieve" ? "Read-only MP code adapter: grep, read, ls or glob. No model-supplied code or writes. Optional, best effort." : `Optional read-only Mind Vault ${name.slice(3)}. Spec and code remain authoritative.`,
+    description: name === "harness_plan_analysis" ? "Read-only evidence from the canonical draft/current plan by feature_id: declared dependencies, shared scopes, frozen owners, shared criteria and exact literal path references in named files. Not an architectural score, resolved import graph or approval gate. No writes or MCP required; inspect coverage and limitations." : name === "harness_complexity" ? "Pass an existing file path. The host reads the file and returns its complexity using the exact Claude Code scorer. No inline source or pseudocode. File complexity is advisory, not task complexity or an approval gate." : name === "mp_retrieve" ? "Read-only MP code adapter: grep, read, ls or glob. No model-supplied code or writes. Optional, best effort." : `Optional read-only Mind Vault ${name.slice(3)}. Spec and code remain authoritative.`,
     parameters: schemas[name],
     async execute(_id: string, input: any, signal: AbortSignal | undefined, _update: any, ctx: any) {
       const identity: any = readPiChildIdentity(ctx.cwd, piSessionId(ctx), { parentSessionId: ctx.sessionManager?.getHeader?.()?.parentSession });
       let result: any = { available: false, advisory: true, reason: "Planning tools belong to planner and plan-reviewer." };
       if (identity?.ok && isPlanningRole(identity.record.role)) {
-        if (name !== "harness_complexity") result = await planningRetrieval(name, input, async (...args: any[]) => {
+        if (name === "harness_plan_analysis") result = analyzePiPlan({ root: ctx.cwd, featureId: input.feature_id });
+        else if (name !== "harness_complexity") result = await planningRetrieval(name, input, async (...args: any[]) => {
           if (!Object.hasOwn(deps, "call") && !closed) await (loading ??= loadAdapter(ctx));
           if (typeof call !== "function" || closed || signal?.aborted) throw Error("MCP unavailable");
           return call(...args, ctx);

@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { parseTaskDispatchIdentity } from "../../opencode/lib/task-dispatch-identity.mjs";
-import { isParallelReviewRole, isRuntimeRole } from "./roles.mjs";
+import { isParallelReviewRole, isRuntimeRole, isSupportRole } from "./roles.mjs";
 
 const CHILD_SESSION_CREATED = "subagents:child:session-created";
 const CHILD_BOUND = "subagents:child:bound";
@@ -147,7 +147,7 @@ export function createPiReviewConcurrency(options = {}) {
             const job = {
               controller: undefined,
               execute,
-              exclusive: !identity.reviewPhase,
+              exclusive: !identity.reviewPhase && !isSupportRole(identity.subagentType),
               identity,
               onAbort: undefined,
               reject,
@@ -172,6 +172,7 @@ export function createPiReviewConcurrency(options = {}) {
           if (PARENT_READ_TOOLS.has(event?.toolName)) return null;
           if (event?.toolName === "harness_tasks" && ["status", "wait"].includes(event?.input?.action)) return null;
           if (event?.toolName === "subagent") {
+            if (isSupportRole(event?.input?.subagent_type)) return "reader";
             const review = classifyPiReviewDispatch(event?.input?.subagent_type, event?.input?.prompt);
             if (review) return "reader";
           }
