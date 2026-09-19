@@ -66,8 +66,9 @@ test("task coordinators assess security triggers beyond the status minimum", () 
 
 test("task briefs keep fidelity and implementation verdict formats distinct", () => {
   const task = readAsset("../prompts/harness-task-runtime.md");
-  assert.match(task, /Somente ao `harness-test-reviewer`.*começando.*única linha/is);
-  assert.match(task, /não peça repetir o verdict no fim/);
+  assert.match(task, /Somente ao `harness-test-reviewer`.*ferramentas primeiro.*resposta final.*única linha/is);
+  assert.match(task, /verdict escapar antes das ferramentas.*repetido.*início da resposta final/is);
+  assert.match(task, /retorno final sem verdict não é aprovação/is);
   assert.match(task, /adversary\/compliance\/security de implementação, peça JSON `issues`/);
 });
 

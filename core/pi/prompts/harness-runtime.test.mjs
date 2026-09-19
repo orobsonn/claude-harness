@@ -292,6 +292,12 @@ test("a fidelidade segue o contrato aprovado sem burocracia por rodada", () => {
   assert.match(prompt, /não repita uma varredura ampla/i);
   assert.match(testReviewer, /Given\/When\/Then/);
   assert.match(testReviewer, /On correction, recheck.*affected/is);
+  assert.match(testReviewer, /Do not emit a verdict.*turn.*requests tools.*provisional/is);
+  assert.match(testReviewer, /last assistant response.*review receipt/is);
+  assert.match(testReviewer, /repeat.*authoritative verdict.*final response/is);
+  assert.match(taskPrompt, /ferramentas primeiro.*resposta final.*Verdict: APPROVE\|REVISE\|BLOCKED/is);
+  assert.match(taskPrompt, /não.*comece exatamente.*sem qualificar.*resposta final/is);
+  assert.match(taskPrompt, /nunca infira.*APPROVE.*nenhum finding.*verdict provisório/is);
   assert.doesNotMatch(testReviewer, /require the\s+complete prior ledger|preserve every prior row|separate counterexample.*every internal decision/is);
   assert.doesNotMatch(testAuthor, /resolution map for every supplied finding ID and affected PASS/i);
   assert.doesNotMatch(taskPrompt, /ledger factual completo|ledger completo anterior|retorno\s+do test-author deve mapear cada finding e cada PASS/is);
