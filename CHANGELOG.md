@@ -5,6 +5,13 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [3.1.4](https://github.com/orobsonn/claude-harness/compare/v3.1.3...v3.1.4) (2026-09-19)
+
+
+### Bug Fixes
+
+* **pi:** admit focal tests in scope recovery ([#997](https://github.com/orobsonn/claude-harness/issues/997)) ([9783d1f](https://github.com/orobsonn/claude-harness/commit/9783d1f6c62f4198547729a6dde21dcc46a4c405))
+
 ## [3.1.3](https://github.com/orobsonn/claude-harness/compare/v3.1.2...v3.1.3) (2026-09-19)
 
 
