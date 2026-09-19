@@ -405,7 +405,7 @@ test("revisores de implementação podem compartilhar um lote identificado pela 
   assert.match(prompt, /mesmo lote.*compliance.*security/is);
   assert.match(prompt, /Em LIGHT, não despache olhos de implementação por tarefa/);
   assert.match(prompt, /Em FULL, despache compliance, adversary somente quando `task.adversarial.enabled` for `true`/);
-  assert.match(prompt, /re-gate.*regate-passed.*olho que produziu o finding.*obrigação ou trigger afetado.*saudáveis no HEAD da correção/is);
+  assert.match(prompt, /re-gate.*regate-passed.*papéis em `missing`.*olho que produziu o finding.*saudáveis no HEAD da correção.*irmãos já aceitos/is);
   assert.doesNotMatch(prompt, /Depois de cada mão de implementação, faça a revisão adversarial|após esse adversary concluir saudável/);
 });
 
@@ -421,6 +421,8 @@ test("concorrência limitada preserva barreira, fallback serial e retomada por r
     assert.match(source, /despache somente papéis em `missing`/);
     assert.match(source, /`affected_roles`/);
     assert.match(source, /`affected_reason`/);
+    assert.match(source, /Enquanto (?:existir|houver) papel\s+em `missing`.*não (?:use `affected_roles` para |pode )?reabrir um irmão\s+aceito/is);
+    assert.match(source, /commit\s+posterior e separado.*(?:obrigação ou trigger|obrigação.*trigger)/is);
     assert.doesNotMatch(source, /`missing`[^;\n]*recibo corrente saudável/);
   }
 });
