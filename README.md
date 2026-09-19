@@ -1,6 +1,6 @@
 # Claude Harness — da ideia a uma entrega verificável
 
-![version](https://img.shields.io/static/v1?label=version&message=3.1.1&color=blue) <!-- x-release-please-version --> ![primary](https://img.shields.io/badge/daily-Pi-6E56CF) ![validation](https://img.shields.io/badge/final%20validation-Codex-111827) ![runtimes](https://img.shields.io/badge/runtimes-Pi%20%C2%B7%20Codex%20%C2%B7%20Claude%20Code%20%C2%B7%20OpenCode-success)
+![version](https://img.shields.io/static/v1?label=version&message=3.1.2&color=blue) <!-- x-release-please-version --> ![primary](https://img.shields.io/badge/daily-Pi-6E56CF) ![validation](https://img.shields.io/badge/final%20validation-Codex-111827) ![runtimes](https://img.shields.io/badge/runtimes-Pi%20%C2%B7%20Codex%20%C2%B7%20Claude%20Code%20%C2%B7%20OpenCode-success)
 
 Eu criei este harness a partir de um problema que parece simples.
 
