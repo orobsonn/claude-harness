@@ -418,6 +418,9 @@ test("concorrência limitada preserva barreira, fallback serial e retomada por r
   assert.match(prompt, /somente.*missing/is);
   for (const source of [prompt, readFileSync(taskPromptPath, "utf8")]) {
     assert.match(source, /`missing` são obrigações ainda não satisfeitas, inclusive por negativo ou despacho\s+posterior/);
+    assert.match(source, /despache somente papéis em `missing`/);
+    assert.match(source, /`affected_roles`/);
+    assert.match(source, /`affected_reason`/);
     assert.doesNotMatch(source, /`missing`[^;\n]*recibo corrente saudável/);
   }
 });

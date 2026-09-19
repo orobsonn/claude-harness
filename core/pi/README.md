@@ -187,8 +187,13 @@ atual. Na fase task, lista `required`, `available`, `accepted` e `missing`: adve
 obrigatório; compliance e security de implementação são opcionais até serem despachados.
 Depois de qualquer despacho desses olhos, inclusive interrompido ou REVISE, a task exige
 um recibo atual e saudável daquele papel antes de integrar. `available` não torna todos
-os papéis obrigatórios. Na fase final, a consulta lista `accepted` e `missing`.
-Após retomada, despache os olhos aplicáveis pendentes. Mudar o conteúdo invalida a evidência anterior. O plano torna security final
+os papéis obrigatórios. Depois da primeira rodada, somente `missing` deve ser despachado.
+Um papel aceito cuja obrigação ou trigger explícito foi materialmente afetado pode ser
+movido para `missing` na consulta task com `affected_roles` e `affected_reason`; um HEAD
+novo sozinho não justifica repetir os irmãos. O entry-gate recusa o redispatch de papel
+que a consulta atual preservou em `accepted`. Na fase final, a consulta lista `accepted` e `missing`.
+Após retomada, despache os olhos aplicáveis pendentes. Na fase final, mudar o conteúdo
+invalida a evidência anterior; na task, vale a preservação seletiva descrita acima. O plano torna security final
 obrigatória com `final_review.security: true`; adversary e compliance são sempre exigidos.
 
 A fila é simples e vive na sessão; os recibos existentes são a autoridade de retomada.

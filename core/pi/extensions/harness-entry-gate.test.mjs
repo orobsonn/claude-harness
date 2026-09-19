@@ -23,7 +23,13 @@ import harnessTasks from "./harness-tasks.ts";
 import { readPiChildIdentity } from "../lib/pi-child-identity.mjs";
 import { claimPiDispatchForRuntime, readPiDispatchRecord } from "../lib/pi-state-records.mjs";
 import { writePiSpecDraft } from "../lib/spec-approval.mjs";
-import { missingPiReviewRoles } from "../lib/pi-review-evidence.mjs";
+import {
+  beginPiReviewReceipt,
+  capturePiReviewInput,
+  missingPiReviewRoles,
+  parsePiReviewCompletion,
+  recordPiReviewReceipt,
+} from "../lib/pi-review-evidence.mjs";
 import { registerPiCommandEvidence } from "../lib/pi-command-evidence.mjs";
 
 /** @description Fake do barramento de eventos do Pi (pi.events), por canal. */
@@ -83,12 +89,13 @@ const SESSION = "ses-pi-adapter";
 const FEATURE = "feat-pi-adapter";
 
 /** @description ctx do Pi: sessionId do sessionManager e sessão filha por header.parentSession. */
-function ctxOf(cwd, { child = false, sessionId = SESSION } = {}) {
+function ctxOf(cwd, { child = false, sessionId = SESSION, entries = [] } = {}) {
   return {
     cwd,
     sessionManager: {
       getSessionId: () => sessionId,
       getHeader: () => (child ? { parentSession: "ses-pi-parent" } : {}),
+      getEntries: () => entries,
     },
   };
 }
@@ -392,6 +399,179 @@ test("implementation eyes start after the selective commit and keep their one ac
         assert.deepEqual(missingPiReviewRoles(status), [role], "real content changes still invalidate the receipt");
       } finally { f.close(); }
     });
+  }
+});
+
+test("current harness_reviews status blocks accepted siblings and allows only missing or explicitly affected roles", async () => {
+  const f = fixture();
+  try {
+    const git = (...args) => execFileSync("git", args, { cwd: f.root, encoding: "utf8" }).trim();
+    git("init", "-q");
+    git("add", ".");
+    git("-c", "user.name=Pi", "-c", "user.email=pi@example.test", "commit", "-qm", "fixture");
+    const statePath = join(f.root, ".pi/harness/state", SESSION, "gate-state.json");
+    const state = JSON.parse(readFileSync(statePath, "utf8"));
+    writeFileSync(statePath, JSON.stringify({ ...state, spec_status: "adversary-reviewed", adversary_fired: true }));
+    const entries = [
+      {
+        type: "message",
+        message: { role: "assistant", stopReason: "toolUse", content: [
+          { type: "toolCall", id: "implementation", name: "subagent", arguments: {
+            subagent_type: "harness-executor", prompt: BRIEF,
+          } },
+        ] },
+      },
+      { type: "message", message: { role: "toolResult", toolCallId: "implementation", toolName: "subagent",
+        details: { status: "completed" }, isError: false, content: [] } },
+    ];
+    const ctx = ctxOf(f.root, { entries });
+    const prompt = (role) => role === "harness-adversary"
+      ? BRIEF
+      : `[HARNESS_TASK_REVIEW]\n${BRIEF}`;
+    for (const role of ["harness-adversary", "harness-security"]) {
+      const callId = `accepted-${role}`;
+      entries.push({
+        type: "message",
+        message: { role: "assistant", stopReason: "toolUse", content: [
+          { type: "toolCall", id: callId, name: "subagent", arguments: {
+            subagent_type: role, prompt: prompt(role), description: role,
+          } },
+        ] },
+      });
+      const input = { projectRoot: f.root, sessionId: SESSION, featureId: FEATURE,
+        phase: "task", taskId: "task-1", role, dispatchCallId: callId };
+      const captured = capturePiReviewInput(input);
+      assert.equal(captured.ok, true, captured.reason);
+      assert.equal(beginPiReviewReceipt(input).ok, true);
+      const agentId = `agent-${role}`;
+      const body = '{"issues":[]}';
+      const completion = parsePiReviewCompletion({
+        role, snapshotStart: captured.snapshot, snapshotEnd: captured.snapshot,
+        nativeRecord: { id: agentId, type: role, status: "completed", isBackground: false,
+          result: body, completedAt: 2 },
+        result: wrappedReviewResult(agentId, body),
+      });
+      assert.equal(completion.ok, true, completion.reason);
+      assert.equal(recordPiReviewReceipt({
+        ...input,
+        completion: completion.completion,
+        binding: { agentId, dispatchCallId: callId, childSessionId: `child-${role}` },
+      }).ok, true);
+    }
+
+    // A decisão vem dos recibos + session entries duráveis, não de cache de uma consulta anterior.
+    const h = handlers();
+    h.get("session_start")({}, ctx);
+    const dispatch = async (role, callId) => {
+      const input = { subagent_type: role, prompt: prompt(role), description: role };
+      // Pi may expose the assistant tool-call entry before the tool_call gate runs.
+      entries.push({ type: "message", message: { role: "assistant", stopReason: "toolUse", content: [
+        { type: "toolCall", id: callId, name: "subagent", arguments: input },
+      ] } });
+      return h.get("tool_call")({ toolName: "subagent", toolCallId: callId, input }, ctx);
+    };
+
+    for (const role of ["harness-adversary", "harness-security"]) {
+      const blocked = await dispatch(role, `dispatch-repeat-${role}`);
+      assert.equal(blocked?.block, true);
+      assert.match(blocked.reason, /already accepted.*dispatch only roles listed in missing/i);
+      assert.match(blocked.reason, /affected_roles/);
+    }
+    assert.equal(await dispatch("harness-compliance", "dispatch-missing"), undefined);
+    const duplicateMissing = await dispatch("harness-compliance", "dispatch-missing-again");
+    assert.equal(duplicateMissing?.block, true);
+    assert.match(duplicateMissing.reason, /already has a running/i);
+
+    const affectedDigest = capturePiReviewInput({ projectRoot: f.root, sessionId: SESSION,
+      featureId: FEATURE, phase: "task", taskId: "task-1" }).snapshot.input_digest;
+    h.get("tool_execution_start")({
+      toolName: "harness_reviews",
+      toolCallId: "status-affected",
+      args: {
+        phase: "task",
+        task_id: "task-1",
+        affected_roles: ["harness-security"],
+        affected_reason: "the correction changed external-input validation",
+      },
+    });
+    const beforeStatusResult = await dispatch("harness-security", "dispatch-before-status-result");
+    assert.equal(beforeStatusResult?.block, true, "the model cannot batch query and redispatch before host status exists");
+    assert.match(beforeStatusResult.reason, /already accepted/i);
+    h.get("tool_result")({
+      toolName: "harness_reviews",
+      toolCallId: "status-affected",
+      isError: false,
+      details: {
+        required: ["harness-adversary", "harness-compliance", "harness-security"],
+        available: ["harness-adversary", "harness-compliance", "harness-security"],
+        accepted: ["harness-adversary"],
+        missing: ["harness-compliance", "harness-security"],
+        affected: ["harness-security"],
+        review_input_digest: affectedDigest,
+      },
+    });
+
+    // A autorização é presa ao snapshot exato: um commit entre query e dispatch a invalida.
+    writeFileSync(join(f.root, "feature.ts"), "export const changed = true;\n");
+    git("add", "feature.ts");
+    git("-c", "user.name=Pi", "-c", "user.email=pi@example.test", "commit", "-qm", "product delta");
+    const staleAffected = await dispatch("harness-security", "dispatch-stale-affected");
+    assert.equal(staleAffected?.block, true);
+    assert.match(staleAffected.reason, /already accepted/i);
+
+    const currentDigest = capturePiReviewInput({ projectRoot: f.root, sessionId: SESSION,
+      featureId: FEATURE, phase: "task", taskId: "task-1" }).snapshot.input_digest;
+    h.get("tool_execution_start")({ toolName: "harness_reviews", toolCallId: "status-fresh-affected",
+      args: { phase: "task", task_id: "task-1", affected_roles: ["harness-security"], affected_reason: "changed trigger" } });
+    h.get("tool_result")({ toolName: "harness_reviews", toolCallId: "status-fresh-affected", isError: false,
+      details: { affected: ["harness-security"], review_input_digest: currentDigest } });
+    assert.equal(await dispatch("harness-security", "dispatch-affected-security"), undefined);
+    const duplicateAffected = await dispatch("harness-security", "dispatch-affected-security-again");
+    assert.equal(duplicateAffected?.block, true);
+    assert.match(duplicateAffected.reason, /already has a running/i);
+    const adversaryStillBlocked = await dispatch("harness-adversary", "dispatch-still-accepted");
+    assert.equal(adversaryStillBlocked?.block, true);
+  } finally {
+    f.close();
+  }
+});
+
+test("restart supersedes an orphan running review but still blocks a live duplicate", async () => {
+  const f = fixture();
+  try {
+    const git = (...args) => execFileSync("git", args, { cwd: f.root, encoding: "utf8" }).trim();
+    git("init", "-q");
+    git("add", ".");
+    git("-c", "user.name=Pi", "-c", "user.email=pi@example.test", "commit", "-qm", "fixture");
+    const statePath = join(f.root, ".pi/harness/state", SESSION, "gate-state.json");
+    const state = JSON.parse(readFileSync(statePath, "utf8"));
+    writeFileSync(statePath, JSON.stringify({ ...state, spec_status: "adversary-reviewed", adversary_fired: true }));
+    const orphanCallId = "orphan-security";
+    assert.equal(beginPiReviewReceipt({
+      projectRoot: f.root, sessionId: SESSION, featureId: FEATURE, phase: "task", taskId: "task-1",
+      role: "harness-security", dispatchCallId: orphanCallId,
+    }).ok, true);
+    const entries = [{
+      type: "message",
+      message: { role: "assistant", stopReason: "toolUse", content: [{
+        type: "toolCall", id: orphanCallId, name: "subagent", arguments: {
+          subagent_type: "harness-security", prompt: `[HARNESS_TASK_REVIEW]\n${BRIEF}`,
+        },
+      }] },
+    }];
+    const ctx = ctxOf(f.root, { entries });
+    const h = handlers();
+    h.get("session_start")({}, ctx);
+    const input = { subagent_type: "harness-security", prompt: `[HARNESS_TASK_REVIEW]\n${BRIEF}`,
+      description: "retry orphan" };
+    assert.equal(await h.get("tool_call")({ toolName: "subagent", toolCallId: "retry-security", input }, ctx), undefined);
+    const persisted = JSON.parse(readFileSync(statePath, "utf8"));
+    assert.equal(persisted.task_review_evidence[`${FEATURE}/task-1`].security.active_dispatch_call_id, "retry-security");
+    const duplicate = await h.get("tool_call")({ toolName: "subagent", toolCallId: "duplicate-security", input }, ctx);
+    assert.equal(duplicate?.block, true);
+    assert.match(duplicate.reason, /already has a running/i);
+  } finally {
+    f.close();
   }
 });
 

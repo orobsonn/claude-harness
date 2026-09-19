@@ -28,6 +28,10 @@ import {
   capturePiReviewInput,
   beginPiReviewReceipt,
   checkPiReviewPreparation,
+  findPiReviewReceipt,
+  isSatisfiedPiTaskReviewReceipt,
+  missingPiReviewRoles,
+  observedPiTaskReviewRoles,
   parsePiReviewCompletion,
   recordPiReviewReceipt,
   recordPiReviewFailure,
@@ -71,6 +75,13 @@ export default function harnessEntryGate(pi: ExtensionAPI) {
   let projectRoot = process.cwd();
   /** args do dispatch memorizados no início da tool, por toolCallId (só a tool `subagent`). */
   const pendingArgs = new Map<string, unknown>();
+  /** Escopo consultado pela tool host-owned `harness_reviews`, por toolCallId. */
+  const pendingReviewStatusArgs = new Map<string, { phase: "task" | "final"; taskId?: string }>();
+  /** Exceção explícita one-shot para olho task já aceito cuja obrigação/trigger mudou. */
+  const affectedReviewTokens = new Map<string, {
+    inputDigest: string;
+    roles: Set<string>;
+  }>();
   /** advisory não-bloqueante pendente de injeção no tool_result, por toolCallId. */
   const pendingAdvisory = new Map<string, string>();
   /** sessão filha ligada a cada dispatch em voo, por toolCallId (para limpar no fim). */
@@ -84,6 +95,9 @@ export default function harnessEntryGate(pi: ExtensionAPI) {
   /** Sessão exata capturada no session_start; o barramento é compartilhado entre pai e filhas. */
   let ownSessionId = "";
 
+  const reviewAuthorizationKey = (sessionId: string, phase: "task" | "final", taskId?: string) =>
+    `${sessionId}\0${phase}\0${taskId ?? ""}`;
+
   /** Só o resultado estruturado da tool nativa, não a prosa da filha, prova término saudável. */
   const successfulForegroundOutcome = (result: any, isError: unknown) => {
     const details = result && typeof result === "object" && !Array.isArray(result) ? result.details : null;
@@ -95,6 +109,7 @@ export default function harnessEntryGate(pi: ExtensionAPI) {
 
   pi.on("session_start", (_event, ctx: any) => {
     if (typeof ctx?.cwd === "string" && ctx.cwd.length > 0) projectRoot = ctx.cwd;
+    affectedReviewTokens.clear();
     try {
       ownSessionIsChild = isChildSession(ctx);
       ownSessionId = piSessionId(ctx) ?? "";
@@ -218,6 +233,15 @@ export default function harnessEntryGate(pi: ExtensionAPI) {
 
   pi.on("tool_execution_start", (event: any) => {
     try {
+      if (event?.toolName === "harness_reviews" && typeof event?.toolCallId === "string") {
+        const args = event?.args;
+        if (args?.phase === "task" && typeof args?.task_id === "string") {
+          pendingReviewStatusArgs.set(event.toolCallId, { phase: "task", taskId: args.task_id });
+        } else if (args?.phase === "final" && args?.task_id === undefined) {
+          pendingReviewStatusArgs.set(event.toolCallId, { phase: "final" });
+        }
+        return;
+      }
       if (!isPiDispatchTool(event?.toolName)) return;
       if (typeof event?.toolCallId === "string") pendingArgs.set(event.toolCallId, event?.args);
     } catch {
@@ -284,6 +308,62 @@ export default function harnessEntryGate(pi: ExtensionAPI) {
         ...(review.phase === "task" ? { taskId: review.taskId } : {}),
       });
       if (!captured.ok) return { block: true, reason: captured.reason };
+      const receipt = findPiReviewReceipt(loaded.state, {
+        featureId,
+        phase: review.phase,
+        taskId: review.taskId,
+        role: args.subagent_type,
+      });
+      const runningCallId = receipt?.status === "running" ? receipt.active_dispatch_call_id : undefined;
+      if (typeof runningCallId === "string" && reviewInputs.has(runningCallId)) {
+        return { block: true, reason: `[review-dispatch] Blocked: ${args.subagent_type} already has a running ${review.phase} review; wait for that exact dispatch to finish before querying or retrying.` };
+      }
+      let accepted = false;
+      if (review.phase === "task") {
+        const receiptDispatch = receipt?.active_dispatch_call_id ?? receipt?.dispatch_call_id;
+        const observed = observedPiTaskReviewRoles(ctx.sessionManager, review.taskId,
+          new Map([[args.subagent_type, receiptDispatch]]));
+        if (observed === null) {
+          return { block: true, reason: "Task review dispatch requires durable parent session entries." };
+        }
+        accepted = isSatisfiedPiTaskReviewReceipt(receipt, {
+          projectRoot,
+          sessionId,
+          featureId,
+          phase: "task",
+          taskId: review.taskId,
+          role: args.subagent_type,
+          snapshot: captured.snapshot,
+          dispatchCallId: observed.get(args.subagent_type)?.callId,
+          reviewAfterImplementation: observed.get(args.subagent_type)?.afterImplementation,
+        });
+      } else {
+        accepted = !missingPiReviewRoles({
+          projectRoot,
+          sessionId,
+          featureId,
+          phase: "final",
+          roles: [args.subagent_type],
+        }).includes(args.subagent_type);
+      }
+      const authorizationKey = reviewAuthorizationKey(sessionId, review.phase, review.taskId);
+      const token = affectedReviewTokens.get(authorizationKey);
+      if (token && token.inputDigest !== captured.snapshot.input_digest) {
+        affectedReviewTokens.delete(authorizationKey);
+      }
+      const explicitlyAffected = review.phase === "task" && token?.inputDigest === captured.snapshot.input_digest &&
+        token.roles.has(args.subagent_type);
+      if (accepted && !explicitlyAffected) {
+        const scope = review.phase === "task" ? `task_id=${JSON.stringify(review.taskId)}` : "phase=final";
+        const retry = review.phase === "task"
+          ? ` If this role's explicit obligation or trigger materially changed, call harness_reviews with phase=task, ${scope}, affected_roles=[${JSON.stringify(args.subagent_type)}], and a concrete affected_reason before retrying.`
+          : " Query harness_reviews again only after the final review input materially changes.";
+        return { block: true, reason: `[review-dispatch] Blocked: ${args.subagent_type} is already accepted for the current ${review.phase} review input; dispatch only roles listed in missing.${retry}` };
+      }
+      if (explicitlyAffected && token) {
+        token.roles.delete(args.subagent_type);
+        if (token.roles.size === 0) affectedReviewTokens.delete(authorizationKey);
+      }
       const started = beginPiReviewReceipt({ projectRoot, sessionId, featureId,
         phase: review.phase, taskId: review.taskId, role: args.subagent_type, dispatchCallId: event.toolCallId });
       if (!started.ok) return { block: true, reason: started.reason };
@@ -305,6 +385,21 @@ export default function harnessEntryGate(pi: ExtensionAPI) {
 
   pi.on("tool_result", (event: any) => {
     try {
+      if (event?.toolName === "harness_reviews" && typeof event?.toolCallId === "string") {
+        const scope = pendingReviewStatusArgs.get(event.toolCallId);
+        pendingReviewStatusArgs.delete(event.toolCallId);
+        const status = event?.details;
+        if (scope?.phase === "task" && event?.isError !== true && status && typeof status === "object" && !Array.isArray(status) &&
+            Array.isArray(status.affected) && typeof status.review_input_digest === "string" && ownSessionId) {
+          affectedReviewTokens.set(
+            reviewAuthorizationKey(ownSessionId, scope.phase, scope.taskId),
+            {
+              inputDigest: status.review_input_digest,
+              roles: new Set(status.affected.filter((role: unknown) => typeof role === "string")),
+            },
+          );
+        }
+      }
       const advisory =
         typeof event?.toolCallId === "string" ? pendingAdvisory.get(event.toolCallId) : undefined;
       if (typeof event?.toolCallId === "string") pendingAdvisory.delete(event.toolCallId);
@@ -323,6 +418,7 @@ export default function harnessEntryGate(pi: ExtensionAPI) {
     try {
       const callId = typeof event?.toolCallId === "string" ? event.toolCallId : "";
       if (callId) pendingAdvisory.delete(callId);
+      if (callId) pendingReviewStatusArgs.delete(callId);
       const reviewInput = callId ? reviewInputs.get(callId) : undefined;
       if (callId) reviewInputs.delete(callId);
       const planReviewInput = callId ? planReviewInputs.get(callId) : undefined;
