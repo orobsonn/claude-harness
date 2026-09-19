@@ -205,7 +205,11 @@ para despachar todas. Depois da primeira rodada, despache somente papéis em `mi
 um papel em `accepted` não é repetido só porque existe um HEAD mais novo. Se a correção
 alterou materialmente a obrigação ou um trigger explícito de um olho já aceito, consulte
 novamente com esse papel em `affected_roles` e descreva o nexo concreto em
-`affected_reason`; não marque todos como afetados por rotina. Aplique o modo LIGHT/FULL
+`affected_reason`; não marque todos como afetados por rotina. Enquanto houver papel
+em `missing`, a recuperação repete somente esse conjunto e não pode reabrir um irmão
+aceito; use `affected_roles` apenas depois de zerar `missing` e diante de um commit
+posterior e separado que mude materialmente uma obrigação ou trigger. O mesmo HEAD já
+revisado nunca é justificativa. Aplique o modo LIGHT/FULL
 e os triggers explícitos antes do primeiro despacho. Erro, aborto ou REVISE exige
 revalidar o olho responsável; não cria obrigação de repetir todos os outros olhos. Os relatórios de implementação usam `issues` para
 defeitos aplicáveis e bloqueantes; `follow_ups` opcional é somente diagnóstico para

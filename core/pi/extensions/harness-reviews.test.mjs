@@ -59,19 +59,18 @@ function reviewDispatch(role, taskId = TASK, { id = `call-${role}`, stopReason =
   };
 }
 
-function record(root, role, phase) {
+function record(root, role, phase, body = '{"issues":[]}', dispatchCallId = `call-${role}`) {
   const input = { projectRoot: root, sessionId: SESSION, featureId: FEATURE, phase, ...(phase === "task" ? { taskId: TASK } : {}) };
   const captured = capturePiReviewInput(input);
   assert.equal(captured.ok, true, captured.reason);
   const id = `agent-${role}`;
-  const body = '{"issues":[]}';
   const parsed = parsePiReviewCompletion({
     role, snapshotStart: captured.snapshot, snapshotEnd: captured.snapshot,
     nativeRecord: { id, type: role, status: "completed", isBackground: false, result: body, completedAt: 2 },
     result: { content: [{ type: "text", text: `Agent completed in 1s\nAgent ID: ${id}\n\n${body}` }], details: { agentId: id, status: "completed" } },
   });
   assert.equal(parsed.ok, true, parsed.reason);
-  const written = recordPiReviewReceipt({ ...input, completion: parsed.completion, binding: { agentId: id, dispatchCallId: `call-${role}`, childSessionId: `child-${role}` } });
+  const written = recordPiReviewReceipt({ ...input, completion: parsed.completion, binding: { agentId: id, dispatchCallId, childSessionId: `child-${role}` } });
   assert.equal(written.ok, true, written.reason);
 }
 
@@ -225,6 +224,28 @@ test("task re-gate can explicitly affect one accepted role without reopening its
   }
   const status = await tool();
   const reason = "the correction changed the external-input validation owned by security";
+  const withoutDelta = await status.execute("affected-without-delta", {
+    phase: "task",
+    task_id: TASK,
+    affected_roles: ["harness-security"],
+    affected_reason: reason,
+  }, undefined, undefined, f.ctx);
+  assert.equal(withoutDelta.isError, true);
+  assert.match(withoutDelta.details.reason, /separate committed task input.*current HEAD was already reviewed/i);
+
+  execFileSync("git", ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "--allow-empty", "-qm", "empty commit"], { cwd: f.root });
+  const emptyCommit = await status.execute("affected-after-empty-commit", {
+    phase: "task",
+    task_id: TASK,
+    affected_roles: ["harness-security"],
+    affected_reason: reason,
+  }, undefined, undefined, f.ctx);
+  assert.equal(emptyCommit.isError, true);
+  assert.match(emptyCommit.details.reason, /material committed tree delta.*empty commit/i);
+
+  writeFileSync(join(f.root, "feature.txt"), "behavior B");
+  execFileSync("git", ["add", "feature.txt"], { cwd: f.root });
+  execFileSync("git", ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-qm", "separate trigger change"], { cwd: f.root });
   const result = await status.execute("affected", {
     phase: "task",
     task_id: TASK,
@@ -242,6 +263,123 @@ test("task re-gate can explicitly affect one accepted role without reopening its
     affected_reason: reason,
   });
   assert.deepEqual(JSON.parse(result.content[0].text), publicDetails);
+});
+
+test("task recovery cannot reopen an accepted sibling while a negative reviewer remains missing", async (t) => {
+  const f = fixture(t);
+  implementationCompleted(f);
+  for (const role of ["harness-adversary", "harness-compliance"]) {
+    f.entries.push(reviewDispatch(role));
+  }
+  record(f.root, "harness-adversary", "task", JSON.stringify({
+    issues: [{
+      description: "The implementation accepts a malformed snapshot.",
+      scope: "src/feature.ts",
+      evidence: "The guard compares the raw value.",
+      fix_hint: "Validate the canonical value before writing.",
+      severity: "high",
+      category: "locked-decision",
+    }],
+  }));
+  record(f.root, "harness-compliance", "task");
+
+  const status = await tool();
+  const current = await status.execute("current", {
+    phase: "task",
+    task_id: TASK,
+  }, undefined, undefined, f.ctx);
+  assert.deepEqual(current.details.accepted, ["harness-compliance"]);
+  assert.deepEqual(current.details.missing, ["harness-adversary"]);
+
+  const reopened = await status.execute("reopen-sibling", {
+    phase: "task",
+    task_id: TASK,
+    affected_roles: ["harness-compliance"],
+    affected_reason: "the correction changed the central implementation",
+  }, undefined, undefined, f.ctx);
+  assert.equal(reopened.isError, true);
+  assert.match(reopened.details.reason, /finish the currently missing reviewers.*accepted siblings/i);
+
+  writeFileSync(join(f.root, "feature.txt"), "behavior B");
+  execFileSync("git", ["add", "feature.txt"], { cwd: f.root });
+  execFileSync("git", ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-qm", "finding fix"], { cwd: f.root });
+  f.entries.push(reviewDispatch("harness-adversary", TASK, { id: "adversary-recovery" }));
+  record(f.root, "harness-adversary", "task", '{"issues":[]}', "adversary-recovery");
+
+  const recovered = await status.execute("recovered", {
+    phase: "task",
+    task_id: TASK,
+  }, undefined, undefined, f.ctx);
+  assert.deepEqual(recovered.details.accepted, ["harness-adversary", "harness-compliance"]);
+  assert.deepEqual(recovered.details.missing, []);
+
+  const lateReopen = await status.execute("late-reopen-sibling", {
+    phase: "task",
+    task_id: TASK,
+    affected_roles: ["harness-compliance"],
+    affected_reason: "the earlier finding fix touched the central implementation",
+  }, undefined, undefined, f.ctx);
+  assert.equal(lateReopen.isError, true);
+  assert.match(lateReopen.details.reason, /separate committed task input.*current HEAD was already reviewed/i);
+
+  execFileSync("git", ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "--allow-empty", "-qm", "empty after recovery"], { cwd: f.root });
+  const emptyAfterRecovery = await status.execute("empty-after-recovery", {
+    phase: "task",
+    task_id: TASK,
+    affected_roles: ["harness-compliance"],
+    affected_reason: "an empty commit did not change the compliance obligation",
+  }, undefined, undefined, f.ctx);
+  assert.equal(emptyAfterRecovery.isError, true);
+  assert.match(emptyAfterRecovery.details.reason, /material committed tree delta.*empty commit/i);
+
+  writeFileSync(join(f.root, "feature.txt"), "behavior C");
+  execFileSync("git", ["add", "feature.txt"], { cwd: f.root });
+  execFileSync("git", ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-qm", "separate product change"], { cwd: f.root });
+  const separatelyAffected = await status.execute("separate-affected", {
+    phase: "task",
+    task_id: TASK,
+    affected_roles: ["harness-compliance"],
+    affected_reason: "a later product commit changed the compliance obligation",
+  }, undefined, undefined, f.ctx);
+  assert.equal(separatelyAffected.isError, undefined);
+  assert.deepEqual(separatelyAffected.details.accepted, ["harness-adversary"]);
+  assert.deepEqual(separatelyAffected.details.missing, ["harness-compliance"]);
+});
+
+test("a later revert reopens only the role whose newer accepted tree was reverted", async (t) => {
+  const f = fixture(t);
+  implementationCompleted(f);
+  for (const role of ["harness-adversary", "harness-compliance"]) f.entries.push(reviewDispatch(role));
+
+  record(f.root, "harness-compliance", "task");
+  writeFileSync(join(f.root, "feature.txt"), "behavior B");
+  execFileSync("git", ["add", "feature.txt"], { cwd: f.root });
+  execFileSync("git", ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-qm", "adversary finding fix"], { cwd: f.root });
+  record(f.root, "harness-adversary", "task");
+
+  writeFileSync(join(f.root, "feature.txt"), "behavior A");
+  execFileSync("git", ["add", "feature.txt"], { cwd: f.root });
+  execFileSync("git", ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-qm", "revert finding fix"], { cwd: f.root });
+
+  const status = await tool();
+  const adversaryAffected = await status.execute("reopen-reverted-role", {
+    phase: "task",
+    task_id: TASK,
+    affected_roles: ["harness-adversary"],
+    affected_reason: "the later commit reverted the tree accepted by adversary",
+  }, undefined, undefined, f.ctx);
+  assert.equal(adversaryAffected.isError, undefined);
+  assert.deepEqual(adversaryAffected.details.accepted, ["harness-compliance"]);
+  assert.deepEqual(adversaryAffected.details.missing, ["harness-adversary"]);
+
+  const complianceUnaffected = await status.execute("keep-role-that-reviewed-restored-tree", {
+    phase: "task",
+    task_id: TASK,
+    affected_roles: ["harness-compliance"],
+    affected_reason: "the current tree is the same tree compliance already accepted",
+  }, undefined, undefined, f.ctx);
+  assert.equal(complianceUnaffected.isError, true);
+  assert.match(complianceUnaffected.details.reason, /affected role baseline.*already-reviewed tree/i);
 });
 
 test("affected_roles is task-only, paired with a reason, unique, and limited to accepted roles", async (t) => {
