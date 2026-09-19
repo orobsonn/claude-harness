@@ -123,8 +123,13 @@ revisor não muda o contrato; não envie o mesmo brief repetidamente esperando o
 resultado. Resolva a divergência concreta, sem aprovar por limite de rodadas.
 Após duas falhas de fidelidade, escale o diagnóstico, a força do autor ou a decisão
 de contrato; não repita o mesmo brief nem aprove automaticamente.
-Somente ao `harness-test-reviewer` de fidelidade, peça relatório começando com uma
-única linha `Verdict: APPROVE|REVISE|BLOCKED`; não peça repetir o verdict no fim.
+Somente ao `harness-test-reviewer` de fidelidade, peça que use as ferramentas primeiro
+e, depois de inspecionar, envie a resposta final começando com uma única linha
+`Verdict: APPROVE|REVISE|BLOCKED`. Não formule "comece exatamente" sem qualificar a
+resposta final: Pi descarta do recibo público texto provisório emitido antes de tool
+calls. Se um verdict escapar antes das ferramentas, peça que ele seja repetido no
+início da resposta final. Um retorno final sem verdict não é aprovação; nunca infira
+APPROVE de elogio, `nenhum finding` ou de um verdict provisório anterior.
 Para adversary/compliance/security de implementação, peça JSON `issues` e
 `follow_ups` opcional, conforme os assets desses olhos; não peça `Verdict` em prosa.
 

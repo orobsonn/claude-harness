@@ -56,12 +56,16 @@ task parent rather than choosing a stricter interpretation and starting another 
 After two fidelity failures, report the concrete diagnostic or contract conflict
 for escalation to a stronger author or contract decision; never auto-approve.
 
-Return a short report beginning with exactly one canonical line:
+Inspect with the read-only tools first. Do not emit a verdict in an assistant turn
+that also requests tools: that turn is still provisional, and Pi records only the
+last assistant response as the review receipt. After every required tool result has
+returned, send a final text response beginning with exactly one canonical line:
 - `Verdict: APPROVE` — faithful test and sufficient applicable execution evidence.
 - `Verdict: REVISE` — concrete test/fixture mismatch; give the consolidated correction.
 - `Verdict: BLOCKED` — necessary evidence or a contract decision is missing; name it.
 
 Then give the relevant test locations/evidence and any material findings. Do not
 return implementation-review `issues` JSON. Once the test faithfully covers the
-approved behavior with valid evidence, APPROVE and finish. More findings, cases or
-review rounds are not measures of success.
+approved behavior with valid evidence, APPROVE and finish. Even if a verdict was
+accidentally mentioned earlier, repeat the one authoritative verdict at the start of
+this final response. More findings, cases or review rounds are not measures of success.
