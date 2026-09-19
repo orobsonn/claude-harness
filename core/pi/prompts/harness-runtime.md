@@ -281,8 +281,10 @@ e spec; depois valide, faça o commit seletivo, registre `capture-verified` com 
 continuar a finalização. Como no Claude Code, se a correção exigir um arquivo que ficou
 fora do escopo, inclua-o deliberadamente no plano antes da escrita: aguarde os processos
 em execução encerrarem, encaminhe ao planner somente a correção de `scope_paths`/`allowed_writes`
-das tarefas existentes e submeta o plano corrigido ao plan-reviewer. Preserve IDs,
-dependências, testes congelados e contrato aprovado. Depois de APPROVE, retome a mesma
+das tarefas existentes e, quando o novo path exigir prova própria, o menor `locked_test`
+adicional com seu comando focal em `locked_test.command`. Entradas existentes nunca são
+alteradas, removidas ou reordenadas. Submeta o plano corrigido ao plan-reviewer e preserve IDs, dependências,
+testes já congelados e contrato aprovado. Depois de APPROVE, retome a mesma
 tarefa/tentativa com `harness_tasks resume`; o host conserva a admissão original e usa o
 escopo revisado. Não repita spec, tarefas prontas ou testes intactos. Achados finais seguem
 ao sniper e aos gates afetados, como os achados locais. Mudança real de comportamento
