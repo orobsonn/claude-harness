@@ -347,6 +347,7 @@ test("o prompt exige vermelho executável antes do fidelity-pass", () => {
   assert.match(prompt, /dependência.*ausente|runner.*ausente/i);
   assert.match(prompt, /fidelity-pass/i);
   assert.match(prompt, /harness-test-reviewer.*fidelity-pass.*capture-verified/is);
+  assert.match(prompt, /\[HARNESS_CANONICAL_TASK\].*plano estável.*nunca substitui nem resume/is);
 });
 
 test("o prompt obriga o orquestrador a tratar achados de olhos sem criar burocracia artificial", () => {
@@ -447,6 +448,7 @@ test("finding de produto preserva fidelidade e autoria só reabre por contrato d
 
   assert.match(prompt, /finding de produto segue ao sniper sem repetir fidelidade/);
   assert.match(prompt, /Reabra test-author somente por teste\/fixture congelado incorreto, mudança do contrato aprovado ou observável aprovado concretamente sem cobertura/);
+  assert.match(prompt, /hand-finished.*capture-verified.*rail de dispatch nega test-author.*eventos nativos.*DONE.*commit de produto.*descendente estrito/is);
   assert.doesNotMatch(prompt, /defeito real sem cobertura pede regressão focal/);
   assert.match(sniper, /never edit.*frozen acceptance test/i);
   assert.match(sniper, /return.*parent.*harness-test-author/is);

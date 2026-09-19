@@ -203,7 +203,16 @@ export function decidePiPlanGate(event = {}, deps = {}) {
       if (!["low", "medium", "high", "max"].includes(plannedComplexity) || (!inherited && declaredComplexity !== plannedComplexity)) {
         return deny(`dispatch complexity conflicts with stable plan task (${declaredComplexity || "(missing)"} != ${plannedComplexity || "(missing)"})`);
       }
-      if (isTestAuthorRole(role)) return { block: false, complexity: plannedComplexity, ...(warn ? { warn } : {}) };
+      if (isTestAuthorRole(role)) return {
+        block: false,
+        complexity: plannedComplexity,
+        // A mesma tarefa já validada pelo gate alimenta o transporte canônico do
+        // test-author/test-reviewer. Não releia nem reconstrua esse contrato a partir
+        // da paráfrase do pai: isso perderia precisamente as condições que distinguem
+        // uma prova fiel de uma versão mais fraca.
+        canonicalTask: task,
+        ...(warn ? { warn } : {}),
+      };
     }
 
     // Deliberadamente NÃO muta args.prompt: o brief é o transporte do modelo.
