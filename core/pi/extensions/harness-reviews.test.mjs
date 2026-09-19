@@ -151,12 +151,22 @@ test("task status keeps a dispatched optional reviewer required after REVISE or 
     } },
     reviewDispatch("harness-security", TASK, { id: "call-security" }),
   );
+  const base = { projectRoot: f.root, sessionId: SESSION, featureId: FEATURE, phase: "task", taskId: TASK };
+  assert.equal(beginPiReviewReceipt({ ...base, role: "harness-compliance", dispatchCallId: "call-compliance" }).ok, true);
+  assert.equal(recordPiReviewFailure({ ...base, role: "harness-compliance", dispatchCallId: "call-compliance",
+    reason: "review requested a correction" }).ok, true);
+  assert.equal(beginPiReviewReceipt({ ...base, role: "harness-security", dispatchCallId: "call-security" }).ok, true);
   const result = await (await tool()).execute("status", { phase: "task", task_id: TASK }, undefined, undefined, f.ctx);
   assert.deepEqual(result.details, {
     required: ["harness-compliance", "harness-security"],
     available: [...PARALLEL_REVIEW_ROLES],
     accepted: [],
     missing: ["harness-compliance", "harness-security"],
+    diagnostics: [{
+      role: "harness-compliance",
+      reason: "review requested a correction",
+      dispatch_call_id: "call-compliance",
+    }],
   });
 });
 
@@ -200,8 +210,57 @@ test("a new optional dispatch revokes its older successful receipt", async (t) =
   const f = fixture(t);
   record(f.root, "harness-security", "task");
   f.entries.push(reviewDispatch("harness-security", TASK, { id: "security-second" }));
+  assert.equal(beginPiReviewReceipt({ projectRoot: f.root, sessionId: SESSION, featureId: FEATURE,
+    phase: "task", taskId: TASK, role: "harness-security", dispatchCallId: "security-second" }).ok, true);
   const result = await (await tool()).execute("pending", { phase: "task", task_id: TASK }, undefined, undefined, f.ctx);
   assert.deepEqual(result.details.missing, ["harness-security"]);
+});
+
+test("task re-gate can explicitly affect one accepted role without reopening its siblings", async (t) => {
+  const f = fixture(t);
+  implementationCompleted(f);
+  for (const role of ["harness-adversary", "harness-security"]) {
+    f.entries.push(reviewDispatch(role));
+    record(f.root, role, "task");
+  }
+  const status = await tool();
+  const reason = "the correction changed the external-input validation owned by security";
+  const result = await status.execute("affected", {
+    phase: "task",
+    task_id: TASK,
+    affected_roles: ["harness-security"],
+    affected_reason: reason,
+  }, undefined, undefined, f.ctx);
+  const { review_input_digest: reviewInputDigest, ...publicDetails } = result.details;
+  assert.match(reviewInputDigest, /^[0-9a-f]{64}$/);
+  assert.deepEqual(publicDetails, {
+    required: ["harness-security"],
+    available: [...PARALLEL_REVIEW_ROLES],
+    accepted: ["harness-adversary"],
+    missing: ["harness-security"],
+    affected: ["harness-security"],
+    affected_reason: reason,
+  });
+  assert.deepEqual(JSON.parse(result.content[0].text), publicDetails);
+});
+
+test("affected_roles is task-only, paired with a reason, unique, and limited to accepted roles", async (t) => {
+  const f = fixture(t);
+  implementationCompleted(f);
+  f.entries.push(reviewDispatch("harness-security"));
+  record(f.root, "harness-security", "task");
+  const status = await tool();
+  const invalid = [
+    { phase: "task", task_id: TASK, affected_roles: ["harness-security"] },
+    { phase: "task", task_id: TASK, affected_reason: "changed trigger" },
+    { phase: "task", task_id: TASK, affected_roles: ["harness-security", "harness-security"], affected_reason: "changed trigger" },
+    { phase: "task", task_id: TASK, affected_roles: ["harness-compliance"], affected_reason: "not accepted" },
+    { phase: "final", affected_roles: ["harness-security"], affected_reason: "final input changed" },
+  ];
+  for (const args of invalid) {
+    const result = await status.execute("invalid-affected", args, undefined, undefined, f.ctx);
+    assert.equal(result.isError, true, JSON.stringify(args));
+  }
 });
 
 test("status rejects ancestral review dispatched before implementation completion", async (t) => {

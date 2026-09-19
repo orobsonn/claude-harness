@@ -201,9 +201,13 @@ não é um defeito; peça evidência adicional somente para uma dúvida concreta
 Consulte `harness_reviews` na fase `task`: `required` são obrigações já ativadas e
 `missing` são obrigações ainda não satisfeitas, inclusive por negativo ou despacho
 posterior; `available` são opções, não uma ordem
-para despachar todas. Aplique o modo LIGHT/FULL e os triggers explícitos antes do primeiro
-despacho. Erro, aborto ou REVISE exige revalidar o olho responsável; não cria obrigação
-de repetir todos os outros olhos. Os relatórios de implementação usam `issues` para
+para despachar todas. Depois da primeira rodada, despache somente papéis em `missing`;
+um papel em `accepted` não é repetido só porque existe um HEAD mais novo. Se a correção
+alterou materialmente a obrigação ou um trigger explícito de um olho já aceito, consulte
+novamente com esse papel em `affected_roles` e descreva o nexo concreto em
+`affected_reason`; não marque todos como afetados por rotina. Aplique o modo LIGHT/FULL
+e os triggers explícitos antes do primeiro despacho. Erro, aborto ou REVISE exige
+revalidar o olho responsável; não cria obrigação de repetir todos os outros olhos. Os relatórios de implementação usam `issues` para
 defeitos aplicáveis e bloqueantes; `follow_ups` opcional é somente diagnóstico para
 achados explicitamente preexistentes, fora de escopo ou residuais aceitos, com evidência.
 Não mova defeito atual para follow-up. Preserve esses diagnósticos no retorno ao pai,

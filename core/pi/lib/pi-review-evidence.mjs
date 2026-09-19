@@ -6,6 +6,7 @@ import crypto from "node:crypto";
 import { execFileSync } from "node:child_process";
 
 import { withGateStateLock } from "../../opencode/lib/gate-state.mjs";
+import { parseTaskDispatchIdentity } from "../../opencode/lib/task-dispatch-identity.mjs";
 import { validateReviewReport } from "../../shared/lib/review-report-schema.mjs";
 import { isSafeFeatureId, isSafeSessionId, isSafeTaskId } from "../../shared/lib/feature-id.mjs";
 import { piExecutionPlanPath, piGateStatePath, piSpecPath } from "./pi-paths.mjs";
@@ -13,6 +14,7 @@ import { isPiReviewSecretPath } from "./policy.mjs";
 import { isParallelReviewRole } from "./roles.mjs";
 import { checkPiFinalCommands } from "./pi-command-evidence.mjs";
 import { postHarvestReviewSnapshot } from "./memory-cycle.mjs";
+import { classifyPiReviewDispatch } from "./pi-review-concurrency.mjs";
 
 const HEX_256 = /^[0-9a-f]{64}$/;
 
@@ -37,6 +39,39 @@ function splitZero(value) {
 }
 
 const PREPARATION_REASON = "Uncommitted review input: inspect the pending paths and make the selective implementation/fix commit before implementation or final eyes. Do not rewrite receipts or discard unrelated changes.";
+
+/** Project only structured native dispatches from the append-only parent session. */
+export function observedPiTaskReviewRoles(sessionManager, taskId, receiptDispatchByRole) {
+  let entries;
+  try { entries = sessionManager?.getEntries?.(); } catch { return null; }
+  if (!Array.isArray(entries)) return null;
+  const observed = new Map();
+  const implementationCalls = new Set();
+  let implementationCompleted = false;
+  for (const entry of entries) {
+    const message = entry?.type === "message" ? entry.message : null;
+    if (message?.role === "toolResult" && implementationCalls.has(message.toolCallId) &&
+        message.isError !== true && message.details?.status === "completed") implementationCompleted = true;
+    if (message?.role !== "assistant" || !Array.isArray(message.content) ||
+        message.stopReason === "aborted" || message.stopReason === "error") continue;
+    for (const block of message.content) {
+      if (block?.type !== "toolCall" || block.name !== "subagent" ||
+          !block.arguments || typeof block.arguments !== "object" || Array.isArray(block.arguments)) continue;
+      const review = classifyPiReviewDispatch(block.arguments.subagent_type, block.arguments.prompt);
+      if (["harness-executor", "harness-sniper"].includes(block.arguments.subagent_type) &&
+          parseTaskDispatchIdentity(block.arguments.prompt).taskId === taskId) implementationCalls.add(block.id);
+      if (review?.phase === "task" && review.taskId === taskId) {
+        const expectedCallId = receiptDispatchByRole instanceof Map
+          ? receiptDispatchByRole.get(block.arguments.subagent_type)
+          : undefined;
+        if (receiptDispatchByRole instanceof Map && block.id !== expectedCallId) continue;
+        observed.set(block.arguments.subagent_type,
+          { callId: block.id, afterImplementation: implementationCompleted });
+      }
+    }
+  }
+  return observed;
+}
 
 /** Secrets and volatile host state are rejected by path before any worktree bytes are read. */
 function excluded(root, relativePath) {

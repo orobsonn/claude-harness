@@ -62,6 +62,10 @@ sessão pai local, usando a pipeline nativa de mãos, fidelidade, freeze, captur
   por task pode manter satisfeita a obrigação de um olho não afetado, mas não certifica
   o novo HEAD; a revisão final global é fresca e permanece dual
   (compliance/adversary), ou triad quando security se aplica, inclusive em LIGHT.
+  Depois da primeira rodada, despache somente os papéis que `harness_reviews` listar em
+  `missing`. Se a correção mudar materialmente a obrigação ou um trigger de um papel em
+  `accepted`, passe apenas esse papel em `affected_roles` com um `affected_reason`
+  concreto; HEAD novo por si só não reabre os olhos irmãos.
 - Antes do primeiro lote FULL, avalie a mudança efetiva: `required` de `harness_reviews`
   mostra o mínimo já ativado, não uma classificação completa de aplicabilidade.
   A ausência de security nessa lista não o dispensa. Seguindo o Claude, despache
