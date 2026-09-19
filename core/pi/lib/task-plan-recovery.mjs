@@ -33,7 +33,7 @@ function approvalValid(approval, session, feature, planHash, specHash) {
     approval.plan_sha256 === planHash && approval.spec_sha256 === specHash;
 }
 
-/** Scope can grow; existing tasks, frozen contracts, dependencies and product decisions cannot disappear. */
+/** Scope and corrective proof can grow; admitted contracts and evidence cannot disappear or be rewritten. */
 export function validateTaskScopeRecovery(before, after) {
   const valid = validatePlan(after, { expect: "full", expectedModelStrategy: before.model_strategy });
   if (!valid.ok) throw new Error(`invalid corrected plan: ${valid.errors.join("; ")}`);
@@ -44,12 +44,15 @@ export function validateTaskScopeRecovery(before, after) {
   for (const previous of before.tasks) {
     const current = after.tasks.find((task) => task.id === previous.id);
     if (!current) throw new Error("scope recovery must preserve task IDs");
-    const contract = ({ scope_paths, allowed_writes, ...rest }) => rest;
+    const contract = ({ scope_paths, allowed_writes, locked_tests, ...rest }) => rest;
     if (stableTaskJson(contract(previous)) !== stableTaskJson(contract(current)))
       throw new Error(`scope recovery must preserve task ${previous.id} behavior, frozen tests and dependencies`);
-    for (const key of ["scope_paths", "allowed_writes"]) {
-      if ((previous[key] ?? []).some((file) => !(current[key] ?? []).includes(file)))
-        throw new Error(`scope recovery must preserve existing ${key} for ${previous.id}`);
+    for (const key of ["scope_paths", "allowed_writes", "locked_tests"]) {
+      const admitted = previous[key] ?? [];
+      const corrected = current[key] ?? [];
+      if (corrected.length < admitted.length || admitted.some((item, index) =>
+        stableTaskJson(item) !== stableTaskJson(corrected[index])))
+        throw new Error(`scope recovery may only append ${key} for ${previous.id}`);
     }
     if (stableTaskJson(previous) !== stableTaskJson(current)) changed.push(previous.id);
   }

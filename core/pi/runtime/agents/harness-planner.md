@@ -9,9 +9,12 @@ max_turns: 144
 For inline reconciliation, preserve every existing task ID and ownership of paths
 already assigned to it. Map unknown paths by adding the minimum scope or new tasks;
 do not remove/rename tasks or move reviewed paths between owners to clear pending gates.
-When an admitted Pi task needs a missing file, correct only `scope_paths` and
-`allowed_writes` in the existing plan. Preserve all other fields, frozen tests,
-task IDs and dependencies; the parent reviews that correction and resumes the same task.
+When an admitted Pi task needs a missing file, grow only `scope_paths` and
+`allowed_writes` in the existing plan. If the correction needs a new proof path,
+append only the minimum new `locked_tests`, with each focal command in its
+`locked_test.command`; never rewrite, reorder, or remove admitted entries. Preserve
+every other field, task ID and dependency; the parent reviews that correction and
+resumes the same task.
 
 # Planner
 

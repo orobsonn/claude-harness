@@ -254,6 +254,12 @@ test("Claude Code scope correction flows through planner review and the same Pi 
   const corrected = structuredClone(f.plan);
   corrected.tasks[0].scope_paths.push("src/audit.mjs");
   corrected.tasks[0].allowed_writes = ["src/audit-helper.mjs"];
+  corrected.tasks[0].locked_tests.push({
+    id: "a-audit-recovery",
+    path: "tests/a-audit.test.mjs",
+    assertion: "Given recovered audit scope When written Then the focused proof fails before implementation",
+    command: "npm test -- tests/a-audit.test.mjs",
+  });
   const planPath = path.join(f.dir, ".pi/harness/plans/feature/execution-plan.json");
   write(planPath, corrected);
   const resume = { action: "resume", task_id: "a", attempt_id: a.attempt_id,
@@ -271,11 +277,15 @@ test("Claude Code scope correction flows through planner review and the same Pi 
   const binding = readTaskRunBinding(a.worktree, "local-a");
   assert.equal(binding.ok, true, binding.reason);
   assert.ok(binding.task.scope_paths.includes("src/audit.mjs"));
+  assert.equal(binding.task.locked_tests.at(-1).path, "tests/a-audit.test.mjs");
   assert.ok(binding.recovered_task_contract_sha256);
   const writer = canonicalPiDispatchFromPlan(a.worktree, "feature", "a", "harness-sniper");
   assert.equal(writer.ok, true, writer.reason);
   assert.ok(writer.scopePaths.includes("src/audit.mjs"));
   assert.ok(writer.allowedWrites.includes("src/audit-helper.mjs"));
+  const testAuthor = canonicalPiDispatchFromPlan(a.worktree, "feature", "a", "harness-test-author");
+  assert.equal(testAuthor.ok, true, testAuthor.reason);
+  assert.ok(testAuthor.scopePaths.includes("tests/a-audit.test.mjs"));
   assert.equal(fs.readFileSync(a.grant_path, "utf8"), grant);
   assert.equal(fs.readFileSync(`${a.grant_path}.claim`, "utf8"), claim);
   assert.equal(f.registry().tasks.a.attempt_id, a.attempt_id);
@@ -292,7 +302,10 @@ test("scope port preserves contracts and refuses changing plans underneath a run
   for (const change of [
     (plan) => plan.tasks.pop(),
     (plan) => { plan.tasks[0].scope_paths = []; },
+    (plan) => { plan.tasks[0].scope_paths.unshift("src/inserted-before-admission.mjs"); },
     (plan) => { plan.tasks[0].locked_tests[0].assertion = "Given less When less Then less"; },
+    (plan) => { plan.tasks[0].locked_tests.unshift({ id: "replacement", path: "tests/replacement.test.mjs", assertion: "replacement" }); },
+    (plan) => { plan.tasks[0].verification_commands = ["rm -rf unsafe-placeholder"]; },
     (plan) => { plan.tasks[0].depends_on = ["b"]; },
     (plan) => { plan.feature_id = "different"; },
   ]) {
@@ -300,6 +313,15 @@ test("scope port preserves contracts and refuses changing plans underneath a run
     change(altered);
     assert.throws(() => validateTaskScopeRecovery(f.plan, altered));
   }
+  const admittedWithAllowedWrites = structuredClone(f.plan);
+  admittedWithAllowedWrites.tasks[0].allowed_writes = ["src/original.mjs"];
+  const insertedAllowedWrite = structuredClone(admittedWithAllowedWrites);
+  insertedAllowedWrite.tasks[0].allowed_writes.unshift("src/inserted.mjs");
+  assert.throws(() => validateTaskScopeRecovery(admittedWithAllowedWrites, insertedAllowedWrite));
+  const additive = structuredClone(f.plan);
+  additive.tasks[0].scope_paths.push("src/audit.mjs");
+  additive.tasks[0].locked_tests.push({ id: "audit-proof", path: "tests/audit.test.mjs", assertion: "audit proof", command: "npm test -- tests/audit.test.mjs" });
+  assert.deepEqual(validateTaskScopeRecovery(f.plan, additive), ["a"]);
   const current = structuredClone(f.plan);
   current.tasks[0].scope_paths.push("src/audit.mjs");
   write(path.join(f.dir, ".pi/harness/plans/feature/execution-plan.json"), current);
