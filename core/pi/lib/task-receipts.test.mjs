@@ -143,7 +143,11 @@ function inspectionFixture({ historicFailure = false, frozenFixture = false } = 
     event("tool_execution_start", { toolCallId: "fidelity", toolName: "mark", args: { action: "fidelity", task_id: TASK } }),
     event("tool_execution_end", { toolCallId: "fidelity", toolName: "mark", isError: false, result: { details: { ok: true } } }),
     event("tool_execution_start", { toolCallId: "producer", toolName: "subagent", args: { subagent_type: "harness-executor", prompt: `[HARNESS_TASK_CONTEXT]{"task_id":"${TASK}"}[/HARNESS_TASK_CONTEXT]` } }),
-    event("tool_execution_end", { toolCallId: "producer", toolName: "subagent", isError: false, result: { details: { status: "completed" } } }),
+    event("tool_execution_end", { toolCallId: "producer", toolName: "subagent", isError: false, result: {
+      content: [{ type: "text", text: "Implementation complete.\nStatus: DONE" }], details: { status: "completed" } } }),
+    event("tool_execution_start", { toolCallId: "product-commit", toolName: "bash", args: { command: "git commit -m \"implement\"" } }),
+    event("tool_execution_end", { toolCallId: "product-commit", toolName: "bash", isError: false,
+      result: { content: [{ type: "text", text: `[task ${head.slice(0, 7)}] implement` }] } }),
   ];
   const makeLaunch = (runId, pid, lifecycle, eventLines = calls) => {
     const dir = path.join(jobRoot, runId);
@@ -431,7 +435,10 @@ function testOnlyRecovery({ capturedImplementation = true, productDelta = false,
     run(f.root, "git", "add", "src/task.mjs");
     run(f.root, "git", "commit", "-m", "new implementation after integration");
     f.head = baseline = run(f.root, "git", "rev-parse", "HEAD");
-    add("fresh-producer", "subagent", { subagent_type: "harness-executor", prompt }, { details: { status: "completed" } });
+    add("fresh-producer", "subagent", { subagent_type: "harness-executor", prompt }, {
+      content: [{ type: "text", text: "Implementation complete.\nStatus: DONE" }], details: { status: "completed" } });
+    add("fresh-product-commit", "bash", { command: "git commit -m \"implement\"" }, {
+      content: [{ type: "text", text: `[task ${f.head.slice(0, 7)}] implement` }] });
   }
   const implementationCallId = freshImplementation ? "fresh-producer" + suffix : "producer";
   const capture = () => add("prior-capture", "mark", { action: "capture-verified", task_id: TASK },
@@ -496,6 +503,100 @@ test("a captured implementation survives a reviewed test-only correction without
   assert.equal(inspected.result.freeze_sha, f.head);
   assert.equal(inspected.result.hand_capture.freeze_sha, f.recoveryBaseline);
   assert.equal(inspected.result.hand_capture.recovery_origin.head_sha, f.recoveryBaseline);
+});
+
+test("the first scoped test-author freeze recovers a missing pre-author capture without fabricating a writer", () => {
+  const f = testOnlyRecovery({ capturedImplementation: false });
+  const inspected = inspectTaskRun(f.entry, f.dependencies);
+  assert.equal(inspected.ok, true, inspected.reason);
+  assert.equal(inspected.result.hand_capture.recovery_origin.head_sha, f.recoveryBaseline);
+  assert.equal(inspected.result.hand_capture.recovery_origin.producer_call_id, "producer");
+  assert.equal(inspected.result.hand_capture.recovery_origin.derived_from, "pre-author-product-commit");
+});
+
+test("legacy missing-capture recovery rejects absent commit proof, BLOCKED implementation and HEAD-to-HEAD inference", () => {
+  const missingCommit = testOnlyRecovery({ capturedImplementation: false });
+  const eventsPath = missingCommit.entry.launches.at(-1).events_path;
+  const withoutCommit = fs.readFileSync(eventsPath, "utf8").trim().split("\n")
+    .filter((line) => JSON.parse(line).toolCallId !== "product-commit");
+  write(eventsPath, withoutCommit.join("\n") + "\n");
+  assert.match(inspectTaskRun(missingCommit.entry, missingCommit.dependencies).reason, /clean captured implementation/);
+
+  const blocked = testOnlyRecovery({ capturedImplementation: false });
+  const blockedPath = blocked.entry.launches.at(-1).events_path;
+  const blockedEvents = fs.readFileSync(blockedPath, "utf8").trim().split("\n").map((line) => {
+    const item = JSON.parse(line);
+    if (item.type === "tool_execution_end" && item.toolCallId === "producer") {
+      item.result.content = [{ type: "text", text: "Implementation incomplete.\nStatus: BLOCKED" }];
+    }
+    return JSON.stringify(item);
+  });
+  write(blockedPath, blockedEvents.join("\n") + "\n");
+  assert.match(inspectTaskRun(blocked.entry, blocked.dependencies).reason, /clean captured implementation/);
+
+  const sameHead = testOnlyRecovery({ capturedImplementation: false });
+  const handPath = path.join(sameHead.root, ".pi/harness/state/hand-records", FEATURE, CHILD, `${TASK}.json`);
+  const hand = JSON.parse(fs.readFileSync(handPath, "utf8"));
+  write(handPath, { ...hand, freezeCommitSha: sameHead.head });
+  const state = JSON.parse(fs.readFileSync(sameHead.statePath, "utf8"));
+  state.capture_verified = [`${FEATURE}/${TASK}@${sameHead.head}`];
+  write(sameHead.statePath, state);
+  assert.match(inspectTaskRun(sameHead.entry, sameHead.dependencies).reason, /clean captured implementation/);
+
+  const overlapping = testOnlyRecovery({ capturedImplementation: false });
+  const overlappingPath = overlapping.entry.launches.at(-1).events_path;
+  const overlappingEvents = fs.readFileSync(overlappingPath, "utf8").trim().split("\n");
+  const commitEnd = overlappingEvents.findIndex((line) => {
+    const item = JSON.parse(line);
+    return item.type === "tool_execution_end" && item.toolCallId === "product-commit";
+  });
+  const [lateEnd] = overlappingEvents.splice(commitEnd, 1);
+  const authorStart = overlappingEvents.findIndex((line) => {
+    const item = JSON.parse(line);
+    return item.type === "tool_execution_start" && item.toolCallId === "correct-author";
+  });
+  overlappingEvents.splice(authorStart + 1, 0, lateEnd);
+  write(overlappingPath, overlappingEvents.join("\n") + "\n");
+  assert.match(inspectTaskRun(overlapping.entry, overlapping.dependencies).reason, /clean captured implementation/);
+
+  const mentioned = testOnlyRecovery({ capturedImplementation: false });
+  const mentionedPath = mentioned.entry.launches.at(-1).events_path;
+  const mentionedEvents = fs.readFileSync(mentionedPath, "utf8").trim().split("\n").map((line) => {
+    const item = JSON.parse(line);
+    if (item.type === "tool_execution_start" && item.toolCallId === "product-commit") {
+      item.args.command = "git log -1 --format='commit %H' # git commit";
+    }
+    return JSON.stringify(item);
+  });
+  write(mentionedPath, mentionedEvents.join("\n") + "\n");
+  assert.match(inspectTaskRun(mentioned.entry, mentioned.dependencies).reason, /clean captured implementation/);
+
+  const skipped = testOnlyRecovery({ capturedImplementation: false });
+  const skippedPath = skipped.entry.launches.at(-1).events_path;
+  const skippedEvents = fs.readFileSync(skippedPath, "utf8").trim().split("\n").map((line) => {
+    const item = JSON.parse(line);
+    if (item.type === "tool_execution_start" && item.toolCallId === "product-commit") {
+      item.args.command = `false && git commit -m ignored; git show -s --format='commit %H' ${skipped.recoveryBaseline}`;
+    }
+    return JSON.stringify(item);
+  });
+  write(skippedPath, skippedEvents.join("\n") + "\n");
+  assert.match(inspectTaskRun(skipped.entry, skipped.dependencies).reason, /clean captured implementation/);
+
+  const expanded = testOnlyRecovery({ capturedImplementation: false });
+  const expandedPath = expanded.entry.launches.at(-1).events_path;
+  const expandedEvents = fs.readFileSync(expandedPath, "utf8").trim().split("\n").map((line) => {
+    const item = JSON.parse(line);
+    if (item.type === "tool_execution_start" && item.toolCallId === "product-commit") {
+      item.args.command = "git add . && git commit -m * && git status --short && git log -1 --format='format:[fake %H]'";
+    }
+    if (item.type === "tool_execution_end" && item.toolCallId === "product-commit") {
+      item.result.content = [{ type: "text", text: `[fake ${expanded.recoveryBaseline}]` }];
+    }
+    return JSON.stringify(item);
+  });
+  write(expandedPath, expandedEvents.join("\n") + "\n");
+  assert.match(inspectTaskRun(expanded.entry, expanded.dependencies).reason, /clean captured implementation/);
 });
 
 function reconciledTestRecovery({ productDelta = false, memoryDelta = false } = {}) {
@@ -670,7 +771,7 @@ test("integrated recovery rejects product drift, later writers and forged recove
 });
 
 test("test-only recovery cannot cover an uncaptured implementation, product drift or later writer", () => {
-  for (const options of [{ capturedImplementation: false }, { productDelta: true }, { laterWriter: true },
+  for (const options of [{ capturedImplementation: false, extraAuthor: true }, { productDelta: true }, { laterWriter: true },
     { earlierAuthorProductDrift: true }, { lateCapture: true }, { failedWriter: true },
     { overlappingCapture: true }, { originOverride: { head_sha: undefined } },
     { originOverride: { worktree_clean: false } }, { originOverride: { producer_call_id: "foreign" } },
@@ -681,7 +782,7 @@ test("test-only recovery cannot cover an uncaptured implementation, product drif
 });
 
 test("uncaptured recovery reports a current upstream blocker without authorizing integration", () => {
-  const f = testOnlyRecovery({ capturedImplementation: false });
+  const f = testOnlyRecovery({ capturedImplementation: false, extraAuthor: true });
   const head = run(f.root, "git", "rev-parse", "HEAD");
   const content = "BLOCKED: current RED requires correction in upstream task-3 before this task can finish.";
   const context = { version: 1, kind: "task-context-return", session_id: CHILD, task_id: TASK,
@@ -707,6 +808,21 @@ test("inspectTaskRun issues a child-bound receipt from native lifecycle, fidelit
   assert.equal(inspected.result.latest_run_id, "run-current");
   assert.deepEqual(inspected.result.changed_paths, ["src/task.mjs", "src/task.spec.mjs"]);
   assert.match(inspected.result.frozen_blobs["src/task.spec.mjs"], /^[0-9a-f]{64}$/);
+});
+
+test("ordinary fidelity keeps accepting a staged freeze commit chain outside legacy recovery", () => {
+  const fixture = inspectionFixture();
+  const eventsPath = fixture.entry.launches.at(-1).events_path;
+  const events = fs.readFileSync(eventsPath, "utf8").trim().split("\n").map((line) => {
+    const item = JSON.parse(line);
+    if (item.type === "tool_execution_start" && item.toolCallId === "freeze") {
+      item.args.command = 'git add src/task.spec.mjs && git commit -m "freeze tests"';
+    }
+    return JSON.stringify(item);
+  });
+  write(eventsPath, events.join("\n") + "\n");
+  const inspected = inspectTaskRun(fixture.entry, fixture.dependencies);
+  assert.equal(inspected.ok, true, inspected.reason);
 });
 
 test("pinned runtimes with the dedicated test reviewer cannot use compliance as new fidelity evidence", () => {
@@ -1252,7 +1368,11 @@ test("inspectTaskRun rejects implementation evidence that only predates fidelity
   const fixture = inspectionFixture();
   const eventsPath = fixture.entry.launches.at(-1).events_path;
   const lines = fs.readFileSync(eventsPath, "utf8").trimEnd().split("\n");
-  const producer = lines.splice(-2);
+  const producerIndex = lines.findIndex((line) => {
+    const item = JSON.parse(line);
+    return item.type === "tool_execution_start" && item.toolCallId === "producer";
+  });
+  const producer = lines.splice(producerIndex, 2);
   lines.splice(3, 0, ...producer);
   write(eventsPath, `${lines.join("\n")}\n`);
 
@@ -2247,10 +2367,16 @@ test("a new implementation after integration supplies the origin for its own tes
   const checked = inspectTaskRun(again.entry, again.dependencies);
   assert.equal(checked.ok, true, checked.reason);
   assert.equal(checked.result.hand_capture.recovery_origin.producer_call_id, "fresh-producer");
+
+  const recovered = testOnlyRecovery({ integrated: true, freshImplementation: true, capturedImplementation: false });
+  const recoveredInspection = inspectTaskRun(recovered.entry, recovered.dependencies);
+  assert.equal(recoveredInspection.ok, true, recoveredInspection.reason);
+  assert.equal(recoveredInspection.result.hand_capture.recovery_origin.producer_call_id, "fresh-producer");
+  assert.equal(recoveredInspection.result.hand_capture.recovery_origin.derived_from, "pre-author-product-commit");
 });
 
-test("new implementation cannot fall back to old integration when its clean capture is missing or invalid", () => {
-  for (const options of [{ capturedImplementation: false }, { lateCapture: true }, { productDelta: true },
+test("new implementation cannot fall back to old integration when capture evidence is invalid or product changed", () => {
+  for (const options of [{ lateCapture: true }, { productDelta: true },
     { originOverride: { producer_call_id: "producer" } }, { originOverride: { worktree_clean: false } }]) {
     const f = testOnlyRecovery({ integrated: true, freshImplementation: true, ...options });
     const inspected = inspectTaskRun(f.entry, f.dependencies);

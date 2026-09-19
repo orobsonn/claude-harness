@@ -81,6 +81,8 @@ test("test-author inherits missing complexity, preserves explicit match and deni
       const { decision } = dispatch(f.root, { role: "harness-test-author", extra: { complexity } });
       assert.equal(decision.block, false, decision.reason);
       assert.equal(decision.complexity, "medium");
+      assert.equal(decision.canonicalTask.id, "task-1");
+      assert.equal(decision.canonicalTask.description, "Consume the stable plan directly.");
     }
     for (const complexity of ["high", "", null]) assert.equal(dispatch(f.root, { role: "harness-test-author", extra: { complexity } }).decision.block, true);
     assert.equal(dispatch(f.root, { extra: { complexity: undefined } }).decision.block, true);
