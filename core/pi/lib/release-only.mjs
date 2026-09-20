@@ -14,6 +14,7 @@ import { decideMergeChecks } from "../../shared/lib/merge-check-gate.mjs";
 
 const RELEASE_BRANCH = /^chore\/release-(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const RELEASE_SUBJECT = /^chore: release v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?: \(#([1-9]\d*)\))?$/;
+const RELEASE_PREPARE_SUBJECT = /^chore: prepare release v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const TASK = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
 const GIT_SHA = /^[0-9a-f]{7,64}$/;
 const FULL_GIT_SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
@@ -285,7 +286,10 @@ export function classifyPiReleaseOnly(projectRoot) {
     const match = RELEASE_BRANCH.exec(branch);
     if (!match) return { ok: false, reason: "release branch is not exact" };
     const version = `${match[1]}.${match[2]}.${match[3]}`;
-    if (git(projectRoot, ["log", "-1", "--format=%s"]) !== `chore: release v${version}`) {
+    const subject = git(projectRoot, ["log", "-1", "--format=%s"]);
+    const prepared = RELEASE_PREPARE_SUBJECT.exec(subject);
+    if (subject !== `chore: release v${version}` &&
+        (!prepared || `${prepared[1]}.${prepared[2]}.${prepared[3]}` !== version)) {
       return { ok: false, reason: "release commit subject does not match branch version" };
     }
 

@@ -817,6 +817,48 @@ test("fluxo pós-merge libera shipper, tag exata e publicação presa ao commit 
   }
 });
 
+test("merge do PR prepare-release reutiliza registry no HEAD funcional anterior ao squash", async () => {
+  const f = postMergeGateFixture({ functional: true });
+  try {
+    fixtureGit(f.root, ["commit", "-q", "--amend", "-m", "chore: prepare release v1.2.4"]);
+    const releaseHead = fixtureGit(f.root, ["rev-parse", "HEAD"]);
+    const seenHeads = [];
+    const result = await decidePiBashGate({
+      projectRoot: f.root,
+      sessionId: SESSION,
+      command: "gh pr merge 42 --squash",
+      env: {},
+      isAncestorFn: () => false,
+      gitStateFn: () => ({ branch: "chore/release-1.2.4", commitsAhead: 1, defaultBranch: "main" }),
+      loadGateStateFn: stateOf({
+        classified: true,
+        mode: "FULL",
+        feature_id: FEATURE,
+        task_pipeline_version: 1,
+        regate_pending: [`${FEATURE}/old-task`],
+        regate_passed: [`${FEATURE}/old-task@${OLD_RELEASE_TASK_SHA}`],
+      }),
+      readReviewPlanFn: () => ({ ok: true, plan: { tasks: [{ id: "task-1" }] } }),
+      readAllIntegratedTaskEvidenceFn: ({ headSha }) => {
+        seenHeads.push(headSha);
+        return { ok: headSha === f.functionalHeadSha };
+      },
+      readMergedReleaseEvidenceFn: (sha) => sha === f.baseSha ? f.functionalEvidence() : null,
+      readMergeCheckEvidenceFn: () => ({
+        statusCheckRollup: [{ conclusion: "SUCCESS" }],
+        headRefOid: releaseHead,
+        headRefName: "chore/release-1.2.4",
+        baseRefName: "main",
+        baseRefOid: f.baseSha,
+      }),
+    });
+    assert.equal(result.decision, "allow", result.reason);
+    assert.deepEqual(seenHeads, [releaseHead, f.functionalHeadSha]);
+  } finally {
+    f.close();
+  }
+});
+
 test("release no WT original reutiliza integrações do produto squashado sem markers globais e prende a tag ao merge", async () => {
   const f = postMergeGateFixture({ functional: true });
   try {
