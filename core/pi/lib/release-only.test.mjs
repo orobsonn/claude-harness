@@ -214,6 +214,27 @@ test("classifica um único commit release-only limpo sobre origin/main", async (
   }
 });
 
+test("classifica o assunto prepare release usado pelo shipper sem relaxar versão ou conteúdo", async () => {
+  const f = releaseFixture();
+  try {
+    git(f.root, ["commit", "-q", "--amend", "-m", "chore: prepare release v1.2.4"]);
+    const headSha = git(f.root, ["rev-parse", "HEAD"]);
+    const { classifyPiReleaseOnly } = await subject();
+    assert.deepEqual(classifyPiReleaseOnly(f.root), {
+      ok: true,
+      branch: "chore/release-1.2.4",
+      version: "1.2.4",
+      headSha,
+      baseSha: f.baseSha,
+      baseBranch: "main",
+    });
+    git(f.root, ["commit", "-q", "--amend", "-m", "chore: prepare release v1.2.5"]);
+    assert.equal(classifyPiReleaseOnly(f.root).ok, false, "branch/subject version mismatch must remain denied");
+  } finally {
+    f.close();
+  }
+});
+
 test("classifica o commit release-only já mergeado em main pelo PR e CI exatos", async () => {
   const f = releaseFixture();
   try {
