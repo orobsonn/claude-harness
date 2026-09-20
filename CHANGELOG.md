@@ -5,6 +5,13 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [3.2.0](https://github.com/orobsonn/claude-harness/compare/v3.1.9...v3.2.0) (2026-09-20)
+
+
+### Features
+
+* **pi:** add Jev fidelity shadow ([#1009](https://github.com/orobsonn/claude-harness/issues/1009)) ([d98e3fd](https://github.com/orobsonn/claude-harness/commit/d98e3fd14f33d748832d6f1fb067f1918528abf1))
+
 ## [3.1.9](https://github.com/orobsonn/claude-harness/compare/v3.1.8...v3.1.9) (2026-09-20)
 
 
