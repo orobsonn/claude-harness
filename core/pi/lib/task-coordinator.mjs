@@ -308,9 +308,16 @@ function reconcileMerge(owner, registry, persist) {
   entry.status = "integrated";
   delete entry.reason;
   delete registry.integration_intent;
-  if (registry.correction_barrier?.task_id === entry.task_id)
-    delete registry.correction_barrier;
+  completeCorrectionBarrier(registry, entry.task_id);
   persist();
+}
+function completeCorrectionBarrier(registry, taskId) {
+  if (registry.correction_barrier?.task_id !== taskId) return;
+  const restored = registry.correction_barrier_stack?.pop();
+  if (restored) registry.correction_barrier = restored;
+  else delete registry.correction_barrier;
+  if (!registry.correction_barrier_stack?.length)
+    delete registry.correction_barrier_stack;
 }
 function invalidateAggregate(owner, registry, persist) {
   const reset = withGateStateLock(
@@ -839,10 +846,19 @@ export async function executeTaskAction(params, context = {}, injected = {}) {
         throw new Error("Orca global workspace identity changed");
       registry.orca_parent ??= deps.orcaBackend.parent;
     }
+    const barrierTaskId = registry.correction_barrier?.task_id;
+    const nestedOwnerRecovery = barrierTaskId &&
+      params.action === "resume" &&
+      params.task_id !== barrierTaskId &&
+      registry.tasks[params.task_id]?.integration &&
+      descendants(artifacts.plan, params.task_id).includes(barrierTaskId);
+    const idempotentIntegratedRetry = params.action === "integrate" &&
+      registry.tasks[params.task_id]?.status === "integrated" &&
+      registry.tasks[params.task_id]?.integration?.child_head === params.expected_head;
     if (
       registry.correction_barrier &&
       (params.action === "dispatch" ||
-        params.task_id !== registry.correction_barrier.task_id)
+        (params.task_id !== barrierTaskId && !nestedOwnerRecovery && !idempotentIntegratedRetry))
     )
       throw new Error(
         `Correction of ${registry.correction_barrier.task_id} must be integrated before other task changes`,
@@ -1035,7 +1051,7 @@ export async function executeTaskAction(params, context = {}, injected = {}) {
       entry.result = checked.result;
       entry.status = "integrated";
       delete entry.reason;
-      delete registry.correction_barrier;
+      completeCorrectionBarrier(registry, entry.task_id);
       // No launch, hand, review or prior receipt is removed or rewritten. The
       // global final eyes invalidated at resume remain invalidated.
       persist();
@@ -1111,6 +1127,8 @@ export async function executeTaskAction(params, context = {}, injected = {}) {
         entry.integration_history.push(entry.integration);
         entry.result_history ??= {};
         entry.result_history[entry.integration.result_sha256] = entry.result;
+        if (registry.correction_barrier && registry.correction_barrier.task_id !== entry.task_id)
+          (registry.correction_barrier_stack ??= []).push(registry.correction_barrier);
         registry.correction_barrier = {
           task_id: entry.task_id,
           attempt_id: entry.attempt_id,

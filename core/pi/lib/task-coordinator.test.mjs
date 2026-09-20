@@ -1120,6 +1120,82 @@ test("integrated dependent recovery uses the real receipt reader while its own c
   assert.equal(fs.readFileSync(path.join(f.c.worktree, "src/a.mjs"), "utf8"), "export const a=2;");
 });
 
+test("a pending dependent correction can hand recovery back to its integrated owner", async (t) => {
+  const f = await pendingCorrectionFixture(t);
+  const firstDependentHead = git(f.c.worktree, "rev-parse", "HEAD");
+  assert.equal((await f.action({ action: "integrate", task_id: "c", attempt_id: f.c.attempt_id,
+    expected_head: firstDependentHead })).ok, true);
+  await f.correct();
+  assert.equal((await f.resumeC()).ok, true);
+  const pendingDependent = f.registry().tasks.c;
+  assert.equal(f.registry().correction_barrier.task_id, "c");
+  assert.equal(pendingDependent.integration, null);
+
+  const nested = await f.resumeA();
+  assert.equal(nested.ok, true, nested.reason);
+  let registry = f.registry();
+  assert.equal(registry.correction_barrier.task_id, "a",
+    "the product owner temporarily becomes the only active correction");
+  assert.equal(registry.tasks.c.integration, null,
+    "the dependent remains pending rather than receiving a false approval");
+  assert.ok(registry.tasks.c.reconciliation_required.upstreams.a,
+    "the pending dependent must reconcile the new owner receipt before another review");
+
+  fs.writeFileSync(path.join(f.a.worktree, "src/a.mjs"), "export const a=3;");
+  git(f.a.worktree, "add", "src/a.mjs");
+  git(f.a.worktree, "commit", "-qm", "correct owner again");
+  assert.equal((await f.action({ action: "integrate", task_id: "a", attempt_id: f.a.attempt_id,
+    expected_head: git(f.a.worktree, "rev-parse", "HEAD") })).ok, true);
+  assert.equal(f.registry().correction_barrier.task_id, "c",
+    "the suspended dependent correction resumes after the owner integrates");
+
+  const resumedDependent = await f.resumeC();
+  assert.equal(resumedDependent.ok, true, resumedDependent.reason);
+  registry = f.registry();
+  assert.equal(registry.correction_barrier.task_id, "c");
+  assert.equal(registry.tasks.c.reconciliation_required, undefined);
+  assert.equal(registry.tasks.c.reconciliations.at(-1).written_by, "host-task-reconciliation");
+});
+
+test("nested owner integration journal recovery is idempotent after restoring the dependent barrier", async (t) => {
+  const f = await pendingCorrectionFixture(t);
+  assert.equal((await f.action({ action: "integrate", task_id: "c", attempt_id: f.c.attempt_id,
+    expected_head: git(f.c.worktree, "rev-parse", "HEAD") })).ok, true);
+  await f.correct();
+  assert.equal((await f.resumeC()).ok, true);
+  assert.equal((await f.resumeA()).ok, true);
+
+  fs.writeFileSync(path.join(f.a.worktree, "src/a.mjs"), "export const a=3;");
+  git(f.a.worktree, "add", "src/a.mjs");
+  git(f.a.worktree, "commit", "-qm", "correct owner before interrupted integration");
+  await f.action({ action: "status", task_id: "a" });
+  const registry = f.registry();
+  const entry = registry.tasks.a;
+  const parent = git(f.dir, "rev-parse", "HEAD");
+  const child = entry.result.child_head;
+  const { hashTaskReceipt } = await import("./task-contract.mjs");
+  registry.integration_intent = {
+    task_id: "a",
+    attempt_id: entry.attempt_id,
+    parent_head: parent,
+    child_head: child,
+    tree: git(f.dir, "merge-tree", "--write-tree", parent, child),
+    result_sha256: hashTaskReceipt(entry.result),
+  };
+  write(taskRegistryPath(f.dir, "parent"), registry);
+  git(f.dir, "merge", "--no-ff", "-m", "interrupted nested owner merge", child);
+
+  const recovered = await f.action({ action: "integrate", task_id: "a",
+    attempt_id: entry.attempt_id, expected_head: child });
+  assert.equal(recovered.ok, true, recovered.reason);
+  const after = f.registry();
+  assert.equal(after.tasks.a.status, "integrated");
+  assert.equal(after.tasks.a.integration.child_head, child);
+  assert.equal(after.correction_barrier.task_id, "c");
+  assert.equal(after.correction_barrier_stack, undefined);
+  assert.equal(after.integration_intent, undefined);
+});
+
 async function pendingCorrectionFixture(t, { overlap = false, nativeReceipts = false } = {}) {
   const dependent = task("c", ["a"]);
   if (overlap) dependent.scope_paths.push("src/a.mjs");
