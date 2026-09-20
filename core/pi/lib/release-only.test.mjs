@@ -27,10 +27,14 @@ async function subject() {
   }
 }
 
-function mergeReleaseFixture(f, { number = 42, ci = [{ conclusion: "SUCCESS" }] } = {}) {
+function mergeReleaseFixture(f, {
+  number = 42,
+  ci = [{ conclusion: "SUCCESS" }],
+  subject = `chore: release v1.2.4 (#${number})`,
+} = {}) {
   git(f.root, ["switch", "-q", "main"]);
   git(f.root, ["merge", "-q", "--squash", "chore/release-1.2.4"]);
-  git(f.root, ["commit", "-q", "-m", `chore: release v1.2.4 (#${number})`]);
+  git(f.root, ["commit", "-q", "-m", subject]);
   const headSha = git(f.root, ["rev-parse", "HEAD"]);
   git(f.root, ["update-ref", "refs/remotes/origin/main", headSha]);
   return {
@@ -274,6 +278,20 @@ test("classifica o commit release-only já mergeado em main pelo PR e CI exatos"
       ...merged.evidence,
       repository: { ...merged.evidence.repository, defaultBranchOid: "f".repeat(40), defaultBranchContainsMerge: false },
     }).ok, false, "a force-pushed remote main must not orphan the release merge");
+  } finally {
+    f.close();
+  }
+});
+
+test("classifica o squash prepare-release emitido pelo GitHub sem relaxar a identidade do PR", async () => {
+  const f = releaseFixture();
+  try {
+    const merged = mergeReleaseFixture(f, { subject: "chore: prepare release v1.2.4 (#42)" });
+    const { classifyPiPostMergeRelease } = await subject();
+    const proof = classifyPiPostMergeRelease(f.root, merged.evidence);
+    assert.equal(proof.ok, true, proof.reason);
+    assert.equal(proof.headSha, merged.headSha);
+    assert.equal(proof.prNumber, 42);
   } finally {
     f.close();
   }

@@ -13,7 +13,7 @@ import { isDeepStrictEqual } from "node:util";
 import { decideMergeChecks } from "../../shared/lib/merge-check-gate.mjs";
 
 const RELEASE_BRANCH = /^chore\/release-(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
-const RELEASE_SUBJECT = /^chore: release v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?: \(#([1-9]\d*)\))?$/;
+const RELEASE_SUBJECT = /^chore: (?:prepare )?release v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?: \(#([1-9]\d*)\))?$/;
 const RELEASE_PREPARE_SUBJECT = /^chore: prepare release v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const TASK = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
 const GIT_SHA = /^[0-9a-f]{7,64}$/;
