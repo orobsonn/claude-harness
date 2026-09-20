@@ -58,3 +58,95 @@ fracos, ausência de RED e obrigações sutis.
 
 Mesmo que o resultado seja favorável, promover o Jev a aprovador exige uma mudança
 separada, com limiar de confiança versionado, fallback nativo e testes adversariais.
+
+## Onde procurar depois da janela
+
+Os arquivos são locais à raiz Git em que o Pi executou. Runs distintas no mesmo
+projeto acumulam no mesmo JSONL; worktrees distintas mantêm arquivos distintos:
+
+```text
+<projeto-ou-worktree>/.pi/harness/observability/jev-fidelity-shadow.jsonl
+<projeto-ou-worktree>/.pi/harness/observability/jev-fidelity-shadow-summary.json
+```
+
+Na VPS do Orca, o inventário inicial deve cobrir bases e worktrees. Ajuste ou
+acrescente raízes se a instalação usar outros diretórios:
+
+```bash
+find "$HOME/orca/projects" "$HOME/orca/workspaces" "$HOME/dev" \
+  -path '*/.pi/harness/observability/jev-fidelity-shadow.jsonl' \
+  -type f -print
+```
+
+Worktrees são descartáveis. Antes de remover qualquer uma criada durante a janela,
+copie seu JSONL para um diretório de avaliação fora da worktree, preservando no nome
+o projeto e a worktree de origem. Sem isso, apagar uma worktree também apaga suas
+amostras. Não concatene o arquivo `summary.json`: ele é derivado e pode ser sempre
+recalculado a partir dos JSONL.
+
+## Como consolidar toda a VPS
+
+Com `jq` instalado, o comando abaixo lê todos os eventos, junta previsão e reviewer
+nativo pela identidade `(session_id, call_id)` e calcula os números globais sem
+gravar código, prompt ou segredo:
+
+```bash
+find "$HOME/orca/projects" "$HOME/orca/workspaces" "$HOME/dev" \
+  -path '*/.pi/harness/observability/jev-fidelity-shadow.jsonl' \
+  -type f -print0 |
+xargs -0 jq -s '
+  sort_by([.session_id, .call_id])
+  | group_by([.session_id, .call_id])
+  | map({
+      prediction: (map(select(.type == "prediction")) | .[-1]),
+      native: (map(select(.type == "native-verdict")) | .[-1])
+    })
+  | . as $all
+  | [$all[] | select(.prediction.status == "ok" and .native.verdict != null)] as $paired
+  | {
+      predictions_ok: ([$all[] | select(.prediction.status == "ok")] | length),
+      prediction_errors: ([$all[] | select(.prediction != null and .prediction.status != "ok")] | length),
+      paired_reviews: ($paired | length),
+      exact_matches: ([$paired[] | select(.prediction.choice == .native.verdict)] | length),
+      false_approves: ([$paired[] | select(.prediction.choice == "APPROVE" and .native.verdict != "APPROVE")] | length),
+      false_rejects: ([$paired[] | select(.prediction.choice != "APPROVE" and .native.verdict == "APPROVE")] | length),
+      native_distribution: ($paired | group_by(.native.verdict) | map({key: .[0].native.verdict, value: length}) | from_entries),
+      input_tokens: ([$all[].prediction.usage.input_tokens // 0] | add // 0),
+      output_tokens: ([$all[].prediction.usage.output_tokens // 0] | add // 0),
+      average_latency_ms: ([$all[].prediction.latency_ms | select(. != null)] | if length == 0 then null else add / length end)
+    }
+  | .agreement_rate = (if .paired_reviews == 0 then null else .exact_matches / .paired_reviews end)
+  | .error_rate = (if (.predictions_ok + .prediction_errors) == 0 then null else .prediction_errors / (.predictions_ok + .prediction_errors) end)
+'
+```
+
+Se os JSONL já tiverem sido copiados para um diretório de avaliação, substitua as
+raízes do `find` por esse diretório. Não conte o mesmo arquivo original e sua cópia
+na mesma consolidação.
+
+## Checklist da avaliação
+
+Registre a versão efetivamente respondida em `model`; não misture versões do Jev na
+mesma conclusão. Para a primeira decisão após 72 horas, avalie nesta ordem:
+
+1. **Cobertura operacional:** pelo menos 30 pares, `error_rate < 0.05` e nenhum
+   período relevante sem credencial ou API. Três dias sem volume não bastam.
+2. **Diversidade:** a `native_distribution` precisa conter casos `REVISE` ou
+   `BLOCKED`. Um conjunto composto apenas de aprovações não mede o risco principal.
+3. **Segurança da decisão:** `false_approves` deve ser zero. Abra no JSONL cada
+   discordância e classifique a causa como evidência ausente, estado truncado,
+   pergunta inadequada, erro do Jev ou erro do reviewer nativo.
+4. **Utilidade:** use `agreement_rate >= 0.90` como piso exploratório, não como prova
+   suficiente. Avalie também latência, tokens e estabilidade das probabilidades.
+5. **Calibração:** compare `probabilities.APPROVE` e `confidence` com os resultados
+   observados. `confidence` mede a concentração entre as opções, não a correção do
+   julgamento nem autorização para agir.
+6. **Conjunto adversarial:** antes de qualquer promoção, rode casos rotulados com
+   teste fiel, obrigação omitida, assert fraco, ausência de RED, evidência stale e
+   evidência insuficiente. A concordância com o reviewer em tráfego natural não
+   substitui esse conjunto.
+
+O reviewer nativo é o comparador operacional da janela, não verdade absoluta. Toda
+discordância precisa de inspeção humana. A decisão documentada ao final deve ser uma
+destas: manter shadow, ajustar estado/pergunta e repetir a janela, experimentar uma
+cascata com fallback nativo, ou rejeitar o uso como aprovador.
