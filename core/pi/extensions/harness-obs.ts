@@ -15,6 +15,10 @@ import {
   piSessionId,
   piSubagentArgs,
 } from "../lib/pi-adapter-map.mjs";
+import {
+  finishJevFidelityShadow,
+  startJevFidelityShadow,
+} from "../lib/jev-fidelity-shadow.mjs";
 
 /**
  * @description Adaptador fino dos três observadores da lane Pi (obs-hand, obs-eye,
@@ -32,6 +36,8 @@ import {
 export default function harnessObs(pi: ExtensionAPI) {
   /** args memorizados do início da tool, por toolCallId (apenas dispatch e write/edit). */
   const pendingArgs = new Map<string, any>();
+  /** Chamadas de fidelity acompanhadas pelo shadow; nunca participam de gates. */
+  const jevShadowCalls = new Set<string>();
 
   pi.on("tool_execution_start", (event: any, ctx: any) => {
     try {
@@ -40,6 +46,17 @@ export default function harnessObs(pi: ExtensionAPI) {
       pendingArgs.set(event.toolCallId, event?.args);
       if (!isPiDispatchTool(event?.toolName)) return;
       const ids = extractTaskIds(piSubagentArgs(event?.args));
+      const shadowStarted = startJevFidelityShadow({
+        projectRoot: ctx?.cwd,
+        sessionId: piSessionId(ctx),
+        callId: event?.toolCallId,
+        dispatch: {
+          ...piSubagentArgs(event?.args),
+          task_id: ids.taskId,
+          feature_id: ids.featureId || null,
+        },
+      });
+      if (shadowStarted && typeof event?.toolCallId === "string") jevShadowCalls.add(event.toolCallId);
       observePiTaskExecuting({
         projectRoot: ctx?.cwd,
         sessionId: piSessionId(ctx),
@@ -63,6 +80,14 @@ export default function harnessObs(pi: ExtensionAPI) {
         const dispatch = piSubagentArgs(args);
         const ids = extractTaskIds(dispatch);
         const outputText = piResultText(event?.result);
+        if (jevShadowCalls.delete(event?.toolCallId)) {
+          finishJevFidelityShadow({
+            projectRoot,
+            sessionId,
+            callId: event?.toolCallId,
+            responseText: outputText,
+          });
+        }
         observePiHandCompletion({
           projectRoot,
           sessionId,

@@ -83,6 +83,7 @@ const REQUIRED_LIBS = [
   "core/pi/lib/memory-cycle.mjs",
   "core/pi/lib/native-bootstrap.mjs",
   "core/pi/lib/obs.mjs",
+  "core/pi/lib/jev-fidelity-shadow.mjs",
   "core/pi/lib/parent-session-recovery.mjs",
   "core/pi/lib/pi-adapter-map.mjs",
   "core/pi/lib/pi-auth-path-patch.mjs",
