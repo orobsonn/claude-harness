@@ -284,6 +284,43 @@ test("abandoning an operational resume revalidates the original integration with
   assert.equal(inspectTaskRun(f.entry, f.dependencies).ok, false, "the resumed hand remains blocked");
 });
 
+test("abandoning a resume refuses a later host reconciliation and directs current receipt integration", () => {
+  const f = abandonedResumeFixture();
+  run(f.root, "git", "checkout", "-b", "late-parent", f.base);
+  write(path.join(f.root, "src/task.mjs"), "export const parent = true;\n");
+  run(f.root, "git", "add", "src/task.mjs");
+  run(f.root, "git", "commit", "-m", "late parent correction");
+  const parent = run(f.root, "git", "rev-parse", "HEAD");
+  run(f.root, "git", "checkout", "-b", "late-reconciliation", f.head);
+  const preview = taskMergePreview(f.root, f.head, parent);
+  assert.deepEqual(preview.conflicts, ["src/task.mjs"]);
+  assert.throws(() => run(f.root, "git", "merge", "--no-ff", "--no-commit", parent));
+  write(path.join(f.root, "src/task.mjs"), "export const actual = 1;\nexport const parent = true;\n");
+  run(f.root, "git", "add", "src/task.mjs");
+  run(f.root, "git", "commit", "--no-edit");
+  const merged = run(f.root, "git", "rev-parse", "HEAD");
+
+  f.entry.reconciliations = [{
+    written_by: "host-task-reconciliation",
+    kind: "integration-conflict",
+    task_id: TASK,
+    attempt_id: ATTEMPT,
+    scope_base_sha: f.base,
+    pre_child_head: f.head,
+    parent_head: parent,
+    merged_head: merged,
+    tree: preview.tree,
+    conflicts: preview.conflicts,
+    upstreams: [],
+    launch_count: f.result.launches.length,
+  }];
+
+  const inspected = inspectTaskResumeAbandonment(f.entry, { headSha: f.head }, f.dependencies);
+  assert.equal(inspected.ok, false);
+  assert.match(inspected.reason, /cannot discard a host reconciliation; integrate the current ready receipt instead/);
+  assert.equal(run(f.root, "git", "rev-parse", "HEAD"), merged, "the fixture keeps the real reconciled child HEAD");
+});
+
 test("coordinator-only resume can retain its original captured hand without a new writer", () => {
   const f = abandonedResumeFixture({ blockedHand: false });
   const inspected = inspectTaskResumeAbandonment(f.entry, { headSha: f.head }, f.dependencies);

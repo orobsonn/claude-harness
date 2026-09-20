@@ -1025,6 +1025,8 @@ export function inspectTaskResumeAbandonment(entry, { headSha } = {}, dependenci
       return failure("resume abandonment requires the immediately previous integration and exact inspection");
     if (entry.reconciliation_required || entry.reconciliation_intent)
       return failure("dependency reconciliation cannot be abandoned as an unchanged resume");
+    if (entry.reconciliations?.some((proof) => proof.launch_count >= result.launches.length))
+      return failure("resume abandonment cannot discard a host reconciliation; integrate the current ready receipt instead");
     const inspectionEntry = { ...entry, result, launches: entry.launches.slice(0, result.launches.length) };
     const historical = validateIntegration(inspectionEntry, integration, {
       projectRoot: entry.parent_root, sessionId: entry.parent_session_id,
