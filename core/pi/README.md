@@ -238,9 +238,10 @@ O transporte mantém limite de inatividade de 15 minutos por chamada de modelo.
 
 Sessões novas usam `trial-orchestration-deepseek` por padrão. Nesse perfil,
 DeepSeek V4.1 Flash orquestra os pais global e local; executor, sniper e
-test-author usam DeepSeek em low/medium e GLM 5.3 em high/max. Os olhos continuam
-no Codex. `trial-hands-deepseek` mantém os pais no Codex e move executor, sniper e
-test-author low/medium para DeepSeek V4.1 Flash e high/max para GLM 5.3; planner,
+test-author usam DeepSeek em low/medium/high/max. `max` permanece somente como
+fallback defensivo para planos legados; o planner deve decompor a task antes da
+admissão. Os olhos continuam no Codex. `trial-hands-deepseek` mantém os pais no
+Codex e move executor, sniper e test-author integralmente para DeepSeek V4.1 Flash; planner,
 test-reviewer e demais olhos continuam no Codex. `trial-hands-glm` é o braço
 explícito somente-GLM. `trial-orchestration-deepseek` também move os pais global
 e local para DeepSeek, ou eles podem ser escolhidos separadamente com

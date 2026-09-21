@@ -6,6 +6,7 @@ import test from "node:test";
 
 import {
   DEEPSEEK_MODEL, DEFAULT_MODEL_PROFILE, GLM_MODEL, MODEL_PROFILE_ENV, MODEL_PROFILE_HASH_ENV,
+  MODEL_PROFILE_VERSION,
   loadModelProfileFromEnv, modelStrategyFromProfile, parseModelProfileArgs,
   profilePrompt, readModelProfileSnapshot, resolveModelProfile, routeFromModelProfile,
   stableProfileJson, writeModelProfileSnapshot,
@@ -23,6 +24,8 @@ test("AC-01 baseline preserves every canonical route and needs no Ollama credent
 
 test("new sessions default to DeepSeek orchestration while baseline stays explicit", () => {
   const profile = resolveModelProfile();
+  assert.equal(MODEL_PROFILE_VERSION, 2);
+  assert.equal(profile.version, 2);
   assert.equal(DEFAULT_MODEL_PROFILE, "trial-orchestration-deepseek");
   assert.equal(profile.profile, DEFAULT_MODEL_PROFILE);
   assert.equal(profile.parents.global.route.model, DEEPSEEK_MODEL);
@@ -32,7 +35,7 @@ test("new sessions default to DeepSeek orchestration while baseline stays explic
 
 test("AC-02 hands profiles change executor, sniper and test-author while eyes stay fixed", () => {
   for (const [name, tierModel] of [
-    ["trial-hands-deepseek", (complexity) => ["high", "max"].includes(complexity) ? GLM_MODEL : DEEPSEEK_MODEL],
+    ["trial-hands-deepseek", () => DEEPSEEK_MODEL],
     ["trial-hands-glm", () => GLM_MODEL],
   ]) {
     const profile = resolveModelProfile({ profile: name });
@@ -112,6 +115,18 @@ test("AC-08 legacy absence resolves baseline while malformed snapshots are rejec
   }), /hash mismatch/);
 });
 
+test("v1 sessions retain their admitted tiered DeepSeek/GLM routes after the v2 default", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-model-profile-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const legacy = resolveModelProfile({ profile: "trial-orchestration-deepseek", version: 1 });
+  assert.equal(routeFromModelProfile(legacy, "harness-executor", "medium").model, `ollama-cloud/${DEEPSEEK_MODEL}`);
+  assert.equal(routeFromModelProfile(legacy, "harness-executor", "high").model, `ollama-cloud/${GLM_MODEL}`);
+  writeModelProfileSnapshot(root, "legacy-v1", legacy);
+  const restored = readModelProfileSnapshot(root, "legacy-v1");
+  assert.equal(restored.ok, true);
+  assert.deepEqual(restored.snapshot, legacy);
+});
+
 test("AC-13 profile carries dated rates without treating missing usage as zero", () => {
   const profile = resolveModelProfile({ profile: "trial-hands-deepseek" });
   assert.equal(profile.models.deepseek.id, DEEPSEEK_MODEL);
@@ -149,6 +164,6 @@ test("model strategy projects only the plan contract", () => {
   assert.deepEqual(modelStrategyFromProfile(resolveModelProfile({ profile: "trial-hands-deepseek" })).hand_tiers, {
     low: "ollama-cloud/deepseek-v4.1-flash",
     medium: "ollama-cloud/deepseek-v4.1-flash",
-    high: "ollama-cloud/glm-5.3",
+    high: "ollama-cloud/deepseek-v4.1-flash",
   });
 });
