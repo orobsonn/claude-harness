@@ -939,3 +939,48 @@ test("harness-memory finalize: replay exige tombstone compatível, revisão atua
     assert.equal(replay?.isError, true);
   });
 });
+
+test("harness-memory harvest: correção durável pós-finalize reutiliza somente os olhos do produto", async (t) => {
+  const root = fixture(t);
+  const api = register();
+  const original = readFileSync(join(root, "kaizen.md"), "utf8");
+  const malformed = "proposta verificada בלבד\n";
+
+  emitHarvest(api, root, {
+    changes: [{
+      path: "kaizen.md",
+      before_sha256: sha256(original),
+      append: malformed,
+      evidence: "resultado observado na entrega",
+      invalidation: "corrigir se o texto persistido estiver malformado",
+    }],
+  });
+  assert.equal((await api.execute({ action: "apply" }, ctx(root))).details.ok, true);
+  execFileSync("git", ["add", "kaizen.md"], { cwd: root });
+  commit(root, "docs: persist first harvest");
+  emitShipper(api, root);
+  assert.equal((await api.execute({ action: "finalize" }, ctx(root))).details.ok, true);
+  assert.equal(existsSync(harvestPath(root)), false);
+
+  const beforeCorrection = readFileSync(join(root, "kaizen.md"), "utf8");
+  emitHarvest(api, root, {
+    callId: "corrective-harvest",
+    changes: [{
+      path: "kaizen.md",
+      before_sha256: sha256(beforeCorrection),
+      patch: { old_text: malformed, new_text: "proposta verificada\n" },
+      evidence: "o blob commitado contém texto malformado",
+      invalidation: "revalidar se o blob ou a revisão final mudar",
+    }],
+  });
+  const corrective = await readMemory(api, root);
+  const tombstone = JSON.parse(readFileSync(finalizedPath(root), "utf8"));
+  assert.equal(corrective.details.harvestReceipt?.review_input?.head_sha, tombstone.review_input.head_sha);
+  assert.equal((await api.execute({ action: "apply" }, ctx(root))).details.ok, true);
+  execFileSync("git", ["add", "kaizen.md"], { cwd: root });
+  commit(root, "docs: correct harvested memory");
+  emitShipper(api, root, { callId: "corrective-shipper" });
+  const finalized = await api.execute({ action: "finalize" }, ctx(root));
+  assert.equal(finalized.details.ok, true, JSON.stringify(finalized.details));
+  assert.equal(readFileSync(join(root, "kaizen.md"), "utf8"), original + "proposta verificada\n");
+});

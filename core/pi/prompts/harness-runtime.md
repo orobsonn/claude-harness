@@ -310,6 +310,13 @@ não chame harvester para confirmar atualidade. Resultado inválido exige diagno
 a proposta e o input, não repetir a mesma colheita. Só retome com entrada materialmente
 corrigida, recorte relevante e hashes atuais, incluindo o erro exato e os deltas ainda
 sustentados. Não descarte um aprendizado válido apenas para esconder erro de formato.
+Texto do resultado intermediário do harvester não prova o conteúdo persistido. Antes de
+abrir colheita corretiva, leia o blob commitado do path alegadamente incorreto e confirme
+o literal no HEAD atual; se ele não existir, não fabrique delta nem reabra a finalização.
+Quando um defeito real estiver restrito aos documentos duráveis após `finalize`, reutilize
+a mesma sessão e faça uma única colheita corretiva vinculada ao tombstone; não repita
+olhos do produto nem peça edição manual ao operador. Mudança fora dos documentos duráveis
+continua exigindo a recuperação e as revisões normais.
 
 Com delta não vazio, chame `harness_memory` com `action="apply"`. O host aplica a
 proposta validada de forma idempotente, somente nos paths e hashes do recibo. Inspecione

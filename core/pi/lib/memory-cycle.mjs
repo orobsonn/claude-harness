@@ -233,9 +233,13 @@ export function beginHarvest(projectRoot, sessionId) {
   const paths = memoryPaths(projectRoot, sessionId);
   cleanTree(paths.root);
   const release = resolvePiReleaseProof(paths.root);
+  let reviewed;
   // Preserve the existing, independently verified metadata-only release lane:
   // it must not redispatch product eyes after the functional squash.
-  if (!release.ok) checkCurrentMemoryReviews(projectRoot, sessionId, { allowHarvest: false });
+  // A finalized memory-only commit is also a valid base for a corrective harvest:
+  // use its tombstone to carry the exact accepted product input forward instead
+  // of demanding reviews on the durable documents themselves.
+  if (!release.ok) reviewed = resolveCurrentMemoryReviews(projectRoot, sessionId, { requireSharedInput: true });
   const raw = readSmall(join(paths.directory, "gate-state.json"), 1024 * 1024);
   const state = raw === null ? {} : JSON.parse(raw);
   if (state.session_id && state.session_id !== sessionId) throw new Error("Harvest gate identity mismatch");
@@ -244,7 +248,11 @@ export function beginHarvest(projectRoot, sessionId) {
   const { plan: _plan, ...planSnapshot } = snapshotPlan(paths, state.feature_id);
   return { session_id: sessionId, project_root: paths.root, feature_id: state.feature_id ?? null,
     base_head: gitMemory(paths.root, ["rev-parse", "HEAD"]), planSnapshot, durable: readDurableMemory(paths.root),
-    ...(!release.ok ? { review_input: { head_sha: captured.snapshot.head_sha, input_digest: captured.snapshot.input_digest } } : {}) };
+    ...(!release.ok ? { review_input: {
+      head_sha: reviewed.reviewSnapshot.head_sha,
+      input_digest: reviewed.reviewSnapshot.input_digest,
+      memory_paths: reviewed.reviewBinding?.memory_paths ?? [],
+    } } : {}) };
 }
 function validateMemoryDelta(change) {
   if (Object.hasOwn(change, "content")) throw new Error("Full replacement is forbidden; use a small patch or append with the current before_sha256, or changes: []");
@@ -295,14 +303,23 @@ export function completeHarvest(snapshot, text, agentId) {
   const paths = memoryPaths(snapshot.project_root, snapshot.session_id, true);
   if (gitMemory(paths.root, ["rev-parse", "HEAD"]) !== snapshot.base_head) throw new Error("HEAD changed during harvest; rerun it");
   cleanTree(paths.root);
-  if (!resolvePiReleaseProof(paths.root).ok) checkCurrentMemoryReviews(paths.root, snapshot.session_id, { allowHarvest: false });
+  const reviewed = !resolvePiReleaseProof(paths.root).ok
+    ? resolveCurrentMemoryReviews(paths.root, snapshot.session_id, { requireSharedInput: true })
+    : null;
   if (snapshotPlan(paths, snapshot.feature_id).hash !== snapshot.planSnapshot.hash) throw new Error("Canonical plan changed during harvest; rerun it");
   let reviewInput;
   if (snapshot.review_input) {
+    if (!reviewed || reviewed.reviewSnapshot.head_sha !== snapshot.review_input.head_sha ||
+        reviewed.reviewSnapshot.input_digest !== snapshot.review_input.input_digest)
+      throw new Error("Reviewed input changed during harvest; revalidate before retrying");
     const captured = capturePiReviewInput({ projectRoot: paths.root, sessionId: snapshot.session_id, featureId: snapshot.feature_id, phase: "final" });
-    if (!captured.ok || captured.snapshot.input_digest !== snapshot.review_input.input_digest) throw new Error("Reviewed input changed during harvest; revalidate before retrying");
-    const memory_paths = changes.map((change) => change.path);
-    reviewInput = { ...snapshot.review_input, memory_paths,
+    if (!captured.ok) throw new Error("Reviewed input changed during harvest; revalidate before retrying");
+    const memory_paths = [...new Set([
+      ...(snapshot.review_input.memory_paths ?? []),
+      ...changes.map((change) => change.path),
+    ])];
+    reviewInput = { head_sha: snapshot.review_input.head_sha,
+      input_digest: snapshot.review_input.input_digest, memory_paths,
       remainder_digest: memoryReviewRemainder(captured.snapshot, memory_paths) };
   }
   const receipt = { written_by: "host-subagent-completion", session_id: snapshot.session_id, parent_session_id: snapshot.session_id,
@@ -386,44 +403,55 @@ function memoryReviewRemainder(snapshot, memoryPaths) {
     body[key] = body[key].filter((entry) => !memoryPaths.includes(entry.path));
   return sha(stable(body));
 }
-export function postHarvestReviewSnapshot(projectRoot, sessionId, snapshot) {
-  if (snapshot?.phase !== "final") return snapshot;
+function resolvePostHarvestReviewSnapshot(projectRoot, sessionId, snapshot) {
+  if (snapshot?.phase !== "final") return { snapshot, binding: null };
   try {
     const paths = memoryPaths(projectRoot, sessionId);
     let binding;
     if (regularFile(paths.harvest)) {
       const { harvest } = checkHarvestReady(projectRoot, sessionId);
-      if (harvest.feature_id !== snapshot.feature_id) return snapshot;
+      if (harvest.feature_id !== snapshot.feature_id) return { snapshot, binding: null };
       binding = harvest.review_input;
-      if (binding?.head_sha !== harvest.base_head) return snapshot;
-      if (JSON.stringify(binding.memory_paths) !== JSON.stringify(harvest.changes.map((change) => change.path))) return snapshot;
+      if (binding?.head_sha !== harvest.base_head) {
+        const finalized = JSON.parse(readSmall(paths.finalized, 8192) ?? "null");
+        if (finalized?.written_by !== "host-memory-finalize" || finalized.session_id !== sessionId ||
+            finalized.feature_id !== snapshot.feature_id || finalized.head !== harvest.base_head ||
+            finalized.review_input?.head_sha !== binding?.head_sha ||
+            finalized.review_input?.input_digest !== binding?.input_digest) return { snapshot, binding: null };
+      }
+      const changedPaths = harvest.changes.map((change) => change.path);
+      if (!changedPaths.every((file) => binding?.memory_paths?.includes(file))) return { snapshot, binding: null };
       // applyHarvest creates regular, non-executable documents. A manual chmod,
       // symlink or staged alternative is not part of its authorized proposal.
       for (const change of harvest.changes) {
         const tree = snapshot.head.find((item) => item.path === change.path);
         if (!tree || snapshot.index.find((item) => item.path === change.path)?.oid !== tree.oid ||
             sha(execFileSync("git", ["cat-file", "blob", tree.oid], { cwd: paths.root,
-              timeout: 10000, maxBuffer: 1024 * 1024 + 1, stdio: ["ignore", "pipe", "pipe"] })) !== change.after_sha256) return snapshot;
+              timeout: 10000, maxBuffer: 1024 * 1024 + 1, stdio: ["ignore", "pipe", "pipe"] })) !== change.after_sha256) return { snapshot, binding: null };
         for (const key of ["head", "index", "worktree"]) {
           const entry = snapshot[key].find((item) => item.path === change.path);
-          if (entry?.mode !== "100644" || (key === "worktree" && (entry.kind !== "file" || entry.sha256 !== change.after_sha256))) return snapshot;
+          if (entry?.mode !== "100644" || (key === "worktree" && (entry.kind !== "file" || entry.sha256 !== change.after_sha256))) return { snapshot, binding: null };
         }
       }
     } else {
       const finalized = JSON.parse(readSmall(paths.finalized, 8192) ?? "null");
       if (finalized?.written_by !== "host-memory-finalize" || finalized.session_id !== sessionId ||
           finalized.feature_id !== snapshot.feature_id || finalized.head !== snapshot.head_sha ||
-          finalized.input_digest !== snapshot.input_digest) return snapshot;
+          finalized.input_digest !== snapshot.input_digest) return { snapshot, binding: null };
       binding = finalized.review_input;
     }
     if (!binding || !/^[a-f0-9]{64}$/.test(binding.input_digest ?? "") ||
         !Array.isArray(binding.memory_paths) || binding.memory_paths.some((file) => !DURABLE_MEMORY_FILES.includes(file)) ||
-        binding.remainder_digest !== memoryReviewRemainder(snapshot, binding.memory_paths)) return snapshot;
-    return { ...snapshot, head_sha: binding.head_sha, input_digest: binding.input_digest };
-  } catch { return snapshot; }
+        binding.remainder_digest !== memoryReviewRemainder(snapshot, binding.memory_paths)) return { snapshot, binding: null };
+    return { snapshot: { ...snapshot, head_sha: binding.head_sha, input_digest: binding.input_digest }, binding };
+  } catch { return { snapshot, binding: null }; }
 }
 
-export function checkCurrentMemoryReviews(projectRoot, sessionId, { allowHarvest = true } = {}) {
+export function postHarvestReviewSnapshot(projectRoot, sessionId, snapshot) {
+  return resolvePostHarvestReviewSnapshot(projectRoot, sessionId, snapshot).snapshot;
+}
+
+function resolveCurrentMemoryReviews(projectRoot, sessionId, { allowHarvest = true, requireSharedInput = false } = {}) {
   const paths = memoryPaths(projectRoot, sessionId);
   cleanTree(paths.root);
   const head = gitMemory(paths.root, ["rev-parse", "HEAD"]);
@@ -432,16 +460,34 @@ export function checkCurrentMemoryReviews(projectRoot, sessionId, { allowHarvest
   if (state.session_id !== sessionId || !state.feature_id || state.final_review_done !== true) throw new Error("Finalize requires this session's completed final review");
   const captured = capturePiReviewInput({ projectRoot: paths.root, sessionId, featureId: state.feature_id, phase: "final" });
   if (!captured.ok) throw new Error("Finalize requires both host-owned final reviews with accepted report evidence on the current input");
-  const harvested = allowHarvest ? postHarvestReviewSnapshot(paths.root, sessionId, captured.snapshot) : captured.snapshot;
+  const carried = allowHarvest
+    ? resolvePostHarvestReviewSnapshot(paths.root, sessionId, captured.snapshot)
+    : { snapshot: captured.snapshot, binding: null };
+  const harvested = carried.snapshot;
   const loadedPlan = readPiReviewPlan({ projectRoot: paths.root, featureId: state.feature_id, expectedSha256: captured.snapshot.canonical_plan.sha256 });
   if (!loadedPlan.ok) throw new Error(loadedPlan.reason);
+  let acceptedSnapshot = null;
+  let sharedInput = true;
   for (const role of requiredPiFinalReviewRoles(loadedPlan.plan)) {
     const name = role.replace("harness-", "");
     const receipt = state.final_review_evidence?.[name];
     const reviewSnapshot = hasAcceptedPiReviewEvidence(receipt, captured.snapshot) ? captured.snapshot : harvested;
     if (!receipt || !hasAcceptedPiReviewEvidence(receipt, reviewSnapshot) || receipt.written_by !== "host-subagent-completion" || receipt.role !== role || receipt.parent_session_id !== sessionId || receipt.feature_id !== state.feature_id || receipt.status !== "completed" || receipt.reviewed_head_sha !== reviewSnapshot.head_sha || !receipt.dispatch_call_id || !receipt.child_session_id || !receipt.agent_id) throw new Error(`Finalize requires host-owned final ${name} review with accepted report evidence on the current input`);
+    if (acceptedSnapshot && (acceptedSnapshot.head_sha !== reviewSnapshot.head_sha || acceptedSnapshot.input_digest !== reviewSnapshot.input_digest)) sharedInput = false;
+    else if (!acceptedSnapshot) acceptedSnapshot = reviewSnapshot;
   }
-  return { head, featureId: state.feature_id };
+  if (requireSharedInput && !sharedInput) throw new Error("Harvest requires all host-owned final reviews on one shared accepted input");
+  const reviewSnapshot = sharedInput ? acceptedSnapshot ?? harvested : null;
+  const usesCarriedInput = reviewSnapshot && reviewSnapshot.head_sha === harvested.head_sha &&
+    reviewSnapshot.input_digest === harvested.input_digest &&
+    (reviewSnapshot.head_sha !== captured.snapshot.head_sha || reviewSnapshot.input_digest !== captured.snapshot.input_digest);
+  return { head, featureId: state.feature_id, reviewSnapshot,
+    reviewBinding: usesCarriedInput ? carried.binding : null };
+}
+
+export function checkCurrentMemoryReviews(projectRoot, sessionId, options = {}) {
+  const { head, featureId } = resolveCurrentMemoryReviews(projectRoot, sessionId, options);
+  return { head, featureId };
 }
 
 /** Ordinary shipping is post-review. Verified release metadata has its own narrow proof. */
