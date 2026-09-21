@@ -11,6 +11,7 @@ import {
   taskGroupMembers,
   taskProcessIdentity,
 } from "./task-process.mjs";
+import { MODEL_PROFILE_ENV, MODEL_PROFILE_HASH_ENV } from "./model-profile.mjs";
 
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 async function terminal(launch) {
@@ -72,6 +73,44 @@ function realPtyLauncher(t, { input = "", beforeLaunch } = {}) {
     },
   };
 }
+
+test("task worker transports only immutable model profile pointers", async (t) => {
+  const dir = fixture(t);
+  const marker = path.join(dir, "profile-env.json");
+  const profile = path.join(dir, "profile.json");
+  const digest = "a".repeat(64);
+  const launch = await startTaskProcess({
+    jobDir: path.join(dir, "job"),
+    runId: "profile-env",
+    cwd: dir,
+    command: process.execPath,
+    args: ["-e", `require("node:fs").writeFileSync(${JSON.stringify(marker)}, JSON.stringify({path:process.env.${MODEL_PROFILE_ENV},hash:process.env.${MODEL_PROFILE_HASH_ENV}}))`],
+    profileEnvironment: {
+      [MODEL_PROFILE_ENV]: profile,
+      [MODEL_PROFILE_HASH_ENV]: digest,
+    },
+  });
+  const end = await terminal(launch);
+  assert.equal(end.ok, true);
+  assert.deepEqual(JSON.parse(fs.readFileSync(marker, "utf8")), { path: profile, hash: digest });
+  const descriptor = JSON.parse(fs.readFileSync(launch.descriptor_path, "utf8"));
+  assert.deepEqual(descriptor.profile_environment, {
+    [MODEL_PROFILE_ENV]: profile,
+    [MODEL_PROFILE_HASH_ENV]: digest,
+  });
+  await assert.rejects(startTaskProcess({
+    jobDir: path.join(dir, "bad-job"),
+    runId: "bad-profile-env",
+    cwd: dir,
+    command: process.execPath,
+    args: ["-e", ""],
+    profileEnvironment: {
+      [MODEL_PROFILE_ENV]: profile,
+      [MODEL_PROFILE_HASH_ENV]: digest,
+      TYPESAFE_API_KEY: "must-not-be-serialized",
+    },
+  }), /profile environment is invalid/);
+});
 test("detached worker persists identity, output and completion across coordinator instances", async (t) => {
   const dir = fixture(t);
   const launch = await startTaskProcess({

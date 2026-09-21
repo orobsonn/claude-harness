@@ -35,8 +35,8 @@ TypeSafe. O Jev recebe texto; ele não acessa a VPS nem lê caminhos por conta p
 Os arquivos abaixo são criados no projeto consumidor:
 
 ```text
-.pi/harness/observability/jev-fidelity-shadow.jsonl
-.pi/harness/observability/jev-fidelity-shadow-summary.json
+.pi/harness/state/observability/jev-fidelity-shadow.jsonl
+.pi/harness/state/observability/jev-fidelity-shadow-summary.json
 ```
 
 Não são gravados prompts, diffs, saídas, chave ou resposta textual. O log contém
@@ -65,8 +65,8 @@ Os arquivos são locais à raiz Git em que o Pi executou. Runs distintas no mesm
 projeto acumulam no mesmo JSONL; worktrees distintas mantêm arquivos distintos:
 
 ```text
-<projeto-ou-worktree>/.pi/harness/observability/jev-fidelity-shadow.jsonl
-<projeto-ou-worktree>/.pi/harness/observability/jev-fidelity-shadow-summary.json
+<projeto-ou-worktree>/.pi/harness/state/observability/jev-fidelity-shadow.jsonl
+<projeto-ou-worktree>/.pi/harness/state/observability/jev-fidelity-shadow-summary.json
 ```
 
 Na VPS do Orca, o inventário inicial deve cobrir bases e worktrees. Ajuste ou
@@ -74,7 +74,7 @@ acrescente raízes se a instalação usar outros diretórios:
 
 ```bash
 find "$HOME/orca/projects" "$HOME/orca/workspaces" "$HOME/dev" \
-  -path '*/.pi/harness/observability/jev-fidelity-shadow.jsonl' \
+  -path '*/.pi/harness/state/observability/jev-fidelity-shadow.jsonl' \
   -type f -print
 ```
 
@@ -92,7 +92,7 @@ gravar código, prompt ou segredo:
 
 ```bash
 find "$HOME/orca/projects" "$HOME/orca/workspaces" "$HOME/dev" \
-  -path '*/.pi/harness/observability/jev-fidelity-shadow.jsonl' \
+  -path '*/.pi/harness/state/observability/jev-fidelity-shadow.jsonl' \
   -type f -print0 |
 xargs -0 jq -s '
   sort_by([.session_id, .call_id])

@@ -152,7 +152,10 @@ export function buildJevFidelityState({ projectRoot, sessionId, prompt } = {}) {
 function observabilityDirectory(projectRoot) {
   const root = fs.realpathSync(projectRoot);
   let current = root;
-  for (const part of [".pi", "harness", "observability"]) {
+  // Keep host-owned telemetry inside the already excluded state subtree. A
+  // consumer is not required to add a new gitignore entry just to enable this
+  // fail-open experiment, and reviewers must never see telemetry as product input.
+  for (const part of [".pi", "harness", "state", "observability"]) {
     current = path.join(current, part);
     try { fs.mkdirSync(current, { mode: 0o700 }); }
     catch (error) { if (error?.code !== "EEXIST") throw error; }

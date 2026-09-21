@@ -522,6 +522,10 @@ test("Orca parent pins placement and every launch receives the terminal adapter"
 test("separate parent routing leaves the local model to the admitted profile", async (t) => {
   const f = fixture(t);
   let started;
+  const profileEnvironment = {
+    PI_HARNESS_MODEL_PROFILE: "/repo/.pi/harness/state/model-profiles/parent.json",
+    PI_HARNESS_MODEL_PROFILE_SHA256: "a".repeat(64),
+  };
   const result = await executeTaskAction(
     { action: "dispatch", task_ids: ["a"] },
     {
@@ -529,6 +533,7 @@ test("separate parent routing leaves the local model to the admitted profile", a
       separateParentRouting: true,
       thinkingLevel: "high",
       model: { provider: "ollama-cloud", id: "deepseek-v4.1-flash" },
+      profileEnvironment,
     },
     {
       ...f.deps,
@@ -542,6 +547,7 @@ test("separate parent routing leaves the local model to the admitted profile", a
   assert.equal(started.args.includes("--provider"), false);
   assert.equal(started.args.includes("--model"), false);
   assert.equal(started.args.includes("--thinking"), false);
+  assert.deepEqual(started.profileEnvironment, profileEnvironment);
 });
 
 test("a recent partial registry lock remains owned instead of being reclaimed during its write", async (t) => {

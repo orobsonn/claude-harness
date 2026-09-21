@@ -33,11 +33,37 @@ import {
  * Nenhum hook aqui pode bloquear: `tool_execution_start`/`tool_execution_end` são notificações,
  * e toda decisão vive em core/pi/lib/obs.mjs, que é fail-open por construção.
  */
-export default function harnessObs(pi: ExtensionAPI) {
+export default function harnessObs(pi: ExtensionAPI, injected: any = {}) {
+  const startJev = injected.startJevFidelityShadow ?? startJevFidelityShadow;
+  const finishJev = injected.finishJevFidelityShadow ?? finishJevFidelityShadow;
   /** args memorizados do início da tool, por toolCallId (apenas dispatch e write/edit). */
   const pendingArgs = new Map<string, any>();
   /** Chamadas de fidelity acompanhadas pelo shadow; nunca participam de gates. */
   const jevShadowCalls = new Set<string>();
+
+  // `tool_call` runs after the earlier dispatch/evidence hooks have enriched the
+  // shared input. Pi's later `tool_execution_start.args` is the original model
+  // payload, so starting the shadow there loses HARNESS_REVIEW_EVIDENCE.
+  pi.on("tool_call", (event: any, ctx: any) => {
+    try {
+      if (!isPiDispatchTool(event?.toolName)) return;
+      const dispatch = piSubagentArgs(event?.input);
+      const ids = extractTaskIds(dispatch);
+      const shadowStarted = startJev({
+        projectRoot: ctx?.cwd,
+        sessionId: piSessionId(ctx),
+        callId: event?.toolCallId,
+        dispatch: {
+          ...dispatch,
+          task_id: ids.taskId,
+          feature_id: ids.featureId || null,
+        },
+      });
+      if (shadowStarted && typeof event?.toolCallId === "string") jevShadowCalls.add(event.toolCallId);
+    } catch {
+      /* observação nunca bloqueia */
+    }
+  });
 
   pi.on("tool_execution_start", (event: any, ctx: any) => {
     try {
@@ -46,17 +72,6 @@ export default function harnessObs(pi: ExtensionAPI) {
       pendingArgs.set(event.toolCallId, event?.args);
       if (!isPiDispatchTool(event?.toolName)) return;
       const ids = extractTaskIds(piSubagentArgs(event?.args));
-      const shadowStarted = startJevFidelityShadow({
-        projectRoot: ctx?.cwd,
-        sessionId: piSessionId(ctx),
-        callId: event?.toolCallId,
-        dispatch: {
-          ...piSubagentArgs(event?.args),
-          task_id: ids.taskId,
-          feature_id: ids.featureId || null,
-        },
-      });
-      if (shadowStarted && typeof event?.toolCallId === "string") jevShadowCalls.add(event.toolCallId);
       observePiTaskExecuting({
         projectRoot: ctx?.cwd,
         sessionId: piSessionId(ctx),
@@ -81,7 +96,7 @@ export default function harnessObs(pi: ExtensionAPI) {
         const ids = extractTaskIds(dispatch);
         const outputText = piResultText(event?.result);
         if (jevShadowCalls.delete(event?.toolCallId)) {
-          finishJevFidelityShadow({
+          finishJev({
             projectRoot,
             sessionId,
             callId: event?.toolCallId,
