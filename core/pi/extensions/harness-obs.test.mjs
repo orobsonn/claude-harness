@@ -18,13 +18,39 @@ const FEATURE = "obs-ext";
 const MARKER = '[HARNESS_TASK_CONTEXT]{"task_id":"t1"}[/HARNESS_TASK_CONTEXT]';
 
 /** @description Registra a extensão contra um fake de ExtensionAPI e devolve os dois handlers. */
-function captureHandlers() {
+function captureHandlers(injected) {
   const handlers = {};
-  harnessObs(/** @type {any} */ ({ on: (name, fn) => { handlers[name] = fn; } }));
+  harnessObs(/** @type {any} */ ({ on: (name, fn) => { handlers[name] = fn; } }), injected);
+  assert.equal(typeof handlers.tool_call, "function");
   assert.equal(typeof handlers.tool_execution_start, "function");
   assert.equal(typeof handlers.tool_execution_end, "function");
   return handlers;
 }
+
+test("JEV starts from the enriched tool_call input, not the original execution args", async () => {
+  const starts = [];
+  const finishes = [];
+  const h = captureHandlers({
+    startJevFidelityShadow: (input) => { starts.push(input); return true; },
+    finishJevFidelityShadow: (input) => { finishes.push(input); },
+  });
+  const ctx = { cwd: "/repo", sessionManager: { getSessionId: () => SESSION } };
+  const enriched = {
+    subagent_type: "harness-test-reviewer",
+    prompt: `${MARKER}\n[HARNESS_REVIEW_EVIDENCE]\n{"status":"available"}\n[/HARNESS_REVIEW_EVIDENCE]`,
+  };
+  h.tool_call({ toolCallId: "jev-1", toolName: "subagent", input: enriched }, ctx);
+  h.tool_execution_start({
+    toolCallId: "jev-1",
+    toolName: "subagent",
+    args: { subagent_type: "harness-test-reviewer", prompt: MARKER },
+  }, ctx);
+  h.tool_execution_end({ toolCallId: "jev-1", toolName: "subagent", result: "Verdict: APPROVE" }, ctx);
+  assert.equal(starts.length, 1);
+  assert.match(starts[0].dispatch.prompt, /HARNESS_REVIEW_EVIDENCE/);
+  assert.equal(finishes.length, 1);
+  assert.equal(finishes[0].callId, "jev-1");
+});
 
 /**
  * @description Projeto temporário com gate-state/plano Pi e um outbox real; restaura o env.

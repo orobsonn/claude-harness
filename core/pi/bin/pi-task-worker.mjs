@@ -7,6 +7,7 @@ import {
   renderTaskEventLine,
   taskProcessIdentity,
   taskGroupMembers,
+  validateTaskProfileEnvironment,
   writeTaskJson,
 } from "../lib/task-process.mjs";
 import { verifyTaskRuntime } from "../lib/task-runtime-assets.mjs";
@@ -77,7 +78,10 @@ let output = null;
 if (tuiPresentation) precreatePrivateEventFile(job.events_path, descriptorPath);
 else output = fs.openSync(job.events_path, "a", 0o600);
 const errors = fs.openSync(job.stderr_path, "a", 0o600);
-const env = { ...process.env };
+const env = {
+  ...process.env,
+  ...(validateTaskProfileEnvironment(job.profile_environment) ?? {}),
+};
 // A task is a fresh local parent, never an inherited native subagent.
 for (const key of Object.keys(env)) {
   if (

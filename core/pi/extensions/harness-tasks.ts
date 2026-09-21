@@ -1,7 +1,11 @@
 import { Type } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { isChildSession, piSessionId } from "../lib/pi-adapter-map.mjs";
-import { loadModelProfileFromEnv } from "../lib/model-profile.mjs";
+import {
+  loadModelProfileFromEnv,
+  MODEL_PROFILE_ENV,
+  MODEL_PROFILE_HASH_ENV,
+} from "../lib/model-profile.mjs";
 import {
   executeTaskAction,
   decideTaskCoordinatorEdit,
@@ -208,6 +212,25 @@ export default function harnessTasks(pi: ExtensionAPI, injected: Parameters<type
         };
         return { content: [{ type: "text" as const, text: JSON.stringify(result) }], details: result, isError: true };
       }
+      const profileContext = (() => {
+        try {
+          const profile = loadModelProfileFromEnv(process.env);
+          const separateParentRouting = Boolean(profile.parents.global.route || profile.parents.local.route);
+          const profilePath = process.env[MODEL_PROFILE_ENV];
+          const profileHash = process.env[MODEL_PROFILE_HASH_ENV];
+          return {
+            separateParentRouting,
+            ...(separateParentRouting && profilePath && profileHash ? {
+              profileEnvironment: {
+                [MODEL_PROFILE_ENV]: profilePath,
+                [MODEL_PROFILE_HASH_ENV]: profileHash,
+              },
+            } : {}),
+          };
+        } catch {
+          return { separateParentRouting: false };
+        }
+      })();
       const context = {
         projectRoot: ctx.cwd,
         sessionId: piSessionId(ctx),
@@ -217,14 +240,7 @@ export default function harnessTasks(pi: ExtensionAPI, injected: Parameters<type
         // If either parent has an admitted experimental route, the task
         // launcher must resolve the local parent from the immutable snapshot;
         // copying the current global model here would collapse both choices.
-        separateParentRouting: (() => {
-          try {
-            const profile = loadModelProfileFromEnv(process.env);
-            return Boolean(profile.parents.global.route || profile.parents.local.route);
-          } catch {
-            return false;
-          }
-        })(),
+        ...profileContext,
         ...(process.env.ORCA_WORKTREE_ID ? { orca: { worktreeId: process.env.ORCA_WORKTREE_ID } } : {}),
       };
       let result;

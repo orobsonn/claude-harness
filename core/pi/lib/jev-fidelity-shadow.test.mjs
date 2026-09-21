@@ -122,7 +122,7 @@ test("shadow records prediction and native verdict without gaining authority", a
     callId: "call-1",
     responseText: "Native evidence.\nVerdict: APPROVE",
   });
-  const summaryPath = path.join(f.root, ".pi", "harness", "observability", "jev-fidelity-shadow-summary.json");
+  const summaryPath = path.join(f.root, ".pi", "harness", "state", "observability", "jev-fidelity-shadow-summary.json");
   await waitFor(summaryPath);
   for (let attempt = 0; attempt < 100; attempt += 1) {
     const summary = JSON.parse(fs.readFileSync(summaryPath, "utf8"));
@@ -151,12 +151,12 @@ test("disabled shadow does not create observability artifacts", (t) => {
     fetchImpl: () => { throw new Error("must not run"); },
   });
   assert.equal(started, false);
-  assert.equal(fs.existsSync(path.join(f.root, ".pi", "harness", "observability")), false);
+  assert.equal(fs.existsSync(path.join(f.root, ".pi", "harness", "state", "observability")), false);
 });
 
 test("shadow refuses a redirected event log and remains fail-open", (t) => {
   const f = fixture(t);
-  const directory = path.join(f.root, ".pi", "harness", "observability");
+  const directory = path.join(f.root, ".pi", "harness", "state", "observability");
   fs.mkdirSync(directory, { recursive: true });
   const victim = path.join(f.root, "victim.txt");
   fs.writeFileSync(victim, "unchanged\n");

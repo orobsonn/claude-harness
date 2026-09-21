@@ -5,6 +5,12 @@ import os from "node:os";
 import path from "node:path";
 import harnessTasks from "./harness-tasks.ts";
 import { runNativeToolCall } from "./pi-native-tool.test.mjs";
+import {
+  MODEL_PROFILE_ENV,
+  MODEL_PROFILE_HASH_ENV,
+  resolveModelProfile,
+  writeModelProfileSnapshot,
+} from "../lib/model-profile.mjs";
 
 test("native tool exposes sequential durable actions and derives the global identity from the host", async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-tasks-tool-"));
@@ -86,6 +92,40 @@ const toolContext = {
   cwd: "/fixture/project",
   sessionManager: { getSessionId: () => "parent", getHeader: () => ({}) },
 };
+
+test("task dispatch exports the admitted profile pointers for an Orca local parent", async (t) => {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "pi-task-profile-tool-")));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const stored = writeModelProfileSnapshot(root, "parent", resolveModelProfile({
+    profile: "trial-orchestration-deepseek",
+  }));
+  const previousPath = process.env[MODEL_PROFILE_ENV];
+  const previousHash = process.env[MODEL_PROFILE_HASH_ENV];
+  process.env[MODEL_PROFILE_ENV] = stored.path;
+  process.env[MODEL_PROFILE_HASH_ENV] = stored.sha256;
+  t.after(() => {
+    if (previousPath === undefined) delete process.env[MODEL_PROFILE_ENV];
+    else process.env[MODEL_PROFILE_ENV] = previousPath;
+    if (previousHash === undefined) delete process.env[MODEL_PROFILE_HASH_ENV];
+    else process.env[MODEL_PROFILE_HASH_ENV] = previousHash;
+  });
+  let observed;
+  const tool = taskTool({ executeAction: async (_params, context) => {
+    observed = context;
+    return { ok: true, tasks: [] };
+  } });
+  const result = await tool.execute("profile", { action: "status" }, undefined, undefined, {
+    cwd: root,
+    model: { provider: "ollama-cloud", id: "deepseek-v4.1-flash" },
+    sessionManager: { getSessionId: () => "parent", getHeader: () => ({}) },
+  });
+  assert.equal(result.details.ok, true);
+  assert.equal(observed.separateParentRouting, true);
+  assert.deepEqual(observed.profileEnvironment, {
+    [MODEL_PROFILE_ENV]: stored.path,
+    [MODEL_PROFILE_HASH_ENV]: stored.sha256,
+  });
+});
 
 test("abandon-resume exposes the explicit product judgment and passes only host-derived identity", async () => {
   const params = { action: "abandon-resume", task_id: "a", attempt_id: "attempt", expected_head: "a".repeat(40),

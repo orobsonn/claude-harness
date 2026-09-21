@@ -639,6 +639,7 @@ async function launchTask(entry, context, persist, deps, instruction) {
       args,
       presentation,
       runtime: entry.runtime,
+      profileEnvironment: context.profileEnvironment,
       ...(deps.orcaBackend ? {
         launchTerminal: (input) => deps.orcaBackend.launchTerminal({ ...input, worktreeId: entry.orca.worktree_id, instanceId: entry.orca.instance_id, title: `${entry.task_id} · ${localSession ? "resume" : "implementação"}` }),
       } : {}),

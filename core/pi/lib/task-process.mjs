@@ -3,10 +3,31 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawn, execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import {
+  MODEL_PROFILE_ENV,
+  MODEL_PROFILE_HASH_ENV,
+} from "./model-profile.mjs";
 
 const TASK_WORKER_PATH = fileURLToPath(
   new URL("../bin/pi-task-worker.mjs", import.meta.url),
 );
+
+const HEX_256 = /^[0-9a-f]{64}$/;
+
+/** Only immutable profile pointers cross an Orca terminal boundary; never secrets. */
+export function validateTaskProfileEnvironment(value) {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== "object" || Array.isArray(value) ||
+      Object.keys(value).sort().join("\0") !== [MODEL_PROFILE_ENV, MODEL_PROFILE_HASH_ENV].sort().join("\0") ||
+      typeof value[MODEL_PROFILE_ENV] !== "string" || !path.isAbsolute(value[MODEL_PROFILE_ENV]) ||
+      typeof value[MODEL_PROFILE_HASH_ENV] !== "string" || !HEX_256.test(value[MODEL_PROFILE_HASH_ENV])) {
+    throw new Error("task model profile environment is invalid");
+  }
+  return {
+    [MODEL_PROFILE_ENV]: value[MODEL_PROFILE_ENV],
+    [MODEL_PROFILE_HASH_ENV]: value[MODEL_PROFILE_HASH_ENV],
+  };
+}
 
 export function writeTaskJson(file, value) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -358,7 +379,7 @@ export function readTaskProcess(launch, dependencies = {}) {
   }
 }
 
-/** Called only by the host coordinator. Environment values are never serialized. */
+/** Called only by the host coordinator. Secrets are never serialized. */
 export async function startTaskProcess({
   jobDir,
   runId,
@@ -370,6 +391,7 @@ export async function startTaskProcess({
   launchTerminal,
   title,
   presentation = "json",
+  profileEnvironment,
 }) {
   let launch;
   let worker;
@@ -398,6 +420,7 @@ export async function startTaskProcess({
       ...(launchTerminal ? { terminal_mode: true } : {}),
       ...(presentation === "tui" ? { presentation } : {}),
     };
+    const admittedProfileEnvironment = validateTaskProfileEnvironment(profileEnvironment);
     writeTaskJson(descriptor, {
       ...launch,
       cwd,
@@ -405,6 +428,7 @@ export async function startTaskProcess({
       args,
       runtime,
       timeoutMs,
+      ...(admittedProfileEnvironment ? { profile_environment: admittedProfileEnvironment } : {}),
     });
     if (launchTerminal) {
       try {
