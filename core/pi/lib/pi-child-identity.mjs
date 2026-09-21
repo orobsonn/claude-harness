@@ -1,6 +1,6 @@
 /**
  * @description Identidade de sessão FILHA na lane Pi — o equivalente ao sinal que o SDK do
- * OpenCode entrega de graça (`session.agent === 'planner'`) e que o Pi 0.84.4 NÃO tem: o
+ * OpenCode entrega de graça (`session.agent === 'planner'`) e que o Pi 0.86.1 NÃO tem: o
  * `SessionHeader` da filha carrega só `parentSession` (dist/core/session-manager.d.ts), nunca o
  * nome do agente.
  *

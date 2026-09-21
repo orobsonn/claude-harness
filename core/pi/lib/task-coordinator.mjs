@@ -618,8 +618,8 @@ async function launchTask(entry, context, persist, deps, instruction) {
       ? ["--harness-resume", localSession]
       : ["--harness-task", entry.grant_path]),
     ...(presentation === "tui" ? ["--no-approve"] : ["--mode", "json", "-p"]),
-    ...(context.thinkingLevel ? ["--thinking", context.thinkingLevel] : []),
-    ...(context.model?.provider && context.model?.id
+    ...(!context.separateParentRouting && context.thinkingLevel ? ["--thinking", context.thinkingLevel] : []),
+    ...(!context.separateParentRouting && context.model?.provider && context.model?.id
       ? ["--provider", context.model.provider, "--model", context.model.id]
       : []),
     prompt,

@@ -1,6 +1,7 @@
 import { Type } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { isChildSession, piSessionId } from "../lib/pi-adapter-map.mjs";
+import { loadModelProfileFromEnv } from "../lib/model-profile.mjs";
 import {
   executeTaskAction,
   decideTaskCoordinatorEdit,
@@ -213,6 +214,17 @@ export default function harnessTasks(pi: ExtensionAPI, injected: Parameters<type
         isChild: isChildSession(ctx),
         model: ctx.model,
         thinkingLevel: pi.getThinkingLevel?.(),
+        // If either parent has an admitted experimental route, the task
+        // launcher must resolve the local parent from the immutable snapshot;
+        // copying the current global model here would collapse both choices.
+        separateParentRouting: (() => {
+          try {
+            const profile = loadModelProfileFromEnv(process.env);
+            return Boolean(profile.parents.global.route || profile.parents.local.route);
+          } catch {
+            return false;
+          }
+        })(),
         ...(process.env.ORCA_WORKTREE_ID ? { orca: { worktreeId: process.env.ORCA_WORKTREE_ID } } : {}),
       };
       let result;

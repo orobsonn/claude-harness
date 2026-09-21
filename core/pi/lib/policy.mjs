@@ -192,6 +192,23 @@ export function piProtectablePath(path) {
   return protectablePath(value) || PI_PROTECTED.test(value)
 }
 
+// Task worktrees intentionally live below the parent's .pi/harness/state tree.
+// Native write tools may report an absolute target; judge an in-project target
+// by its path inside the current canonical project, otherwise every ordinary
+// src/test write in a delegated task looks like a harness mutation.
+function projectRelativeWritePath(path, options = {}) {
+  if (typeof path !== 'string' || path.length === 0) return path
+  try {
+    const cwd = resolve(options.cwd ?? process.cwd())
+    const root = resolve(options.projectRoot ?? cwd)
+    const target = isAbsolute(path) ? resolve(path) : resolve(cwd, path)
+    if (!pathIsInside(root, target)) return path
+    return relative(root, target) || '.'
+  } catch {
+    return path
+  }
+}
+
 /** @description Caminho carrega segredo segundo os Read-denies de core/claude-code/settings.json:
  * `.env`, `.env.*`, `**​/.env`, `**​/.env.*`, `.dev.vars`, `**​/.dev.vars`, `~/.ssh/**`, `~/.aws/**`.
  * Expande `~` e resolve para absoluto antes de casar. */
@@ -201,6 +218,11 @@ export function isSecretReadPath(path, options = {}) {
   const cwd = typeof options.cwd === 'string' && options.cwd.length > 0 ? options.cwd : process.cwd()
   const expanded = path === '~' ? home : path.startsWith(`~${sep}`) || path.startsWith('~/') ? resolve(home, path.slice(2)) : path
   const absolute = isAbsolute(expanded) ? resolve(expanded) : resolve(cwd, expanded)
+  // Linux procfs exposes the complete process environment (including provider
+  // credentials) and argv through ordinary-looking files. Treat the whole tree
+  // as secret-bearing: aliases such as /proc/self/root/proc/... and fd links can
+  // otherwise bypass a filename-only deny.
+  if (absolute === '/proc' || absolute.startsWith(`/proc${sep}`)) return true
   const name = basename(absolute)
   if (name === '.env' || name.startsWith('.env.')) return true
   if (name === '.dev.vars') return true
@@ -330,6 +352,13 @@ export function decidePiPolicy(call = {}, options = {}) {
   const modelPreferences = decideModelPreferences(toolName, input, options)
   if (modelPreferences) return modelPreferences
 
+  // Shell tools can reach procfs without going through the native read tools.
+  // Deny any explicit procfs path before the parent allowlist is evaluated.
+  if (isPiBashTool(toolName) && typeof input.command === 'string' &&
+    /(?:^|[\s"'`=:(])(?:\/+|(?:\.\.\/)+)proc(?:\/|$)/.test(input.command)) {
+    return { block: true, reason: SECRET_REASON }
+  }
+
   const parentAuthority = decidePiParentOrchestratorPolicy({ toolName, input }, options)
   if (parentAuthority.block) return parentAuthority
 
@@ -339,7 +368,10 @@ export function decidePiPolicy(call = {}, options = {}) {
     return isSecretReadPath(input.path, options) ? { block: true, reason: SECRET_REASON } : ALLOW
   }
 
-  const payload = toCodexPreToolPayload({ toolName, input })
+  const policyInput = isPiWriteTool(toolName)
+    ? { ...input, path: projectRelativeWritePath(input.path, options) }
+    : input
+  const payload = toCodexPreToolPayload({ toolName, input: policyInput })
   if (!payload) return ALLOW
 
   // O plano canônico é um único carve-out: a policy de superfície não sabe quem escreve;

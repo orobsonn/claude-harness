@@ -1,0 +1,44 @@
+{
+  "providers": {
+    "ollama-cloud": {
+      "baseUrl": "https://ollama.com/v1",
+      "api": "openai-completions",
+      "apiKey": "$OLLAMA_API_KEY",
+      "authHeader": true,
+      "compat": {
+        "supportsDeveloperRole": true,
+        "supportsReasoningEffort": true
+      },
+      "models": [
+        {
+          "id": "deepseek-v4.1-flash",
+          "name": "DeepSeek V4.1 Flash (Ollama Cloud)",
+          "reasoning": true,
+          "input": ["text", "image"],
+          "contextWindow": 1000000,
+          "maxTokens": 32768,
+          "cost": {
+            "input": 0.15,
+            "output": 0.60,
+            "cacheRead": 0.003,
+            "cacheWrite": 0
+          }
+        },
+        {
+          "id": "glm-5.3",
+          "name": "GLM 5.3 (Ollama Cloud)",
+          "reasoning": true,
+          "input": ["text"],
+          "contextWindow": 1000000,
+          "maxTokens": 32768,
+          "cost": {
+            "input": 1.40,
+            "output": 4.40,
+            "cacheRead": 0.26,
+            "cacheWrite": 0
+          }
+        }
+      ]
+    }
+  }
+}
