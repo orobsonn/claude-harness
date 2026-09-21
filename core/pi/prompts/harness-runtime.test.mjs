@@ -109,6 +109,8 @@ test("harvest runs once after final eyes and rework, before shipper", () => {
   assert.match(harvester, /`append`.*host computes.*full\s+preimage/is);
   assert.match(harvester, /8 KiB/);
   assert.match(prompt, /recibo válido.*reutilize.*changes: \[\]/is);
+  assert.match(prompt, /resultado intermediário.*não prova.*conteúdo persistido.*blob commitado.*HEAD atual/is);
+  assert.match(prompt, /documentos duráveis após `finalize`.*colheita corretiva.*tombstone.*não repita\s+olhos do produto/is);
   assert.match(prompt, /zero deltas.*não cria.*tarefa/is);
   assert.match(prompt, /delta não vazio.*action="apply".*host.*idempotente/is);
   assert.match(prompt, /commit seletivo.*paths.*recibo/is);
