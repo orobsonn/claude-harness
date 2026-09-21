@@ -9,7 +9,8 @@ Implementação sobre o harness 3.2.x e Pi 0.86.1. O provider distribuído usa
 
 - `baseline`: rotas Codex anteriores e rollback explícito sem chave Ollama.
 - `trial-hands-deepseek`: executor, sniper e test-author usam DeepSeek em
-  low/medium e GLM em high/max. Test-reviewer permanece Luna.
+  low/medium/high/max. `max` é apenas fallback defensivo para planos legados;
+  o planner deve decompor a task antes da admissão. Test-reviewer permanece Luna.
 - `trial-hands-glm`: as mesmas mãos usam GLM em todos os tiers, sem fallback.
 - `trial-orchestration-deepseek`: acrescenta DeepSeek nos pais global e local;
   é o default para sessões novas.
@@ -188,7 +189,7 @@ capacidade de entrega; antes de adotá-lo como default, o plano deve representar
 comando ou validar esse detalhe na admissão para evitar a mesma sobre-engenharia.
 
 Leitura operacional: o perfil é viável. Por decisão do operador após o terceiro braço,
-novas sessões usam pais DeepSeek e hands DeepSeek/GLM por padrão; `baseline` permanece o
+novas sessões usam pais e hands DeepSeek por padrão; `baseline` permanece o
 rollback explícito. O bootstrap, o contexto de 1M e os rails de identidade/pipeline são
 parte obrigatória dessa admissão.
 

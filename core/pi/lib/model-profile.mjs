@@ -4,7 +4,7 @@ import path from "node:path";
 
 export const MODEL_PROFILE_ENV = "PI_HARNESS_MODEL_PROFILE";
 export const MODEL_PROFILE_HASH_ENV = "PI_HARNESS_MODEL_PROFILE_SHA256";
-export const MODEL_PROFILE_VERSION = 1;
+export const MODEL_PROFILE_VERSION = 2;
 export const OLLAMA_PROVIDER = "ollama-cloud";
 export const OLLAMA_ENDPOINT = "https://ollama.com/v1";
 export const DEEPSEEK_MODEL = "deepseek-v4.1-flash";
@@ -12,6 +12,7 @@ export const GLM_MODEL = "glm-5.3";
 export const DEFAULT_MODEL_PROFILE = "trial-orchestration-deepseek";
 
 const COMPLEXITIES = Object.freeze(["low", "medium", "high", "max"]);
+const SUPPORTED_MODEL_PROFILE_VERSIONS = new Set([1, MODEL_PROFILE_VERSION]);
 const PARENT_TARGETS = new Set(["baseline", "deepseek"]);
 
 const BASELINE_FIXED = Object.freeze({
@@ -36,8 +37,14 @@ const BASELINE_HANDS = Object.freeze({
 
 const PROFILE_DEFAULTS = Object.freeze({
   baseline: Object.freeze({ handModel: null, globalParent: "baseline", localParent: "baseline" }),
-  "trial-hands-deepseek": Object.freeze({ handModel: "tiered-open", globalParent: "baseline", localParent: "baseline" }),
+  "trial-hands-deepseek": Object.freeze({ handModel: DEEPSEEK_MODEL, globalParent: "baseline", localParent: "baseline" }),
   "trial-hands-glm": Object.freeze({ handModel: GLM_MODEL, globalParent: "baseline", localParent: "baseline" }),
+  "trial-orchestration-deepseek": Object.freeze({ handModel: DEEPSEEK_MODEL, globalParent: "deepseek", localParent: "deepseek" }),
+});
+
+const LEGACY_PROFILE_DEFAULTS = Object.freeze({
+  ...PROFILE_DEFAULTS,
+  "trial-hands-deepseek": Object.freeze({ handModel: "tiered-open", globalParent: "baseline", localParent: "baseline" }),
   "trial-orchestration-deepseek": Object.freeze({ handModel: "tiered-open", globalParent: "deepseek", localParent: "deepseek" }),
 });
 
@@ -65,8 +72,10 @@ function parentRoute(target) {
     : null;
 }
 
-export function resolveModelProfile({ profile = DEFAULT_MODEL_PROFILE, globalParent, localParent, budgetUsd = null } = {}) {
-  const defaults = PROFILE_DEFAULTS[profile];
+export function resolveModelProfile({ profile = DEFAULT_MODEL_PROFILE, globalParent, localParent, budgetUsd = null,
+  version = MODEL_PROFILE_VERSION } = {}) {
+  if (!SUPPORTED_MODEL_PROFILE_VERSIONS.has(version)) throw new Error(`unsupported harness model profile version: ${String(version)}`);
+  const defaults = (version === 1 ? LEGACY_PROFILE_DEFAULTS : PROFILE_DEFAULTS)[profile];
   if (!defaults) throw new Error(`unknown harness model profile: ${String(profile)}`);
   const selectedGlobal = globalParent ?? defaults.globalParent;
   const selectedLocal = localParent ?? defaults.localParent;
@@ -91,7 +100,7 @@ export function resolveModelProfile({ profile = DEFAULT_MODEL_PROFILE, globalPar
       max: { model: "openai-codex/gpt-5.6-sol", thinking: "high" },
     };
   const snapshot = {
-    version: MODEL_PROFILE_VERSION,
+    version,
     profile,
     budget_usd: budgetUsd === null ? null : Number(budgetUsd),
     provider: {
@@ -126,7 +135,7 @@ export function resolveModelProfile({ profile = DEFAULT_MODEL_PROFILE, globalPar
 }
 
 export function routeFromModelProfile(snapshot, role, complexity) {
-  if (!snapshot || snapshot.version !== MODEL_PROFILE_VERSION) return { ok: false, reason: "profile-snapshot" };
+  if (!snapshot || !SUPPORTED_MODEL_PROFILE_VERSIONS.has(snapshot.version)) return { ok: false, reason: "profile-snapshot" };
   if (role === "harness-test-author") {
     const route = snapshot.routes?.test_author?.[complexity];
     return route ? { ok: true, ...route } : { ok: false, reason: "hand-complexity" };
@@ -202,6 +211,7 @@ export function readModelProfileSnapshot(projectRoot, sessionId) {
   try {
     const value = JSON.parse(text);
     const expected = resolveModelProfile({
+      version: value.version,
       profile: value.profile,
       globalParent: value.parents?.global?.target,
       localParent: value.parents?.local?.target,
@@ -225,6 +235,7 @@ export function loadModelProfileFromEnv(env = process.env) {
   if (actualHash !== expectedHash) throw new Error("admitted model profile hash mismatch");
   const value = JSON.parse(text);
   const expected = resolveModelProfile({
+    version: value.version,
     profile: value.profile,
     globalParent: value.parents?.global?.target,
     localParent: value.parents?.local?.target,
