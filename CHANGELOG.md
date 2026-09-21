@@ -5,6 +5,13 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [3.3.1](https://github.com/orobsonn/claude-harness/compare/v3.3.0...v3.3.1) (2026-09-21)
+
+
+### Bug Fixes
+
+* **pi:** preserve local routing and Jev review packets ([#1014](https://github.com/orobsonn/claude-harness/issues/1014)) ([052dd10](https://github.com/orobsonn/claude-harness/commit/052dd10b1afaf1deab0c00350d2afd1cdd917859))
+
 ## [3.3.0](https://github.com/orobsonn/claude-harness/compare/v3.2.0...v3.3.0) (2026-09-21)
 
 
