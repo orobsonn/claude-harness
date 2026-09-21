@@ -146,6 +146,39 @@ test("task capture without re-gate continues locally, while ready and LIGHT comp
   assert.equal(readDeliveryContinuation(f.ctx, dependencies), null, "do not invent reviews in LIGHT");
 });
 
+test("ancestral capture marker closes a corrected task without dispatching a no-op hand", t => {
+  const f = fixture(t);
+  const key = "issue-22/one";
+  const capturedHead = f.head;
+  fs.writeFileSync(path.join(f.ctx.cwd, "correction.txt"), "review correction\n");
+  execFileSync("git", ["add", "correction.txt"], { cwd: f.ctx.cwd });
+  execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", "fix: review correction"], { cwd: f.ctx.cwd });
+  const currentHead = execFileSync("git", ["rev-parse", "HEAD"], { cwd: f.ctx.cwd, encoding: "utf8" }).trim();
+  const handPath = path.join(f.ctx.cwd, ".pi/harness/state/hand-records/issue-22/parent/one.json");
+  fs.mkdirSync(path.dirname(handPath), { recursive: true });
+  fs.writeFileSync(handPath, JSON.stringify({
+    featureId: "issue-22", taskId: "one", sessionId: "parent",
+    producerCallId: "implementation-call", freezeCommitSha: capturedHead,
+    outcome: "DONE", scopeViolations: [], frozenViolations: [],
+    capturedVerifiedAt: "2026-09-21T13:01:45.425Z", writtenBy: "host-hand-finished",
+  }));
+  Object.assign(f.state, {
+    task_run: { task_id: "one" },
+    hand_finished: [key],
+    capture_verified: [`${key}@${capturedHead}`],
+    regate_passed: [`${key}@${currentHead}`],
+  });
+  f.write("gate-state.json", f.state);
+  const dependencies = { readBinding: () => ({ ok: true, grant: { task_id: "one" }, task: {} }) };
+  assert.equal(readDeliveryContinuation(f.ctx, dependencies), null,
+    "validated ancestral capture must not manufacture pending implementation");
+
+  f.state.capture_verified = [];
+  f.write("gate-state.json", f.state);
+  assert.equal(readDeliveryContinuation(f.ctx, dependencies).stage, "task-implementation",
+    "hand record alone cannot replace the host capture marker");
+});
+
 test("uncommitted task RED is progress once, including restart, not a new approval", async t => {
   const f = fixture(t);
   f.state.task_run = { task_id: "one" }; f.write("gate-state.json", f.state);
