@@ -5,6 +5,13 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [3.3.2](https://github.com/orobsonn/claude-harness/compare/v3.3.1...v3.3.2) (2026-09-21)
+
+
+### Bug Fixes
+
+* **pi:** honor ancestral task capture in continuation ([#1016](https://github.com/orobsonn/claude-harness/issues/1016)) ([8fb64a0](https://github.com/orobsonn/claude-harness/commit/8fb64a007b963ef19d827964df449725409119d1))
+
 ## [3.3.1](https://github.com/orobsonn/claude-harness/compare/v3.3.0...v3.3.1) (2026-09-21)
 
 
