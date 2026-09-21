@@ -4,11 +4,15 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { isSafeSessionId, isSafeFeatureId } from "../../shared/lib/feature-id.mjs";
+import { isCaptureEligibleHandRecord, recordViolations } from "../../shared/lib/real-file-capture-rail.mjs";
+import { validateOcCaptureEligibleHandRecord } from "../../opencode/lib/hand-records.mjs";
 import { isChildSession, piSessionId } from "./pi-adapter-map.mjs";
+import { piHandRecordPath } from "./pi-paths.mjs";
 import { readTaskRunBinding } from "./task-run.mjs";
 import { checkScope } from "../../shared/lib/capture-oracle.mjs";
 
 const ENTRY = "harness-delivery-continuation";
+const COMMIT_SHA = /^[0-9a-f]{40}$/;
 const hash = value => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const read = (root, file) => {
   const absolute = path.join(root, file);
@@ -47,6 +51,34 @@ function pendingTaskContent(root, task = {}) {
   });
 }
 
+// Capture authority is intentionally anchored at the implementation producer's
+// freezeCommitSha. Later corrective/review commits may advance HEAD without
+// requiring a no-op writer; the real task gate accepts that ancestral lineage.
+// Keep this advisory continuation detector aligned with the same contract.
+function hasCurrentTaskCapture(root, { state, sessionId, featureId, taskId, key, head, pendingContent }) {
+  if (pendingContent.length !== 0 || !(state.hand_finished ?? []).includes(key)) return false;
+  if ((state.capture_verified ?? []).includes(`${key}@${head}`)) return true;
+  const resolved = piHandRecordPath({ projectRoot: root, sessionId, featureId }, taskId);
+  if (!resolved.ok) return false;
+  const relative = path.relative(root, resolved.path);
+  const hand = relative && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)
+    ? read(root, relative)
+    : null;
+  const violations = recordViolations(hand);
+  if (!isCaptureEligibleHandRecord(hand) ||
+      !validateOcCaptureEligibleHandRecord(hand, { featureId, taskId, sessionId }).ok ||
+      violations.scope.length || violations.frozen.length ||
+      typeof hand.capturedVerifiedAt !== "string" || !hand.capturedVerifiedAt ||
+      !COMMIT_SHA.test(hand.freezeCommitSha ?? "") ||
+      !(state.capture_verified ?? []).includes(`${key}@${hand.freezeCommitSha}`)) return false;
+  try {
+    execFileSync("git", ["merge-base", "--is-ancestor", hand.freezeCommitSha, head], {
+      cwd: root, stdio: ["ignore", "ignore", "ignore"], timeout: 10000,
+    });
+    return true;
+  } catch { return false; }
+}
+
 /** Read-only hints. Existing tools remain the sole approval and scheduling authority. */
 export function readDeliveryContinuation(ctx, { readBinding = readTaskRunBinding } = {}) {
   const sessionId = piSessionId(ctx);
@@ -66,7 +98,9 @@ export function readDeliveryContinuation(ctx, { readBinding = readTaskRunBinding
     const taskId = binding.grant.task_id;
     const key = `${feature}/${taskId}`;
     const pendingContent = pendingTaskContent(root, binding.task);
-    const captured = pendingContent.length === 0 && (state.hand_finished ?? []).includes(key) && (state.capture_verified ?? []).includes(`${key}@${head}`);
+    const captured = hasCurrentTaskCapture(root, {
+      state, sessionId, featureId: feature, taskId, key, head, pendingContent,
+    });
     const reviews = { ...(state.task_review_evidence?.[key] ?? {}), adversary: state.task_adversary_evidence?.[key] };
     const reviewRequired = state.mode.toUpperCase() === "FULL" || Object.values(reviews).some(Boolean);
     const regated = (state.regate_passed ?? []).includes(`${key}@${head}`);
