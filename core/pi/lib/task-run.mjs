@@ -12,6 +12,7 @@ import { parseTestReviewVerdict } from "../../shared/lib/test-review-verdict.mjs
 import { checkScope } from "../../shared/lib/capture-oracle.mjs";
 import { piSubagentArgs } from "./pi-adapter-map.mjs";
 import { piDispatchRoute } from "./dispatch-rail.mjs";
+import { loadModelProfileFromEnv } from "./model-profile.mjs";
 import { readPiSpecApproval } from "./spec-approval.mjs";
 import { validateTaskContextHandoff } from "./task-context.mjs";
 import {
@@ -512,7 +513,7 @@ export function checkTaskRepairPreservation(binding, event) {
 export function taskRunPrompt(taskRuntime, admission) {
   if (typeof taskRuntime !== "string" || !taskRuntime.trim()) throw new Error("stable task runtime prompt required");
   const dispatchRoutes = Object.fromEntries([...TASK_ROLES].map((role) => {
-    const resolved = piDispatchRoute(role, admission.task.complexity);
+    const resolved = piDispatchRoute(role, admission.task.complexity, loadModelProfileFromEnv());
     if (!resolved.ok) throw new Error(`task dispatch route unavailable for ${role}`);
     const { ok: _ok, ...route } = resolved;
     return [role, TASK_WRITING_ROLES.has(role)

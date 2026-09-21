@@ -519,6 +519,31 @@ test("Orca parent pins placement and every launch receives the terminal adapter"
   assert.deepEqual(starts[2].args.slice(3, 6), ["--mode", "json", "-p"]);
 });
 
+test("separate parent routing leaves the local model to the admitted profile", async (t) => {
+  const f = fixture(t);
+  let started;
+  const result = await executeTaskAction(
+    { action: "dispatch", task_ids: ["a"] },
+    {
+      ...f.context,
+      separateParentRouting: true,
+      thinkingLevel: "high",
+      model: { provider: "ollama-cloud", id: "deepseek-v4.1-flash" },
+    },
+    {
+      ...f.deps,
+      startProcess: async (input) => {
+        started = input;
+        return f.deps.startProcess(input);
+      },
+    },
+  );
+  assert.equal(result.ok, true, result.reason);
+  assert.equal(started.args.includes("--provider"), false);
+  assert.equal(started.args.includes("--model"), false);
+  assert.equal(started.args.includes("--thinking"), false);
+});
+
 test("a recent partial registry lock remains owned instead of being reclaimed during its write", async (t) => {
   const f = fixture(t);
   const registry = taskRegistryPath(f.dir, "parent");

@@ -1,6 +1,12 @@
 import { join } from "node:path";
 
 import { RUNTIME_ROLES, isRuntimeRole } from "./roles.mjs";
+import {
+  BASELINE_FIXED as FIXED_PI_ROUTES,
+  BASELINE_HANDS as HAND_PI_ROUTES,
+  loadModelProfileFromEnv,
+  routeFromModelProfile,
+} from "./model-profile.mjs";
 
 // Planner and review eyes routinely need several inspect/verify cycles on a FULL
 // delivery. Keep a finite ceiling as a liveness/cost rail, but leave enough
@@ -17,34 +23,13 @@ const INDEPENDENT_REVIEW_ROLES = new Set([
   "harness-security",
 ]);
 
-/** Rotas fixas da lane Pi. O pai escolhe a complexidade do plano, mas não o modelo/effort. */
-const FIXED_PI_ROUTES = Object.freeze({
-  "harness-support": Object.freeze({ model: "openai-codex/gpt-5.6-terra", thinking: "high" }),
-  "harness-planner": Object.freeze({ model: "openai-codex/gpt-5.6-sol", thinking: "high" }),
-  "harness-plan-reviewer": Object.freeze({ model: "openai-codex/gpt-6-astra", thinking: "high" }),
-  "harness-test-reviewer": Object.freeze({ model: "openai-codex/gpt-5.6-luna", thinking: "xhigh" }),
-  "harness-adversary": Object.freeze({ model: "openai-codex/gpt-5.6-sol", thinking: "medium" }),
-  "harness-security": Object.freeze({ model: "openai-codex/gpt-5.6-sol" }),
-  "harness-compliance": Object.freeze({ model: "openai-codex/gpt-5.6-terra", thinking: "high" }),
-  "harness-harvester": Object.freeze({ model: "openai-codex/gpt-5.6-luna", thinking: "high" }),
-  "harness-shipper": Object.freeze({ model: "openai-codex/gpt-5.6-luna", thinking: "high" }),
-  "harness-discussion-adversary": Object.freeze({ model: "openai-codex/gpt-5.6-sol", thinking: "medium" }),
-});
-
-const HAND_PI_ROUTES = Object.freeze({
-  low: Object.freeze({ model: "openai-codex/gpt-5.6-luna", thinking: "high" }),
-  medium: Object.freeze({ model: "openai-codex/gpt-5.6-terra", thinking: "medium" }),
-  high: Object.freeze({ model: "openai-codex/gpt-5.6-terra", thinking: "xhigh" }),
-  // O contrato de plano legado ainda aceita `max`; na rota aprovada ele colapsa no maior degrau.
-  max: Object.freeze({ model: "openai-codex/gpt-5.6-terra", thinking: "xhigh" }),
-});
-
 function deny(reason) {
   return { ok: false, reason };
 }
 
 /** @description Resolve a rota imutável de um despacho. Executor/sniper exigem a complexidade do plano. */
-export function piDispatchRoute(role, complexity) {
+export function piDispatchRoute(role, complexity, profileSnapshot = loadModelProfileFromEnv()) {
+  if (profileSnapshot) return routeFromModelProfile(profileSnapshot, role, complexity);
   if (role === "harness-test-author") {
     if (!["low", "medium", "high", "max"].includes(complexity)) return { ok: false, reason: "hand-complexity" };
     return { ok: true, model: ["high", "max"].includes(complexity) ? "openai-codex/gpt-5.6-sol" : "openai-codex/gpt-5.6-terra", thinking: "high" };
@@ -60,7 +45,7 @@ export function piDispatchRoute(role, complexity) {
 
 /**
  * @param {unknown} input
- * @param {{shadowedRoles?: Set<string>}} [options]
+ * @param {{shadowedRoles?: Set<string>, profileSnapshot?: object}} [options]
  */
 export function validateSubagentDispatch(input, options = {}) {
   const data = input && typeof input === "object" ? input : {};
@@ -75,7 +60,7 @@ export function validateSubagentDispatch(input, options = {}) {
   if (data.resume != null) return deny("resume-disabled");
   if (data.run_in_background === true) return deny("background-disabled");
   if (typeof data.max_turns === "number" && data.max_turns > MAX_TURNS) return deny("turn-limit");
-  const route = piDispatchRoute(role, data.complexity);
+  const route = piDispatchRoute(role, data.complexity, options.profileSnapshot ?? loadModelProfileFromEnv());
   if (!route.ok) return deny(route.reason);
   if (data.model !== route.model || data.thinking !== route.thinking) return deny("model-route");
   return { ok: true };

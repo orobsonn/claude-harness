@@ -1,5 +1,5 @@
 /**
- * Compatibility overlay for the pinned Pi 0.84.4 runtime.
+ * Compatibility overlay for the pinned Pi 0.86.1 runtime.
  *
  * Pi binds credentials to PI_CODING_AGENT_DIR. The harness keeps that directory
  * per worktree, so this sealed patch introduces PI_CODING_AGENT_AUTH_PATH while
@@ -15,8 +15,8 @@ export const PI_SUBAGENTS_AUTH_PATH_PATCH_MARKER = "CLAUDE_HARNESS_SUBAGENTS_AUT
 export const PI_AUTH_PATH_ENV = "PI_CODING_AGENT_AUTH_PATH";
 export const PI_RESUME_ENV = "PI_HARNESS_RESUME";
 const PI_RESUME_PATCH_MARKER = "CLAUDE_HARNESS_EXACT_RESUME_PATCH_v1";
-const PINNED_PI_VERSION = "0.84.4";
-const PINNED_SUBAGENTS_VERSION = "21.2.0";
+const PINNED_PI_VERSION = "0.86.1";
+const PINNED_SUBAGENTS_VERSION = "21.7.4";
 
 function sha256(content) {
   return createHash("sha256").update(content).digest("hex");
@@ -35,8 +35,8 @@ function mark(content) {
 const PATCHES = [
   {
     rel: "dist/core/session-manager.js",
-    sha256: "f0912a8b585263cc9793b38d97f01d19b0617c67b56d7f790bbb81a27d916a3c",
-    patchedSha256: "499a7e12a0b12fddfce8ef5f0b18c2c7d91ef39ec0d210b3b8f1e348aefe9272",
+    sha256: "96bd76b298f3c0a6b6d9b57b727f0f9b1196fbfa83172071ac280a5a37f82a08",
+    patchedSha256: "0911392288b89db5195d1a1b1223ba1bcaa32641ff911338214383aa7dd2d344",
     marker: PI_RESUME_PATCH_MARKER,
     transform(content) {
       let next = replaceExactly(content,
@@ -72,7 +72,7 @@ const PATCHES = [
   },
   {
     rel: "dist/config.js",
-    sha256: "9fcb50fd3192dd8550be77bd178c754a80512f20dc0058335b21b42954812a7f",
+    sha256: "d10613c9933c612cd6ce705823511b1cea68250de3869b3cf3b5d67418d65344",
     transform(content) {
       let next = replaceExactly(
         content,
@@ -107,7 +107,7 @@ const PATCHES = [
   },
   {
     rel: "dist/core/sdk.js",
-    sha256: "6969bd56ba8e1628cd033bb15cb15fe38299f00b5ad84f4f8ef37a33a98681c9",
+    sha256: "3417c58edc5c02a4ae71a3604bbd04688d1741e0203497bf082a748ca843d850",
     transform(content) {
       let next = replaceExactly(content, 'import { getAgentDir } from "../config.js";', 'import { getAgentDir, getAuthPath } from "../config.js";');
       next = replaceExactly(next, 'const authPath = options.agentDir ? join(agentDir, "auth.json") : undefined;', "const authPath = getAuthPath();");
@@ -116,7 +116,7 @@ const PATCHES = [
   },
   {
     rel: "dist/migrations.js",
-    sha256: "aa57901e3dd13f38d3d4e95b40ea3a9062e4943feff4535285cc41ece0d98f69",
+    sha256: "8514d2573b028baeba60635498a1c5f129a602abd203ea5c37a63df2eea3fb6b",
     transform(content) {
       let next = replaceExactly(
         content,
@@ -165,14 +165,14 @@ function patchFile(path, spec) {
 
 
 // Pinned internal PromptOptions.preflightResult seam, not a stable public SDK API.
-const PI_REVIEW_PREFLIGHT_SHA = "e213e4094a3f176b2491e0470ac8ecd88aeab0030d35aabd9ba289ba7b74b923";
+const PI_REVIEW_PREFLIGHT_SHA = "edaff7055ced7d49d25135c92415fbbfd9c14c4a29be5a79510ab9216045d6d9";
 const PI_SUBAGENTS_LIFECYCLE_MARKER = "CLAUDE_HARNESS_SUBAGENTS_LIFECYCLE_PATCH_v1";
 const SUBAGENTS_LIFECYCLE_PATCHES = [
   {
     rel: "src/lifecycle/create-subagent-session.ts",
     marker: PI_SUBAGENTS_LIFECYCLE_MARKER,
-    sha256: "9892d8ccd699b54a72784921997da5d88bc965dd831d29287f86f7a250bc888f",
-    patchedSha256: "8b179272f3a2342191203a2465389f3cb7c7aa8808ec9d988d519c2779ddd0b0",
+    sha256: "519fa77bac82a082316f7939e3b97605bbb7f364c2977b06e8bfddf5136ddafa",
+    patchedSha256: "898a87c64d39949c386207e9a17787bbf01fa48e4bfc284b614c84d9f11e530b",
     transform(content) {
       let next = replaceExactly(content,
         "  deps.lifecycle.sessionCreated({ sessionId, parentSessionId });\n\n  try {\n",
@@ -205,8 +205,8 @@ const SUBAGENTS_LIFECYCLE_PATCHES = [
   {
     rel: "src/lifecycle/subagent-session.ts",
     marker: PI_SUBAGENTS_LIFECYCLE_MARKER,
-    sha256: "4811b4889987cc4ae7c443c03cd5917abffddbe8aca8655d10012a3ab652ca4b",
-    patchedSha256: "858d6550e83db1a387857d29c757466276de7bfa1a3759b7c488474f69ccaad5",
+    sha256: "909e4e802a27a4dc178f56d4eea429b2b85e6b043596264482c7461d458bdf51",
+    patchedSha256: "adb458855786692e50f8d4adaac206da233193c920e04f637655dd9bf84408d4",
     transform(content) {
       const next = replaceExactly(content,
         "      await session.prompt(effectivePrompt);",
@@ -246,7 +246,7 @@ function applySubagentsAuthPathPatch(subagentsPackagePath) {
   if (!info.isFile() || info.isSymbolicLink()) throw new Error("subagents auth-path patch refuses non-regular src/index.ts");
   const current = readFileSync(indexPath, "utf8");
   if (current.includes(PI_SUBAGENTS_AUTH_PATH_PATCH_MARKER)) return { ok: true };
-  if (sha256(current) !== "7685e1a390a8789e3935c5316afb2672d6f100dae6ec80f26113b33449f49ff6") {
+  if (sha256(current) !== "245846b0f63c5b9bdf4eadb905d515adcaf45ffc2c46479e1c898905c07d6092") {
     throw new Error("subagents auth-path patch refused unexpected bytes: src/index.ts");
   }
   const patched = `// ${PI_SUBAGENTS_AUTH_PATH_PATCH_MARKER}\n${replaceExactly(

@@ -17,26 +17,14 @@ import { readTaskProcess, taskGroupMembers, exactWorkerPids } from "./task-proce
 import { piExecutionPlanPath, piGateStatePath, piSpecPath, piStateRoot } from "./pi-paths.mjs";
 import { readTaskRunBinding } from "./task-run.mjs";
 import { hasSuccessfulAdversaryCompletion } from "./marker-authority.mjs";
+import { modelStrategyFromProfile, resolveModelProfile } from "./model-profile.mjs";
 
 const MAX_FILE_BYTES = 1024 * 1024;
 const RECOVERABLE_MODES = new Set(["LIGHT", "FULL"]);
 // A retomada não pode aceitar a estratégia declarada pelo próprio plano: ela
 // precisa conferir contra a rota canônica que este runtime Pi materializa.
 // Assim, trocar o modelo no JSON salvo não converte um plano inválido em válido.
-const CURRENT_PI_MODEL_STRATEGY = Object.freeze({
-  hand_tiers: Object.freeze({
-    low: "openai-codex/gpt-5.6-luna",
-    medium: "openai-codex/gpt-5.6-terra",
-    high: "openai-codex/gpt-5.6-terra",
-  }),
-  planner: "openai-codex/gpt-5.6-sol",
-  "plan-reviewer": "openai-codex/gpt-6-astra",
-  compliance: "openai-codex/gpt-5.6-terra",
-  adversary: "openai-codex/gpt-5.6-sol",
-  security: "openai-codex/gpt-5.6-sol",
-  shipper: "openai-codex/gpt-5.6-luna",
-  harvester: "openai-codex/gpt-5.6-luna",
-});
+const CURRENT_PI_MODEL_STRATEGY = Object.freeze(modelStrategyFromProfile(resolveModelProfile({ profile: "baseline" })));
 // Compatibilidade de retomada é estreita: somente o snapshot imediatamente
 // anterior, completo e imutável, pode reabrir para ser reconciliado.
 const LEGACY_PI_MODEL_STRATEGY = Object.freeze({
@@ -188,7 +176,7 @@ function hasPostPlanEvidence(root, statePath, state) {
  * @param {string} projectRoot
  * @param {string} sessionId
  */
-export function recoverPiParentSession(projectRoot, sessionId) {
+export function recoverPiParentSession(projectRoot, sessionId, options = {}) {
   if (!projectRoot || !isSafeSessionId(sessionId)) return { ok: false, reason: "resume session identity invalid" };
   let root;
   try { root = fs.realpathSync(projectRoot); } catch { return { ok: false, reason: "resume worktree missing" }; }
@@ -260,11 +248,13 @@ export function recoverPiParentSession(projectRoot, sessionId) {
   if (planFile.ok) {
     const parsedPlan = parseJson(planFile.text, "resume plan invalid");
     if (!parsedPlan.ok) return parsedPlan;
+    const expectedModelStrategy = options.expectedModelStrategy ?? CURRENT_PI_MODEL_STRATEGY;
     const currentPlan = validatePlan(parsedPlan.value, {
       expect: "full",
-      expectedModelStrategy: CURRENT_PI_MODEL_STRATEGY,
+      expectedModelStrategy,
     });
-    legacyPlan = currentPlan.ok ? null : validatePlan(parsedPlan.value, {
+    const baselineRecovery = JSON.stringify(expectedModelStrategy) === JSON.stringify(CURRENT_PI_MODEL_STRATEGY);
+    legacyPlan = currentPlan.ok || !baselineRecovery ? null : validatePlan(parsedPlan.value, {
       expect: "full",
       expectedModelStrategy: LEGACY_PI_MODEL_STRATEGY,
     });

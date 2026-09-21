@@ -23,8 +23,8 @@ function fixtureRoot() {
     version: "1.0.0",
     private: true,
     dependencies: {
-      "@earendil-works/pi-coding-agent": "0.84.4",
-      "@gotgenes/pi-subagents": "21.2.0",
+      "@earendil-works/pi-coding-agent": "0.86.1",
+      "@gotgenes/pi-subagents": "21.7.4",
     },
   }));
   writeFileSync(join(assetsDir, "package-lock.json"), JSON.stringify({ lockfileVersion: 3, packages: {} }));

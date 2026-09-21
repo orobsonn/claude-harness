@@ -24,7 +24,7 @@ const { createJiti } = await import(
 const sdk = await import(
   pathToFileURL(join(MODULES, "@earendil-works/pi-coding-agent/dist/index.js"))
 );
-const { fauxAssistantMessage, fauxProvider, fauxToolCall } = await import(
+const { fauxAssistantMessage, fauxProvider, fauxToolCall, getCurrentSystemPrompt } = await import(
   pathToFileURL(join(MODULES, "@earendil-works/pi-ai/dist/index.js"))
 );
 const jiti = createJiti(import.meta.url, { moduleCache: true, tsconfigPaths: true });
@@ -77,7 +77,7 @@ let childModelCalls = 0;
 const faux = fauxProvider();
 const model = faux.getModel();
 const respond = async (context) => {
-  const isChild = String(context.systemPrompt ?? "").includes("PROBE_CHILD");
+  const isChild = getCurrentSystemPrompt(context.messages).includes("PROBE_CHILD");
   if (!isChild) return fauxAssistantMessage("unexpected parent model call");
   childModelCalls++;
   const last = context.messages.at(-1);

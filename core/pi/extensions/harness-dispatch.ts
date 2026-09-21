@@ -4,6 +4,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { validateOcCaptureEligibleHandRecord } from "../../opencode/lib/hand-records.mjs";
 import { isCaptureEligibleHandRecord } from "../../shared/lib/real-file-capture-rail.mjs";
 import { findShadowedCanonicalRoles, validateSubagentDispatch } from "../lib/dispatch-rail.mjs";
+import { loadModelProfileFromEnv, profilePrompt } from "../lib/model-profile.mjs";
 import { isDiscussionRole, isSupportRole } from "../lib/roles.mjs";
 import { isChildSession, isPiHeadlessContext, piSessionId, piSubagentArgs } from "../lib/pi-adapter-map.mjs";
 import { loadPiGateStateFromDisk } from "../lib/pi-gate-state.mjs";
@@ -66,6 +67,7 @@ function discussionDenied(ctx: any) {
 /** @description Thin Pi hook that protects the harness subagent contract. */
 export default function harnessDispatch(pi: ExtensionAPI) {
   let shadowedRoles = new Set<string>();
+  const profileSnapshot = loadModelProfileFromEnv();
 
   pi.on("session_start", (_event, ctx) => {
     shadowedRoles = findShadowedCanonicalRoles(ctx.cwd, existsSync);
@@ -109,11 +111,14 @@ export default function harnessDispatch(pi: ExtensionAPI) {
       if (!canonical.block) canonicalTask = canonical.canonicalTask;
     }
     if (canonicalTask) event.input.prompt = canonicalTaskPrompt(event.input.prompt, canonicalTask);
+    if (role === "harness-planner") {
+      event.input.prompt = `${String(event.input.prompt ?? "").trimEnd()}\n\n${profilePrompt(profileSnapshot)}`;
+    }
     if (isDiscussionRole(role)) {
       const reason = discussionDenied(ctx);
       if (reason) return { block: true, reason: `harness dispatch blocked: ${reason}` };
     }
-    const result = validateSubagentDispatch(event.input, { shadowedRoles });
+    const result = validateSubagentDispatch(event.input, { shadowedRoles, profileSnapshot });
     if (!result.ok) return { block: true, reason: `harness dispatch blocked: ${result.reason}` };
   });
 }

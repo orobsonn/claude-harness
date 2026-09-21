@@ -19,6 +19,7 @@ import {
   resolveOrcaStatusExtension,
   resolvePiDependencyPaths,
   runPiHarnessCli,
+  shouldPersistModelProfile,
   verifyPiHarness,
 } from "./pi-harness.mjs";
 import { applyPiAuthPathPatch, PI_AUTH_PATH_ENV, PI_AUTH_PATH_PATCH_MARKER, PI_RESUME_ENV, verifyPiAuthPathPatch } from "../lib/pi-auth-path-patch.mjs";
@@ -249,7 +250,7 @@ test("lock contention exits cleanly without trying to release an unacquired lock
 
 test("fresh launcher releases the worktree lock after setup failure", () => {
   const events = [];
-  const result = runPiHarnessCli(["-p", "deliver"], {
+  const result = runPiHarnessCli(["--harness-profile", "baseline", "-p", "deliver"], {
     cwd: "/worktree",
     env: {},
     packageRoot: "/package",
@@ -270,7 +271,7 @@ test("fresh launcher releases the worktree lock after setup failure", () => {
 
 test("an authorized dispatched child does not contend with the parent worktree lock", () => {
   const events = [];
-  const result = runPiHarnessCli(["-p", "child", "--mode", "json"], {
+  const result = runPiHarnessCli(["--harness-profile", "baseline", "-p", "child", "--mode", "json"], {
     cwd: "/worktree",
     env: { HARNESS_DISPATCH_PARENT_SESSION_ID: "parent", HARNESS_DISPATCH_CALL_ID: "call" },
     packageRoot: "/package",
@@ -408,7 +409,7 @@ test("pinned Pi overlay keeps one global auth path for parent and subagents", ()
   const packagePath = join(runtime, "package.json");
   const subagentsPackagePath = join(subagentsRuntime, "package.json");
   const sessionManager = join(runtime, "dist/core/session-manager.js");
-  // Restore this test copy to the exact published 0.84.4 bytes, even if another
+  // Restore this test copy to the exact published 0.86.1 bytes, even if another
   // test/launcher already patched node_modules. The digest was checked against
   // npm's original tarball; never accept an already-patched fixture as pristine.
   const pristineSessionManager = readFileSync(sessionManager, "utf8")
@@ -416,7 +417,7 @@ test("pinned Pi overlay keeps one global auth path for parent and subagents", ()
     .replace(/        \/\/ Only the exact recovered parent[\s\S]*?        if \(\(resume && this.sessionFile === resume.file\) \|\| existsSync\(this.sessionFile\)\) \{/, "        if (existsSync(this.sessionFile)) {")
     .replace(/\n$/, "");
   assert.equal(createHash("sha256").update(pristineSessionManager).digest("hex"),
-    "f0912a8b585263cc9793b38d97f01d19b0617c67b56d7f790bbb81a27d916a3c");
+    "96bd76b298f3c0a6b6d9b57b727f0f9b1196fbfa83172071ac280a5a37f82a08");
   writeFileSync(sessionManager, pristineSessionManager);
   const before = verifyPiAuthPathPatch(packagePath);
   assert.deepEqual(before, { ok: false, reason: "unpatched:dist/core/session-manager.js" });
@@ -483,6 +484,38 @@ test("runtime defaults select Terra/high from Pi's real registry without a CLI m
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
 
+test("materialized Ollama models load through Pi's pinned offline registry without persisting credentials", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "pi-harness-ollama-models-"));
+  const runtimeDir = join(directory, "runtime");
+  try {
+    materializeRuntime(process.cwd(), runtimeDir);
+    const modelsPath = join(runtimeDir, "models.json");
+    const modelsSource = readFileSync(modelsPath, "utf8");
+
+    assert.match(modelsSource, /\$OLLAMA_API_KEY/);
+    assert.doesNotMatch(modelsSource, /synthetic-ollama-secret/);
+
+    const modelRuntime = await ModelRuntime.create({
+      credentials: AuthStorage.inMemory({
+        "ollama-cloud": { type: "api_key", key: "synthetic-ollama-secret" },
+      }),
+      modelsPath,
+      allowModelNetwork: false,
+      refreshOnCreate: true,
+    });
+    const models = modelRuntime.getModels("ollama-cloud");
+
+    assert.deepEqual(models.map(({ id }) => id).sort(), ["deepseek-v4.1-flash", "glm-5.3"]);
+    for (const model of models) {
+      assert.equal(model.provider, "ollama-cloud");
+      assert.equal(model.baseUrl, "https://ollama.com/v1");
+      assert.equal(model.api, "openai-completions");
+      assert.equal(model.contextWindow, 1_000_000);
+      assert.equal(model.maxTokens, 32_768);
+    }
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
 test("runtime já materializado atualiza os agentes travados sem tocar em autenticação", () => {
   const directory = mkdtempSync(join(tmpdir(), "pi-harness-agents-refresh-"));
   const runtimeDir = join(directory, "runtime");
@@ -525,6 +558,7 @@ test("runtime já materializado migra somente o antigo default do harness para o
         defaultProvider: "openai-codex",
         defaultModel: "gpt-5.6-terra",
         defaultThinkingLevel: "high",
+        hideThinkingBlock: true,
         httpIdleTimeoutMs: 900_000,
         retained: true,
         ...piChildResourceSettings(process.cwd()),
@@ -550,11 +584,23 @@ test("runtime já materializado preserva um default explícito compatível do op
     defaultProvider: "openai-codex",
     defaultModel: "gpt-5.6-terra",
     defaultThinkingLevel: "high",
+    hideThinkingBlock: true,
     httpIdleTimeoutMs: 900_000,
     retained: true,
     ...piChildResourceSettings(process.cwd()),
     harnessChildResources: { version: 1, ...piChildResourceSettings(process.cwd()) },
   });
+});
+
+test("runtime preserva preferência explícita de exibir thinking", () => {
+  const directory = mkdtempSync(join(tmpdir(), "pi-harness-thinking-visibility-"));
+  const runtimeDir = join(directory, ".pi/harness/runtime");
+  mkdirSync(runtimeDir, { recursive: true });
+  writeFileSync(join(runtimeDir, "settings.json"), JSON.stringify({ hideThinkingBlock: false }));
+
+  materializeRuntime(process.cwd(), runtimeDir);
+
+  assert.equal(JSON.parse(readFileSync(join(runtimeDir, "settings.json"), "utf8")).hideThinkingBlock, false);
 });
 
 test("runtime já materializado recebe o novo teto de turns sem perder campos próprios", () => {
@@ -574,4 +620,75 @@ test("runtime já materializado recebe o novo teto de turns sem perder campos pr
     defaultMaxTurns: 144,
     retained: true,
   });
+});
+
+test("runtime materialization adds Ollama without replacing operator providers", () => {
+  const directory = mkdtempSync(join(tmpdir(), "pi-harness-models-"));
+  const runtimeDir = join(directory, ".pi/harness/runtime");
+  mkdirSync(runtimeDir, { recursive: true });
+  writeFileSync(join(runtimeDir, "models.json"), JSON.stringify({
+    providers: { private: { baseUrl: "https://private.invalid/v1", api: "openai-completions", models: [{ id: "private" }] } },
+  }));
+
+  materializeRuntime(process.cwd(), runtimeDir);
+
+  const models = JSON.parse(readFileSync(join(runtimeDir, "models.json"), "utf8"));
+  assert.equal(models.providers.private.baseUrl, "https://private.invalid/v1");
+  assert.equal(models.providers["ollama-cloud"].apiKey, "$OLLAMA_API_KEY");
+  assert.equal(models.providers["ollama-cloud"].baseUrl, "https://ollama.com/v1");
+  assert.deepEqual(models.providers["ollama-cloud"].models.map(({ id }) => id), ["deepseek-v4.1-flash", "glm-5.3"]);
+});
+
+test("default launcher requires the Ollama credential and injects the admitted DeepSeek parent route", () => {
+  const directory = mkdtempSync(join(tmpdir(), "pi-harness-profile-launch-"));
+  const errors = [];
+  let builtRuntimePrompt = "";
+  const common = {
+    cwd: directory,
+    env: {},
+    runtimePrompt: "runtime",
+    errorSink: (message) => errors.push(message),
+    randomSessionIdFn: () => "profile-session",
+    acquireParentLockFn: () => ({ ok: true, release() {} }),
+    materializeRuntimeFn() {},
+    buildInvocationFn: ({ argv, env, runtimePrompt }) => {
+      builtRuntimePrompt = runtimePrompt;
+      return {
+        command: "pi", args: argv, env: { ...env, PI_CODING_AGENT_DIR: join(directory, "runtime") }, runtimePrompt,
+      };
+    },
+  };
+  assert.equal(runPiHarnessCli([], common).exitCode, 2);
+  assert.match(errors.pop(), /OLLAMA_API_KEY/);
+
+  let spawned;
+  const result = runPiHarnessCli([], {
+    ...common,
+    env: { OLLAMA_API_KEY: "test-only-key" },
+    spawnSyncFn: (command, args, options) => { spawned = { command, args, env: options.env }; return { status: 0 }; },
+  });
+  assert.equal(result.exitCode, 0);
+  assert.deepEqual(spawned.args.slice(0, 6), [
+    "--provider", "ollama-cloud", "--model", "deepseek-v4.1-flash", "--thinking", "high",
+  ]);
+  assert.match(spawned.env.PI_HARNESS_MODEL_PROFILE, /model-profiles\/profile-session\.json$/);
+  assert.match(spawned.env.PI_HARNESS_MODEL_PROFILE_SHA256, /^[a-f0-9]{64}$/);
+  assert.match(builtRuntimePrompt, /HARNESS_OPEN_PARENT_BOOTSTRAP/);
+  assert.doesNotMatch(readFileSync(spawned.env.PI_HARNESS_MODEL_PROFILE, "utf8"), /test-only-key/);
+});
+
+test("delegated task persists the inherited profile for its own resume identity", () => {
+  const inherited = { path: "/parent/profile.json", sha256: "a".repeat(64) };
+  assert.equal(shouldPersistModelProfile({
+    resumeSessionId: undefined,
+    parentOperation: true,
+    taskGrant: "/task/grant.json",
+    admittedProfileFile: inherited,
+  }), true);
+  assert.equal(shouldPersistModelProfile({
+    resumeSessionId: "local-session",
+    parentOperation: true,
+    taskGrant: undefined,
+    admittedProfileFile: inherited,
+  }), false);
 });

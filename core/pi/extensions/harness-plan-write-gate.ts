@@ -17,7 +17,7 @@ import { normalizeProjectPath, readPiBoundDispatchForChild } from "../lib/pi-sta
  * core/pi/lib/plan-write-decide.mjs (que por sua vez reusa o rail de escopo do OC por import);
  * aqui só se traduz o evento do Pi.
  *
- * Contrato de eventos (Pi 0.84.4, docs/extensions.md): `tool_call` roda depois de
+ * Contrato de eventos (Pi 0.86.1, docs/extensions.md): `tool_call` roda depois de
  * tool_execution_start e ANTES da tool executar, e bloqueia devolvendo `{block:true, reason}`.
  * Nunca usamos `terminate` — negar uma escrita não deve encerrar a sessão. Todo import é
  * ESTÁTICO: "tool_call errors block the tool (fail-safe)", então uma falha de resolução de

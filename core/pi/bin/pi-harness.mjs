@@ -11,6 +11,11 @@ import { PI_AUTH_PATH_ENV, PI_RESUME_ENV, verifyPiAuthPathPatch } from "../lib/p
 import { resolveVerifiedPiRuntime } from "../lib/pi-runtime-cache.mjs";
 import { mergePiChildResourceSettings, piChildResourceSettings } from "../lib/pi-child-extensions.mjs";
 import { materializePiReviewConfig } from "../lib/pi-review-config.mjs";
+import {
+  MODEL_PROFILE_ENV, MODEL_PROFILE_HASH_ENV, loadModelProfileFromEnv, modelStrategyFromProfile,
+  parseModelProfileArgs, profilePrompt, readModelProfileSnapshot, resolveModelProfile,
+  writeModelProfileSnapshot,
+} from "../lib/model-profile.mjs";
 import { acquirePiParentWorktreeLock, recoverPiParentSession } from "../lib/parent-session-recovery.mjs";
 import { admitTaskRun, inspectTaskAdmission, rollbackTaskAdmission, taskRunPrompt, TASK_RUN_ENV } from "../lib/task-run.mjs";
 
@@ -81,6 +86,7 @@ const REQUIRED_LIBS = [
   "core/pi/lib/entry-gate.mjs",
   "core/pi/lib/marker-authority.mjs",
   "core/pi/lib/memory-cycle.mjs",
+  "core/pi/lib/model-profile.mjs",
   "core/pi/lib/native-bootstrap.mjs",
   "core/pi/lib/obs.mjs",
   "core/pi/lib/jev-fidelity-shadow.mjs",
@@ -113,7 +119,7 @@ const REQUIRED_LIBS = [
 ];
 
 /** Defaults imutáveis do pacote materializados no data dir do Pi na primeira execução. */
-const RUNTIME_DEFAULTS = ["agents", "models-store.json", "settings.json", "subagents.json"];
+const RUNTIME_DEFAULTS = ["agents", "models.json", "models-store.json", "settings.json", "subagents.json"];
 
 // Formato anterior do harness, antes de o Pi exigir provider e id separados. Só estes
 // defaults emitidos pelo harness podem ser migrados sem substituir uma escolha do operador.
@@ -317,6 +323,29 @@ export function materializeRuntime(root, runtimeDir, stateDir = harnessStateDir(
     if (name === "agents") cpSync(source, target, { recursive: true, force: true });
     else if (!existsSync(target)) cpSync(source, target, { recursive: true });
   }
+  // models.json is operator-extensible. Add the harness-owned provider when absent,
+  // preserve unrelated providers, and fail closed on an id collision instead of
+  // silently replacing an endpoint or credential rule.
+  const modelsSource = join(root, "core/pi/runtime/models.json");
+  const modelsTarget = join(runtimeDir, "models.json");
+  try {
+    const expected = JSON.parse(readFileSync(modelsSource, "utf8"));
+    const current = JSON.parse(readFileSync(modelsTarget, "utf8"));
+    const expectedProvider = expected?.providers?.["ollama-cloud"];
+    const currentProvider = current?.providers?.["ollama-cloud"];
+    if (!expectedProvider) throw new Error("distributed ollama-cloud provider missing");
+    if (currentProvider && JSON.stringify(currentProvider) !== JSON.stringify(expectedProvider)) {
+      throw new Error(`provider ollama-cloud conflicts in ${modelsTarget}`);
+    }
+    if (!currentProvider) {
+      writeFileSync(modelsTarget, `${JSON.stringify({
+        ...current,
+        providers: { ...(current?.providers ?? {}), "ollama-cloud": expectedProvider },
+      }, null, 2)}\n`, "utf8");
+    }
+  } catch (error) {
+    throw new Error(`harness-model-provider: ${error instanceof Error ? error.message : String(error)}`);
+  }
   // settings.json é um artefato do harness, não credencial do operador. O formato anterior
   // combinava provider/model em defaultModel, mas Pi exige ambos separados. Migramos somente
   // os valores históricos emitidos pelo harness e preservamos defaults explícitos do operador.
@@ -339,6 +368,7 @@ export function materializeRuntime(root, runtimeDir, stateDir = harnessStateDir(
       current.defaultProvider === undefined &&
       LEGACY_HARNESS_DEFAULT_MODELS.has(current.defaultModel);
     const needsIdleTimeout = current?.httpIdleTimeoutMs !== expected?.httpIdleTimeoutMs;
+    const needsThinkingVisibilityDefault = current?.hideThinkingBlock === undefined;
     // This exact pair was the old distributed default. Project preferences and
     // native per-model settings remain under Pi's own precedence/trust rules.
     const oldParentDefault = current.defaultProvider === "openai-codex" && current.defaultModel === "gpt-5.6-sol" && current.defaultThinkingLevel === undefined;
@@ -347,7 +377,7 @@ export function materializeRuntime(root, runtimeDir, stateDir = harnessStateDir(
       JSON.stringify(current?.extensions) !== JSON.stringify(childResources.extensions) ||
       JSON.stringify(current?.skills) !== JSON.stringify(childResources.skills) ||
       JSON.stringify(current?.harnessChildResources) !== JSON.stringify(childResources.harnessChildResources);
-    if (legacyHarnessDefault || oldParentDefault || needsThinkingDefault || needsIdleTimeout || needsChildResources) {
+    if (legacyHarnessDefault || oldParentDefault || needsThinkingDefault || needsThinkingVisibilityDefault || needsIdleTimeout || needsChildResources) {
       writeFileSync(
         settingsTarget,
         `${JSON.stringify({
@@ -357,6 +387,7 @@ export function materializeRuntime(root, runtimeDir, stateDir = harnessStateDir(
             defaultModel: expected.defaultModel,
           } : {}),
           ...(needsThinkingDefault ? { defaultThinkingLevel: expected.defaultThinkingLevel } : {}),
+          ...(needsThinkingVisibilityDefault ? { hideThinkingBlock: expected.hideThinkingBlock } : {}),
           ...(needsIdleTimeout ? { httpIdleTimeoutMs: expected.httpIdleTimeoutMs } : {}),
           ...(needsChildResources ? childResources : {}),
         }, null, 2)}\n`,
@@ -413,6 +444,7 @@ export function verifyPiHarness(root, cacheOptions = {}) {
     join(root, "core/pi/runtime/subagents.json"),
     join(root, "core/pi/runtime/harness.json"),
     join(root, "core/pi/runtime/models-store.json"),
+    join(root, "core/pi/runtime/models.json"),
     join(root, "core/pi/runtime/settings.json"),
     ...RUNTIME_ROLES.map((role) => join(root, "core/pi/runtime/agents", `${role}.md`)),
   ];
@@ -420,8 +452,8 @@ export function verifyPiHarness(root, cacheOptions = {}) {
   if (missing) return { ok: false, reason: `missing:${missing}` };
   const runtime = JSON.parse(readFileSync(dependencies.piPackage, "utf8"));
   const subagents = JSON.parse(readFileSync(dependencies.subagentsPackage, "utf8"));
-  if (runtime.version !== "0.84.4") return { ok: false, reason: `runtime-version:${runtime.version}` };
-  if (subagents.version !== "21.2.0") return { ok: false, reason: `subagents-version:${subagents.version}` };
+  if (runtime.version !== "0.86.1") return { ok: false, reason: `runtime-version:${runtime.version}` };
+  if (subagents.version !== "21.7.4") return { ok: false, reason: `subagents-version:${subagents.version}` };
   const authPatch = verifyPiAuthPathPatch(dependencies.piPackage, dependencies.subagentsPackage);
   if (!authPatch.ok) return { ok: false, reason: `auth-path-patch:${authPatch.reason}` };
   return { ok: true, runtimeVersion: runtime.version, subagentsVersion: subagents.version, roles: CANONICAL_ROLES.length };
@@ -432,6 +464,12 @@ function dispatchedChild(env) {
     env.HARNESS_DISPATCH_PARENT_SESSION_ID.length > 0 &&
     typeof env?.HARNESS_DISPATCH_CALL_ID === "string" &&
     env.HARNESS_DISPATCH_CALL_ID.length > 0;
+}
+
+/** A fresh delegated task owns a distinct resume identity, so it must retain
+ * the inherited immutable profile inside its own worktree. */
+export function shouldPersistModelProfile({ resumeSessionId, parentOperation, taskGrant, admittedProfileFile }) {
+  return !resumeSessionId && parentOperation && (!admittedProfileFile || Boolean(taskGrant));
 }
 
 /**
@@ -453,7 +491,26 @@ export function runPiHarnessCli(argv, options = {}) {
   const materializeRuntimeFn = options.materializeRuntimeFn ?? materializeRuntime;
   const spawnSyncFn = options.spawnSyncFn ?? spawnSync;
   const randomSessionIdFn = options.randomSessionIdFn ?? randomUUID;
+  const outputSink = options.outputSink ?? ((message) => console.log(message));
 
+  let profileArgs;
+  try {
+    profileArgs = parseModelProfileArgs(argv);
+    argv = profileArgs.argv;
+  } catch (error) {
+    errorSink(`Pi harness: ${error instanceof Error ? error.message : String(error)}`);
+    return { exitCode: 2 };
+  }
+  let selectedProfile;
+  try { selectedProfile = resolveModelProfile(profileArgs.selection); }
+  catch (error) {
+    errorSink(`Pi harness: ${error instanceof Error ? error.message : String(error)}`);
+    return { exitCode: 2 };
+  }
+  if (profileArgs.inspect) {
+    outputSink(JSON.stringify(selectedProfile, null, 2));
+    return { exitCode: 0 };
+  }
   const marker = argv.indexOf("--");
   const operationalEnd = marker < 0 ? argv.length : marker;
   const taskIndexes = [];
@@ -483,6 +540,47 @@ export function runPiHarnessCli(argv, options = {}) {
   }
 
   const sessionId = parsed.resumeSessionId ?? randomSessionIdFn();
+  if (parsed.resumeSessionId && profileArgs.explicit) {
+    errorSink("Pi harness: resume uses the admitted model profile; profile overrides are disabled");
+    return { exitCode: 2 };
+  }
+  let admittedProfile = selectedProfile;
+  let admittedProfileFile = null;
+  if (!parsed.resumeSessionId && (taskGrant || dispatchedChild(env))) {
+    if (env[MODEL_PROFILE_ENV] || env[MODEL_PROFILE_HASH_ENV]) {
+      try {
+        admittedProfile = loadModelProfileFromEnv(env);
+        admittedProfileFile = { path: env[MODEL_PROFILE_ENV], sha256: env[MODEL_PROFILE_HASH_ENV] };
+      } catch (error) {
+        errorSink(`Pi harness: inherited model profile invalid: ${error instanceof Error ? error.message : String(error)}`);
+        return { exitCode: 2 };
+      }
+    } else {
+      // Delegations created before immutable profile snapshots must keep the
+      // historical Codex route instead of being reinterpreted by today's default.
+      admittedProfile = resolveModelProfile({ profile: "baseline" });
+    }
+  }
+  if (parsed.resumeSessionId) {
+    const stored = readModelProfileSnapshot(cwd, sessionId);
+    if (stored.ok) {
+      admittedProfile = stored.snapshot;
+      admittedProfileFile = { path: stored.path, sha256: stored.fileSha256 };
+    } else if (!stored.absent) {
+      errorSink(`Pi harness: cannot resume ceremony: ${stored.reason}`);
+      return { exitCode: 2 };
+    } else {
+      // Sessions created before model-profile snapshots are always interpreted
+      // with the historical Codex routes, regardless of today's new-session default.
+      admittedProfile = resolveModelProfile({ profile: "baseline" });
+    }
+  }
+  const usesOllama = admittedProfile.profile !== "baseline" ||
+    admittedProfile.parents.global.target !== "baseline" || admittedProfile.parents.local.target !== "baseline";
+  if (usesOllama && !env.OLLAMA_API_KEY) {
+    errorSink("Pi harness: admitted Ollama profile requires OLLAMA_API_KEY in the host environment");
+    return { exitCode: 2 };
+  }
   const parentOperation = Boolean(taskGrant) || Boolean(parsed.resumeSessionId) ||
     (shouldCreateFreshPiSession(parsed.argv) && !dispatchedChild(env));
   let parentLock;
@@ -513,7 +611,9 @@ export function runPiHarnessCli(argv, options = {}) {
     }
     let resumeSessionFile;
     if (parsed.resumeSessionId) {
-      const recovery = recoverParentSessionFn(cwd, parsed.resumeSessionId);
+      const recovery = recoverParentSessionFn(cwd, parsed.resumeSessionId, {
+        expectedModelStrategy: modelStrategyFromProfile(admittedProfile),
+      });
       if (!recovery.ok) {
         errorSink(`Pi harness: cannot resume ceremony: ${recovery.reason}`);
         return { exitCode: 2 };
@@ -528,6 +628,24 @@ export function runPiHarnessCli(argv, options = {}) {
       resumeSessionFile = recovery.sessionFile;
     }
 
+    const parentKind = taskGrant || (parsed.resumeSessionId && env[TASK_RUN_ENV]) ? "local" : "global";
+    runtimePrompt = `${runtimePrompt}\n\n${profilePrompt(admittedProfile, { parentKind })}`;
+
+    const parentRoute = admittedProfile.parents[parentKind].route;
+    if (parentRoute) {
+      const forbidden = ["--provider", "--model", "--thinking"].find((flag) => parsed.argv.includes(flag));
+      if (forbidden) {
+        errorSink(`Pi harness: ${forbidden} cannot override an admitted experimental parent route`);
+        return { exitCode: 2 };
+      }
+      parsed.argv = [
+        "--provider", parentRoute.provider,
+        "--model", parentRoute.model,
+        "--thinking", parentRoute.thinking_effective,
+        ...parsed.argv,
+      ];
+    }
+
     const invocation = buildInvocationFn({
       root: packageRoot,
       argv: parsed.argv,
@@ -537,6 +655,22 @@ export function runPiHarnessCli(argv, options = {}) {
       sessionId,
     });
     materializeRuntimeFn(packageRoot, invocation.env.PI_CODING_AGENT_DIR);
+    // A delegated task is a new local parent with its own resume identity. Even
+    // when it inherited the global parent's immutable profile, persist that
+    // same snapshot under the local session so resume never falls back to the
+    // current project/default profile.
+    if (shouldPersistModelProfile({
+      resumeSessionId: parsed.resumeSessionId,
+      parentOperation,
+      taskGrant,
+      admittedProfileFile,
+    })) {
+      admittedProfileFile = writeModelProfileSnapshot(cwd, sessionId, admittedProfile);
+    }
+    if (admittedProfileFile) {
+      invocation.env[MODEL_PROFILE_ENV] = admittedProfileFile.path;
+      invocation.env[MODEL_PROFILE_HASH_ENV] = admittedProfileFile.sha256;
+    }
     let taskAdmission;
     if (taskGrant) {
       // Claim only after dependency resolution, prompt/resource reads and runtime materialization
@@ -546,7 +680,7 @@ export function runPiHarnessCli(argv, options = {}) {
         errorSink(`Pi harness: ${taskAdmission.reason}`);
         return { exitCode: 2 };
       }
-      if (taskRunPrompt(taskRuntimePrompt, taskAdmission) !== runtimePrompt) {
+      if (`${taskRunPrompt(taskRuntimePrompt, taskAdmission)}\n\n${profilePrompt(admittedProfile, { parentKind })}` !== runtimePrompt) {
         rollbackTaskAdmission(taskAdmission);
         taskAdmission = null;
         throw new Error("task grant changed between preflight and admission");

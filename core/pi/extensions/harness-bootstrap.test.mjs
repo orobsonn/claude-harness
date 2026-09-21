@@ -180,15 +180,20 @@ test("bootstrap registra o fallback Astra antes do subagents, preservando o cat�
   });
 
   const handlers = register();
-  assert.equal(handlers.providers.length, 1, "o alias precisa ser registrado mesmo no launcher, antes do retorno do bootstrap");
-  const provider = handlers.providers[0];
   const builtin = builtinProviders().find((entry) => entry.id === "openai-codex");
   assert.ok(builtin);
+  const builtinHasAstra = builtin.getModels().some((model) => model.id === "gpt-6-astra");
+  assert.equal(
+    handlers.providers.length,
+    builtinHasAstra ? 0 : 1,
+    "o shim só deve ser registrado quando a versão pinada do Pi ainda não oferecer Astra",
+  );
+  const provider = handlers.providers[0] ?? builtin;
   assert.equal(provider.id, "openai-codex");
   assert.equal(provider.auth.oauth?.name, builtin.auth.oauth?.name, "não pode reconfigurar nem ler a autenticação do provider");
   assert.equal(typeof provider.auth.oauth?.toAuth, "function", "o wrapper conserva o OAuth do provider pinado");
   assert.equal(typeof provider.stream, "function", "o wrapper conserva o stream do provider pinado");
-  const expectedIds = builtin.getModels().map((model) => model.id);
+  const expectedIds = builtin.getModels().map((model) => model.id).filter((id) => id !== "gpt-6-astra");
   const wrapped = provider.getModels();
   assert.deepEqual(
     wrapped.filter((model) => model.id !== "gpt-6-astra").map((model) => model.id),
@@ -202,7 +207,7 @@ test("bootstrap registra o fallback Astra antes do subagents, preservando o cat�
   parentRegistry.registerProvider(provider);
   assert.ok(parentRegistry.getAvailable().some((model) => model.provider === "openai-codex" && model.id === "gpt-6-astra"));
   const reloaded = register().providers[0];
-  parentRegistry.registerProvider(reloaded);
+  if (reloaded) parentRegistry.registerProvider(reloaded);
   assert.equal(
     parentRegistry.getAll().filter((model) => model.provider === "openai-codex" && model.id === "gpt-6-astra").length,
     1,
@@ -255,10 +260,11 @@ test("createSubagentSession real aceita Astra pela registry filha sem rede", asy
   const { providers } = register();
   const parentRuntime = await runtimeWithSyntheticCodexCredential();
   const parentRegistry = new ModelRegistry(parentRuntime);
-  parentRegistry.registerProvider(providers[0]);
+  if (providers[0]) parentRegistry.registerProvider(providers[0]);
   const childRuntime = await runtimeWithSyntheticCodexCredential();
   const childRegistry = new ModelRegistry(childRuntime);
-  childRegistry.registerProvider(parentRegistry.getRegisteredNativeProvider("openai-codex"));
+  const inheritedProvider = parentRegistry.getRegisteredNativeProvider("openai-codex");
+  if (inheritedProvider) childRegistry.registerProvider(inheritedProvider);
   const { createSubagentSession } = await loadCreateSubagentSession();
   const createdModels = [];
   const loader = new DefaultResourceLoader({

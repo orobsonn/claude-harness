@@ -338,6 +338,30 @@ test('read, grep, find e ls negam os 8 caminhos com segredo do settings.json', (
   }
 })
 
+test('procfs nunca pode expor ambiente, argv ou descritores do processo', () => {
+  for (const path of [
+    '/proc/self/environ',
+    '/proc/1/cmdline',
+    '/proc/thread-self/fd/0',
+    '/proc/self/root/proc/self/environ',
+  ]) {
+    for (const toolName of ['read', 'grep', 'find', 'ls']) {
+      const out = decidePiPolicy({ toolName, input: { path } }, { home: HOME, cwd: '/repo' })
+      assert.equal(out.block, true, `${toolName}:${path}`)
+      assert.equal(out.reason, 'Secret-bearing paths are blocked from shell access by the delivery harness.')
+    }
+  }
+  for (const command of [
+    'cat /proc/self/environ',
+    'node -e "require(\'fs\').readFileSync(\'/proc/1/environ\')"',
+    'cat ../../proc/self/cmdline',
+  ]) {
+    const out = decidePiPolicy({ toolName: 'bash', input: { command } })
+    assert.equal(out.block, true, command)
+    assert.equal(out.reason, 'Secret-bearing paths are blocked from shell access by the delivery harness.')
+  }
+})
+
 test('read de arquivo comum continua liberado', () => {
   for (const path of ['package.json', 'src/.environment.ts', '~/.sshfoo/key', 'docs/.envoy.md']) {
     assert.deepEqual(readPath(path), { block: false }, path)
@@ -352,6 +376,21 @@ test('piProtectablePath cobre .pi além de .codex e .agents', () => {
   assert.equal(piProtectablePath('.pi/harness/lib/x.mjs'), true)
   assert.equal(piProtectablePath('.pilot/config.json'), false)
   assert.equal(piProtectablePath('src/app.ts'), false)
+})
+
+test('task worktree nested under parent .pi protects its own harness without blocking product writes', () => {
+  const root = '/repo/.pi/harness/state/parent/task-runs/worktrees/attempt'
+  const options = { cwd: root, projectRoot: root, isChild: true }
+  assert.deepEqual(decidePiPolicy({
+    toolName: 'write',
+    input: { path: `${root}/src/sum.test.mjs`, content: 'test' },
+  }, options), { block: false })
+  const protectedWrite = decidePiPolicy({
+    toolName: 'write',
+    input: { path: `${root}/.pi/harness/runtime/settings.json`, content: '{}' },
+  }, options)
+  assert.equal(protectedWrite.block, true)
+  assert.equal(protectedWrite.reason, 'Harness-owned paths are protected from direct tool mutation.')
 })
 
 test('diretório de auditoria fica sob .pi/harness/state', () => {

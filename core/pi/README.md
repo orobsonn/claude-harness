@@ -18,7 +18,7 @@ Na worktree onde o harness foi instalado, rode:
 node .pi/harness/pi-harness.mjs --verify
 ```
 
-O resultado precisa incluir `"ok":true`, `"runtimeVersion":"0.84.4"` e `"subagentsVersion":"21.2.0"`. Ele não chama modelo, lê credenciais, instala ou corrige dependências. Cache ausente ou alterado é um erro: execute o init/update do harness nesse host antes de iniciar a run.
+O resultado precisa incluir `"ok":true`, `"runtimeVersion":"0.86.1"` e `"subagentsVersion":"21.7.4"`. Ele não chama modelo, lê credenciais, instala ou corrige dependências. Cache ausente ou alterado é um erro: execute o init/update do harness nesse host antes de iniciar a run.
 
 O init/update que inclui Pi prepara primeiro o runtime fixado em um cache do usuário (`~/.cache/claude-harness/pi-runtime`, ou sob `XDG_CACHE_HOME` absoluto). Worktrees no mesmo host reutilizam a mesma geração; plataformas e versões incompatíveis usam gerações distintas. O launcher não usa nem modifica o Pi global ou `node_modules` do produto. Uma falha de provisionamento impede a atualização dos arquivos do harness. O pacote nativo Pi mantém suas dependências próprias para preservar `pi install`; isso pode duplicar downloads no instalador npx, mas não muda o runtime isolado usado pelo launcher.
 
@@ -31,6 +31,12 @@ node .pi/harness/pi-harness.mjs "Implemente a issue #<numero> de forma autônoma
 ```
 
 O comando acima abre o TUI; para headless, acrescente `--mode json -p` antes do pedido. A issue é a entrada de produto, não um atalho que dispensa spec e revisão adversarial.
+
+O runtime distribuído deixa os blocos privados de thinking ocultos no TUI por
+padrão. `Ctrl+T` alterna a visualização e persiste a preferência nativa do Pi;
+isso muda somente a apresentação, sem remover o bloco da sessão, do replay ou do
+contexto usado pelo modelo. Um `hideThinkingBlock: false` explícito do operador é
+preservado nas atualizações do harness.
 
 Cada execução operacional iniciada pelo launcher recebe uma sessão nova e mantém um lock único da worktree até o Pi terminar. Assim, outro pai fresh ou retomado não sobrepõe a mesma implementação. Para reabrir exatamente uma sessão existente, use `node .pi/harness/pi-harness.mjs --harness-resume <session-id> "Continue o plano."`; se o arquivo exato ou o preflight não conferir, nenhuma sessão substituta é criada. Depois de uma interrupção, a retomada reconcilia o owner e os processos registrados antes de liberar o lock; não apague o lock nem inicie um segundo pai manualmente.
 
@@ -229,6 +235,34 @@ Test-author usa Terra/high para low/medium e Sol/high para high/max legado,
 sempre pela task canônica; complexity omitida é herdada, divergência é rejeitada.
 Executor/sniper mantêm low Luna/high, medium Terra/medium, high/max Terra/xhigh.
 O transporte mantém limite de inatividade de 15 minutos por chamada de modelo.
+
+Sessões novas usam `trial-orchestration-deepseek` por padrão. Nesse perfil,
+DeepSeek V4.1 Flash orquestra os pais global e local; executor, sniper e
+test-author usam DeepSeek em low/medium e GLM 5.3 em high/max. Os olhos continuam
+no Codex. `trial-hands-deepseek` mantém os pais no Codex e move executor, sniper e
+test-author low/medium para DeepSeek V4.1 Flash e high/max para GLM 5.3; planner,
+test-reviewer e demais olhos continuam no Codex. `trial-hands-glm` é o braço
+explícito somente-GLM. `trial-orchestration-deepseek` também move os pais global
+e local para DeepSeek, ou eles podem ser escolhidos separadamente com
+`--harness-global-parent deepseek` e `--harness-local-parent deepseek`.
+
+```bash
+# inspeção offline, sem credencial ou inferência
+pi-harness --harness-profile-inspect --harness-profile trial-hands-deepseek
+
+# sessão nova no default DeepSeek; OLLAMA_API_KEY existe apenas no ambiente host
+pi-harness
+
+# rollback explícito para uma sessão nova totalmente Codex
+pi-harness --harness-profile baseline
+```
+
+Toda sessão nova grava um snapshot imutável de rota em
+`.pi/harness/state/model-profiles/<session-id>.json`. Retomada usa somente
+`--harness-resume <session-id>` e recusa overrides de perfil. O orçamento opcional
+é metadado de auditoria; não é um teto local, e o painel Ollama continua sendo a
+autoridade externa de créditos. Para rollback, inicie sessões novas com
+`--harness-profile baseline`; sessões, worktrees e evidências anteriores permanecem.
 
 Planner e plan-reviewer recebem `harness_complexity`, usando diretamente a lógica
 do scorer do Claude Code. A tool recebe o `path` de um arquivo existente e o host
