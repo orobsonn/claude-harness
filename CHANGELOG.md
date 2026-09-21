@@ -5,6 +5,13 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [3.3.4](https://github.com/orobsonn/claude-harness/compare/v3.3.3...v3.3.4) (2026-09-21)
+
+
+### Bug Fixes
+
+* **pi:** route all default hands to DeepSeek ([#1020](https://github.com/orobsonn/claude-harness/issues/1020)) ([1eaa17f](https://github.com/orobsonn/claude-harness/commit/1eaa17f647ff4341978c55b694ec1172d84965f5))
+
 ## [3.3.3](https://github.com/orobsonn/claude-harness/compare/v3.3.2...v3.3.3) (2026-09-21)
 
 
