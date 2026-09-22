@@ -24,6 +24,8 @@ sessão pai local, usando a pipeline nativa de mãos, fidelidade, freeze, captur
   outra tentativa para substituir um job que ainda possa estar vivo. Se o resumo trouxer
   `context_return`, revalide os fatos e só então cure manualmente o que merece entrar no
   `shared_context` global com `harness_memory update`.
+  Depois de consumir um `context_return`, use `compact:true` nas consultas `status`/`wait`
+  seguintes para preservar estado, handles, heads e diagnósticos sem repetir o corpo inteiro.
 - Integre apenas um resultado `ready` com `task_id`, `attempt_id` e `expected_head` exatos. O recibo
   host-owned, não o tip da branch nem o relatório textual, é a evidência para dependentes e gates
   finais.

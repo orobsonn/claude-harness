@@ -5,7 +5,7 @@
  */
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
@@ -21,7 +21,7 @@ import test from "node:test";
 
 import harnessMemory from "./harness-memory.ts";
 import { capturePiReviewInput } from "../lib/pi-review-evidence.mjs";
-import { beginHarvest, completeHarvest, applyHarvest } from "../lib/memory-cycle.mjs";
+import { beginHarvest, completeHarvest, applyHarvest, resolvePostHarvestReviewSnapshot } from "../lib/memory-cycle.mjs";
 
 const SESSION = "ses-harvest-parent";
 const FEATURE = "pi-memory-harvest";
@@ -101,7 +101,34 @@ function commit(root, message) {
     ["-c", "user.name=Pi Harvest", "-c", "user.email=pi-harvest@example.test", "commit", "-q", "-m", message],
     { cwd: root },
   );
-  return head(root);
+  const current = head(root);
+  seedHarvestVerification(root, current);
+  return current;
+}
+
+function seedHarvestVerification(root, currentHead) {
+  const receiptPath = harvestPath(root);
+  if (!existsSync(receiptPath)) return;
+  const receipt = JSON.parse(readFileSync(receiptPath, "utf8"));
+  if (receipt.receipt_version !== 2) return;
+  const evidenceRoot = join(root, ".pi", "harness", "state", SESSION, "evidence");
+  mkdirSync(evidenceRoot, { recursive: true });
+  const status = execFileSync("git", ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--", ".",
+    ":(exclude).pi/harness/", ":(exclude)node_modules/"], { cwd: root });
+  const identity = { worktree_identity_status: "available", worktree_root: root, head_sha: currentHead,
+    worktree_dirty: status.length > 0, worktree_status_sha256: createHash("sha256").update(status).digest("hex"),
+    freshness: "observed-at-tool-result-only" };
+  for (const command of receipt.verification_commands ?? []) {
+    const id = randomUUID();
+    const outputPath = join(evidenceRoot, `${id}.log`);
+    const metadataPath = join(evidenceRoot, `${id}.json`);
+    const output = Buffer.from("structural verification passed\n");
+    writeFileSync(outputPath, output);
+    writeFileSync(metadataPath, JSON.stringify({ version: 1, session_id: SESSION, tool_call_id: id,
+      tool_name: "bash", command, original_status: { kind: "success", is_error: false, exit_code: 0 },
+      started_identity: identity, ...identity, output_path: outputPath, output_bytes: output.length,
+      output_sha256: createHash("sha256").update(output).digest("hex") }));
+  }
 }
 
 function head(root) {
@@ -156,9 +183,9 @@ function harvestArgs(overrides = {}) {
   };
 }
 
-function resultEnvelope(changes, { trailing = "", malformed = false } = {}) {
+function resultEnvelope(changes, { trailing = "", malformed = false, verificationCommands = changes.length ? ["npm test"] : [] } = {}) {
   if (malformed) return "Harvest complete.\n[HARNESS_HARVEST_RESULT]{broken[/HARNESS_HARVEST_RESULT]";
-  return `Harvest complete.\n[HARNESS_HARVEST_RESULT]${JSON.stringify({ changes })}[/HARNESS_HARVEST_RESULT]${trailing}`;
+  return `Harvest complete.\n[HARNESS_HARVEST_RESULT]${JSON.stringify({ changes, verification_commands: verificationCommands })}[/HARNESS_HARVEST_RESULT]${trailing}`;
 }
 
 function emitHarvest(api, root, {
@@ -244,13 +271,38 @@ function plannerEvent(role = "harness-planner") {
   };
 }
 
-test("a failed replacement harvest cannot reuse the previous successful receipt", async (t) => {
+test("a failed replacement harvest preserves the previous successful receipt", async (t) => {
   const root = fixture(t);
   const api = register();
   emitHarvest(api, root);
   assert.equal(api.handlers.get("tool_call")(shipperEvent(), ctx(root)), undefined);
   emitHarvest(api, root, { callId: "replacement", isError: true, status: "failed" });
-  await assertBlocked(api.handlers.get("tool_call")(shipperEvent(), ctx(root)));
+  assert.equal(api.handlers.get("tool_call")(shipperEvent(), ctx(root)), undefined);
+  assert.notEqual((await readMemory(api, root)).details.harvestReceipt, null);
+});
+
+test("post-harvest shipping waits for structural checks on the committed memory HEAD and reports why carry is pending", async (t) => {
+  const root = fixture(t);
+  const api = register();
+  const before = readFileSync(join(root, "kaizen.md"), "utf8");
+  emitHarvest(api, root, { changes: [{
+    path: "kaizen.md", before_sha256: sha256(before), append: "**verified note**\n",
+    evidence: "repository constraint", invalidation: "format contract changes",
+  }], text: resultEnvelope([{
+    path: "kaizen.md", before_sha256: sha256(before), append: "**verified note**\n",
+    evidence: "repository constraint", invalidation: "format contract changes",
+  }], { verificationCommands: ["npm test -- structural-docs.test.mjs"] }) });
+  assert.equal((await api.execute({ action: "apply" }, ctx(root))).details.ok, true);
+  execFileSync("git", ["add", "kaizen.md"], { cwd: root });
+  execFileSync("git", ["-c", "user.name=Pi Harvest", "-c", "user.email=pi-harvest@example.test",
+    "commit", "-q", "-m", "docs: unchecked harvest"], { cwd: root });
+  const blocked = api.handlers.get("tool_call")(shipperEvent(), ctx(root));
+  assert.match(blocked.reason, /harvest structural verification.*structural-docs/);
+  const captured = capturePiReviewInput({ projectRoot: root, sessionId: SESSION, featureId: FEATURE, phase: "final" });
+  const carry = resolvePostHarvestReviewSnapshot(root, SESSION, captured.snapshot);
+  assert.match(carry.reason, /harvest structural verification.*structural-docs/);
+  seedHarvestVerification(root, head(root));
+  assert.equal(api.handlers.get("tool_call")(shipperEvent(), ctx(root)), undefined);
 });
 
 function finalMarkEvent() {
@@ -389,6 +441,33 @@ test("harness-memory harvest: read expõe documentos duráveis com hash e o reci
   await assertBlocked(
     await restarted.handlers.get("tool_call")(shipperEvent(), ctx(root, { sessionId: "ses-harvest-other" })),
   );
+});
+
+test("harness-memory status resume gates and hashes without returning durable bodies", async (t) => {
+  const root = fixture(t);
+  const api = register();
+  const sessions = join(root, ".pi", "harness", "sessions");
+  mkdirSync(sessions, { recursive: true });
+  writeFileSync(join(sessions, `2026-09-21T00-00-00-000Z_${SESSION}.jsonl`), `${JSON.stringify({
+    type: "message", message: { role: "assistant", provider: "ollama-cloud", model: "deepseek-v4.1-flash",
+      usage: { input: 100, output: 20, cacheRead: 4, cacheWrite: 0, reasoning: 0, totalTokens: 124,
+        cost: { total: 0.0123456 } } },
+  })}\n`);
+  await api.execute({ action: "update", content: "curated run fact" }, ctx(root));
+  emitHarvest(api, root);
+  const result = await api.execute({ action: "status" }, ctx(root));
+  assert.equal(result.details.ok, true);
+  assert.equal(result.details.feature_id, FEATURE);
+  assert.equal(result.details.mode, "FULL");
+  assert.equal(result.details.final_review_done, true);
+  assert.equal(typeof result.details.shared_context.sha256, "string");
+  assert.equal(result.details.shared_context.bytes, Buffer.byteLength("curated run fact"));
+  assert.equal(result.details.durable_files.every((entry) => !Object.hasOwn(entry, "content")), true);
+  assert.equal(Object.hasOwn(result.details, "sharedContext"), false);
+  assert.equal(result.details.harvest.apply_status, "applied");
+  assert.equal(result.details.usage.calls, 1);
+  assert.equal(result.details.usage.cost_usd, 0.012346);
+  assert.equal(result.details.usage.by_model["ollama-cloud/deepseek-v4.1-flash"].total_tokens, 124);
 });
 
 test("harness-memory harvest: read limita conteúdo durável, mas calcula hash sobre o arquivo completo", async (t) => {

@@ -4,7 +4,7 @@
  */
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
@@ -42,7 +42,34 @@ function git(root, args) {
 function commit(root, message) {
   git(root, ["add", "."]);
   git(root, ["commit", "-q", "-m", message]);
-  return git(root, ["rev-parse", "HEAD"]);
+  const current = git(root, ["rev-parse", "HEAD"]);
+  seedHarvestVerification(root, current);
+  return current;
+}
+
+function seedHarvestVerification(root, currentHead) {
+  const receipt = harvestPath(root);
+  if (!existsSync(receipt)) return;
+  const parsed = JSON.parse(readFileSync(receipt, "utf8"));
+  if (parsed.receipt_version !== 2) return;
+  const evidenceRoot = join(root, ".pi", "harness", "state", SESSION, "evidence");
+  mkdirSync(evidenceRoot, { recursive: true });
+  const status = execFileSync("git", ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--", ".",
+    ":(exclude).pi/harness/", ":(exclude)node_modules/"], { cwd: root });
+  const identity = { worktree_identity_status: "available", worktree_root: root, head_sha: currentHead,
+    worktree_dirty: status.length > 0, worktree_status_sha256: createHash("sha256").update(status).digest("hex"),
+    freshness: "observed-at-tool-result-only" };
+  for (const command of parsed.verification_commands ?? []) {
+    const id = randomUUID();
+    const outputPath = join(evidenceRoot, `${id}.log`);
+    const metadataPath = join(evidenceRoot, `${id}.json`);
+    const output = Buffer.from("structural verification passed\n");
+    writeFileSync(outputPath, output);
+    writeFileSync(metadataPath, JSON.stringify({ version: 1, session_id: SESSION, tool_call_id: id,
+      tool_name: "bash", command, original_status: { kind: "success", is_error: false, exit_code: 0 },
+      started_identity: identity, ...identity, output_path: outputPath, output_bytes: output.length,
+      output_sha256: createHash("sha256").update(output).digest("hex") }));
+  }
 }
 
 function writeJson(root, name, value) {
@@ -232,7 +259,7 @@ function completeShipper(api, root, during = () => {}) {
 }
 
 function harvestEnvelope(changes) {
-  return `[HARNESS_HARVEST_RESULT]${JSON.stringify({ changes })}[/HARNESS_HARVEST_RESULT]`;
+  return `[HARNESS_HARVEST_RESULT]${JSON.stringify({ changes, verification_commands: changes.length ? ["npm test"] : [] })}[/HARNESS_HARVEST_RESULT]`;
 }
 
 function completeHarvest(api, root, changes = []) {

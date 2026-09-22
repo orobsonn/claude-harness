@@ -49,7 +49,7 @@ function parallelDelivery(t, { productConflict = false, memoryConflict = true, b
   } else {
     seed(root, expected_head, { accepted: true, input_digest: currentInput(root).input_digest,
       report_digest: REPORT_DIGEST, report: EMPTY_REPORT });
-    completeHarvest(beginHarvest(root, SESSION), '[HARNESS_HARVEST_RESULT]{"changes":[]}[/HARNESS_HARVEST_RESULT]', "native-harvester");
+    completeHarvest(beginHarvest(root, SESSION), '[HARNESS_HARVEST_RESULT]{"changes":[],"verification_commands":[]}[/HARNESS_HARVEST_RESULT]', "native-harvester");
     assert.ok(checkMemoryShipperReady(root, SESSION));
   }
   return { root, git, expected_head, base_sha };
@@ -82,7 +82,7 @@ test("parallel finalization reconciles memory on the host, preserves receipts an
   assert.throws(() => checkMemoryShipperReady(root, SESSION), /review|harvest|changed/i);
   seed(root, merged.head, { accepted: true, input_digest: currentInput(root).input_digest,
     report_digest: REPORT_DIGEST, report: EMPTY_REPORT });
-  completeHarvest(beginHarvest(root, SESSION), '[HARNESS_HARVEST_RESULT]{"changes":[]}[/HARNESS_HARVEST_RESULT]', "native-harvester-new-base");
+  completeHarvest(beginHarvest(root, SESSION), '[HARNESS_HARVEST_RESULT]{"changes":[],"verification_commands":[]}[/HARNESS_HARVEST_RESULT]', "native-harvester-new-base");
   assert.equal(checkMemoryShipperReady(root, SESSION).head, merged.head);
 });
 
@@ -266,7 +266,7 @@ function reviewedHarvest(root, head) {
   seed(root, head, { accepted: true, input_digest: currentInput(root).input_digest,
     report_digest: REPORT_DIGEST, report: EMPTY_REPORT });
   const snapshot = beginHarvest(root, SESSION);
-  completeHarvest(snapshot, '[HARNESS_HARVEST_RESULT]{"changes":[{"path":"MEMORY.md","before_sha256":null,"append":"Verified after final corrections.\\n","evidence":"final eyes and tests","invalidation":"contract changes"}]}[/HARNESS_HARVEST_RESULT]', "harvester-after-eyes");
+  completeHarvest(snapshot, '[HARNESS_HARVEST_RESULT]{"changes":[{"path":"MEMORY.md","before_sha256":null,"append":"Verified after final corrections.\\n","evidence":"final eyes and tests","invalidation":"contract changes"}],"verification_commands":["npm test"]}[/HARNESS_HARVEST_RESULT]', "harvester-after-eyes");
   applyHarvest(root, SESSION);
   execFileSync("git", ["add", "MEMORY.md"], { cwd: root });
   execFileSync("git", ["-c", "user.name=Pi Memory", "-c", "user.email=pi-memory@example.test", "commit", "-qm", "docs: harvest reviewed outcome"], { cwd: root });
@@ -333,7 +333,7 @@ test("harvest never hides unproposed durable files when Git reports clean", asyn
     const current = currentInput(root);
     seed(root, current.head_sha, { accepted: true, input_digest: current.input_digest, report_digest: REPORT_DIGEST, report: EMPTY_REPORT });
     const changes = change === "no-op-mode" ? [] : [{ path: "MEMORY.md", before_sha256: createHash("sha256").update("original durable evidence\n").digest("hex"), append: "verified addition\n", evidence: "reviewed", invalidation: "contract changes" }];
-    completeHarvest(beginHarvest(root, SESSION), `[HARNESS_HARVEST_RESULT]${JSON.stringify({ changes })}[/HARNESS_HARVEST_RESULT]`, "harvester");
+    completeHarvest(beginHarvest(root, SESSION), `[HARNESS_HARVEST_RESULT]${JSON.stringify({ changes, verification_commands: changes.length ? ["npm test"] : [] })}[/HARNESS_HARVEST_RESULT]`, "harvester");
     if (changes.length) {
       applyHarvest(root, SESSION);
       execFileSync("git", ["add", "MEMORY.md"], { cwd: root });

@@ -32,6 +32,14 @@ Inspect only relevant entries with read/grep; the host computes the result from 
 preimage and validates its hash. Never infer unseen contents or reconstruct the document
 from an excerpt. Each delta has evidence and an invalidation condition for rechecking it.
 
+For every non-empty proposal, inspect repository tests/configuration that constrain the
+three durable files and return `verification_commands`: the smallest exact commands that
+must pass on the committed post-harvest HEAD. Include a focused structural test when one
+exists; use the repository's broader test command when that is the only reliable proof.
+Do not claim to have run these commands. The parent runs them after apply and commit, and
+the host blocks shipping until their successful evidence belongs to that clean HEAD.
+For `changes: []`, return `verification_commands: []`.
+
 `changes: []` is a valid completed harvest, not a reason to try again. If the parent
 returns with materially corrected input after a failure, use that evidence and the exact
 validation error, preserving still-supported local deltas. Do not invent a lesson to
@@ -40,4 +48,4 @@ avoid no-op or silently drop one merely to evade validation.
 The first prompt line is `[HARNESS_HARVEST]`. End with exactly one tagged JSON result and no
 text after it. `changes` may be empty; otherwise it contains at most three distinct allowed paths:
 
-`[HARNESS_HARVEST_RESULT]{"changes":[{"path":"MEMORY.md","before_sha256":"<current hash or null absent>","append":"<small new entry>","evidence":"<verified sources>","invalidation":"<when recheck>"}]}[/HARNESS_HARVEST_RESULT]`
+`[HARNESS_HARVEST_RESULT]{"changes":[{"path":"MEMORY.md","before_sha256":"<current hash or null absent>","append":"<small new entry>","evidence":"<verified sources>","invalidation":"<when recheck>"}],"verification_commands":["<exact structural check on committed HEAD>"]}[/HARNESS_HARVEST_RESULT]`

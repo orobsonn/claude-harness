@@ -406,7 +406,16 @@ export function validateTaskFidelityFreeze({ projectRoot, sessionId, taskId, ses
       return fail("fidelity requires native test-author then test-reviewer APPROVE before freeze");
     const commitCall = calls.find((call) => call.name === "bash" && call.index > review.endIndex && call.index < boundary &&
       /\bgit\s+commit\b/.test(call.args?.command ?? "") && call.result && call.result.isError !== true);
-    const abbreviated = text(commitCall).match(/^\[[^\]\n]+\s+([0-9a-f]{7,40})\]/m)?.[1]
+    const commandEvidence = commitCall?.result?.details?.command_evidence;
+    const observedCommit = commandEvidence?.status === "available" &&
+      commandEvidence?.original_status?.kind === "success" &&
+      HEX_40.test(commandEvidence?.head_sha ?? "") &&
+      HEX_40.test(commandEvidence?.started_identity?.head_sha ?? "") &&
+      commandEvidence.head_sha !== commandEvidence.started_identity.head_sha
+      ? commandEvidence.head_sha
+      : null;
+    const abbreviated = observedCommit
+      ?? text(commitCall).match(/^\[[^\]\n]+\s+([0-9a-f]{7,40})\]/m)?.[1]
       ?? text(commitCall).match(/\bcommit\s+([0-9a-f]{7,40})\b/i)?.[1];
     if (!abbreviated) return fail("native test-only freeze commit required after test-reviewer APPROVE");
     const freezeSha = String(gitFn("rev-parse", `${abbreviated}^{commit}`)).trim();

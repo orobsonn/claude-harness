@@ -345,6 +345,22 @@ test("task fidelity accepts a reviewed ancestral freeze across executor sniper a
     freezeSha,
     frozenPaths: ["test/task-one.test.ts"],
   });
+
+  const quiet = prepare();
+  writeLockedTest(quiet);
+  quiet.git("add", "--", "test/task-one.test.ts");
+  const beforeQuietCommit = quiet.git("rev-parse", "HEAD");
+  quiet.git("-c", "user.name=Harness", "-c", "user.email=harness@example.invalid", "commit", "-q", "-m", "freeze tests quietly");
+  const quietFreeze = quiet.git("rev-parse", "HEAD");
+  quiet.completed("freeze", "bash", { command: "git commit -q -m 'freeze tests quietly'" }, "", {
+    command_evidence: {
+      status: "available",
+      original_status: { kind: "success", is_error: false, exit_code: 0 },
+      started_identity: { head_sha: beforeQuietCommit },
+      head_sha: quietFreeze,
+    },
+  });
+  assert.equal(check(quiet).freezeSha, quietFreeze, "quiet git commit uses host-observed HEAD identity");
   for (const role of ["harness-executor", "harness-sniper"]) {
     valid.completed(role, "subagent", { subagent_type: role, prompt: valid.prompt });
     fs.mkdirSync(path.join(valid.root, "src"), { recursive: true });

@@ -665,6 +665,14 @@ test("blocked status returns fresh diagnostics without persisting or replaying t
   assert.equal(f.registry().tasks.a.result, null);
   assert.equal(f.registry().tasks.a.diagnostics, undefined);
 
+  const compactBlocked = await executeTaskAction(
+    { action: "status", task_id: "a", compact: true },
+    f.context,
+    f.deps,
+  );
+  assert.equal(compactBlocked.diagnostics.a.context_return, undefined);
+  assert.deepEqual(compactBlocked.diagnostics.a.review_findings, [{ severity: "high", finding: "Missing boundary check" }]);
+
   f.deps.inspectRun = () => ({ ok: false, reason: "receipt still incomplete" });
   const next = await executeTaskAction(
     { action: "status", task_id: "a" },
@@ -687,6 +695,9 @@ test("summary exposes durable context only for ready or integrated tasks", async
   await executeTaskAction({ action: "dispatch", task_ids: ["a"] }, f.context, f.deps);
   const ready = await executeTaskAction({ action: "status", task_id: "a" }, f.context, f.deps);
   assert.deepEqual(ready.tasks[0].context_return, { summary: "Current result" });
+  const compact = await executeTaskAction({ action: "status", task_id: "a", compact: true }, f.context, f.deps);
+  assert.equal(compact.tasks[0].context_return, undefined);
+  assert.equal(compact.tasks[0].child_head, ready.tasks[0].child_head);
 
   f.deps.readProcess = () => ({ ok: true, running: true, terminal: false });
   const running = await executeTaskAction({ action: "status", task_id: "a" }, f.context, f.deps);

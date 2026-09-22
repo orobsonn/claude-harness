@@ -191,14 +191,19 @@ function decorateNativeFactory(nativeFactory: (pi: ExtensionAPI) => unknown) {
             "- Use run_in_background for work you don't need immediately. You will be notified when it completes.",
             "- run_in_background: true is forbidden by the harness; omit it or set false. A background-disabled rejection does not mean foreground review batches are unavailable: retry the pending reviews as foreground calls in the same batch.",
           ),
-          ...(tool.parameters?.properties?.run_in_background ? {
+          ...(tool.parameters?.properties ? {
             parameters: {
               ...tool.parameters,
               properties: {
                 ...tool.parameters.properties,
-                run_in_background: {
+                ...(tool.parameters.properties.run_in_background ? { run_in_background: {
                   ...tool.parameters.properties.run_in_background,
                   description: "Harness: omit or set false. Background is forbidden; task/final eyes can run concurrently as foreground calls in the same batch.",
+                } } : {}),
+                complexity: {
+                  type: "string",
+                  enum: ["low", "medium", "high", "max"],
+                  description: "Harness task complexity. Required for executor, sniper and test-author; copy the canonical task value exactly so model routing can be validated.",
                 },
               },
             },
