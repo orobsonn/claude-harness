@@ -5,6 +5,13 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [3.3.6](https://github.com/orobsonn/claude-harness/compare/v3.3.5...v3.3.6) (2026-09-22)
+
+
+### Bug Fixes
+
+* **pi:** preserve task adversary receipts in Orca ([#1024](https://github.com/orobsonn/claude-harness/issues/1024)) ([ee27432](https://github.com/orobsonn/claude-harness/commit/ee274321d8848b15371ef869eaa2125d72ce1150))
+
 ## [3.3.5](https://github.com/orobsonn/claude-harness/compare/v3.3.4...v3.3.5) (2026-09-22)
 
 
