@@ -6,9 +6,9 @@ import test from "node:test";
 
 import harnessDispatch, { testApi } from "./harness-dispatch.ts";
 
-function handler() {
+function handler(injected) {
   const registered = new Map();
-  harnessDispatch({ on: (name, fn) => registered.set(name, fn) });
+  harnessDispatch({ on: (name, fn) => registered.set(name, fn) }, injected);
   return registered.get("tool_call");
 }
 function ctx({ hasUI = true, child = false, mode } = {}) {
@@ -166,6 +166,27 @@ test("task review headers fail fast with the exact role-specific prefix", () => 
   assert.equal(testApi.taskReviewHeaderReason("harness-compliance", `[HARNESS_TASK_REVIEW]\n${MARKER}\nReview.`, "task-1"), null);
   assert.match(testApi.taskReviewHeaderReason("harness-adversary", `[HARNESS_TASK_REVIEW]\n${MARKER}`, "task-1"), /task-review-header.*HARNESS_TASK_CONTEXT/);
   assert.match(testApi.taskReviewHeaderReason("harness-security", MARKER, "task-1"), /task-review-header.*HARNESS_TASK_REVIEW/);
+  assert.equal(testApi.canonicalTaskReviewPrompt("harness-adversary", `[HARNESS_TASK_REVIEW]\n${MARKER}\nReview.`, "task-1"), `${MARKER}\nReview.`);
+  assert.equal(testApi.canonicalTaskReviewPrompt("harness-compliance", `${MARKER}\nReview.`, "task-1"), `[HARNESS_TASK_REVIEW]\n${MARKER}\nReview.`);
+  assert.equal(testApi.canonicalTaskReviewPrompt("harness-adversary", `[HARNESS_TASK_REVIEW]\n[HARNESS_TASK_CONTEXT]{"task_id":"other"}[/HARNESS_TASK_CONTEXT]`, "task-1"), `[HARNESS_TASK_REVIEW]\n[HARNESS_TASK_CONTEXT]{"task_id":"other"}[/HARNESS_TASK_CONTEXT]`);
+});
+
+test("an Orca local task parent canonicalizes inverted review headers without native parentSession", () => {
+  const localTask = handler({
+    readTaskRunBindingFn: () => ({ ok: true, grant: { task_id: "task-1" } }),
+  });
+  const input = {
+    subagent_type: "harness-adversary",
+    model: "openai-codex/gpt-5.6-sol",
+    thinking: "medium",
+    prompt: `[HARNESS_TASK_REVIEW]\n${MARKER}\nReview.`,
+  };
+  const result = localTask({
+    toolName: "subagent",
+    input,
+  }, ctx({ child: false }));
+  assert.equal(result, undefined);
+  assert.equal(input.prompt, `${MARKER}\nReview.`);
 });
 
 test("corrective test-author waits for capture of the latest implementation delta", () => {
