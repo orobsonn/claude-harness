@@ -7,6 +7,8 @@ import { piChildResourceSettings, verifyPiChildBoundResources } from "../lib/pi-
 import { createPiReviewConcurrency, isPiSubagentDescendant } from "../lib/pi-review-concurrency.mjs";
 import { readPiReviewConfig } from "../lib/pi-review-config.mjs";
 import { ensurePiRuntime, resolveVerifiedPiRuntime } from "../lib/pi-runtime-cache.mjs";
+import { piSessionId } from "../lib/pi-adapter-map.mjs";
+import { readTaskRunBinding } from "../lib/task-run.mjs";
 import { isRuntimeRole } from "../lib/roles.mjs";
 import { parseReviewReportText, validateReviewReport } from "../../shared/lib/review-report-schema.mjs";
 import { parseTestReviewVerdict } from "../../shared/lib/test-review-verdict.mjs";
@@ -263,6 +265,10 @@ export default async function harnessSubagents(pi: ExtensionAPI, deps: BridgeDep
   const nativeFactory = await (deps.loadNativeFactory ?? loadVerifiedNativeFactory)();
   const bridge = createPiReviewConcurrency({
     maxParallelEyes,
+    resolveTaskReviewId: (_event: unknown, ctx: any) => {
+      const binding: any = readTaskRunBinding(ctx?.cwd, piSessionId(ctx));
+      return binding?.ok === true ? binding.grant?.task_id : null;
+    },
     verifyChildBound: (payload: unknown) => verifyPiChildBoundResources(root, payload),
   });
   const result = bridge.wrapNativeFactory(decorateNativeFactory(nativeFactory))(pi);

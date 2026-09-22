@@ -28,6 +28,51 @@ test("task adversary classification requires the context marker as its exact pre
   assert.deepEqual(classifyPiReviewDispatch("harness-adversary", "[HARNESS_FINAL_REVIEW]\n" + context), { phase: "final" });
 });
 
+test("regression: task-header repairs acquire reader leases before the later dispatch hook canonicalizes them", async () => {
+  const taskId = "task-one";
+  const context = `[HARNESS_TASK_CONTEXT]{"task_id":"${taskId}"}[/HARNESS_TASK_CONTEXT]`;
+  const { handlers } = installBridge({
+    maxParallelEyes: 3,
+    resolveTaskReviewId: () => taskId,
+  }, () => {});
+  const reviews = [
+    {
+      type: "tool_call",
+      toolName: "subagent",
+      toolCallId: "review-adversary-inverted",
+      input: {
+        subagent_type: "harness-adversary",
+        prompt: `[HARNESS_TASK_REVIEW]\n${context}\nReview implementation.`,
+      },
+    },
+    {
+      type: "tool_call",
+      toolName: "subagent",
+      toolCallId: "review-compliance-context-first",
+      input: {
+        subagent_type: "harness-compliance",
+        prompt: `${context}\nReview implementation.`,
+      },
+    },
+    {
+      type: "tool_call",
+      toolName: "subagent",
+      toolCallId: "review-security-canonical",
+      input: {
+        subagent_type: "harness-security",
+        prompt: `[HARNESS_TASK_REVIEW]\n${context}\nReview implementation.`,
+      },
+    },
+  ];
+
+  assert.deepEqual(
+    await Promise.all(reviews.map((event) => prepareToolCall(handlers, event))),
+    [undefined, undefined, undefined],
+    "all canonical or canonically repairable task eyes must share the prepared reader lease",
+  );
+  for (const review of reviews) await finishToolCall(handlers, review);
+});
+
 function deferred() {
   return Promise.withResolvers();
 }
