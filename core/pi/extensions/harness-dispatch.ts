@@ -25,6 +25,21 @@ function taskReviewHeaderReason(role: string, prompt: unknown, taskId: string) {
   return `task-review-header; start the prompt exactly with ${prefix}`;
 }
 
+function canonicalTaskReviewPrompt(role: string, prompt: unknown, taskId: string) {
+  if (typeof prompt !== "string") return prompt;
+  const marker = `[HARNESS_TASK_CONTEXT]{"task_id":"${taskId}"}[/HARNESS_TASK_CONTEXT]`;
+  const review = "[HARNESS_TASK_REVIEW]";
+  if (role === "harness-adversary") {
+    for (const separator of ["\n", "\r\n"]) {
+      const inverted = `${review}${separator}${marker}`;
+      if (prompt.startsWith(inverted)) return prompt.slice(review.length + separator.length);
+    }
+  } else if ((role === "harness-compliance" || role === "harness-security") && prompt.startsWith(marker)) {
+    return `${review}\n${prompt}`;
+  }
+  return prompt;
+}
+
 function canonicalTaskPrompt(prompt: unknown, task: unknown) {
   const original = typeof prompt === "string" ? prompt : "";
   if (!task || typeof task !== "object" || Array.isArray(task)) return original;
@@ -76,9 +91,12 @@ function discussionDenied(ctx: any) {
 }
 
 /** @description Thin Pi hook that protects the harness subagent contract. */
-export default function harnessDispatch(pi: ExtensionAPI) {
+export default function harnessDispatch(pi: ExtensionAPI, injected: {
+  readTaskRunBindingFn?: typeof readTaskRunBinding;
+} = {}) {
   let shadowedRoles = new Set<string>();
   const profileSnapshot = loadModelProfileFromEnv();
+  const readTaskBinding = injected.readTaskRunBindingFn ?? readTaskRunBinding;
 
   pi.on("session_start", (_event, ctx) => {
     shadowedRoles = findShadowedCanonicalRoles(ctx.cwd, existsSync);
@@ -88,9 +106,13 @@ export default function harnessDispatch(pi: ExtensionAPI) {
     if (event.toolName !== "subagent") return;
     shadowedRoles = findShadowedCanonicalRoles(ctx.cwd, existsSync);
     const role = piSubagentArgs(event.input).subagent_type;
-    if (isChildSession(ctx) && isParallelReviewRole(role)) {
-      const binding: any = readTaskRunBinding(ctx.cwd, piSessionId(ctx) ?? "");
+    if (isParallelReviewRole(role)) {
+      // Orca task parents are separate Pi processes, not native Pi subagent
+      // sessions, so parentSession is absent. The admitted task_run binding on
+      // disk is the authority that decides whether task-review headers apply.
+      const binding: any = readTaskBinding(ctx.cwd, piSessionId(ctx) ?? "");
       if (binding?.ok) {
+        event.input.prompt = canonicalTaskReviewPrompt(role, event.input?.prompt, binding.grant?.task_id);
         const headerReason = taskReviewHeaderReason(role, event.input?.prompt, binding.grant?.task_id);
         if (headerReason) return { block: true, reason: `harness dispatch blocked: ${headerReason}` };
       }
@@ -141,4 +163,4 @@ export default function harnessDispatch(pi: ExtensionAPI) {
   });
 }
 
-export const testApi = Object.freeze({ canonicalTaskPrompt, uncapturedImplementationReason, taskReviewHeaderReason });
+export const testApi = Object.freeze({ canonicalTaskPrompt, canonicalTaskReviewPrompt, uncapturedImplementationReason, taskReviewHeaderReason });
