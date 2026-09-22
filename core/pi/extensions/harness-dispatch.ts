@@ -6,7 +6,7 @@ import { isCaptureEligibleHandRecord } from "../../shared/lib/real-file-capture-
 import { findShadowedCanonicalRoles, validateSubagentDispatch } from "../lib/dispatch-rail.mjs";
 import { loadModelProfileFromEnv, profilePrompt } from "../lib/model-profile.mjs";
 import { isDiscussionRole, isParallelReviewRole, isSupportRole } from "../lib/roles.mjs";
-import { classifyPiReviewDispatch } from "../lib/pi-review-concurrency.mjs";
+import { canonicalTaskReviewPrompt, classifyPiReviewDispatch } from "../lib/pi-review-concurrency.mjs";
 import { readTaskRunBinding } from "../lib/task-run.mjs";
 import { isChildSession, isPiHeadlessContext, piSessionId, piSubagentArgs } from "../lib/pi-adapter-map.mjs";
 import { loadPiGateStateFromDisk } from "../lib/pi-gate-state.mjs";
@@ -23,21 +23,6 @@ function taskReviewHeaderReason(role: string, prompt: unknown, taskId: string) {
     ? `[HARNESS_TASK_CONTEXT]{"task_id":"${taskId}"}[/HARNESS_TASK_CONTEXT]`
     : `[HARNESS_TASK_REVIEW]\n[HARNESS_TASK_CONTEXT]{"task_id":"${taskId}"}[/HARNESS_TASK_CONTEXT]`;
   return `task-review-header; start the prompt exactly with ${prefix}`;
-}
-
-function canonicalTaskReviewPrompt(role: string, prompt: unknown, taskId: string) {
-  if (typeof prompt !== "string") return prompt;
-  const marker = `[HARNESS_TASK_CONTEXT]{"task_id":"${taskId}"}[/HARNESS_TASK_CONTEXT]`;
-  const review = "[HARNESS_TASK_REVIEW]";
-  if (role === "harness-adversary") {
-    for (const separator of ["\n", "\r\n"]) {
-      const inverted = `${review}${separator}${marker}`;
-      if (prompt.startsWith(inverted)) return prompt.slice(review.length + separator.length);
-    }
-  } else if ((role === "harness-compliance" || role === "harness-security") && prompt.startsWith(marker)) {
-    return `${review}\n${prompt}`;
-  }
-  return prompt;
 }
 
 function canonicalTaskPrompt(prompt: unknown, task: unknown) {

@@ -23,6 +23,22 @@ export function classifyPiReviewDispatch(role, prompt) {
   return task.ok ? { phase: "task", taskId: task.taskId } : null;
 }
 
+/** Repair only the two role-specific task-review header inversions accepted by the dispatch rail. */
+export function canonicalTaskReviewPrompt(role, prompt, taskId) {
+  if (typeof prompt !== "string" || typeof taskId !== "string" || taskId.length === 0) return prompt;
+  const marker = `[HARNESS_TASK_CONTEXT]{"task_id":"${taskId}"}[/HARNESS_TASK_CONTEXT]`;
+  const review = "[HARNESS_TASK_REVIEW]";
+  if (role === "harness-adversary") {
+    for (const separator of ["\n", "\r\n"]) {
+      const inverted = `${review}${separator}${marker}`;
+      if (prompt.startsWith(inverted)) return prompt.slice(review.length + separator.length);
+    }
+  } else if ((role === "harness-compliance" || role === "harness-security") && prompt.startsWith(marker)) {
+    return `${review}\n${prompt}`;
+  }
+  return prompt;
+}
+
 function abortError(message, cause) {
   const error = new Error(message, cause === undefined ? undefined : { cause });
   error.name = "AbortError";
@@ -46,11 +62,15 @@ export function createPiReviewConcurrency(options = {}) {
   const maxParallelEyes = configuredLimit(options.maxParallelEyes);
   const bindChildSession = options.bindChildSession;
   const verifyChildBound = options.verifyChildBound;
+  const resolveTaskReviewId = options.resolveTaskReviewId;
   if (bindChildSession !== undefined && typeof bindChildSession !== "function") {
     throw new TypeError("bindChildSession must be a function");
   }
   if (verifyChildBound !== undefined && typeof verifyChildBound !== "function") {
     throw new TypeError("verifyChildBound must be a function");
+  }
+  if (resolveTaskReviewId !== undefined && typeof resolveTaskReviewId !== "function") {
+    throw new TypeError("resolveTaskReviewId must be a function");
   }
 
   return {
@@ -168,21 +188,24 @@ export function createPiReviewConcurrency(options = {}) {
           });
         }
 
-        function leaseKind(event) {
+        function leaseKind(event, ctx) {
           if (PARENT_READ_TOOLS.has(event?.toolName)) return null;
           if (event?.toolName === "harness_tasks" && ["status", "wait"].includes(event?.input?.action)) return null;
           if (event?.toolName === "subagent") {
             if (isSupportRole(event?.input?.subagent_type)) return "reader";
-            const review = classifyPiReviewDispatch(event?.input?.subagent_type, event?.input?.prompt);
+            const role = event?.input?.subagent_type;
+            const taskId = resolveTaskReviewId?.(event, ctx);
+            const prompt = canonicalTaskReviewPrompt(role, event?.input?.prompt, taskId);
+            const review = classifyPiReviewDispatch(role, prompt);
             if (review) return "reader";
           }
           return "exclusive";
         }
 
-        function acquirePreparedLease(event) {
+        function acquirePreparedLease(event, ctx) {
           const callId = typeof event?.toolCallId === "string" ? event.toolCallId : "";
           if (!callId || preparedLeases.has(callId)) return;
-          const kind = leaseKind(event);
+          const kind = leaseKind(event, ctx);
           if (!kind) return;
           const leases = [...preparedLeases.values()];
           const conflicts = kind === "exclusive"
@@ -293,7 +316,7 @@ export function createPiReviewConcurrency(options = {}) {
             return Reflect.apply(nativeSpawn, this, [type, ...args]);
           };
         }
-        pi.on("tool_call", (event) => acquirePreparedLease(event));
+        pi.on("tool_call", (event, ctx) => acquirePreparedLease(event, ctx));
         pi.on("tool_execution_end", (event) => {
           if (typeof event?.toolCallId === "string") preparedLeases.delete(event.toolCallId);
         });
