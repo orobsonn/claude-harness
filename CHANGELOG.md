@@ -5,6 +5,13 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [3.3.5](https://github.com/orobsonn/claude-harness/compare/v3.3.4...v3.3.5) (2026-09-22)
+
+
+### Bug Fixes
+
+* **pi:** harden post-harvest delivery recovery ([#1022](https://github.com/orobsonn/claude-harness/issues/1022)) ([90629fb](https://github.com/orobsonn/claude-harness/commit/90629fb73a8db62f757f36f525097afdf7d382a1))
+
 ## [3.3.4](https://github.com/orobsonn/claude-harness/compare/v3.3.3...v3.3.4) (2026-09-21)
 
 
