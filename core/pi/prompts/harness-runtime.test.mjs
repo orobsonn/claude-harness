@@ -99,7 +99,7 @@ test("harvest runs once after final eyes and rework, before shipper", () => {
   }
   assert.equal(
     harvester.trim().split("\n").at(-1),
-    '`[HARNESS_HARVEST_RESULT]{"changes":[{"path":"MEMORY.md","before_sha256":"<current hash or null absent>","append":"<small new entry>","evidence":"<verified sources>","invalidation":"<when recheck>"}]}[/HARNESS_HARVEST_RESULT]`',
+    '`[HARNESS_HARVEST_RESULT]{"changes":[{"path":"MEMORY.md","before_sha256":"<current hash or null absent>","append":"<small new entry>","evidence":"<verified sources>","invalidation":"<when recheck>"}],"verification_commands":["<exact structural check on committed HEAD>"]}[/HARNESS_HARVEST_RESULT]`',
   );
   assert.match(harvester, /before_sha256.*content.*evidence.*invalidation/is);
   assert.match(harvester, /24 KiB/i);

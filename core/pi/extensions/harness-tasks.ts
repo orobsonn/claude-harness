@@ -163,7 +163,7 @@ export default function harnessTasks(pi: ExtensionAPI, injected: Parameters<type
           }),
         ),
         task_id: Type.Optional(Type.String({
-          description: "Singular task identifier for status, wait, integrate, or resume; not dispatch.",
+          description: "Singular task identifier for status, wait, integrate, resume or abandon-resume; not dispatch.",
         })),
         task_contexts: Type.Optional(Type.Array(Type.Object({
           task_id: Type.String(),
@@ -177,7 +177,8 @@ export default function harnessTasks(pi: ExtensionAPI, injected: Parameters<type
               "For status: wait up to this many seconds if work is running. Default 20; zero returns immediately.",
           }),
         ),
-        attempt_id: Type.Optional(Type.String()),
+        compact: Type.Optional(Type.Boolean({ description: "For status or wait only: omit repeated context_return bodies while preserving task identity, state, heads and diagnostics." })),
+        attempt_id: Type.Optional(Type.String({ description: "Required for integrate, resume and abandon-resume. Copy the exact current attempt_id returned by dispatch/status; resume never creates a new attempt." })),
         expected_head: Type.Optional(Type.String({ description: "Exact observed HEAD for integrate or abandon-resume only; never send this field with resume." })),
         instruction: Type.Optional(Type.String({ maxLength: 16000, description: "For resume only: focused correction or diagnostic context. The field is instruction, not feedback. Preserve unresolved material concerns." })),
         no_product_obligation: Type.Optional(Type.Boolean({ description: "For abandon-resume only: explicitly declare that the resumed task has no remaining product correction obligation." })),
@@ -246,9 +247,17 @@ export default function harnessTasks(pi: ExtensionAPI, injected: Parameters<type
       let result;
       try {
         if (action.action === "wait") {
-          if (Object.keys(action).some((key) => !["action", "task_id"].includes(key)))
-            throw new Error("wait accepts only an optional task_id");
+          if (Object.keys(action).some((key) => !["action", "task_id", "compact"].includes(key)))
+            throw new Error("wait accepts only optional task_id and compact");
           result = await waitForTaskChange({ taskId: action.task_id, context, signal }, injected);
+          if (action.compact && result?.ok && Array.isArray(result.tasks)) {
+            const diagnostics = Object.fromEntries(Object.entries(result.diagnostics ?? {}).map(([taskId, detail]: [string, any]) => {
+              const { context_return: _context, ...rest } = detail ?? {};
+              return [taskId, rest];
+            }));
+            result = { ...result, tasks: result.tasks.map(({ context_return: _context, ...task }) => task),
+              ...(Object.keys(diagnostics).length ? { diagnostics } : {}) };
+          }
         } else {
           result = await (injected.executeAction ?? executeTaskAction)(action, context);
         }

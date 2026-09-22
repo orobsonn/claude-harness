@@ -6,6 +6,7 @@ import { isChildSession, piSessionId } from "../lib/pi-adapter-map.mjs";
 import { loadPiGateStateFromDisk } from "../lib/pi-gate-state.mjs";
 import { capturePiReviewInput, checkPiReviewPreparation, findPiReviewReceipt, isSatisfiedPiTaskReviewReceipt, missingPiReviewRoles, observedPiTaskReviewRoles, readPiReviewPlan } from "../lib/pi-review-evidence.mjs";
 import { PARALLEL_REVIEW_ROLES, requiredPiFinalReviewRoles, requiredPiTaskReviewRoles } from "../lib/roles.mjs";
+import { resolvePostHarvestReviewSnapshot } from "../lib/memory-cycle.mjs";
 
 function committedTreeChanged(projectRoot: string, reviewedHead: string, currentHead: string) {
   try {
@@ -155,12 +156,14 @@ export default function harnessReviews(pi: ExtensionAPI) {
             ...(affected.length ? { affected, affected_reason: params.affected_reason.trim() } : {}),
           };
       const preparation = checkPiReviewPreparation(input);
+      const carry = params.phase === "final" ? resolvePostHarvestReviewSnapshot(ctx.cwd, sessionId, captured.snapshot) : null;
       const diagnostics = unavailable.flatMap((role) => {
         const receipt: any = receipts.get(role);
         return receipt?.status === "invalid" && typeof receipt.reason === "string"
           ? [{ role, reason: receipt.reason, dispatch_call_id: receipt.active_dispatch_call_id }] : [];
       });
-      const status = { ...result, ...(preparation.ok ? {} : { preparation }), ...(diagnostics.length ? { diagnostics } : {}) };
+      const carryDiagnostic = carry?.reason ? { post_harvest_carry: { ok: false, reason: carry.reason } } : {};
+      const status = { ...result, ...(preparation.ok ? {} : { preparation }), ...carryDiagnostic, ...(diagnostics.length ? { diagnostics } : {}) };
       const details = affected.length ? { ...status, review_input_digest: captured.snapshot.input_digest } : status;
       return { content: [{ type: "text" as const, text: JSON.stringify(status) }], details };
     },

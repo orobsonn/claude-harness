@@ -189,9 +189,11 @@ export function createPiReviewConcurrency(options = {}) {
             ? leases.length > 0
             : leases.includes("exclusive");
           if (conflicts) {
+            const requested = kind === "exclusive" ? "a mutation/serial" : "a review/reader";
+            const active = leases.includes("exclusive") ? "an active mutation/serial" : "active review/reader";
             return {
               block: true,
-              reason: "[review-concurrency] Blocked: review and mutation/serial dispatch leases are exclusive; retry after the active lease ends.",
+              reason: `[review-concurrency] Blocked: ${event?.toolName ?? "tool"} requests ${requested} lease while ${active} lease exists; retry after the active lease ends. Shell tools are treated as mutation-capable even when the command appears read-only.`,
             };
           }
           preparedLeases.set(callId, kind);

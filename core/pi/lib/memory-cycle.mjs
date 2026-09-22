@@ -1,11 +1,12 @@
 /** Run-local curated context and evidence-backed harvest, never a substitute for gate-state. */
-import { constants, closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readSync, realpathSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { constants, closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readSync, readdirSync, realpathSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { isSafeSessionId, isSafeFeatureId } from "../../shared/lib/feature-id.mjs";
 import { classifyPiFunctionalMergeTransition, readPiMergedReleaseEvidence, resolvePiReleaseProof } from "./release-only.mjs";
 import { capturePiReviewInput, hasAcceptedPiReviewEvidence, isPiReviewExcludedPath, readPiReviewPlan } from "./pi-review-evidence.mjs";
+import { checkPiFinalCommands, validatePiVerificationCommands } from "./pi-command-evidence.mjs";
 import { requiredPiFinalReviewRoles } from "./roles.mjs";
 
 export const DURABLE_MEMORY_FILES = Object.freeze(["MEMORY.md", "CONTEXT.md", "kaizen.md"]);
@@ -78,6 +79,129 @@ export function readMemory(projectRoot, sessionId) {
   const harvestReceipt = raw === null ? null : JSON.parse(raw);
   if (harvestReceipt && (harvestReceipt.session_id !== sessionId || harvestReceipt.project_root !== paths.root)) throw new Error("Harvest identity mismatch");
   return { ok: true, path: paths.shared, sharedContext, durableFiles: readDurableMemory(paths.root), harvestReceipt };
+}
+
+function sessionUsageFiles(root, sessionId) {
+  if (!isSafeSessionId(sessionId)) return [];
+  const sessions = join(root, ".pi", "harness", "sessions");
+  const info = stat(sessions);
+  if (!info?.isDirectory() || info.isSymbolicLink()) return [];
+  const files = [];
+  for (const entry of readdirSync(sessions, { withFileTypes: true })) {
+    if (entry.isSymbolicLink?.()) continue;
+    const matches = entry.name.includes(`_${sessionId}`);
+    if (entry.isFile() && matches && entry.name.endsWith(".jsonl")) files.push(join(sessions, entry.name));
+    if (!entry.isDirectory() || !matches) continue;
+    const tasks = join(sessions, entry.name, "tasks");
+    const taskInfo = stat(tasks);
+    if (!taskInfo?.isDirectory() || taskInfo.isSymbolicLink()) continue;
+    for (const child of readdirSync(tasks, { withFileTypes: true })) {
+      if (child.isFile() && !child.isSymbolicLink?.() && child.name.endsWith(".jsonl")) files.push(join(tasks, child.name));
+    }
+  }
+  return files;
+}
+
+function usageFromFiles(files) {
+  const models = new Map();
+  let calls = 0;
+  for (const file of new Set(files)) {
+    const info = regularFile(file);
+    if (!info || info.size > 256 * 1024 * 1024) continue;
+    const fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW);
+    try {
+      const chunk = Buffer.alloc(64 * 1024);
+      let offset = 0;
+      let pending = "";
+      for (;;) {
+        const count = readSync(fd, chunk, 0, chunk.length, offset);
+        if (count === 0) break;
+        offset += count;
+        const lines = (pending + chunk.subarray(0, count).toString("utf8")).split("\n");
+        pending = lines.pop() ?? "";
+        for (const line of lines) accumulate(line);
+      }
+      if (pending) accumulate(pending);
+    } finally { closeSync(fd); }
+  }
+  function accumulate(line) {
+    let message;
+    try { message = JSON.parse(line)?.message; } catch { return; }
+    const usage = message?.role === "assistant" ? message.usage : null;
+    if (!usage || typeof usage !== "object") return;
+    const key = `${message.provider ?? "unknown"}/${message.model ?? "unknown"}`;
+    const current = models.get(key) ?? { calls: 0, input: 0, output: 0, cache_read: 0, cache_write: 0, reasoning: 0, total_tokens: 0, cost_usd: 0 };
+    current.calls += 1;
+    current.input += Number(usage.input) || 0;
+    current.output += Number(usage.output) || 0;
+    current.cache_read += Number(usage.cacheRead) || 0;
+    current.cache_write += Number(usage.cacheWrite) || 0;
+    current.reasoning += Number(usage.reasoning) || 0;
+    current.total_tokens += Number(usage.totalTokens) || 0;
+    current.cost_usd += Number(usage.cost?.total) || 0;
+    models.set(key, current);
+    calls += 1;
+  }
+  const byModel = Object.fromEntries([...models.entries()].sort(([left], [right]) => left.localeCompare(right))
+    .map(([model, usage]) => [model, { ...usage, cost_usd: Number(usage.cost_usd.toFixed(6)) }]));
+  return { calls, cost_usd: Number([...models.values()].reduce((sum, item) => sum + item.cost_usd, 0).toFixed(6)), by_model: byModel };
+}
+
+/** Compact resumability/status view: hashes and gates without replaying document bodies. */
+export function readMemoryStatus(projectRoot, sessionId) {
+  const paths = memoryPaths(projectRoot, sessionId);
+  const parse = (path, limit) => JSON.parse(readSmall(path, limit) ?? "null");
+  const shared = readSmall(paths.shared, SHARED_CONTEXT_MAX_BYTES);
+  const durableFiles = readDurableMemory(paths.root).map(({ path, sha256, truncated, error }) => ({
+    path, sha256, ...(truncated ? { truncated } : {}), ...(error ? { error } : {}),
+  }));
+  const harvest = parse(paths.harvest, 262144);
+  const shipment = parse(paths.shipment, 8192);
+  const finalized = parse(paths.finalized, 8192);
+  const gate = parse(join(paths.directory, "gate-state.json"), 1024 * 1024);
+  const registry = parse(join(paths.directory, "task-runs", "index.json"), 4 * 1024 * 1024);
+  const usageFiles = sessionUsageFiles(paths.root, sessionId);
+  for (const entry of Object.values(registry?.tasks ?? {})) {
+    try {
+      if (typeof entry.worktree !== "string" || realpathSync(entry.worktree) !== entry.worktree) continue;
+      if (isSafeSessionId(entry.result?.session_id)) usageFiles.push(...sessionUsageFiles(entry.worktree, entry.result.session_id));
+    } catch { /* A removed task worktree leaves status readable without usage. */ }
+  }
+  const reviews = Object.fromEntries(Object.entries(gate?.final_review_evidence ?? {}).map(([role, receipt]) => [role, {
+    status: receipt?.status ?? null, accepted: receipt?.accepted === true,
+    reviewed_head_sha: receipt?.reviewed_head_sha ?? null,
+  }]));
+  const tasks = Object.values(registry?.tasks ?? {}).map((entry) => ({
+    task_id: entry.task_id, attempt_id: entry.attempt_id, status: entry.status,
+    child_head: entry.result?.child_head ?? null, integrated_head: entry.integration?.integrated_head ?? null,
+    ...(entry.reason ? { reason: entry.reason } : {}),
+  }));
+  return {
+    ok: true,
+    session_id: sessionId,
+    head: gitMemory(paths.root, ["rev-parse", "HEAD"]),
+    mode: gate?.mode ?? null,
+    feature_id: gate?.feature_id ?? null,
+    spec_sha256: gate?.spec_sha256 ?? null,
+    plan_review: gate?.plan_review_evidence ? {
+      verdict: gate.plan_review_evidence.verdict ?? null,
+      plan_sha256: gate.plan_review_evidence.plan_sha256 ?? null,
+      spec_sha256: gate.plan_review_evidence.spec_sha256 ?? null,
+    } : null,
+    tasks,
+    final_review_done: gate?.final_review_done === true,
+    final_reviews: reviews,
+    shared_context: shared === null ? null : { bytes: Buffer.byteLength(shared), sha256: sha(shared) },
+    durable_files: durableFiles,
+    harvest: harvest ? {
+      status: harvest.status ?? null, apply_status: harvest.apply_status ?? null, base_head: harvest.base_head ?? null,
+      paths: Array.isArray(harvest.changes) ? harvest.changes.map((change) => change.path) : [],
+      verification_commands: harvest.verification_commands ?? [],
+    } : null,
+    shipment: shipment ? { status: shipment.status ?? null, head: shipment.head ?? null } : null,
+    finalized: finalized ? { head: finalized.head ?? null, finalized_at: finalized.finalized_at ?? null } : null,
+    usage: usageFromFiles(usageFiles),
+  };
 }
 
 /** Finalization is a one-way phase for planning, even after receipts are cleaned up. */
@@ -283,6 +407,12 @@ export function completeHarvest(snapshot, text, agentId) {
   if (Buffer.byteLength(matches[1]) > HARVEST_MAX_BYTES) throw new Error("Harvest exceeds 24 KiB");
   const proposal = JSON.parse(matches[1]);
   if (!Array.isArray(proposal.changes) || proposal.changes.length > 3) throw new Error("Harvest must propose zero to three changes");
+  const requiresVerification = snapshot.require_structural_verification === true;
+  const verificationCommands = proposal.verification_commands ?? [];
+  const validatedCommands = validatePiVerificationCommands(verificationCommands);
+  if (!validatedCommands.ok) throw new Error("Harvest result has invalid or sensitive verification_commands");
+  if (requiresVerification && proposal.changes.length > 0 && verificationCommands.length === 0)
+    throw new Error("A durable memory delta requires at least one structural verification command");
   const seen = new Set();
   const changes = proposal.changes.map((change) => {
     if (!change || !DURABLE_MEMORY_FILES.includes(change.path) || seen.has(change.path)) throw new Error("Invalid or duplicate durable memory path");
@@ -322,10 +452,11 @@ export function completeHarvest(snapshot, text, agentId) {
       input_digest: snapshot.review_input.input_digest, memory_paths,
       remainder_digest: memoryReviewRemainder(captured.snapshot, memory_paths) };
   }
-  const receipt = { written_by: "host-subagent-completion", session_id: snapshot.session_id, parent_session_id: snapshot.session_id,
+  const receipt = { ...(requiresVerification ? { receipt_version: 2 } : {}), written_by: "host-subagent-completion", session_id: snapshot.session_id, parent_session_id: snapshot.session_id,
     project_root: paths.root, feature_id: snapshot.feature_id, base_head: snapshot.base_head,
     agent_id: agentId, status: "completed", apply_status: changes.length === 0 ? "applied" : "proposed",
-    plan_snapshot: snapshot.planSnapshot, review_input: reviewInput, changes, proposal_sha256: sha(JSON.stringify(changes)) };
+    plan_snapshot: snapshot.planSnapshot, review_input: reviewInput, changes,
+    ...(requiresVerification ? { verification_commands: validatedCommands.commands } : {}), proposal_sha256: sha(JSON.stringify(changes)) };
   atomicWrite(paths.harvest, JSON.stringify(receipt, null, 2));
   return receipt;
 }
@@ -392,6 +523,13 @@ export function checkHarvestReady(projectRoot, sessionId) {
   for (const change of harvest.changes) {
     if (!DURABLE_MEMORY_FILES.includes(change.path) || sha(readSmall(join(paths.root, change.path), 1024 * 1024) ?? "") !== change.after_sha256) throw new Error("Durable memory differs from the harvested proposal");
   }
+  if (harvest.receipt_version === 2) {
+    const verification = checkPiFinalCommands({ projectRoot: paths.root, sessionId, commands: harvest.verification_commands });
+    if (!verification.ok) {
+      const commands = Array.isArray(verification.commands) ? `: ${JSON.stringify(verification.commands)}` : "";
+      throw new Error(`Run the harvest structural verification commands on the committed durable-memory HEAD before shipping${commands}`);
+    }
+  }
   return { ok: true, head: gitMemory(paths.root, ["rev-parse", "HEAD"]), harvest };
 }
 
@@ -403,7 +541,7 @@ function memoryReviewRemainder(snapshot, memoryPaths) {
     body[key] = body[key].filter((entry) => !memoryPaths.includes(entry.path));
   return sha(stable(body));
 }
-function resolvePostHarvestReviewSnapshot(projectRoot, sessionId, snapshot) {
+export function resolvePostHarvestReviewSnapshot(projectRoot, sessionId, snapshot) {
   if (snapshot?.phase !== "final") return { snapshot, binding: null };
   try {
     const paths = memoryPaths(projectRoot, sessionId);
@@ -444,7 +582,9 @@ function resolvePostHarvestReviewSnapshot(projectRoot, sessionId, snapshot) {
         !Array.isArray(binding.memory_paths) || binding.memory_paths.some((file) => !DURABLE_MEMORY_FILES.includes(file)) ||
         binding.remainder_digest !== memoryReviewRemainder(snapshot, binding.memory_paths)) return { snapshot, binding: null };
     return { snapshot: { ...snapshot, head_sha: binding.head_sha, input_digest: binding.input_digest }, binding };
-  } catch { return { snapshot, binding: null }; }
+  } catch (error) {
+    return { snapshot, binding: null, reason: error instanceof Error ? error.message : String(error) };
+  }
 }
 
 export function postHarvestReviewSnapshot(projectRoot, sessionId, snapshot) {
@@ -499,10 +639,13 @@ export function checkMemoryShipperReady(projectRoot, sessionId) {
     if (state.session_id !== sessionId || !isSafeFeatureId(state.feature_id)) throw new Error("Shipper requires this classified session");
     return { head: release.headSha, featureId: state.feature_id, release };
   }
+  // Validate the durable transaction first so a missing post-commit structural
+  // check is reported directly instead of degrading into misleading missing eyes.
+  const ready = regularFile(paths.harvest) ? checkHarvestReady(paths.root, sessionId) : null;
   const reviewed = checkCurrentMemoryReviews(paths.root, sessionId);
   const tombstone = JSON.parse(readSmall(paths.finalized, 8192) ?? "null");
   if (!regularFile(paths.shared) && !regularFile(paths.harvest) && tombstone?.session_id === sessionId && tombstone.feature_id === reviewed.featureId && tombstone.head === reviewed.head) return reviewed;
-  const ready = checkHarvestReady(paths.root, sessionId);
+  if (!ready) throw new Error("Run a successful [HARNESS_HARVEST] after final review and before shipping");
   if (ready.harvest.feature_id !== reviewed.featureId) throw new Error("Harvest feature identity mismatch");
   return reviewed;
 }

@@ -2,7 +2,7 @@ import { StringEnum, Type } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { isChildSession, piSessionId } from "../lib/pi-adapter-map.mjs";
 import { piResultText } from "../lib/obs.mjs";
-import { applyHarvest, beginHarvest, checkMemoryShipperReady, completeHarvest, completeMemoryShipment, finalizationStarted, finalizeMemory, invalidateMemoryAttempt, memoryBrief, memoryPaths, readMemory, reconcileMemoryDelivery, updateSharedContext } from "../lib/memory-cycle.mjs";
+import { applyHarvest, beginHarvest, checkMemoryShipperReady, completeHarvest, completeMemoryShipment, finalizationStarted, finalizeMemory, invalidateMemoryAttempt, memoryBrief, memoryPaths, readMemory, readMemoryStatus, reconcileMemoryDelivery, updateSharedContext } from "../lib/memory-cycle.mjs";
 
 /** Parent-only lifecycle. The mutable tool_result hook binds receipts to the actual completed call. */
 export default function harnessMemory(pi: ExtensionAPI) {
@@ -61,8 +61,13 @@ export default function harnessMemory(pi: ExtensionAPI) {
         pending.set(key(ctx, event.toolCallId), { kind: "shipment", session_id: sessionId, project_root: ctx.cwd, ...ready });
       } else {
         if (!/^\[HARNESS_HARVEST\](?:\r?\n|$)/.test(args.prompt ?? "")) return;
-        invalidateMemoryAttempt(ctx.cwd, sessionId, "harvest");
-        pending.set(key(ctx, event.toolCallId), { ...beginHarvest(ctx.cwd, sessionId), kind: "harvest" });
+        // Replacement harvests are transactional. A failed corrective attempt
+        // must not destroy the last completed receipt and its review carry.
+        pending.set(key(ctx, event.toolCallId), {
+          ...beginHarvest(ctx.cwd, sessionId),
+          kind: "harvest",
+          require_structural_verification: true,
+        });
       }
     } catch { /* Failed snapshot can never authorize shipping. */ }
   });
@@ -95,7 +100,7 @@ export default function harnessMemory(pi: ExtensionAPI) {
           ? "[harness-memory] " + phase + " receipt recorded."
           : kind === "shipment"
             ? "[harness-memory] Shipment receipt not recorded: " + reason + ". The remote effect may already have happened. Reconcile the remote before retrying completion; do not repeat a merge or publish automatically."
-            : "[harness-memory] Harvest receipt not recorded: " + reason + ". Correct or rerun the harvest after final reviews and before shipping." },
+            : "[harness-memory] Harvest receipt not recorded: " + reason + ". Any prior completed receipt was preserved; correct or rerun the harvest before shipping." },
       ],
       details: {
         ...details,
@@ -119,17 +124,17 @@ export default function harnessMemory(pi: ExtensionAPI) {
   });
   pi.registerTool({
     name: "harness_memory", label: "Harness memory",
-    description: "Read project memory and this run's curated shared_context, update that ephemeral document, apply a validated harvest proposal, reconcile a delivery base on the global host, or finalize delivery and remove ephemeral context.",
+    description: "Read project memory, inspect compact delivery/memory status, update this run's curated shared_context, apply a validated harvest proposal, reconcile a delivery base on the global host, or finalize delivery and remove ephemeral context.",
     promptSnippet: "Keep useful run discoveries with harness_memory update; reconcile a required base before final review or shipping; apply a validated harvest proposal; finalize after delivery.",
     promptGuidelines: [
       "Keep shared_context under 8192 UTF-8 bytes: concise facts, assumptions and decisions with evidence and revalidation conditions. No secrets, transcripts or gate approvals.",
-      "The parent receives the current shared_context automatically as ephemeral custom context. Do not reread unchanged memory; use read only for structured hashes, harvest receipts or explicit diagnostics.",
+      "The parent receives the current shared_context automatically as ephemeral custom context. Use status for hashes, task/gate progress and receipt summaries without returning document bodies. Use read only when the full durable excerpts are required for an explicit memory diagnosis.",
       "Use only this session's context. Reviewers never inherit the diary; relay relevant facts to hands selectively.",
-      "After final eyes approve the committed aggregate, finish any rework and revalidation, mark final-review, then dispatch [HARNESS_HARVEST]. Apply a non-empty validated proposal and commit only its exact durable paths before shipper. This host-bound memory-only delta preserves final approvals; product changes require current eyes again. Never create a plan task for harvest.",
+      "After final eyes approve the committed aggregate, finish any rework and revalidation, mark final-review, then dispatch [HARNESS_HARVEST]. Every non-empty result must include verification_commands that exercise the repository's structural constraints for the changed durable documents. Apply the validated proposal, commit only its exact durable paths, then run those exact commands on the new clean HEAD before shipper. This host-bound memory-only delta preserves final approvals; product changes require current eyes again. A corrective harvester owns defects limited to MEMORY.md, CONTEXT.md or kaizen.md; do not create a plan task or use a product writer for harvest.",
       "When a new base must be incorporated, use reconcile on the global parent before the first final review, or for a shipping base conflict; never task resume or a writer. Do not review or harvest just to unlock a merge. Supply full expected_head/base_sha. Omit resolutions for a read-only preview; supply [] for a clean merge or one hash-bound literal patch per durable-memory conflict. Preserve both sides' verified knowledge; never replace a document from an excerpt. Product conflicts stop without mutation. After integration, inspect changes and revalidate final input before harvest/shipping; no old receipt is promoted.",
       "Call finalize only when delivery is complete. Quit, abort or a pause is not completion; preserve the document for exact-session resume.",
     ],
-    parameters: Type.Object({ action: StringEnum(["read", "update", "apply", "reconcile", "finalize"] as const), content: Type.Optional(Type.String()),
+    parameters: Type.Object({ action: StringEnum(["read", "status", "update", "apply", "reconcile", "finalize"] as const), content: Type.Optional(Type.String()),
       expected_head: Type.Optional(Type.String()), base_sha: Type.Optional(Type.String()),
       resolutions: Type.Optional(Type.Array(Type.Object({ path: Type.String(), before_sha256: Type.String(),
         patch: Type.Object({ old_text: Type.String(), new_text: Type.String() }) }))),
@@ -140,6 +145,7 @@ export default function harnessMemory(pi: ExtensionAPI) {
         const sessionId = identity(ctx);
         let result;
         if (params.action === "read") result = readMemory(ctx.cwd, sessionId);
+        else if (params.action === "status") result = readMemoryStatus(ctx.cwd, sessionId);
         else if (params.action === "update") result = updateSharedContext(ctx.cwd, sessionId, params.content);
         else if (params.action === "apply") result = applyHarvest(ctx.cwd, sessionId);
         else if (params.action === "reconcile") result = reconcileMemoryDelivery(ctx.cwd, sessionId, params);

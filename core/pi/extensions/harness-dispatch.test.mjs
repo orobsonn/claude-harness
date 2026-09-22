@@ -161,6 +161,13 @@ test("canonical task injection is idempotent and reviewer enrichment stays fail-
   assert.equal(input.prompt, `${MARKER}\nFallback brief`);
 });
 
+test("task review headers fail fast with the exact role-specific prefix", () => {
+  assert.equal(testApi.taskReviewHeaderReason("harness-adversary", `${MARKER}\nReview.`, "task-1"), null);
+  assert.equal(testApi.taskReviewHeaderReason("harness-compliance", `[HARNESS_TASK_REVIEW]\n${MARKER}\nReview.`, "task-1"), null);
+  assert.match(testApi.taskReviewHeaderReason("harness-adversary", `[HARNESS_TASK_REVIEW]\n${MARKER}`, "task-1"), /task-review-header.*HARNESS_TASK_CONTEXT/);
+  assert.match(testApi.taskReviewHeaderReason("harness-security", MARKER, "task-1"), /task-review-header.*HARNESS_TASK_REVIEW/);
+});
+
 test("corrective test-author waits for capture of the latest implementation delta", () => {
   const f = canonicalFixture();
   const handPath = join(f.root, ".pi/harness/state/hand-records", FEATURE, SESSION, "task-1.json");

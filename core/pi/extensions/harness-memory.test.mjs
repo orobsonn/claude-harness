@@ -83,7 +83,7 @@ function recordZeroDeltaHarvest(api, root) {
       toolName: "subagent",
       toolCallId: "harvest-zero",
       input: args,
-      content: [{ type: "text", text: "Harvest complete.\n[HARNESS_HARVEST_RESULT]{\"changes\":[]}[/HARNESS_HARVEST_RESULT]" }],
+      content: [{ type: "text", text: "Harvest complete.\n[HARNESS_HARVEST_RESULT]{\"changes\":[],\"verification_commands\":[]}[/HARNESS_HARVEST_RESULT]" }],
       details: { status: "completed", agentId: "agent-harvester" },
       isError: false,
     },
@@ -329,7 +329,7 @@ test("harness-memory: tool_result nativo confirma harvest sem apagar a saída do
   const head = initGit(root);
   seedFinalState(root, head);
   const api = register();
-  const original = 'Harvest complete.\n[HARNESS_HARVEST_RESULT]{"changes":[]}[/HARNESS_HARVEST_RESULT]';
+  const original = 'Harvest complete.\n[HARNESS_HARVEST_RESULT]{"changes":[],"verification_commands":[]}[/HARNESS_HARVEST_RESULT]';
   const { result, events } = await runNativeToolCall({
     tool: syntheticSubagent(original),
     input: {

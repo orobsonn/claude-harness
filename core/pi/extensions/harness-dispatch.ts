@@ -5,7 +5,9 @@ import { validateOcCaptureEligibleHandRecord } from "../../opencode/lib/hand-rec
 import { isCaptureEligibleHandRecord } from "../../shared/lib/real-file-capture-rail.mjs";
 import { findShadowedCanonicalRoles, validateSubagentDispatch } from "../lib/dispatch-rail.mjs";
 import { loadModelProfileFromEnv, profilePrompt } from "../lib/model-profile.mjs";
-import { isDiscussionRole, isSupportRole } from "../lib/roles.mjs";
+import { isDiscussionRole, isParallelReviewRole, isSupportRole } from "../lib/roles.mjs";
+import { classifyPiReviewDispatch } from "../lib/pi-review-concurrency.mjs";
+import { readTaskRunBinding } from "../lib/task-run.mjs";
 import { isChildSession, isPiHeadlessContext, piSessionId, piSubagentArgs } from "../lib/pi-adapter-map.mjs";
 import { loadPiGateStateFromDisk } from "../lib/pi-gate-state.mjs";
 import { piHandRecordPath } from "../lib/pi-paths.mjs";
@@ -13,6 +15,15 @@ import { decidePiPlanGate } from "../lib/plan-gate.mjs";
 
 const CANONICAL_TASK_OPEN = "[HARNESS_CANONICAL_TASK]";
 const CANONICAL_TASK_CLOSE = "[/HARNESS_CANONICAL_TASK]";
+
+function taskReviewHeaderReason(role: string, prompt: unknown, taskId: string) {
+  const review = classifyPiReviewDispatch(role, prompt);
+  if (review?.phase === "task" && review.taskId === taskId) return null;
+  const prefix = role === "harness-adversary"
+    ? `[HARNESS_TASK_CONTEXT]{"task_id":"${taskId}"}[/HARNESS_TASK_CONTEXT]`
+    : `[HARNESS_TASK_REVIEW]\n[HARNESS_TASK_CONTEXT]{"task_id":"${taskId}"}[/HARNESS_TASK_CONTEXT]`;
+  return `task-review-header; start the prompt exactly with ${prefix}`;
+}
 
 function canonicalTaskPrompt(prompt: unknown, task: unknown) {
   const original = typeof prompt === "string" ? prompt : "";
@@ -77,6 +88,13 @@ export default function harnessDispatch(pi: ExtensionAPI) {
     if (event.toolName !== "subagent") return;
     shadowedRoles = findShadowedCanonicalRoles(ctx.cwd, existsSync);
     const role = piSubagentArgs(event.input).subagent_type;
+    if (isChildSession(ctx) && isParallelReviewRole(role)) {
+      const binding: any = readTaskRunBinding(ctx.cwd, piSessionId(ctx) ?? "");
+      if (binding?.ok) {
+        const headerReason = taskReviewHeaderReason(role, event.input?.prompt, binding.grant?.task_id);
+        if (headerReason) return { block: true, reason: `harness dispatch blocked: ${headerReason}` };
+      }
+    }
     if (isSupportRole(role)) {
       const loaded: any = loadPiGateStateFromDisk(ctx.cwd, { sessionId: piSessionId(ctx) });
       if (isChildSession(ctx) || loaded?.ok !== true || loaded.state?.task_run ||
@@ -123,4 +141,4 @@ export default function harnessDispatch(pi: ExtensionAPI) {
   });
 }
 
-export const testApi = Object.freeze({ canonicalTaskPrompt, uncapturedImplementationReason });
+export const testApi = Object.freeze({ canonicalTaskPrompt, uncapturedImplementationReason, taskReviewHeaderReason });

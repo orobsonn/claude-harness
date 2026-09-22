@@ -198,7 +198,7 @@ function approvedPlan(owner) {
   }
   return { plan, directory, ...captured.snapshot, receipt };
 }
-function summary(entry) {
+function summary(entry, { compact = false } = {}) {
   const exposesResultContext = ["ready", "integrated"].includes(entry.status);
   return {
     task_id: entry.task_id,
@@ -208,7 +208,7 @@ function summary(entry) {
     session_id: entry.result?.session_id,
     child_head: entry.result?.child_head,
     ...(entry.orca ? { orca: entry.orca } : {}),
-    ...(exposesResultContext && entry.result?.context_return
+    ...(!compact && exposesResultContext && entry.result?.context_return
       ? { context_return: entry.result.context_return }
       : {}),
     ...(entry.reason ? { reason: entry.reason } : {}),
@@ -678,7 +678,7 @@ function descendants(plan, taskId) {
 /** Tool context supplies the native parent identity; parameters cannot choose paths or sessions. */
 export const TASK_ACTION_FIELDS = Object.freeze({
   dispatch: Object.freeze(["action", "task_ids", "task_contexts"]),
-  status: Object.freeze(["action", "task_id"]),
+  status: Object.freeze(["action", "task_id", "compact"]),
   integrate: Object.freeze(["action", "task_id", "attempt_id", "expected_head"]),
   resume: Object.freeze(["action", "task_id", "attempt_id", "instruction"]),
   "abandon-resume": Object.freeze(["action", "task_id", "attempt_id", "expected_head", "no_product_obligation", "reason"]),
@@ -703,6 +703,8 @@ export async function executeTaskAction(params, context = {}, injected = {}) {
       throw new Error(`unexpected task parameters for ${params.action}; allowed: ${allowed.join(", ")}`);
     if (params.task_id !== undefined && !isSafeTaskId(params.task_id))
       throw new Error("safe task_id required");
+    if (params.compact !== undefined && typeof params.compact !== "boolean")
+      throw new Error("compact must be boolean");
     registryPath = taskRegistryPath(owner.root, owner.sessionId);
     fs.mkdirSync(path.dirname(registryPath), { recursive: true });
     lock = acquireLock(registryPath, { timeoutMs: 5, staleMs: LOCK_STALE_MS });
@@ -797,7 +799,7 @@ export async function executeTaskAction(params, context = {}, injected = {}) {
           if (inspected.details && typeof inspected.details === "object") {
             const current = {};
             if (inspected.details.context_return !== undefined)
-              current.context_return = inspected.details.context_return;
+              if (!params.compact) current.context_return = inspected.details.context_return;
             if (inspected.details.review_findings !== undefined)
               current.review_findings = inspected.details.review_findings;
             for (const field of ["task_report", "hand_report", "launch_failure", "worktree_changes"]) {
@@ -811,7 +813,7 @@ export async function executeTaskAction(params, context = {}, injected = {}) {
       persist();
       return {
         ok: true,
-        tasks: entries.map(summary),
+        tasks: entries.map((entry) => summary(entry, { compact: params.compact === true })),
         ...(Object.keys(diagnostics).length > 0 ? { diagnostics } : {}),
         max_parallel_tasks: MAX_PARALLEL_TASKS,
       };
@@ -862,7 +864,7 @@ export async function executeTaskAction(params, context = {}, injected = {}) {
         (params.task_id !== barrierTaskId && !nestedOwnerRecovery && !idempotentIntegratedRetry))
     )
       throw new Error(
-        `Correction of ${registry.correction_barrier.task_id} must be integrated before other task changes`,
+        `Correction of ${registry.correction_barrier.task_id} owns the aggregate correction barrier and must be integrated before another task can mutate or resume. Use status/wait for read-only observation; then integrate that exact attempt first.`,
       );
     if (params.action === "dispatch") {
       if (

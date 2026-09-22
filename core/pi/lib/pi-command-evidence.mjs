@@ -334,13 +334,20 @@ function commandEvidenceManifest(evidenceRoot, prompt, currentIdentity, sessionI
   return { exact_current: exactCurrent, supplied, supplied_unavailable: suppliedUnavailable };
 }
 
-/** Read existing native output for declared final checks; never execute or approve a command. */
-export function checkPiFinalCommands({ projectRoot, sessionId, commands } = {}) {
-  if (commands === undefined) return { ok: true };
+export function validatePiVerificationCommands(commands, { optional = false } = {}) {
+  if (commands === undefined && optional) return { ok: true, commands: [] };
   if (!Array.isArray(commands) || commands.length > 100 || commands.some((command) =>
     typeof command !== "string" || !command.trim() || command.length > COMMAND_MAX_BYTES || sensitiveCommand(command))) {
     return { ok: false, reason: "final_review.verification_commands must contain bounded, non-sensitive command strings" };
   }
+  return { ok: true, commands: [...new Set(commands)] };
+}
+
+/** Read existing native output for declared final checks; never execute or approve a command. */
+export function checkPiFinalCommands({ projectRoot, sessionId, commands } = {}) {
+  const validated = validatePiVerificationCommands(commands, { optional: true });
+  if (!validated.ok) return validated;
+  commands = validated.commands;
   if (!commands.length) return { ok: true };
   const missing = new Set(commands);
   try {
@@ -463,8 +470,11 @@ function declaredVerificationCommand(cwd, sessionId, command) {
     const planDirectory = path.join(root, ".pi/harness/plans", state.feature_id);
     if (fs.realpathSync(planDirectory) !== planDirectory) return false;
     const plan = readRegularJson(path.join(planDirectory, "execution-plan.json"));
-    return plan.feature_id === state.feature_id && Array.isArray(plan.final_review?.verification_commands) &&
-      plan.final_review.verification_commands.includes(command);
+    if (plan.feature_id === state.feature_id && Array.isArray(plan.final_review?.verification_commands) &&
+        plan.final_review.verification_commands.includes(command)) return true;
+    const harvest = readRegularJson(path.join(stateDirectory, "memory-harvest.json"));
+    return harvest.session_id === sessionId && harvest.project_root === root && harvest.receipt_version === 2 &&
+      Array.isArray(harvest.verification_commands) && harvest.verification_commands.includes(command);
   } catch { return false; }
 }
 
