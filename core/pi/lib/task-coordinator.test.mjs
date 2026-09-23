@@ -704,6 +704,29 @@ test("summary exposes durable context only for ready or integrated tasks", async
   assert.equal(running.tasks[0].status, "running");
   assert.equal(running.tasks[0].context_return, undefined);
 });
+test("status flags repeated correction cycles without blocking ordinary progress", async (t) => {
+  const f = fixture(t, [task("a")]);
+  const action = params => executeTaskAction(params, f.context, f.deps);
+  const dispatched = await action({ action: "dispatch", task_ids: ["a"] });
+  assert.equal(dispatched.ok, true);
+  const ordinary = await action({ action: "status", task_id: "a" });
+  assert.equal(ordinary.tasks[0].convergence_attention, undefined);
+  const registry = f.registry();
+  const entry = registry.tasks.a;
+  entry.launches = Array.from({ length: 6 }, (_, index) => ({ ...entry.launches[0], run_id: `retry-${index}` }));
+  entry.integration_history = [{}, {}, {}];
+  write(taskRegistryPath(f.dir, "parent"), registry);
+  const repeated = await action({ action: "status", task_id: "a", compact: true });
+  assert.equal(repeated.ok, true);
+  assert.equal(repeated.tasks[0].convergence_attention.launch_count, 6);
+  assert.equal(repeated.tasks[0].convergence_attention.correction_count, 3);
+  assert.match(repeated.tasks[0].convergence_attention.guidance, /inspect current findings/i);
+  assert.deepEqual(f.registry().tasks.a.integration_history, entry.integration_history, "advisory does not mutate correction history");
+  registry.tasks.a.status = "integrated";
+  write(taskRegistryPath(f.dir, "parent"), registry);
+  const completed = await action({ action: "status", task_id: "a" });
+  assert.equal(completed.tasks[0].convergence_attention, undefined, "completed task is not reported as looping");
+});
 test("integration rejects wrong HEAD and preserves ancestry using a merge journal", async (t) => {
   const f = fixture(t);
   await executeTaskAction(

@@ -212,6 +212,13 @@ function summary(entry, { compact = false } = {}) {
       ? { context_return: entry.result.context_return }
       : {}),
     ...(entry.reason ? { reason: entry.reason } : {}),
+    ...(entry.status !== "integrated" && entry.launches.length >= 6 && (entry.integration_history?.length ?? 0) >= 3
+      ? { convergence_attention: {
+        launch_count: entry.launches.length,
+        correction_count: entry.integration_history.length,
+        guidance: "Repeated correction cycle: inspect current findings and applicability before another resume; use the existing exact-attempt recovery only when its host checks pass.",
+      } }
+      : {}),
     launches: entry.launches.map((launch) => ({
       run_id: launch.run_id,
       pid: launch.pid,

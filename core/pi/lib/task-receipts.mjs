@@ -970,9 +970,15 @@ export function readIntegratedTaskEvidence({ projectRoot, sessionId, featureId, 
     const registry = readJson(registryPath, root);
     const entry = registry?.tasks?.[taskId];
     if (registry?.version !== 1 || registry.parent_session_id !== sessionId || registry.feature_id !== featureId || !object(entry) ||
-        (registry.correction_barrier != null && !isReconciliationDependencyRead(registry, entry, reconciliationFor)) ||
-        entry.status !== "integrated" || entry.parent_session_id !== sessionId || entry.feature_id !== featureId || entry.task_id !== taskId ||
+        entry.parent_session_id !== sessionId || entry.feature_id !== featureId || entry.task_id !== taskId ||
         entry.plan_sha256 !== registry.plan_sha256 || entry.spec_sha256 !== registry.spec_sha256) return failure("current integrated task registry entry required");
+    if (registry.correction_barrier != null && !isReconciliationDependencyRead(registry, entry, reconciliationFor)) {
+      const owner = registry.correction_barrier.task_id;
+      return failure(isSafeTaskId(owner)
+        ? `correction barrier active for task ${owner}; resolve its exact attempt through host-validated recovery before aggregate review`
+        : "correction barrier active; inspect the task registry before aggregate review");
+    }
+    if (entry.status !== "integrated") return failure("current integrated task registry entry required");
     const authority = validateCurrentIntegrationAuthority(entry, registry, { projectRoot: root, sessionId, featureId });
     if (!authority.ok) return authority;
     let inspectionEntry = entry;
