@@ -602,6 +602,8 @@ test("Pi preflight refuses to copy when an extension or lib is missing from the 
 });
 
 for (const missingArtifact of [
+  "control-capabilities.json",
+  "extensions/harness-control-plane.ts",
   "extensions/harness-spec.ts",
   "lib/native-bootstrap.mjs",
   "lib/ceremony-mode.mjs",
@@ -632,6 +634,10 @@ test("Pi import rewrite re-roots only monorepo siblings, depth-aware", () => {
   assert.equal(
     rewritePiImportsForVendor("import { x } from '../../opencode/lib/gate-state.mjs'", "extensions/harness-dispatch.ts"),
     "import { x } from '../vendor/opencode/lib/gate-state.mjs'",
+  );
+  assert.equal(
+    rewritePiImportsForVendor("import { x } from '../../control-plane/lib/protocol.mjs'", "extensions/harness-control-plane.ts"),
+    "import { x } from '../vendor/control-plane/lib/protocol.mjs'",
   );
   assert.equal(
     rewritePiImportsForVendor('import { x } from "../lib/roles.mjs";', "bin/pi-harness.mjs"),

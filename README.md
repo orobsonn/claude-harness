@@ -627,6 +627,18 @@ O selector [`core/orca/select-and-dispatch.mjs`](core/orca/select-and-dispatch.m
 
 O motor antigo de cron da VPS está aposentado: [`docs/vps-retirement.md`](docs/vps-retirement.md). O playbook atual está em [`docs/orca-headless-vps-playbook.md`](docs/orca-headless-vps-playbook.md).
 
+### Control plane opcional
+
+Para operar vários projetos por uma única conversa, execute
+`harness-control-plane`. O agente geral recomenda issues, inicia somente a
+recomendação autorizada, acompanha decisões/resultados e controla apenas
+automações já existentes; execução interna e shipping continuam no pai Pi de
+cada consumer. Ele não recebe shell nem escrita em produto.
+
+A ponte vendorizada permanece inerte fora de uma entrega iniciada pelo control
+plane, e desabilitar o módulo preserva worktrees, terminais e o uso direto do
+launcher. Arquitetura, adoção e demonstração: [`core/control-plane/README.md`](core/control-plane/README.md).
+
 ## O salto dos últimos dez dias
 
 O estado atual não é o README antigo com “suporte ao Pi” adicionado. A arquitetura de execução mudou:

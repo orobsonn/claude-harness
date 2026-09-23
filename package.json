@@ -5,7 +5,8 @@
   "type": "module",
   "bin": {
     "claude-harness": "core/claude-code/skills/initializing-projects/references/cli.mjs",
-    "pi-harness": "core/pi/bin/pi-harness.mjs"
+    "pi-harness": "core/pi/bin/pi-harness.mjs",
+    "harness-control-plane": "core/control-plane/bin/harness-control-plane.mjs"
   },
   "publishConfig": {
     "access": "public"
@@ -17,6 +18,7 @@
     "core/opencode",
     "core/github",
     "core/orca",
+    "core/control-plane",
     "core/shared",
     "core/claude-code",
     "core/codex",
