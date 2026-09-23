@@ -18,7 +18,7 @@ Na worktree onde o harness foi instalado, rode:
 node .pi/harness/pi-harness.mjs --verify
 ```
 
-O resultado precisa incluir `"ok":true`, `"runtimeVersion":"0.86.1"` e `"subagentsVersion":"21.7.4"`. Ele não chama modelo, lê credenciais, instala ou corrige dependências. Cache ausente ou alterado é um erro: execute o init/update do harness nesse host antes de iniciar a run.
+O resultado precisa incluir `"ok":true`, `"runtimeVersion":"0.87.1"` e `"subagentsVersion":"21.7.4"`. Ele não chama modelo, lê credenciais, instala ou corrige dependências. Cache ausente ou alterado é um erro: execute o init/update do harness nesse host antes de iniciar a run.
 
 O init/update que inclui Pi prepara primeiro o runtime fixado em um cache do usuário (`~/.cache/claude-harness/pi-runtime`, ou sob `XDG_CACHE_HOME` absoluto). Worktrees no mesmo host reutilizam a mesma geração; plataformas e versões incompatíveis usam gerações distintas. O launcher não usa nem modifica o Pi global ou `node_modules` do produto. Uma falha de provisionamento impede a atualização dos arquivos do harness. O pacote nativo Pi mantém suas dependências próprias para preservar `pi install`; isso pode duplicar downloads no instalador npx, mas não muda o runtime isolado usado pelo launcher.
 

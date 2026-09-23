@@ -1,5 +1,5 @@
 /**
- * Compatibility overlay for the pinned Pi 0.86.1 runtime.
+ * Compatibility overlay for the pinned Pi 0.87.1 runtime.
  *
  * Pi binds credentials to PI_CODING_AGENT_DIR. The harness keeps that directory
  * per worktree, so this sealed patch introduces PI_CODING_AGENT_AUTH_PATH while
@@ -15,7 +15,7 @@ export const PI_SUBAGENTS_AUTH_PATH_PATCH_MARKER = "CLAUDE_HARNESS_SUBAGENTS_AUT
 export const PI_AUTH_PATH_ENV = "PI_CODING_AGENT_AUTH_PATH";
 export const PI_RESUME_ENV = "PI_HARNESS_RESUME";
 const PI_RESUME_PATCH_MARKER = "CLAUDE_HARNESS_EXACT_RESUME_PATCH_v1";
-const PINNED_PI_VERSION = "0.86.1";
+const PINNED_PI_VERSION = "0.87.1";
 const PINNED_SUBAGENTS_VERSION = "21.7.4";
 
 function sha256(content) {
@@ -35,8 +35,8 @@ function mark(content) {
 const PATCHES = [
   {
     rel: "dist/core/session-manager.js",
-    sha256: "96bd76b298f3c0a6b6d9b57b727f0f9b1196fbfa83172071ac280a5a37f82a08",
-    patchedSha256: "0911392288b89db5195d1a1b1223ba1bcaa32641ff911338214383aa7dd2d344",
+    sha256: "d365ffb5a189915c3af93953daf751bff45fe46222b05c426f8d8b845946bebf",
+    patchedSha256: "9edeb6f5b0ef95abe3ba96fbab3d8594bb799fd4fbe34e1ccbe486ea866ecdff",
     marker: PI_RESUME_PATCH_MARKER,
     transform(content) {
       let next = replaceExactly(content,
@@ -107,7 +107,7 @@ const PATCHES = [
   },
   {
     rel: "dist/core/sdk.js",
-    sha256: "3417c58edc5c02a4ae71a3604bbd04688d1741e0203497bf082a748ca843d850",
+    sha256: "b49c2843197166bb84283edcb7702b91346d8fbaed2b0b8c70e5277dd78bcf5f",
     transform(content) {
       let next = replaceExactly(content, 'import { getAgentDir } from "../config.js";', 'import { getAgentDir, getAuthPath } from "../config.js";');
       next = replaceExactly(next, 'const authPath = options.agentDir ? join(agentDir, "auth.json") : undefined;', "const authPath = getAuthPath();");
@@ -165,7 +165,7 @@ function patchFile(path, spec) {
 
 
 // Pinned internal PromptOptions.preflightResult seam, not a stable public SDK API.
-const PI_REVIEW_PREFLIGHT_SHA = "edaff7055ced7d49d25135c92415fbbfd9c14c4a29be5a79510ab9216045d6d9";
+const PI_REVIEW_PREFLIGHT_SHA = "5ebfae51db5a900596145159428e7cb57d195af9d54a28f41d4ac8ff1bfd5729";
 const PI_SUBAGENTS_LIFECYCLE_MARKER = "CLAUDE_HARNESS_SUBAGENTS_LIFECYCLE_PATCH_v1";
 const SUBAGENTS_LIFECYCLE_PATCHES = [
   {
