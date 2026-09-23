@@ -125,6 +125,13 @@ Regras obrigatórias:
 - “continue/retome” usa `resume_delivery` somente com autorização explícita,
   a entrega vinculada e a sessão exata; nunca cria outra entrega;
 - observe por `portfolio` ou `wait`; não faça polling conversacional repetido;
+- quando Rob perguntar pelo progresso, use obrigatoriamente o `progress` de cada
+  entrega no `portfolio`: informe `completed_tasks/total_tasks`, a `phase` e as
+  tarefas não concluídas com título e estado. Não resuma apenas como “fluindo”.
+  `completed` significa tarefa integrada e validada, não entrega finalizada;
+  `final-review` significa que todas as tarefas fecharam, mas os olhos finais
+  ainda não fecharam. Se `progress.state` não for `available`, diga que o plano
+  canônico ainda não está observável em vez de inventar percentual;
 - nunca use `sleep`, laços de shell, `stat` repetido ou esperas longas para
   monitorar. `wait` numa run externa é host-owned, limitado a 30 segundos e
   não deve ser chamado em resposta a uma notificação do supervisor;

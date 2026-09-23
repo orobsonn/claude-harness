@@ -302,6 +302,7 @@ test("A preexisting parent is tracked durably without creating or restarting any
   assert.equal(tracked.delivery.state, "running");
   assert.equal(tracked.delivery.tracking.mode, "external-readonly");
   assert.equal(tracked.delivery.tracking.bridge, "unavailable-preexisting-session");
+  assert.equal(tracked.delivery.progress.state, "unavailable");
   assert.equal(external.calls.some((call) => call[0] === "orca" && call[1] === "worktree" && call[2] === "create"), false);
   assert.equal(external.calls.some((call) => call[0] === "orca" && call[1] === "terminal" && call[2] === "create"), false);
 
@@ -423,13 +424,34 @@ test("The silent supervisor reports exit of the exact tracked terminal without b
     },
   };
   writeJson(registryPath, registry);
+  const canonicalProgress = {
+    featureId: "existing-feature",
+    tasks: [
+      { canonicalTaskId: "task-complete", title: "Preparar contrato", status: "completed", validationStatus: "passed" },
+      { canonicalTaskId: "task-active", title: "Implementar fluxo", status: "in_progress", validationStatus: "pending" },
+    ],
+  };
+  control.readTaskProgress = () => canonicalProgress;
   const taskActive = control.portfolio("x").deliveries[0].tracking.activity;
   assert.equal(taskActive.state, "child-running");
   assert.equal(taskActive.active_children[0].role, "harness-task-worker");
   assert.equal(taskActive.active_children[0].task_id, "task-active");
+  const taskProgress = control.portfolio("x").deliveries[0].progress;
+  assert.deepEqual({ completed: taskProgress.completed_tasks, total: taskProgress.total_tasks, phase: taskProgress.phase },
+    { completed: 1, total: 2, phase: "tasks" });
+  assert.deepEqual(taskProgress.tasks.map(({ task_id, title, status }) => ({ task_id, title, status })), [
+    { task_id: "task-complete", title: "Preparar contrato", status: "completed" },
+    { task_id: "task-active", title: "Implementar fluxo", status: "in_progress" },
+  ]);
   assert.equal(await control.nextNotification(), null);
   registry.tasks["task-active"].status = "integrated";
   writeJson(registryPath, registry);
+  canonicalProgress.tasks[1] = { ...canonicalProgress.tasks[1], status: "completed", validationStatus: "passed" };
+  assert.equal(control.portfolio("x").deliveries[0].progress.phase, "final-review");
+  const gatePath = path.join(existing, ".pi", "harness", "state", "external-session-two", "gate-state.json");
+  const gate = JSON.parse(fs.readFileSync(gatePath, "utf8"));
+  writeJson(gatePath, { ...gate, final_review_done: true });
+  assert.equal(control.portfolio("x").deliveries[0].progress.phase, "shipping");
   external.terminals[0].preview = "Thinking...\n── ⠹ Working ─────────────────";
   assert.equal(await control.nextNotification(), null);
   external.terminals[0].preview = "Preciso de uma decisão do operador antes de continuar.";
