@@ -5,6 +5,18 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [3.4.0](https://github.com/orobsonn/claude-harness/compare/v3.3.6...v3.4.0) (2026-09-23)
+
+
+### Features
+
+* **control-plane:** add Clovis portfolio operator ([#1028](https://github.com/orobsonn/claude-harness/issues/1028)) ([5827bfd](https://github.com/orobsonn/claude-harness/commit/5827bfd2e6292516895213bff33223f274ffe96d))
+
+
+### Bug Fixes
+
+* **pi:** preserve parallel task review leases ([#1026](https://github.com/orobsonn/claude-harness/issues/1026)) ([acc1475](https://github.com/orobsonn/claude-harness/commit/acc1475287bc62abafdeb3fa31f194c272a5790d))
+
 ## [3.3.6](https://github.com/orobsonn/claude-harness/compare/v3.3.5...v3.3.6) (2026-09-22)
 
 
