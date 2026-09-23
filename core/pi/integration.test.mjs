@@ -121,7 +121,7 @@ test("resume snapshot rejects changed identity and keeps native child creation",
 test("preflight verifies the pinned Pi runtime and all canonical role assets", () => {
   assert.deepEqual(verifyPiHarness(ROOT), {
     ok: true,
-    runtimeVersion: "0.86.1",
+    runtimeVersion: "0.87.1",
     subagentsVersion: "21.7.4",
     roles: 11,
   });
@@ -149,7 +149,7 @@ test("launcher offers a provider-free preflight for the Orca terminal", () => {
   assert.equal(result.status, 0, result.stderr);
   assert.deepEqual(JSON.parse(result.stdout), {
     ok: true,
-    runtimeVersion: "0.86.1",
+    runtimeVersion: "0.87.1",
     subagentsVersion: "21.7.4",
     roles: 11,
   });
@@ -168,7 +168,7 @@ test("published bin entry executes through its npm symlink", () => {
     assert.equal(result.status, 0, result.stderr);
     assert.deepEqual(JSON.parse(result.stdout), {
       ok: true,
-      runtimeVersion: "0.86.1",
+      runtimeVersion: "0.87.1",
       subagentsVersion: "21.7.4",
       roles: 11,
     });
@@ -226,7 +226,7 @@ test("regression: fresh official Pi vendor ships the bridge closure and its veri
   assert.equal(analyzer.analyzePiPlan({ root: target, featureId: 'absent' }).reason, 'plan missing');
   assert.deepEqual(vendoredLauncher.verifyPiHarness(harnessRoot), {
     ok: true,
-    runtimeVersion: "0.86.1",
+    runtimeVersion: "0.87.1",
     subagentsVersion: "21.7.4",
     roles: 11,
   });
