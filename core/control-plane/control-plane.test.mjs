@@ -433,6 +433,18 @@ test("The silent supervisor reports exit of the exact tracked terminal without b
   external.terminals[0].preview = "Thinking...\n── ⠹ Working ─────────────────";
   assert.equal(await control.nextNotification(), null);
   external.terminals[0].preview = "Preciso de uma decisão do operador antes de continuar.";
+  control.sleep = async () => writeJson(childFile, {
+    parent_session_id: "external-session-two",
+    child_session_id: childSessionId,
+    dispatch_call_id: "call-active-reviewer",
+    role: "harness-plan-reviewer",
+    created_at: "2026-01-01T00:00:00.000Z",
+  });
+  assert.equal(await control.nextNotification(), null, "a child created during confirmation suppresses stale attention");
+  fs.unlinkSync(childFile);
+  control.sleep = async () => { external.terminals[0].lastOutputAt += 1; };
+  assert.equal(await control.nextNotification(), null, "new terminal output during confirmation is progress, not attention");
+  control.sleep = async () => {};
   const attention = await control.nextNotification();
   assert.equal(attention.kind, "terminal-idle");
   assert.equal(attention.type, "session.attention-needed");

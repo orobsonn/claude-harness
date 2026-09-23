@@ -523,6 +523,7 @@ export class ControlPlane {
     this.external = options.external ?? createExternalRunner(options.externalOptions);
     this.sleep = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
     this.startWaitMs = options.startWaitMs ?? 30_000;
+    this.attentionConfirmMs = options.attentionConfirmMs ?? 15_000;
   }
 
   settings() {
@@ -1808,12 +1809,39 @@ export class ControlPlane {
                 const activity = shown?.terminal?.lastOutputAt;
                 const fingerprint = terminalAttentionFingerprint(shown?.terminal?.preview);
                 if (fingerprint && fingerprint !== record.terminal_idle_notified_fingerprint) {
+                  // Um pai em execução passa por intervalos breves de TUI ociosa enquanto
+                  // despacha um filho, recebe um resultado ou escolhe o próximo passo. Confirme
+                  // que a mesma saída continua estável e que nenhum trabalho filho apareceu
+                  // antes de transformar esse intervalo normal em atenção do operador.
+                  await this.sleep(this.attentionConfirmMs);
+                  const current = this.readDelivery(record.delivery_id);
+                  if (current.generation !== record.generation || current.session_id !== record.session_id ||
+                      current.terminal?.handle !== record.terminal.handle || current.status !== record.status) continue;
+                  const confirmedActivity = externalActiveActivity(current.worktree.path, current.session_id);
+                  if (!confirmedActivity.ok || confirmedActivity.children.length) continue;
+                  let confirmedIdle;
+                  try {
+                    confirmedIdle = await this.external.orca([
+                      "terminal", "wait", "--terminal", current.terminal.handle,
+                      "--for", "tui-idle", "--timeout-ms", "1",
+                    ], { cwd: current.worktree.path });
+                  } catch (confirmError) {
+                    if (confirmError?.code === "timeout" || /\btimeout\b/i.test(confirmError?.message ?? "")) continue;
+                    throw confirmError;
+                  }
+                  if (confirmedIdle?.wait?.satisfied !== true) continue;
+                  const confirmedShown = await this.external.orca([
+                    "terminal", "show", "--terminal", current.terminal.handle,
+                  ], { cwd: current.worktree.path });
+                  const confirmedOutputAt = confirmedShown?.terminal?.lastOutputAt;
+                  const confirmedFingerprint = terminalAttentionFingerprint(confirmedShown?.terminal?.preview);
+                  if (confirmedFingerprint !== fingerprint || confirmedOutputAt !== activity) continue;
                   return {
                     kind: "terminal-idle", type: "session.attention-needed",
                     project_id: record.project_id, delivery_id: record.delivery_id, issue: record.issue,
                     generation: record.generation, terminal_handle: record.terminal.handle,
-                    ...(Number.isFinite(activity) ? { last_output_at: activity } : {}),
-                    content_fingerprint: fingerprint,
+                    ...(Number.isFinite(confirmedOutputAt) ? { last_output_at: confirmedOutputAt } : {}),
+                    content_fingerprint: confirmedFingerprint,
                   };
                 }
               }
