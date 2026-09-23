@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { parseDependsOn } from "../../shared/lib/harness-deps.mjs";
+import { readCanonicalTaskProgress } from "../../pi/lib/task-progress.mjs";
 import { readTaskProcess } from "../../pi/lib/task-process.mjs";
 import { createExternalRunner, terminalCommand } from "./external.mjs";
 import {
@@ -333,6 +334,55 @@ function externalActiveActivity(worktreePath, sessionId) {
   return { ok: true, children };
 }
 
+function externalPlanProgress(worktreePath, sessionId, finalReviewDone, reader) {
+  try {
+    const canonical = reader(worktreePath, sessionId);
+    if (!canonical) return { state: "unavailable" };
+    const featureId = assertSafeId(String(canonical.featureId ?? ""), "external progress feature id");
+    if (!Array.isArray(canonical.tasks) || canonical.tasks.length < 1 || canonical.tasks.length > 128) {
+      throw new Error("external progress task inventory invalid");
+    }
+    const counts = { pending: 0, in_progress: 0, completed: 0, blocked: 0 };
+    const tasks = canonical.tasks.map((task) => {
+      const taskId = assertSafeId(String(task?.canonicalTaskId ?? ""), "external progress task id");
+      const title = String(task?.title ?? "").trim().slice(0, 160);
+      const status = String(task?.status ?? "");
+      const validationStatus = String(task?.validationStatus ?? "");
+      if (!title || !Object.hasOwn(counts, status) || !["pending", "passed", "failed"].includes(validationStatus)) {
+        throw new Error("external progress task schema conflict");
+      }
+      counts[status] += 1;
+      const activity = task?.activity;
+      if (activity != null && !["awaiting_integration", "awaiting_inspection"].includes(activity)) {
+        throw new Error("external progress task activity conflict");
+      }
+      return {
+        task_id: taskId,
+        title,
+        status,
+        validation_status: validationStatus,
+        ...(activity ? { activity } : {}),
+      };
+    });
+    const phase = counts.blocked > 0 ? "blocked"
+      : counts.completed < tasks.length ? "tasks"
+      : finalReviewDone ? "shipping" : "final-review";
+    return {
+      state: "available",
+      source: "canonical-task-plan",
+      feature_id: featureId,
+      phase,
+      completed_tasks: counts.completed,
+      total_tasks: tasks.length,
+      validation_passed: tasks.filter((task) => task.validation_status === "passed").length,
+      counts,
+      tasks,
+    };
+  } catch {
+    return { state: "unknown" };
+  }
+}
+
 function terminalAttentionFingerprint(preview) {
   const normalized = String(preview ?? "")
     .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "")
@@ -524,6 +574,7 @@ export class ControlPlane {
     this.sleep = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
     this.startWaitMs = options.startWaitMs ?? 30_000;
     this.attentionConfirmMs = options.attentionConfirmMs ?? 15_000;
+    this.readTaskProgress = options.readTaskProgress ?? readCanonicalTaskProgress;
   }
 
   settings() {
@@ -1544,16 +1595,35 @@ export class ControlPlane {
     const externalActivity = delivery.observation_mode === "external-readonly"
       ? externalActiveActivity(delivery.worktree?.path, delivery.session_id)
       : null;
+    const liveParent = delivery.worktree?.path && delivery.session_id
+      ? externalParentIdentity(delivery.worktree.path)
+      : null;
+    const livePhase = liveParent?.session_id === delivery.session_id
+      ? {
+          mode: liveParent.mode,
+          spec_status: liveParent.spec_status,
+          final_review_done: liveParent.final_review_done,
+        }
+      : delivery.observation?.phase ?? null;
+    const progress = delivery.worktree?.path && delivery.session_id
+      ? externalPlanProgress(
+          delivery.worktree.path,
+          delivery.session_id,
+          livePhase?.final_review_done === true,
+          this.readTaskProgress,
+        )
+      : { state: "unavailable" };
     return {
       delivery_id: delivery.delivery_id, project_id: delivery.project_id, issue: delivery.issue, state,
       generation: delivery.generation, session_id: delivery.session_id, worktree: delivery.worktree, terminal: delivery.terminal,
+      progress,
       ...(delivery.observation_mode ? {
         tracking: {
           mode: delivery.observation_mode,
           source: delivery.observation?.source,
           bridge: delivery.observation?.bridge,
           decisions: delivery.observation?.decisions,
-          phase: delivery.observation?.phase ?? null,
+          phase: livePhase,
           activity: externalActivity?.ok
             ? {
                 state: externalActivity.children.length ? "child-running" : "parent-only",
