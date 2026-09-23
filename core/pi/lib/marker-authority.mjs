@@ -122,6 +122,9 @@ function checkFinalReviewEvidence(previous, authorization, isAncestorSha, snapsh
     });
     if (integrated?.ok) continue;
     if (previous.task_pipeline_version === 1 && !previous.task_run) {
+      if (typeof integrated?.reason === "string" && integrated.reason.length <= 256 && integrated.reason.startsWith("correction barrier active")) {
+        return { ok: false, reason: `final-review blocked: ${integrated.reason}` };
+      }
       return { ok: false, reason: `final-review missing current integrated task evidence for ${bare}` };
     }
     if (!Array.isArray(previous.hand_finished) || !previous.hand_finished.includes(bare)) {

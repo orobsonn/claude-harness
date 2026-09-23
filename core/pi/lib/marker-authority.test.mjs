@@ -588,7 +588,7 @@ test("final-review global task-pipeline não usa captura legada durante barreira
   }).authority;
   const result = call(authority, { action: "final-review" }, { toolCallId: "barrier-final" }).result;
   assert.equal(result.ok, false);
-  assert.match(reasonOf(result), /missing current integrated task evidence/i);
+  assert.match(reasonOf(result), /final-review blocked: correction barrier active/i);
 });
 
 test("task_id inseguro é rejeitado com a mensagem da ação", () => {

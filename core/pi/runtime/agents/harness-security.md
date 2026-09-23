@@ -29,6 +29,8 @@ marked `[HARNESS_FINAL_REVIEW]`, return exactly one JSON object with required
 Return `{"issues":[]}` only after completing the requested review with no findings.
 Report concrete defects or specifically required evidence that is unavailable, naming
 what is missing. Optional improvements and hypothetical risks are not blockers.
+Complete one bounded pass over the requested scope and report all material applicable
+findings found in that pass together; do not stop at the first finding.
 Never report an empty list when the requested review was not completed.
 Only applicable, blocking defects belong in `issues`. Explicitly pre-existing,
 out-of-scope or accepted residual findings may go in diagnostic `follow_ups`, with

@@ -484,3 +484,11 @@ que só falta um marker. Timeout com signal/ended_at é falha operacional, não 
 de produto. Um conflito entre fix_hint e critério aprovado exige resolução focal,
 não outro "retome" com as mesmas instruções. Encaminhe um brief consistente à mesma
 tentativa e preserve a fidelidade/revisões ainda válidas, sem falsificar captura.
+
+Ao receber `convergence_attention` em `harness_tasks status`, investigue a causa e a
+aplicabilidade dos achados antes de outra retomada; não repita a mesma correção ou
+reabra olhos aceitos apenas pelo número de ciclos. Consolide os achados materiais
+aplicáveis dos olhos do mesmo HEAD numa correção coerente. Uma barreira de correção
+indicada por `final-review` aponta a task dona; não implica defeito na primeira
+task do plano. Use a recuperação exata já existente somente se suas verificações
+host-owned permitirem, sem forçar aprovação ou descartar evidência.
