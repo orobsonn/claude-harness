@@ -2222,6 +2222,10 @@ test("readIntegratedTaskEvidence rejects all historical integrations while a cor
   write(fixture.registryPath, fixture.registry);
   const owner = readIntegratedTaskEvidence({ projectRoot: fixture.root, sessionId: PARENT, featureId: FEATURE, taskId: TASK, headSha: fixture.base });
   assert.match(owner.reason, new RegExp(`correction barrier active for task ${TASK}`, "i"));
+  fixture.registry.correction_barrier.task_id = "a".repeat(129);
+  write(fixture.registryPath, fixture.registry);
+  const oversized = readIntegratedTaskEvidence({ projectRoot: fixture.root, sessionId: PARENT, featureId: FEATURE, taskId: TASK, headSha: fixture.base });
+  assert.equal(oversized.reason, "correction barrier active; inspect the task registry before aggregate review");
 });
 
 test("only the exact blocked dependent can read its corrected upstream during reconciliation", () => {

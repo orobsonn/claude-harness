@@ -974,7 +974,7 @@ export function readIntegratedTaskEvidence({ projectRoot, sessionId, featureId, 
         entry.plan_sha256 !== registry.plan_sha256 || entry.spec_sha256 !== registry.spec_sha256) return failure("current integrated task registry entry required");
     if (registry.correction_barrier != null && !isReconciliationDependencyRead(registry, entry, reconciliationFor)) {
       const owner = registry.correction_barrier.task_id;
-      return failure(isSafeTaskId(owner)
+      return failure(isSafeTaskId(owner) && owner.length <= 128
         ? `correction barrier active for task ${owner}; resolve its exact attempt through host-validated recovery before aggregate review`
         : "correction barrier active; inspect the task registry before aggregate review");
     }
