@@ -1626,6 +1626,23 @@ test("task inspection preserves ancestral positive reviews but stale negatives s
   assert.match(inspectTaskRun(f.entry, f.dependencies).reason, /accepted security task review/);
 });
 
+test("an entry-gate-blocked review retry does not supersede its accepted receipt", () => {
+  const f = inspectionFixture();
+  appendImplementationReviews(f, ["harness-compliance"]);
+  fs.appendFileSync(f.entry.launches.at(-1).events_path, [
+    event("tool_execution_start", { toolCallId: "blocked-compliance-retry", toolName: "subagent", args: {
+      subagent_type: "harness-compliance",
+      prompt: `[HARNESS_TASK_REVIEW]\n[HARNESS_TASK_CONTEXT]{"task_id":"${TASK}"}[/HARNESS_TASK_CONTEXT]`,
+    } }),
+    event("tool_execution_end", { toolCallId: "blocked-compliance-retry", toolName: "subagent", isError: true,
+      result: { content: [{ type: "text", text: "[review-dispatch] Blocked: already accepted." }] } }),
+    "",
+  ].join("\n"));
+  const inspected = inspectTaskRun(f.entry, f.dependencies);
+  assert.equal(inspected.ok, true, inspected.reason);
+  assert.equal(inspected.result.review_receipts.compliance.dispatch_call_id, "call-harness-compliance");
+});
+
 test("an ancestral approval dispatched before executor completion cannot satisfy implementation review", () => {
   for (const timing of ["before", "in-flight", "after"]) {
     const f = inspectionFixture();

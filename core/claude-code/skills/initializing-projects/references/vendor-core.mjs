@@ -202,7 +202,9 @@ export const FRESH_NATIVE_PATHS = {
   pi: [
     ".pi/harness/pi-harness.mjs",
     ".pi/harness/bin/pi-harness.mjs",
+    ".pi/harness/control-capabilities.json",
     ".pi/harness/extensions/harness-bootstrap.ts",
+    ".pi/harness/extensions/harness-control-plane.ts",
     ".pi/harness/extensions/harness-subagents.ts",
     ".pi/harness/lib/pi-paths.mjs",
     ".pi/harness/prompts/harness-runtime.md",
@@ -213,6 +215,8 @@ export const FRESH_NATIVE_PATHS = {
     ".pi/harness/vendor/shared/lib/gate-state-shape.mjs",
     ".pi/harness/vendor/opencode/lib/gate-state.mjs",
     ".pi/harness/vendor/codex/hooks/policy.mjs",
+    ".pi/harness/vendor/control-plane/lib/protocol.mjs",
+    ".pi/harness/vendor/control-plane/lib/storage.mjs",
     ".pi/.harness-version",
     ".pi/.harness-owned-files.json",
   ],
@@ -226,6 +230,7 @@ export const FRESH_NATIVE_PATHS = {
 const REQUIRED_PI_SOURCE = [
   { rel: "bin/pi-harness.mjs", kind: "file" },
   { rel: "bin/pi-task-worker.mjs", kind: "file" },
+  { rel: "control-capabilities.json", kind: "file" },
   { rel: "prompts/harness-task-runtime.md", kind: "file" },
   { rel: "skills/harness-task-pipeline/SKILL.md", kind: "file" },
   ...["task-contract", "task-run", "task-process", "task-coordinator", "task-receipts", "task-runtime-assets", "task-context", "task-orca"].map((name) => ({ rel: `lib/${name}.mjs`, kind: "file" })),
@@ -284,6 +289,7 @@ const REQUIRED_PI_SOURCE = [
   { rel: "lib/spec-approval.mjs", kind: "file" },
   { rel: "lib/version-check.mjs", kind: "file" },
   { rel: "extensions/harness-bootstrap.ts", kind: "file" },
+  { rel: "extensions/harness-control-plane.ts", kind: "file" },
   { rel: "extensions/harness-planning-tools.ts", kind: "file" },
   { rel: "lib/planning-tools.mjs", kind: "file" },
   { rel: "extensions/harness-subagents.ts", kind: "file" },
@@ -1936,7 +1942,7 @@ export function rewritePiImportsForVendor(content, relFromPiRoot) {
   const depth = Math.max(0, relFromPiRoot.replace(/\\/g, "/").split("/").filter(Boolean).length - 1);
   const from = "../".repeat(depth + 1).replace(/\./g, "\\.");
   const to = depth === 0 ? "./vendor/" : `${"../".repeat(depth)}vendor/`;
-  return content.replace(new RegExp(`(["'])${from}(opencode|shared|codex|claude-code)/`, "g"), `$1${to}$2/`);
+  return content.replace(new RegExp(`(["'])${from}(opencode|shared|codex|claude-code|control-plane)/`, "g"), `$1${to}$2/`);
 }
 
 /**

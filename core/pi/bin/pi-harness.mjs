@@ -31,6 +31,7 @@ const SUBAGENTS_BRIDGE = "core/pi/extensions/harness-subagents.ts";
  */
 const EXTENSIONS_BEFORE_SUBAGENTS = [
   "core/pi/extensions/harness-policy.ts",
+  "core/pi/extensions/harness-control-plane.ts",
   "core/pi/extensions/harness-task-events.ts",
   "core/pi/extensions/harness-task-run.ts",
   "core/pi/extensions/harness-bootstrap.ts",

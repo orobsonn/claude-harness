@@ -1,0 +1,12 @@
+{
+  "schema": "harness.control.consumer-capabilities.v1",
+  "protocol": 1,
+  "capabilities": [
+    "vendored-launcher",
+    "parent-session-identity",
+    "sequenced-events",
+    "durable-inbox",
+    "versioned-decisions",
+    "exact-resume"
+  ]
+}
