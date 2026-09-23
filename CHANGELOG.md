@@ -5,6 +5,19 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [3.5.0](https://github.com/orobsonn/claude-harness/compare/v3.4.0...v3.5.0) (2026-09-23)
+
+
+### Features
+
+* **control-plane:** expose canonical task progress ([#1032](https://github.com/orobsonn/claude-harness/issues/1032)) ([36a0cdb](https://github.com/orobsonn/claude-harness/commit/36a0cdb0fb99fd04585564835422380ff08554a1))
+
+
+### Bug Fixes
+
+* **control-plane:** confirm stable run attention ([#1030](https://github.com/orobsonn/claude-harness/issues/1030)) ([6fb33b4](https://github.com/orobsonn/claude-harness/commit/6fb33b42a5482edc7e457dfce29b668e39737ffd))
+* **pi:** expose correction owner and convergence attention ([#1033](https://github.com/orobsonn/claude-harness/issues/1033)) ([08ded1c](https://github.com/orobsonn/claude-harness/commit/08ded1c7cb8bc84334896807e73fa1c2a8f8cbc4))
+
 ## [3.4.0](https://github.com/orobsonn/claude-harness/compare/v3.3.6...v3.4.0) (2026-09-23)
 
 
