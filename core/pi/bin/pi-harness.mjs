@@ -12,7 +12,8 @@ import { resolveVerifiedPiRuntime } from "../lib/pi-runtime-cache.mjs";
 import { mergePiChildResourceSettings, piChildResourceSettings } from "../lib/pi-child-extensions.mjs";
 import { materializePiReviewConfig } from "../lib/pi-review-config.mjs";
 import {
-  MODEL_PROFILE_ENV, MODEL_PROFILE_HASH_ENV, loadModelProfileFromEnv, modelStrategyFromProfile,
+  DEEPSEEK_MODEL, GLM_MODEL, LEGACY_OLLAMA_CONTEXT_WINDOW, MODEL_PROFILE_ENV, MODEL_PROFILE_HASH_ENV,
+  MODEL_PROFILE_VERSION, OLLAMA_CONTEXT_WINDOW, loadModelProfileFromEnv, modelStrategyFromProfile,
   parseModelProfileArgs, profilePrompt, readModelProfileSnapshot, resolveModelProfile,
   writeModelProfileSnapshot,
 } from "../lib/model-profile.mjs";
@@ -311,7 +312,7 @@ export function buildPiHarnessInvocation({ root, argv, env, runtimePrompt = "", 
  * @param {string} runtimeDir
  * @param {string} [stateDir]
  */
-export function materializeRuntime(root, runtimeDir, stateDir = harnessStateDir(runtimeDir)) {
+export function materializeRuntime(root, runtimeDir, stateDir = harnessStateDir(runtimeDir), modelProfile = resolveModelProfile()) {
   materializePiReviewConfig(runtimeDir, join(root, "core/pi/runtime/harness.json"));
   mkdirSync(runtimeDir, { recursive: true });
   mkdirSync(stateDir, { recursive: true });
@@ -324,21 +325,36 @@ export function materializeRuntime(root, runtimeDir, stateDir = harnessStateDir(
     if (name === "agents") cpSync(source, target, { recursive: true, force: true });
     else if (!existsSync(target)) cpSync(source, target, { recursive: true });
   }
-  // models.json is operator-extensible. Add the harness-owned provider when absent,
-  // preserve unrelated providers, and fail closed on an id collision instead of
-  // silently replacing an endpoint or credential rule.
+  // The Pi model catalog follows the admitted session profile. Old immutable
+  // snapshots retain 1M on exact resume; new sessions use 256 Ki. Only the two
+  // exact harness defaults may be switched, never an operator-custom provider.
   const modelsSource = join(root, "core/pi/runtime/models.json");
   const modelsTarget = join(runtimeDir, "models.json");
   try {
     const expected = JSON.parse(readFileSync(modelsSource, "utf8"));
     const current = JSON.parse(readFileSync(modelsTarget, "utf8"));
-    const expectedProvider = expected?.providers?.["ollama-cloud"];
+    const distributedProvider = expected?.providers?.["ollama-cloud"];
     const currentProvider = current?.providers?.["ollama-cloud"];
-    if (!expectedProvider) throw new Error("distributed ollama-cloud provider missing");
-    if (currentProvider && JSON.stringify(currentProvider) !== JSON.stringify(expectedProvider)) {
+    if (!distributedProvider || ![1, 2, MODEL_PROFILE_VERSION].includes(modelProfile?.version) ||
+        distributedProvider.models?.length !== 2 ||
+        distributedProvider.models[0]?.id !== DEEPSEEK_MODEL || distributedProvider.models[1]?.id !== GLM_MODEL) {
+      throw new Error("distributed Ollama model profile invalid");
+    }
+    const contextWindow = modelProfile.version < MODEL_PROFILE_VERSION
+      ? LEGACY_OLLAMA_CONTEXT_WINDOW : OLLAMA_CONTEXT_WINDOW;
+    const providerForContext = (size) => ({
+      ...distributedProvider,
+      models: distributedProvider.models.map((model) => ({ ...model, contextWindow: size })),
+    });
+    const expectedProvider = providerForContext(contextWindow);
+    const otherProvider = providerForContext(contextWindow === OLLAMA_CONTEXT_WINDOW
+      ? LEGACY_OLLAMA_CONTEXT_WINDOW : OLLAMA_CONTEXT_WINDOW);
+    const matchesExpected = JSON.stringify(currentProvider) === JSON.stringify(expectedProvider);
+    const matchesOther = JSON.stringify(currentProvider) === JSON.stringify(otherProvider);
+    if (currentProvider && !matchesExpected && !matchesOther) {
       throw new Error(`provider ollama-cloud conflicts in ${modelsTarget}`);
     }
-    if (!currentProvider) {
+    if (!currentProvider || matchesOther) {
       writeFileSync(modelsTarget, `${JSON.stringify({
         ...current,
         providers: { ...(current?.providers ?? {}), "ollama-cloud": expectedProvider },
@@ -655,7 +671,7 @@ export function runPiHarnessCli(argv, options = {}) {
       resumeSessionFile,
       sessionId,
     });
-    materializeRuntimeFn(packageRoot, invocation.env.PI_CODING_AGENT_DIR);
+    materializeRuntimeFn(packageRoot, invocation.env.PI_CODING_AGENT_DIR, undefined, admittedProfile);
     // A delegated task is a new local parent with its own resume identity. Even
     // when it inherited the global parent's immutable profile, persist that
     // same snapshot under the local session so resume never falls back to the

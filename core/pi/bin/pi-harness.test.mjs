@@ -25,6 +25,7 @@ import {
 import { applyPiAuthPathPatch, PI_AUTH_PATH_ENV, PI_AUTH_PATH_PATCH_MARKER, PI_RESUME_ENV, verifyPiAuthPathPatch } from "../lib/pi-auth-path-patch.mjs";
 import { piChildResourceSettings } from "../lib/pi-child-extensions.mjs";
 import { ensurePiRuntime } from "../lib/pi-runtime-cache.mjs";
+import { resolveModelProfile } from "../lib/model-profile.mjs";
 
 const RUNTIME_ASSETS = fileURLToPath(new URL("../runtime-deps/", import.meta.url));
 
@@ -511,7 +512,7 @@ test("materialized Ollama models load through Pi's pinned offline registry witho
       assert.equal(model.provider, "ollama-cloud");
       assert.equal(model.baseUrl, "https://ollama.com/v1");
       assert.equal(model.api, "openai-completions");
-      assert.equal(model.contextWindow, 1_000_000);
+      assert.equal(model.contextWindow, 262_144);
       assert.equal(model.maxTokens, 32_768);
     }
   } finally { rmSync(directory, { recursive: true, force: true }); }
@@ -638,6 +639,33 @@ test("runtime materialization adds Ollama without replacing operator providers",
   assert.equal(models.providers["ollama-cloud"].apiKey, "$OLLAMA_API_KEY");
   assert.equal(models.providers["ollama-cloud"].baseUrl, "https://ollama.com/v1");
   assert.deepEqual(models.providers["ollama-cloud"].models.map(({ id }) => id), ["deepseek-v4.1-flash", "glm-5.3"]);
+});
+
+test("runtime materialization switches only exact harness Ollama defaults by admitted profile", () => {
+  const directory = mkdtempSync(join(tmpdir(), "pi-harness-context-migration-"));
+  const runtimeDir = join(directory, ".pi/harness/runtime");
+  try {
+    materializeRuntime(process.cwd(), runtimeDir);
+    const modelsPath = join(runtimeDir, "models.json");
+    const models = JSON.parse(readFileSync(modelsPath, "utf8"));
+    models.providers.private = { baseUrl: "https://private.invalid/v1", models: [{ id: "private" }] };
+    for (const model of models.providers["ollama-cloud"].models) model.contextWindow = 1_000_000;
+    writeFileSync(modelsPath, `${JSON.stringify(models, null, 2)}\n`);
+
+    materializeRuntime(process.cwd(), runtimeDir);
+    let migrated = JSON.parse(readFileSync(modelsPath, "utf8"));
+    assert.deepEqual(migrated.providers["ollama-cloud"].models.map((model) => model.contextWindow), [262_144, 262_144]);
+    assert.deepEqual(migrated.providers.private, models.providers.private);
+
+    materializeRuntime(process.cwd(), runtimeDir, undefined,
+      resolveModelProfile({ profile: "trial-orchestration-deepseek", version: 2 }));
+    migrated = JSON.parse(readFileSync(modelsPath, "utf8"));
+    assert.deepEqual(migrated.providers["ollama-cloud"].models.map((model) => model.contextWindow), [1_000_000, 1_000_000]);
+
+    migrated.providers["ollama-cloud"].baseUrl = "https://operator.invalid/v1";
+    writeFileSync(modelsPath, `${JSON.stringify(migrated, null, 2)}\n`);
+    assert.throws(() => materializeRuntime(process.cwd(), runtimeDir), /provider ollama-cloud conflicts/);
+  } finally { rmSync(directory, { recursive: true, force: true }); }
 });
 
 test("default launcher requires the Ollama credential and injects the admitted DeepSeek parent route", () => {
