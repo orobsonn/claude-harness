@@ -40,6 +40,7 @@ The operator is a non-technical product manager. He approves the **spec** (produ
 ### 4. Scope and reality check (use Read/Grep/Glob)
 - Do the `scope_paths` exist and make sense? Does the plan touch the right files?
 - Is a task or judgment contradicted by code that **already exists** — e.g., the plan reinvents a helper that is already there, or violates an established pattern in the folder?
+- In the initial review, inspect existing tests, runner configuration and project instructions. Require the plan to follow an established test layout without moving existing tests. Only when no layout exists, require new tests and fixtures under root `tests/`, grouped by domain or feature, with runner discovery scoped to the first task. Return REVISE for a violation of either branch; do not request a migration merely to apply this default.
 
 ### 5. Model-routing sanity (severity vs complexity)
 - `severity` = blast radius (drives review). Does a high-blast task carry the review it needs — `adversarial.enabled` set where warranted, and `final_review.security` set when the feature's `scope_paths` hit the sensitive-path allowlist or a security surface (external HTTP client, entrypoint, webhook, log)?

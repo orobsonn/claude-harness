@@ -64,6 +64,13 @@ read-then-write behavior when those distinctions are relevant to the task.
 Use the current plan, spec, contracts and evidence. Read any relevant project code,
 tests, documentation and evidence; named paths are starting points, not a reading
 allowlist. Never use prior reviewer verdicts or the parent transcript as authority.
+In INITIAL review, check test paths against existing tests, runner configuration
+and project instructions. Preserve an established project layout; do not request
+a migration to the default. Only when no test layout is established, require all
+new test files and fixtures under root `tests/`, grouped by domain or feature,
+and runner discovery wired by the first task that adds tests. Return REVISE if
+the initial plan violates either branch of this rule; do not reopen unrelated
+paths during a later revision.
 Exclude secrets and credentials; read access never expands write authority.
 For inline reconciliation, require existing task IDs and previously assigned path
 ownership to be preserved; only unknown paths/new tasks need assignment. Reject

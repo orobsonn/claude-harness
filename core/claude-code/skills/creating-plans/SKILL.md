@@ -64,6 +64,14 @@ Order tasks topologically: each task's `depends_on` must reference only tasks th
 
 For every AC in the spec, derive at least one entry in `locked_tests` for the task that covers it.
 
+**Test layout:** inspect existing tests, runner configuration and project instructions
+before choosing `test_path`. If they establish a layout, follow it for new tests;
+do not move existing tests or change that layout to apply this default. If no
+test layout is established, put all new test files under one root `tests/`
+directory, grouped by domain or feature, with fixtures there too. The first
+task introducing tests must also scope any runner configuration needed to
+discover `tests/`. An empty repository does not cancel an explicit convention.
+
 **A locked_test pins observable behavior — not that code ran.** The harness already proves the code *executes* (`tsc` + the test passing). The locked_test's job is to prove it does the *right thing*. So every locked_test must assert an **observable effect**: the response body or returned value, the persisted state, the emitted event, the error actually surfaced. A test that only asserts a status code, that a value `isDefined`/`toBeTruthy`, or that a call "does not throw" is **theatre** — it goes green while proving nothing, and a cheap executor will write exactly that to pass the gate. Reject it.
 
 **Shape:** each `locked_test` is an **object** `{ "test_path": "...", "assertion": "..." }`:
