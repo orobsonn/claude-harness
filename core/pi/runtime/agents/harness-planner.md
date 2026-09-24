@@ -159,9 +159,21 @@ Keep low/medium work cohesive. Scorer absence/error does not prevent planning.
    severity selects review posture. Decompose new max/x-high work before approval.
 5. Map every acceptance criterion to `criterion_refs` and derive at least one
    `locked_tests` observable from each. Prefer the smallest behavioral proof at an
-   existing boundary. Do not lock a source analyzer, helper layout or exhaustive
-   scenario matrix unless the approved requirement needs that specific evidence;
-   a chosen test technique must not become an extra product requirement.
+   existing boundary. Before assigning a new assertion, compare the relevant
+   existing tests and other planned assertions: which approved behavior and
+   credible regression would this proof distinguish that they do not? One
+   behavioral test may cover several criteria when it actually proves each;
+   reuse or extend its existing test owner instead of duplicating the same
+   failure mode in another file or task. Do not create an extra test, task,
+   file-existence guard, export inventory or test-only production seam merely
+   to obtain a collectible RED. Keep the required executable RED for real
+   product behavior; if no distinct, collectible proof fits the proposed task
+   boundary, correct the boundary before plan admission rather than using
+   `no_tests` or a cosmetic assertion. Do not lock a source analyzer, helper
+   layout or exhaustive scenario matrix unless the approved requirement needs
+   that specific evidence; a chosen test technique must not become an extra
+   product requirement. For admitted plans, preserve the frozen ownership and
+   append-only correction rule above.
    For a critical decision, state the smallest distinguishing allowed and forbidden
    outcome. For example, a valid concurrent winner is not a failed claim, exact
    ownership is not trimmed equality, and atomic exclusion is not a prior read.

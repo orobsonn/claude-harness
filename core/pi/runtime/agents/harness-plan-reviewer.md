@@ -61,6 +61,15 @@ and "would a conforming scenario be rejected?" Pin the smallest missing distinct
 from the approved contract, rather than asking for an exhaustive matrix. Check
 legitimate concurrent winners, exact versus normalized identity, and atomic versus
 read-then-write behavior when those distinctions are relevant to the task.
+In INITIAL review, compare a planned locked assertion with nearby existing tests
+and other planned assertions at its behavioral boundary. Return a `locked-test`
+REVISE only when you can name the existing or planned owner/proof, the same
+credible failure mode and the material extra frozen test or task cycle it would
+cause. Give one smaller correction. Shared criteria, paths, similar setup or
+test counts alone do not prove duplication. Preserve separate proofs for
+distinct public boundaries, security, persistence, concurrency or recovery
+risks. Never request removal or
+reordering of an already admitted locked test merely to reduce test count.
 Use the current plan, spec, contracts and evidence. Read any relevant project code,
 tests, documentation and evidence; named paths are starting points, not a reading
 allowlist. Never use prior reviewer verdicts or the parent transcript as authority.

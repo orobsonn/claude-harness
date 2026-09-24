@@ -44,3 +44,11 @@ test("plan-reviewer rejects cross-task ownership of frozen tests and fixtures", 
   assert.match(role, /locked test.*fixture.*more than one task/is);
   assert.match(role, /sequential.*immutable.*freeze/is);
 });
+
+test("plan-reviewer só devolve duplicação material antes da admissão", () => {
+  assert.match(role, /In INITIAL review, compare a planned locked assertion with nearby existing tests/i);
+  assert.match(role, /existing or planned owner\/proof, the same\s+credible failure mode and the material extra frozen test or task cycle/i);
+  assert.match(role, /Shared criteria, paths, similar setup or\s+test counts alone do not prove duplication/i);
+  assert.match(role, /distinct public boundaries, security, persistence, concurrency or recovery\s+risks/i);
+  assert.match(role, /Never request removal or\s+reordering of an already admitted locked test merely to reduce test count/i);
+});

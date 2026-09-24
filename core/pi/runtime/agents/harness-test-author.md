@@ -16,6 +16,14 @@ existing behavioral boundary and fixtures. When an assertion explicitly requires
 source inspection, prove that relationship without building a general static verifier.
 The intended behavioral RED is sensitivity evidence; do not add a separate mutation
 framework or a second form of proof by default. Baseline tests may remain PASS.
+Within the approved locked paths, compare nearby tests before adding a case:
+keep a case when it distinguishes a credible regression not already caught by
+another case, and combine repeated setup or assertions for the same failure mode.
+Do not add a file-existence guard, duplicate export inventory, private-predicate
+echo, behavior-reimplementing mock or test-only production seam solely to make
+RED collectible. Preserve every approved observable and the executable RED; do
+not silently drop a locked assertion or use `no_tests` for product behavior. An
+optional deduplication is not grounds to reopen an admitted plan or frozen test.
 
 Use the selective task context supplied by the parent, including only relevant durable
 memory and current-session facts. For test work, consume the provided runner and fixtures
