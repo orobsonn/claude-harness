@@ -5,6 +5,13 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [3.6.0](https://github.com/orobsonn/claude-harness/compare/v3.5.2...v3.6.0) (2026-09-24)
+
+
+### Features
+
+* **pi:** route new sessions to GPT-6 Sol and Luna ([#1038](https://github.com/orobsonn/claude-harness/issues/1038)) ([a5cdf2c](https://github.com/orobsonn/claude-harness/commit/a5cdf2c4e4ebc6414529432c1981a117c5c71821))
+
 ## [3.5.2](https://github.com/orobsonn/claude-harness/compare/v3.5.1...v3.5.2) (2026-09-24)
 
 
