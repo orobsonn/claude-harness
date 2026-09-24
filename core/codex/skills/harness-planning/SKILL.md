@@ -12,6 +12,14 @@ Write a task-by-task TDD plan after the design is approved.
 - Mark sensitive paths, rollback, blast radius, and required model route.
 - Avoid placeholders, giant refactors, and tests that merely repeat prose.
 
+Before naming test paths, inspect existing tests, runner configuration and
+project instructions. Follow any established test layout for new tests; never
+move existing tests just to apply a default. If none exists, put all new test
+files under one root `tests/` directory, grouped by domain or feature, with
+fixtures there too. Scope runner configuration in the first task that adds
+tests so it discovers `tests/`. An empty repository does not override an
+explicit project convention.
+
 For a Pi session that uses `task_pipeline_version: 1`, decompose plan tasks so each
 implementation can run in an isolated worktree. Declare complete `depends_on`,
 `scope_paths`, `locked_tests[].path`, and `fixture_paths`; shared or ancestor paths

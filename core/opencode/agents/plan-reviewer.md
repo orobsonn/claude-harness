@@ -89,6 +89,7 @@ Every finding MUST carry a real repo-relative `file:anchor`. For executable code
 - `scope_paths` exist and make sense (specific globs, not blanket `src/**`)?
 - Tasks at the same DAG level don't share writable paths (write-collision hazard)?
 - Task contradicted by code that already exists?
+- In INITIAL review, inspect existing tests, runner configuration and project instructions. Preserve an established test layout without moving existing tests. Only when no layout exists, require new tests and fixtures under root `tests/`, grouped by domain or feature, with runner discovery scoped to the first task. Return REVISE for a violation of either branch; do not request a migration merely to apply this default.
 
 ### 5. Model-routing sanity
 - High-severity tasks flagged `adversarial.enabled: true` with non-empty `focus`?
