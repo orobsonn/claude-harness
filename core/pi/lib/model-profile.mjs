@@ -4,7 +4,9 @@ import path from "node:path";
 
 export const MODEL_PROFILE_ENV = "PI_HARNESS_MODEL_PROFILE";
 export const MODEL_PROFILE_HASH_ENV = "PI_HARNESS_MODEL_PROFILE_SHA256";
-export const MODEL_PROFILE_VERSION = 2;
+export const MODEL_PROFILE_VERSION = 3;
+export const OLLAMA_CONTEXT_WINDOW = 262_144;
+export const LEGACY_OLLAMA_CONTEXT_WINDOW = 1_000_000;
 export const OLLAMA_PROVIDER = "ollama-cloud";
 export const OLLAMA_ENDPOINT = "https://ollama.com/v1";
 export const DEEPSEEK_MODEL = "deepseek-v4.1-flash";
@@ -12,7 +14,7 @@ export const GLM_MODEL = "glm-5.3";
 export const DEFAULT_MODEL_PROFILE = "trial-orchestration-deepseek";
 
 const COMPLEXITIES = Object.freeze(["low", "medium", "high", "max"]);
-const SUPPORTED_MODEL_PROFILE_VERSIONS = new Set([1, MODEL_PROFILE_VERSION]);
+const SUPPORTED_MODEL_PROFILE_VERSIONS = new Set([1, 2, MODEL_PROFILE_VERSION]);
 const PARENT_TARGETS = new Set(["baseline", "deepseek"]);
 
 const BASELINE_FIXED = Object.freeze({
@@ -99,6 +101,7 @@ export function resolveModelProfile({ profile = DEFAULT_MODEL_PROFILE, globalPar
       high: { model: "openai-codex/gpt-5.6-sol", thinking: "high" },
       max: { model: "openai-codex/gpt-5.6-sol", thinking: "high" },
     };
+  const contextWindow = version < MODEL_PROFILE_VERSION ? LEGACY_OLLAMA_CONTEXT_WINDOW : OLLAMA_CONTEXT_WINDOW;
   const snapshot = {
     version,
     profile,
@@ -111,8 +114,8 @@ export function resolveModelProfile({ profile = DEFAULT_MODEL_PROFILE, globalPar
       max_local_concurrency: 2,
     },
     models: {
-      deepseek: { id: DEEPSEEK_MODEL, context_window: 1000000, max_output_tokens: 32768 },
-      glm: { id: GLM_MODEL, context_window: 1000000, max_output_tokens: 32768 },
+      deepseek: { id: DEEPSEEK_MODEL, context_window: contextWindow, max_output_tokens: 32768 },
+      glm: { id: GLM_MODEL, context_window: contextWindow, max_output_tokens: 32768 },
     },
     parents: {
       global: { target: selectedGlobal, route: parentRoute(selectedGlobal) },

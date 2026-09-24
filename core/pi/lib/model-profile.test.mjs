@@ -24,8 +24,8 @@ test("AC-01 baseline preserves every canonical route and needs no Ollama credent
 
 test("new sessions default to DeepSeek orchestration while baseline stays explicit", () => {
   const profile = resolveModelProfile();
-  assert.equal(MODEL_PROFILE_VERSION, 2);
-  assert.equal(profile.version, 2);
+  assert.equal(MODEL_PROFILE_VERSION, 3);
+  assert.equal(profile.version, 3);
   assert.equal(DEFAULT_MODEL_PROFILE, "trial-orchestration-deepseek");
   assert.equal(profile.profile, DEFAULT_MODEL_PROFILE);
   assert.equal(profile.parents.global.route.model, DEEPSEEK_MODEL);
@@ -84,10 +84,19 @@ test("open parent prompt bootstraps the ceremony without changing child prompts"
   assert.doesNotMatch(profilePrompt(resolveModelProfile({ profile: "baseline" }), { parentKind: "global" }), /HARNESS_OPEN_PARENT_BOOTSTRAP/);
 });
 
-test("Ollama snapshots advertise the provider-confirmed one-million-token context", () => {
+test("new Ollama snapshots use the operational 256 Ki token context", () => {
   const profile = resolveModelProfile({ profile: "trial-hands-deepseek" });
-  assert.equal(profile.models.deepseek.context_window, 1_000_000);
-  assert.equal(profile.models.glm.context_window, 1_000_000);
+  assert.equal(profile.models.deepseek.context_window, 262_144);
+  assert.equal(profile.models.glm.context_window, 262_144);
+});
+
+test("v2 Ollama snapshots remain canonical at 1M for exact resume", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-model-profile-v2-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const old = resolveModelProfile({ profile: "trial-orchestration-deepseek", version: 2 });
+  assert.equal(old.models.deepseek.context_window, 1_000_000);
+  writeModelProfileSnapshot(root, "old-session", old);
+  assert.deepEqual(readModelProfileSnapshot(root, "old-session").snapshot, old);
 });
 
 test("AC-07 admitted snapshot is immutable and disk defaults cannot replace it", (t) => {

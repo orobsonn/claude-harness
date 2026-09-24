@@ -24,6 +24,7 @@ import { recoverPiParentSession } from "./parent-session-recovery.mjs";
 import { validateSubagentDispatch } from "./dispatch-rail.mjs";
 import { classifyPiReviewDispatch } from "./pi-review-concurrency.mjs";
 import { runPiHarnessCli } from "../bin/pi-harness.mjs";
+import { resolveModelProfile, writeModelProfileSnapshot } from "./model-profile.mjs";
 import harnessTaskRun from "../extensions/harness-task-run.ts";
 import { writePiChildIdentity } from "./pi-child-identity.mjs";
 
@@ -565,6 +566,8 @@ test("plan review completion requires unchanged hashes, native identity and cano
 test("exact resume preserves task state and restores the stable task runtime", (t) => {
   const f = fixture(t);
   assert.equal(admitTaskRun(f.grantPath, { cwd: f.root, sessionId: "task-parent" }).ok, true);
+  const legacyProfile = resolveModelProfile({ profile: "baseline", version: 2 });
+  writeModelProfileSnapshot(f.root, "task-parent", legacyProfile);
   const sessions = path.join(f.root, ".pi", "harness", "sessions");
   fs.mkdirSync(sessions, { recursive: true });
   fs.writeFileSync(path.join(sessions, "2026-01-01_task-parent.jsonl"), `${JSON.stringify({ type: "session", id: "task-parent", cwd: f.root })}\n`);
@@ -574,6 +577,7 @@ test("exact resume preserves task state and restores the stable task runtime", (
   assert.equal(recovered.ok, true, recovered.reason);
   assert.equal(recovered.taskAdmission.resumed, true);
   let invocation;
+  let materializedProfile;
   const result = runPiHarnessCli(["--harness-resume", "task-parent", "-p", "finish capture"], {
     cwd: f.root,
     env: { PI_HARNESS_TASK_RUN: "foreign-inherited-value" },
@@ -582,10 +586,11 @@ test("exact resume preserves task state and restores the stable task runtime", (
     taskRuntimePrompt: "stable task runtime",
     acquireParentLockFn: () => ({ ok: true, release() {} }),
     buildInvocationFn: (args) => { invocation = args; return { command: "unused", args: [], env: { ...args.env, PI_CODING_AGENT_DIR: path.join(f.root, ".pi/harness/runtime") } }; },
-    materializeRuntimeFn() {},
+    materializeRuntimeFn(_root, _runtimeDir, _stateDir, profile) { materializedProfile = profile; },
     spawnSyncFn: () => ({ status: 0 }),
   });
   assert.equal(result.exitCode, 0);
+  assert.deepEqual(materializedProfile, legacyProfile);
   assert.equal(JSON.parse(invocation.env.PI_HARNESS_TASK_RUN).sessionId, "task-parent");
   assert.match(invocation.runtimePrompt, /stable task runtime/);
   assert.match(invocation.runtimePrompt, /"resumed": true/);

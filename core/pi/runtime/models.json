@@ -15,7 +15,7 @@
           "name": "DeepSeek V4.1 Flash (Ollama Cloud)",
           "reasoning": true,
           "input": ["text", "image"],
-          "contextWindow": 1000000,
+          "contextWindow": 262144,
           "maxTokens": 32768,
           "cost": {
             "input": 0.15,
@@ -29,7 +29,7 @@
           "name": "GLM 5.3 (Ollama Cloud)",
           "reasoning": true,
           "input": ["text"],
-          "contextWindow": 1000000,
+          "contextWindow": 262144,
           "maxTokens": 32768,
           "cost": {
             "input": 1.40,

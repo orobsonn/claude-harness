@@ -264,6 +264,9 @@ Toda sessão nova grava um snapshot imutável de rota em
 é metadado de auditoria; não é um teto local, e o painel Ollama continua sendo a
 autoridade externa de créditos. Para rollback, inicie sessões novas com
 `--harness-profile baseline`; sessões, worktrees e evidências anteriores permanecem.
+Perfis novos limitam DeepSeek e GLM no Pi a 262.144 tokens para antecipar a
+compactação. Sessões admitidas antes dessa mudança preservam o limite de 1M no
+snapshot e na retomada exata; a atualização do vendor não altera uma sessão ativa.
 
 Planner e plan-reviewer recebem `harness_complexity`, usando diretamente a lógica
 do scorer do Claude Code. A tool recebe o `path` de um arquivo existente e o host
