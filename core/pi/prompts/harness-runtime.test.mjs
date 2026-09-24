@@ -318,6 +318,16 @@ test("o pai local preserva autoridade e só reabre autoria por defeito no contra
   assert.doesNotMatch(taskPrompt, /Defeito real sem cobertura: autor acrescenta|nunca use um sniper exploratório/i);
 });
 
+test("test-author evita prova redundante sem enfraquecer o plano aprovado", () => {
+  const testAuthor = readFileSync(testAuthorPath, "utf8");
+
+  assert.match(testAuthor, /within the approved locked paths, compare nearby tests before adding a case/i);
+  assert.match(testAuthor, /credible regression not already caught by\s+another case/i);
+  assert.match(testAuthor, /file-existence guard, duplicate export inventory, private-predicate\s+echo/i);
+  assert.match(testAuthor, /Preserve every approved observable and the executable RED/i);
+  assert.match(testAuthor, /optional deduplication is not grounds to reopen an admitted plan or frozen test/i);
+});
+
 test("fidelidade resolve bloqueio de evidência sem repetir mão ou comando válido", () => {
   const taskPrompt = readFileSync(taskPromptPath, "utf8");
   const testReviewer = readFileSync(testReviewerPath, "utf8");

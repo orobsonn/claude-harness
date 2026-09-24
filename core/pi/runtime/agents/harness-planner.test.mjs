@@ -60,6 +60,17 @@ test("planner Pi não divide a mesma closure congelável entre tasks", () => {
   assert.match(prompt, /multiple assertions.*same.*task/is);
 });
 
+test("planner Pi escolhe provas distintas antes do freeze sem dispensar RED de produto", () => {
+  const prompt = readFileSync(plannerPath, "utf8");
+
+  assert.match(prompt, /compare the relevant\s+existing tests and other planned assertions/i);
+  assert.match(prompt, /one\s+behavioral test may cover several criteria/i);
+  assert.match(prompt, /duplicating the same\s+failure mode/i);
+  assert.match(prompt, /file-existence guard, export inventory or test-only production seam merely\s+to obtain a collectible RED/i);
+  assert.match(prompt, /required executable RED for real\s+product behavior/i);
+  assert.match(prompt, /correct the boundary before plan admission rather than using\s+`no_tests`/i);
+});
+
 test("planner Pi copia o modo estável da cerimônia sem reclassificar por risco", () => {
   const prompt = readFileSync(plannerPath, "utf8");
 
