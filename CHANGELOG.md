@@ -5,6 +5,13 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [3.6.1](https://github.com/orobsonn/claude-harness/compare/v3.6.0...v3.6.1) (2026-09-24)
+
+
+### Bug Fixes
+
+* **pi:** avoid redundant locked tests before plan admission ([3cf0bff](https://github.com/orobsonn/claude-harness/commit/3cf0bff2e627aaec26a78706ba6c0c45bec140f9))
+
 ## [3.6.0](https://github.com/orobsonn/claude-harness/compare/v3.5.2...v3.6.0) (2026-09-24)
 
 
