@@ -188,22 +188,24 @@ Toda mão escritora deve encerrar o relatório com uma única linha terminal no 
 
 Deixe `max_turns` ausente: o runtime aplica o teto finito de 144 turns. Em **todo** despacho de `harness-planner`, inclua no brief o `feature_id` e o modo estável literal retornado por `classify` (`LIGHT` ou `FULL`). O planner deve copiar esse modo em minúsculas para `execution-plan.json`; severidade, complexidade e risco não reclassificam a cerimônia. Se o modo estiver ausente, não o infira: o planner deve retornar `BLOCKED` sem escrever. Ao fim de **todo** despacho de planner, leia o plano canônico. Se ele existir e for válido, avance diretamente para `harness-plan-reviewer`, mesmo que o texto do planner seja breve ou traga aviso de turn limit. Se o plano existir mas estiver estruturalmente inválido, não despache o plan-reviewer: envie a lista exata de erros do validator a um novo `harness-planner`, com o mesmo feature_id, modo estável e caminho canônico, e repita somente o planner até o plano validar. Quando o plan-reviewer devolver `REVISE`, leia o relatório; antes de novo planner, execute somente os comandos de leitura explicitamente solicitados nele, uma chamada simples por comando, dentro da worktree e apenas se a allowlist existente permitir. Despache então um **novo** `harness-planner`, nunca `resume`, cuja primeira linha seja `[HARNESS_PLAN_REVIEW_CONTEXT]` e contenha feature_id, modo estável da cerimônia, caminho canônico, relatório `REVISE` integral e resultado/exit status das leituras. Não persista esse contexto em state; ele serve somente ao novo despacho.
 
-Em **todo** `subagent`, preencha `model` com o ID literal e declare `thinking`
-quando indicado: `harness-planner` = `openai-codex/gpt-5.6-sol` + `high`;
+Em **todo** `subagent`, use primeiro as rotas do `HARNESS_MODEL_PROFILE` admitido
+na sessão; ele prevalece sobre os exemplos a seguir e conserva as rotas de sessões
+antigas. No perfil atual, preencha `model` com o ID literal e declare `thinking`
+quando indicado: `harness-planner` = `openai-codex/gpt-6-sol` + `high`;
 `harness-plan-reviewer` = `openai-codex/gpt-6-astra` + `high`;
-`harness-adversary` = `openai-codex/gpt-5.6-sol` + `medium`;
-`harness-security` = `openai-codex/gpt-5.6-sol` e omita `thinking`;
-`harness-compliance` = `openai-codex/gpt-5.6-terra` + `high`;
-`harness-test-reviewer` = `openai-codex/gpt-5.6-luna` + `xhigh`;
-`harness-shipper` e `harness-harvester` = `openai-codex/gpt-5.6-luna` + `high`.
+`harness-adversary` = `openai-codex/gpt-6-sol` + `medium`;
+`harness-security` = `openai-codex/gpt-6-sol` e omita `thinking`;
+`harness-compliance` = `openai-codex/gpt-6-sol` + `high`;
+`harness-test-reviewer` = `openai-codex/gpt-6-luna` + `xhigh`;
+`harness-shipper` e `harness-harvester` = `openai-codex/gpt-6-luna` + `high`.
 `harness-test-author` deriva da complexidade canônica: low/medium usa
-`openai-codex/gpt-5.6-terra` + `high`; high (e max legado) usa
-`openai-codex/gpt-5.6-sol` + `high`. Se `complexity` for omitida nesse papel, o host
+`openai-codex/gpt-6-sol` + `high`; high (e max legado) usa
+`openai-codex/gpt-6-sol` + `high`. Se `complexity` for omitida nesse papel, o host
 herda e registra a do plano; divergência explícita continua negada.
 Para `harness-executor` e `harness-sniper`, inclua `complexity` igual à tarefa:
-`low` = `openai-codex/gpt-5.6-luna` + `high`, `medium` =
-`openai-codex/gpt-5.6-terra` + `medium`, `high` (e max legado) =
-`openai-codex/gpt-5.6-terra` + `xhigh`. Não escolha modelo/effort fora dessas rotas.
+`low` = `openai-codex/gpt-6-luna` + `high`, `medium` =
+`openai-codex/gpt-6-sol` + `medium`, `high` (e max legado) =
+`openai-codex/gpt-6-sol` + `xhigh`. Não escolha modelo/effort fora dessas rotas.
 
 O agente principal tem as ferramentas normais do Pi, mas elas passam por rails determinísticos que negam a chamada antes de ela executar: comando ou leitura sobre caminho com segredo e comando destrutivo; mutação direta de caminho do harness (`.pi`, `.codex`, `.agents`); `gh pr merge` sem evidência de CI verde; anexar `harness:ready` sem o pipeline fechado; escrita em `.pi/harness/state/` ou no plano canônico por qualquer via que não seja a ferramenta marcadora; despacho de role não canônica, sombreada pelo projeto, em background, acima do limite de turnos, sem plano estável válido ou fora do escopo da tarefa; e `lavish-axi share` / `setup hooks`.
 
@@ -257,7 +259,7 @@ obter recibos.
 **Suporte diagnóstico opcional, não outra revisão.** Quando uma task retorna bloqueada
 sem causa clara, perde a mesma obrigação entre correções, ou revela uma contradição
 entre tasks/spec/código, você pode despachar `harness-support` com
-`model="openai-codex/gpt-5.6-terra"`, `thinking="high"`, `inherit_context=false`.
+`model="openai-codex/gpt-6-sol"`, `thinking="high"`, `inherit_context=false`.
 Use somente a quantidade útil, no máximo três agentes por investigação, cada um
 com pergunta e objetivo distintos (por exemplo contrato, fronteira de dependência,
 fixture/oráculo). Não convoque três por rotina nem repita sem evidência nova.

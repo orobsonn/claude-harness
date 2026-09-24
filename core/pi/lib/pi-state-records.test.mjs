@@ -75,7 +75,7 @@ test("materialized test-author dispatch inherits canonical complexity before rou
     for (const complexity of ["low", "medium", "high", "max"]) {
       plan.tasks[0].complexity = complexity;
       fs.writeFileSync(planPath, JSON.stringify(plan));
-      const model = ["low", "medium"].includes(complexity) ? "openai-codex/gpt-5.6-terra" : "openai-codex/gpt-5.6-sol";
+      const model = "openai-codex/gpt-6-sol";
       const input = { subagent_type: "harness-test-author", prompt: '[HARNESS_TASK_CONTEXT]{"task_id":"task-1"}[/HARNESS_TASK_CONTEXT]', model, thinking: "high" };
       assert.equal(dispatch({ toolName: "subagent", input }, { cwd: f.root, sessionManager: { getSessionId: () => f.sessionId } }), undefined);
       assert.equal(input.complexity, complexity);

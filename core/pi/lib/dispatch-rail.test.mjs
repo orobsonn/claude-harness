@@ -4,18 +4,18 @@ import test from "node:test";
 import { findShadowedCanonicalRoles, piDispatchRoute, validateSubagentDispatch } from "./dispatch-rail.mjs";
 
 const INDEPENDENT_REVIEW_ROUTES = Object.freeze({
-  "harness-support": { model: "openai-codex/gpt-5.6-terra", thinking: "high" },
-  "harness-adversary": { model: "openai-codex/gpt-5.6-sol", thinking: "medium" },
-  "harness-discussion-adversary": { model: "openai-codex/gpt-5.6-sol", thinking: "medium" },
+  "harness-support": { model: "openai-codex/gpt-6-sol", thinking: "high" },
+  "harness-adversary": { model: "openai-codex/gpt-6-sol", thinking: "medium" },
+  "harness-discussion-adversary": { model: "openai-codex/gpt-6-sol", thinking: "medium" },
   "harness-plan-reviewer": { model: "openai-codex/gpt-6-astra", thinking: "high" },
-  "harness-test-reviewer": { model: "openai-codex/gpt-5.6-luna", thinking: "xhigh" },
-  "harness-compliance": { model: "openai-codex/gpt-5.6-terra", thinking: "high" },
-  "harness-security": { model: "openai-codex/gpt-5.6-sol" },
+  "harness-test-reviewer": { model: "openai-codex/gpt-6-luna", thinking: "xhigh" },
+  "harness-compliance": { model: "openai-codex/gpt-6-sol", thinking: "high" },
+  "harness-security": { model: "openai-codex/gpt-6-sol" },
 });
 
 test("dispatch admits only canonical foreground roles within the finite 144-turn cap", () => {
   assert.deepEqual(
-    validateSubagentDispatch({ subagent_type: "harness-planner", max_turns: 144, model: "openai-codex/gpt-5.6-sol", thinking: "high" }),
+    validateSubagentDispatch({ subagent_type: "harness-planner", max_turns: 144, model: "openai-codex/gpt-6-sol", thinking: "high" }),
     { ok: true },
   );
   assert.deepEqual(
@@ -45,39 +45,39 @@ test("all three reviewers require a fresh dispatch and cannot resume or run in t
 
 test("rotas de modelo do Pi são fixas por papel e por complexidade da mão", () => {
   assert.deepEqual(piDispatchRoute("harness-discussion-adversary"), {
-    ok: true, model: "openai-codex/gpt-5.6-sol", thinking: "medium",
+    ok: true, model: "openai-codex/gpt-6-sol", thinking: "medium",
   });
   assert.deepEqual(piDispatchRoute("harness-plan-reviewer"), {
     ok: true, model: "openai-codex/gpt-6-astra", thinking: "high",
   });
   assert.deepEqual(piDispatchRoute("harness-planner"), {
-    ok: true, model: "openai-codex/gpt-5.6-sol", thinking: "high",
+    ok: true, model: "openai-codex/gpt-6-sol", thinking: "high",
   });
   assert.deepEqual(piDispatchRoute("harness-test-author", "medium"), {
-    ok: true, model: "openai-codex/gpt-5.6-terra", thinking: "high",
+    ok: true, model: "openai-codex/gpt-6-sol", thinking: "high",
   });
   assert.deepEqual(piDispatchRoute("harness-test-reviewer"), {
-    ok: true, model: "openai-codex/gpt-5.6-luna", thinking: "xhigh",
+    ok: true, model: "openai-codex/gpt-6-luna", thinking: "xhigh",
   });
   assert.deepEqual(piDispatchRoute("harness-executor", "low"), {
-    ok: true, model: "openai-codex/gpt-5.6-luna", thinking: "high",
+    ok: true, model: "openai-codex/gpt-6-luna", thinking: "high",
   });
   assert.deepEqual(piDispatchRoute("harness-sniper", "medium"), {
-    ok: true, model: "openai-codex/gpt-5.6-terra", thinking: "medium",
+    ok: true, model: "openai-codex/gpt-6-sol", thinking: "medium",
   });
   assert.deepEqual(piDispatchRoute("harness-executor", "high"), {
-    ok: true, model: "openai-codex/gpt-5.6-terra", thinking: "xhigh",
+    ok: true, model: "openai-codex/gpt-6-sol", thinking: "xhigh",
   });
   assert.deepEqual(piDispatchRoute("harness-sniper", "max"), {
-    ok: true, model: "openai-codex/gpt-5.6-terra", thinking: "xhigh",
+    ok: true, model: "openai-codex/gpt-6-sol", thinking: "xhigh",
   });
 
   assert.deepEqual(
-    validateSubagentDispatch({ subagent_type: "harness-compliance", model: "openai-codex/gpt-5.6-terra", thinking: "high" }),
+    validateSubagentDispatch({ subagent_type: "harness-compliance", model: "openai-codex/gpt-6-sol", thinking: "high" }),
     { ok: true },
   );
   assert.deepEqual(
-    validateSubagentDispatch({ subagent_type: "harness-test-reviewer", model: "openai-codex/gpt-5.6-luna", thinking: "xhigh" }),
+    validateSubagentDispatch({ subagent_type: "harness-test-reviewer", model: "openai-codex/gpt-6-luna", thinking: "xhigh" }),
     { ok: true },
   );
   assert.deepEqual(
@@ -110,9 +110,9 @@ test("rotas de modelo do Pi são fixas por papel e por complexidade da mão", ()
   );
 });
 
-test("test-author routes only canonical low/medium to Terra and high/legacy max to Sol", () => {
+test("test-author routes all canonical complexity tiers to Sol 6", () => {
   for (const complexity of ["low", "medium", "high", "max"]) {
-    const model = ["low", "medium"].includes(complexity) ? "openai-codex/gpt-5.6-terra" : "openai-codex/gpt-5.6-sol";
+    const model = "openai-codex/gpt-6-sol";
     assert.deepEqual(piDispatchRoute("harness-test-author", complexity), { ok: true, model, thinking: "high" });
     assert.deepEqual(validateSubagentDispatch({ subagent_type: "harness-test-author", complexity, model, thinking: "high" }), { ok: true });
   }
@@ -126,7 +126,7 @@ test("dispatch rejects a role shadowed by the issue project", () => {
     { ok: false, reason: "shadowed-role" },
   );
   assert.deepEqual(
-    validateSubagentDispatch({ subagent_type: "harness-planner", model: "openai-codex/gpt-5.6-sol", thinking: "high" }, { shadowedRoles }),
+    validateSubagentDispatch({ subagent_type: "harness-planner", model: "openai-codex/gpt-6-sol", thinking: "high" }, { shadowedRoles }),
     { ok: true },
   );
 });

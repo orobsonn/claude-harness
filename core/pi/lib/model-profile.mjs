@@ -4,7 +4,7 @@ import path from "node:path";
 
 export const MODEL_PROFILE_ENV = "PI_HARNESS_MODEL_PROFILE";
 export const MODEL_PROFILE_HASH_ENV = "PI_HARNESS_MODEL_PROFILE_SHA256";
-export const MODEL_PROFILE_VERSION = 3;
+export const MODEL_PROFILE_VERSION = 4;
 export const OLLAMA_CONTEXT_WINDOW = 262_144;
 export const LEGACY_OLLAMA_CONTEXT_WINDOW = 1_000_000;
 export const OLLAMA_PROVIDER = "ollama-cloud";
@@ -14,7 +14,7 @@ export const GLM_MODEL = "glm-5.3";
 export const DEFAULT_MODEL_PROFILE = "trial-orchestration-deepseek";
 
 const COMPLEXITIES = Object.freeze(["low", "medium", "high", "max"]);
-const SUPPORTED_MODEL_PROFILE_VERSIONS = new Set([1, 2, MODEL_PROFILE_VERSION]);
+const SUPPORTED_MODEL_PROFILE_VERSIONS = new Set([1, 2, 3, MODEL_PROFILE_VERSION]);
 const PARENT_TARGETS = new Set(["baseline", "deepseek"]);
 
 const BASELINE_FIXED = Object.freeze({
@@ -36,6 +36,17 @@ const BASELINE_HANDS = Object.freeze({
   high: Object.freeze({ model: "openai-codex/gpt-5.6-terra", thinking: "xhigh" }),
   max: Object.freeze({ model: "openai-codex/gpt-5.6-terra", thinking: "xhigh" }),
 });
+
+// Keep v1-v3 routes byte-for-byte canonical: an admitted session must never
+// silently switch models when the vendored launcher is updated.
+const CURRENT_FIXED = Object.freeze(Object.fromEntries(Object.entries(BASELINE_FIXED).map(([role, route]) => [
+  role, Object.freeze({ ...route, model: route.model.replace("gpt-5.6-terra", "gpt-6-sol")
+    .replace("gpt-5.6-sol", "gpt-6-sol").replace("gpt-5.6-luna", "gpt-6-luna") }),
+])));
+const CURRENT_HANDS = Object.freeze(Object.fromEntries(Object.entries(BASELINE_HANDS).map(([tier, route]) => [
+  tier, Object.freeze({ ...route, model: route.model.replace("gpt-5.6-terra", "gpt-6-sol")
+    .replace("gpt-5.6-luna", "gpt-6-luna") }),
+])));
 
 const PROFILE_DEFAULTS = Object.freeze({
   baseline: Object.freeze({ handModel: null, globalParent: "baseline", localParent: "baseline" }),
@@ -87,21 +98,23 @@ export function resolveModelProfile({ profile = DEFAULT_MODEL_PROFILE, globalPar
     throw new Error("harness Ollama budget must be a positive USD amount");
   }
   const handRoute = defaults.handModel && defaults.handModel !== "tiered-open" ? ollamaRoute(defaults.handModel) : null;
+  const fixedRoutes = version < 4 ? BASELINE_FIXED : CURRENT_FIXED;
+  const handRoutes = version < 4 ? BASELINE_HANDS : CURRENT_HANDS;
   const handTiers = Object.fromEntries(COMPLEXITIES.map((complexity) => [
     complexity,
     defaults.handModel === "tiered-open"
       ? ollamaRoute(["high", "max"].includes(complexity) ? GLM_MODEL : DEEPSEEK_MODEL)
-      : handRoute ? { ...handRoute } : { ...BASELINE_HANDS[complexity] },
+      : handRoute ? { ...handRoute } : { ...handRoutes[complexity] },
   ]));
   const testAuthorTiers = defaults.handModel
     ? Object.fromEntries(COMPLEXITIES.map((complexity) => [complexity, { ...handTiers[complexity] }]))
     : {
-      low: { model: "openai-codex/gpt-5.6-terra", thinking: "high" },
-      medium: { model: "openai-codex/gpt-5.6-terra", thinking: "high" },
-      high: { model: "openai-codex/gpt-5.6-sol", thinking: "high" },
-      max: { model: "openai-codex/gpt-5.6-sol", thinking: "high" },
+      low: { model: version < 4 ? "openai-codex/gpt-5.6-terra" : "openai-codex/gpt-6-sol", thinking: "high" },
+      medium: { model: version < 4 ? "openai-codex/gpt-5.6-terra" : "openai-codex/gpt-6-sol", thinking: "high" },
+      high: { model: version < 4 ? "openai-codex/gpt-5.6-sol" : "openai-codex/gpt-6-sol", thinking: "high" },
+      max: { model: version < 4 ? "openai-codex/gpt-5.6-sol" : "openai-codex/gpt-6-sol", thinking: "high" },
     };
-  const contextWindow = version < MODEL_PROFILE_VERSION ? LEGACY_OLLAMA_CONTEXT_WINDOW : OLLAMA_CONTEXT_WINDOW;
+  const contextWindow = version <= 2 ? LEGACY_OLLAMA_CONTEXT_WINDOW : OLLAMA_CONTEXT_WINDOW;
   const snapshot = {
     version,
     profile,
@@ -122,7 +135,7 @@ export function resolveModelProfile({ profile = DEFAULT_MODEL_PROFILE, globalPar
       local: { target: selectedLocal, route: parentRoute(selectedLocal) },
     },
     routes: {
-      fixed: Object.fromEntries(Object.entries(BASELINE_FIXED).map(([role, route]) => [role, { ...route }])),
+      fixed: Object.fromEntries(Object.entries(fixedRoutes).map(([role, route]) => [role, { ...route }])),
       hands: handTiers,
       test_author: testAuthorTiers,
     },
@@ -278,4 +291,4 @@ export function parseModelProfileArgs(argv) {
   return { argv: remaining, inspect, selection: values, explicit: Object.keys(values).length > 0 };
 }
 
-export { BASELINE_FIXED, BASELINE_HANDS, PROFILE_DEFAULTS };
+export { BASELINE_FIXED, BASELINE_HANDS, CURRENT_FIXED, CURRENT_HANDS, PROFILE_DEFAULTS };

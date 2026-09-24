@@ -2,8 +2,8 @@ import { join } from "node:path";
 
 import { RUNTIME_ROLES, isRuntimeRole } from "./roles.mjs";
 import {
-  BASELINE_FIXED as FIXED_PI_ROUTES,
-  BASELINE_HANDS as HAND_PI_ROUTES,
+  CURRENT_FIXED as FIXED_PI_ROUTES,
+  CURRENT_HANDS as HAND_PI_ROUTES,
   loadModelProfileFromEnv,
   routeFromModelProfile,
 } from "./model-profile.mjs";
@@ -32,7 +32,7 @@ export function piDispatchRoute(role, complexity, profileSnapshot = loadModelPro
   if (profileSnapshot) return routeFromModelProfile(profileSnapshot, role, complexity);
   if (role === "harness-test-author") {
     if (!["low", "medium", "high", "max"].includes(complexity)) return { ok: false, reason: "hand-complexity" };
-    return { ok: true, model: ["high", "max"].includes(complexity) ? "openai-codex/gpt-5.6-sol" : "openai-codex/gpt-5.6-terra", thinking: "high" };
+    return { ok: true, model: "openai-codex/gpt-6-sol", thinking: "high" };
   }
   const fixed = FIXED_PI_ROUTES[role];
   if (fixed) return { ok: true, ...fixed };

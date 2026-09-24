@@ -12,11 +12,11 @@ import {
   stableProfileJson, writeModelProfileSnapshot,
 } from "./model-profile.mjs";
 
-test("AC-01 baseline preserves every canonical route and needs no Ollama credential", () => {
+test("AC-01 baseline uses the new Pi OpenAI routes and needs no Ollama credential", () => {
   const profile = resolveModelProfile({ profile: "baseline" });
   assert.equal(profile.profile, "baseline");
-  assert.equal(routeFromModelProfile(profile, "harness-executor", "low").model, "openai-codex/gpt-5.6-luna");
-  assert.equal(routeFromModelProfile(profile, "harness-executor", "high").model, "openai-codex/gpt-5.6-terra");
+  assert.equal(routeFromModelProfile(profile, "harness-executor", "low").model, "openai-codex/gpt-6-luna");
+  assert.equal(routeFromModelProfile(profile, "harness-executor", "high").model, "openai-codex/gpt-6-sol");
   assert.equal(routeFromModelProfile(profile, "harness-plan-reviewer").model, "openai-codex/gpt-6-astra");
   assert.equal(profile.parents.global.route, null);
   assert.equal(profile.parents.local.route, null);
@@ -24,8 +24,8 @@ test("AC-01 baseline preserves every canonical route and needs no Ollama credent
 
 test("new sessions default to DeepSeek orchestration while baseline stays explicit", () => {
   const profile = resolveModelProfile();
-  assert.equal(MODEL_PROFILE_VERSION, 3);
-  assert.equal(profile.version, 3);
+  assert.equal(MODEL_PROFILE_VERSION, 4);
+  assert.equal(profile.version, 4);
   assert.equal(DEFAULT_MODEL_PROFILE, "trial-orchestration-deepseek");
   assert.equal(profile.profile, DEFAULT_MODEL_PROFILE);
   assert.equal(profile.parents.global.route.model, DEEPSEEK_MODEL);
@@ -44,11 +44,11 @@ test("AC-02 hands profiles change executor, sniper and test-author while eyes st
         assert.equal(routeFromModelProfile(profile, role, complexity).model, `ollama-cloud/${tierModel(complexity)}`);
       }
     }
-    assert.equal(routeFromModelProfile(profile, "harness-planner").model, "openai-codex/gpt-5.6-sol");
+    assert.equal(routeFromModelProfile(profile, "harness-planner").model, "openai-codex/gpt-6-sol");
     assert.equal(routeFromModelProfile(profile, "harness-test-author", "low").model, `ollama-cloud/${tierModel("low")}`);
     assert.equal(routeFromModelProfile(profile, "harness-test-author", "high").model, `ollama-cloud/${tierModel("high")}`);
-    assert.equal(routeFromModelProfile(profile, "harness-test-reviewer").model, "openai-codex/gpt-5.6-luna");
-    assert.equal(routeFromModelProfile(profile, "harness-compliance").model, "openai-codex/gpt-5.6-terra");
+    assert.equal(routeFromModelProfile(profile, "harness-test-reviewer").model, "openai-codex/gpt-6-luna");
+    assert.equal(routeFromModelProfile(profile, "harness-compliance").model, "openai-codex/gpt-6-sol");
   }
 });
 
@@ -58,7 +58,7 @@ test("AC-03 parent targets are independent and do not change eyes", () => {
   });
   assert.equal(profile.parents.global.route.model, DEEPSEEK_MODEL);
   assert.equal(profile.parents.local.route, null);
-  assert.equal(routeFromModelProfile(profile, "harness-security").model, "openai-codex/gpt-5.6-sol");
+  assert.equal(routeFromModelProfile(profile, "harness-security").model, "openai-codex/gpt-6-sol");
 });
 
 test("AC-04 unknown profiles and parent targets fail closed", () => {
@@ -97,6 +97,24 @@ test("v2 Ollama snapshots remain canonical at 1M for exact resume", (t) => {
   assert.equal(old.models.deepseek.context_window, 1_000_000);
   writeModelProfileSnapshot(root, "old-session", old);
   assert.deepEqual(readModelProfileSnapshot(root, "old-session").snapshot, old);
+});
+
+test("v3 admitted routes and 256 Ki context remain canonical across the model upgrade", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-model-profile-v3-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const old = resolveModelProfile({ profile: "trial-orchestration-deepseek", version: 3 });
+  assert.equal(old.sha256, "a32c2bc35b0c47717855fe2cfc90b4d1c8c12b40e71c5eaab3582b4d42edef7f",
+    "o snapshot v3 deve permanecer byte-for-byte igual ao da release anterior");
+  assert.equal(old.models.deepseek.context_window, 262_144);
+  assert.equal(routeFromModelProfile(old, "harness-planner").model, "openai-codex/gpt-5.6-sol");
+  assert.equal(routeFromModelProfile(old, "harness-test-reviewer").model, "openai-codex/gpt-5.6-luna");
+  assert.equal(routeFromModelProfile(old, "harness-compliance").model, "openai-codex/gpt-5.6-terra");
+  const saved = writeModelProfileSnapshot(root, "old-v3", old);
+  assert.deepEqual(readModelProfileSnapshot(root, "old-v3").snapshot, old);
+  assert.deepEqual(loadModelProfileFromEnv({
+    [MODEL_PROFILE_ENV]: saved.path,
+    [MODEL_PROFILE_HASH_ENV]: saved.sha256,
+  }), old);
 });
 
 test("AC-07 admitted snapshot is immutable and disk defaults cannot replace it", (t) => {

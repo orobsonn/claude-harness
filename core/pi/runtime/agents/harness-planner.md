@@ -218,17 +218,17 @@ Keep low/medium work cohesive. Scorer absence/error does not prevent planning.
 ```json
 {
   "hand_tiers": {
-    "low": "openai-codex/gpt-5.6-luna",
-    "medium": "openai-codex/gpt-5.6-terra",
-    "high": "openai-codex/gpt-5.6-terra"
+    "low": "openai-codex/gpt-6-luna",
+    "medium": "openai-codex/gpt-6-sol",
+    "high": "openai-codex/gpt-6-sol"
   },
-  "planner": "openai-codex/gpt-5.6-sol",
+  "planner": "openai-codex/gpt-6-sol",
   "plan-reviewer": "openai-codex/gpt-6-astra",
-  "compliance": "openai-codex/gpt-5.6-terra",
-  "adversary": "openai-codex/gpt-5.6-sol",
-  "security": "openai-codex/gpt-5.6-sol",
-  "harvester": "openai-codex/gpt-5.6-luna",
-  "shipper": "openai-codex/gpt-5.6-luna"
+  "compliance": "openai-codex/gpt-6-sol",
+  "adversary": "openai-codex/gpt-6-sol",
+  "security": "openai-codex/gpt-6-sol",
+  "harvester": "openai-codex/gpt-6-luna",
+  "shipper": "openai-codex/gpt-6-luna"
 }
 ```
 

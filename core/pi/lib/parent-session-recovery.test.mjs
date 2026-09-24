@@ -13,15 +13,12 @@ import {
 } from "./parent-session-recovery.mjs";
 import { decidePiDispatchGate } from "./entry-gate.mjs";
 import { readPiSpecApproval, writePiSpecDraft } from "./spec-approval.mjs";
+import { modelStrategyFromProfile, resolveModelProfile } from "./model-profile.mjs";
 
 const SESSION = "ses-parent-resume";
 const FEATURE = "parent-resume";
-const MODELS = {
-  hand_tiers: { low: "openai-codex/gpt-5.6-luna", medium: "openai-codex/gpt-5.6-terra", high: "openai-codex/gpt-5.6-terra" },
-  planner: "openai-codex/gpt-5.6-sol", "plan-reviewer": "openai-codex/gpt-6-astra", compliance: "openai-codex/gpt-5.6-terra",
-  adversary: "openai-codex/gpt-5.6-sol", security: "openai-codex/gpt-5.6-sol", shipper: "openai-codex/gpt-5.6-luna", harvester: "openai-codex/gpt-5.6-luna",
-};
-const LEGACY_MODELS = { ...MODELS, "plan-reviewer": "openai-codex/gpt-5.6-sol" };
+const MODELS = modelStrategyFromProfile(resolveModelProfile({ profile: "baseline" }));
+const LEGACY_MODELS = { ...modelStrategyFromProfile(resolveModelProfile({ profile: "baseline", version: 3 })), "plan-reviewer": "openai-codex/gpt-5.6-sol" };
 
 function sha(text) {
   return createHash("sha256").update(text).digest("hex");
@@ -293,6 +290,18 @@ test("recovery accepts only the exact legacy reviewer route and requires its rec
     assert.equal(envelope.plan_approval, "not_verified_by_recovery");
     assert.equal(envelope.model_route_status, "legacy-plan-reviewer-sol");
     assert.match(envelope.model_route_reconciliation, /planner.*model_strategy\.plan-reviewer.*Astra.*new hash/is);
+  } finally { f.cleanup(); }
+});
+
+test("recovery resumes a v3 plan only with its admitted v3 model strategy", () => {
+  const f = fixture();
+  try {
+    const old = modelStrategyFromProfile(resolveModelProfile({ profile: "baseline", version: 3 }));
+    const plan = JSON.parse(fs.readFileSync(f.plan, "utf8"));
+    plan.model_strategy = old;
+    fs.writeFileSync(f.plan, JSON.stringify(plan));
+    assert.equal(recoverPiParentSession(f.root, SESSION, { expectedModelStrategy: old }).ok, true);
+    assert.deepEqual(recoverPiParentSession(f.root, SESSION), { ok: false, reason: "resume plan invalid" });
   } finally { f.cleanup(); }
 });
 
