@@ -5,6 +5,13 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [3.5.1](https://github.com/orobsonn/claude-harness/compare/v3.5.0...v3.5.1) (2026-09-24)
+
+
+### Bug Fixes
+
+* **pi:** compact new Ollama sessions at 256k context ([#1034](https://github.com/orobsonn/claude-harness/issues/1034)) ([d0d24c6](https://github.com/orobsonn/claude-harness/commit/d0d24c606d6e50f3734b142fcf600c4065fa4267))
+
 ## [3.5.0](https://github.com/orobsonn/claude-harness/compare/v3.4.0...v3.5.0) (2026-09-23)
 
 
