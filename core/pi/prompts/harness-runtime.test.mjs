@@ -226,17 +226,17 @@ test("freeze-commit órfão vira risco explícito no PR sem bypass de CI", () =>
 test("o prompt fornece ids literais de modelo para todo despacho", () => {
   const prompt = readFileSync(promptPath, "utf8");
 
-  assert.match(prompt, /harness-planner.*openai-codex\/gpt-5\.6-sol.*high/is);
+  assert.match(prompt, /harness-planner.*openai-codex\/gpt-6-sol.*high/is);
   assert.match(prompt, /harness-plan-reviewer.*openai-codex\/gpt-6-astra.*high/is);
   assert.doesNotMatch(prompt, /`harness-plan-reviewer`\s*=\s*`openai-codex\/gpt-5\.6-sol`/);
-  assert.match(prompt, /harness-adversary.*openai-codex\/gpt-5\.6-sol.*medium/is);
-  assert.match(prompt, /`harness-compliance`\s*=\s*`openai-codex\/gpt-5\.6-terra`\s*\+\s*`high`/);
-  assert.match(prompt, /`harness-test-reviewer`\s*=\s*`openai-codex\/gpt-5\.6-luna`\s*\+\s*`xhigh`/);
+  assert.match(prompt, /harness-adversary.*openai-codex\/gpt-6-sol.*medium/is);
+  assert.match(prompt, /`harness-compliance`\s*=\s*`openai-codex\/gpt-6-sol`\s*\+\s*`high`/);
+  assert.match(prompt, /`harness-test-reviewer`\s*=\s*`openai-codex\/gpt-6-luna`\s*\+\s*`xhigh`/);
   assert.doesNotMatch(prompt, /`harness-test-reviewer`\s*=\s*`openai-codex\/gpt-5\.6-terra`/);
-  assert.match(prompt, /harness-test-author.*openai-codex\/gpt-5\.6-terra.*high/is);
-  assert.match(prompt, /high \(e max legado\) usa\s*`openai-codex\/gpt-5\.6-sol`\s*\+\s*`high`/i);
+  assert.match(prompt, /harness-test-author.*openai-codex\/gpt-6-sol.*high/is);
+  assert.match(prompt, /high \(e max legado\) usa\s*`openai-codex\/gpt-6-sol`\s*\+\s*`high`/i);
   assert.match(prompt, /complexity.*omitida.*host\s*herda/is);
-  assert.match(prompt, /harness-executor.*low.*openai-codex\/gpt-5\.6-luna.*high/is);
+  assert.match(prompt, /harness-executor.*low.*openai-codex\/gpt-6-luna.*high/is);
 });
 
 test("o prompt descreve os rails que existem e não promete sandbox", () => {
