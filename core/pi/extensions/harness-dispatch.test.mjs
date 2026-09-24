@@ -19,7 +19,7 @@ function ctx({ hasUI = true, child = false, mode } = {}) {
     ...(mode ? { mode } : {}),
   };
 }
-const args = { subagent_type: "harness-discussion-adversary", model: "openai-codex/gpt-5.6-sol", thinking: "medium", prompt: "critique" };
+const args = { subagent_type: "harness-discussion-adversary", model: "openai-codex/gpt-6-sol", thinking: "medium", prompt: "critique" };
 
 const SESSION = "ses-canonical-contract";
 const FEATURE = "canonical-contract";
@@ -98,7 +98,7 @@ test("discussion refuses unreadable ceremony state or a missing session identity
 
 test("support is a fixed-route global reader, available headless but not recursive or task-local", () => {
   const root = mkdtempSync(join(tmpdir(), "pi-support-dispatch-"));
-  const input = { subagent_type: "harness-support", model: "openai-codex/gpt-5.6-terra", thinking: "high", prompt: "Diagnose contract boundary", inherit_context: false };
+  const input = { subagent_type: "harness-support", model: "openai-codex/gpt-6-sol", thinking: "high", prompt: "Diagnose contract boundary", inherit_context: false };
   const context = { ...ctx({ hasUI: false }), cwd: root };
   try {
     const directory = join(root, ".pi/harness/state/ses-discussion");
@@ -121,7 +121,7 @@ test("test-author and test-reviewer receive the exact canonical task even when t
     for (const subagent_type of ["harness-test-author", "harness-test-reviewer"]) {
       const input = {
         subagent_type,
-        model: subagent_type === "harness-test-author" ? "openai-codex/gpt-5.6-terra" : "openai-codex/gpt-5.6-luna",
+        model: subagent_type === "harness-test-author" ? "openai-codex/gpt-6-sol" : "openai-codex/gpt-6-luna",
         thinking: subagent_type === "harness-test-author" ? "high" : "xhigh",
         description: "Review generic size feedback",
         prompt: `${MARKER}\nOnly check generic UTF-8 feedback.`,
@@ -154,7 +154,7 @@ test("canonical task injection is idempotent and reviewer enrichment stays fail-
   }
 
   const input = {
-    subagent_type: "harness-test-reviewer", model: "openai-codex/gpt-5.6-luna", thinking: "xhigh",
+    subagent_type: "harness-test-reviewer", model: "openai-codex/gpt-6-luna", thinking: "xhigh",
     description: "Review", prompt: `${MARKER}\nFallback brief`,
   };
   assert.equal(handler()({ toolName: "subagent", input }, ctx()), undefined);
@@ -177,7 +177,7 @@ test("an Orca local task parent canonicalizes inverted review headers without na
   });
   const input = {
     subagent_type: "harness-adversary",
-    model: "openai-codex/gpt-5.6-sol",
+    model: "openai-codex/gpt-6-sol",
     thinking: "medium",
     prompt: `[HARNESS_TASK_REVIEW]\n${MARKER}\nReview.`,
   };
@@ -202,7 +202,7 @@ test("corrective test-author waits for capture of the latest implementation delt
   };
   writeFileSync(handPath, JSON.stringify(record));
   const author = () => ({
-    subagent_type: "harness-test-author", model: "openai-codex/gpt-5.6-terra", thinking: "high",
+    subagent_type: "harness-test-author", model: "openai-codex/gpt-6-sol", thinking: "high",
     description: "Correct fixture", prompt: `${MARKER}\nCorrect only the fixture.`,
   });
   try {

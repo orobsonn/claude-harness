@@ -171,7 +171,7 @@ async function loadCreateSubagentSession() {
   return jiti.import(join(PACKAGE_ROOT, "node_modules/@gotgenes/pi-subagents/src/lifecycle/create-subagent-session.ts"));
 }
 
-test("bootstrap registra o fallback Astra antes do subagents, preservando o catálogo Codex e a herança da filha", async (t) => {
+test("bootstrap registra os modelos GPT-6 antes do subagents, preservando o catálogo Codex e a herança da filha", async (t) => {
   const previous = process.env.PI_HARNESS_LAUNCHER;
   process.env.PI_HARNESS_LAUNCHER = "1";
   t.after(() => {
@@ -182,7 +182,11 @@ test("bootstrap registra o fallback Astra antes do subagents, preservando o cat�
   const handlers = register();
   const builtin = builtinProviders().find((entry) => entry.id === "openai-codex");
   assert.ok(builtin);
+  const requiredModels = ["gpt-6-astra", "gpt-6-sol", "gpt-6-luna"];
   const builtinHasAstra = builtin.getModels().some((model) => model.id === "gpt-6-astra");
+  for (const id of ["gpt-6-sol", "gpt-6-luna"]) {
+    assert.ok(builtin.getModels().some((model) => model.id === id), `${id} existe no Pi pinado`);
+  }
   assert.equal(
     handlers.providers.length,
     builtinHasAstra ? 0 : 1,
@@ -193,31 +197,31 @@ test("bootstrap registra o fallback Astra antes do subagents, preservando o cat�
   assert.equal(provider.auth.oauth?.name, builtin.auth.oauth?.name, "não pode reconfigurar nem ler a autenticação do provider");
   assert.equal(typeof provider.auth.oauth?.toAuth, "function", "o wrapper conserva o OAuth do provider pinado");
   assert.equal(typeof provider.stream, "function", "o wrapper conserva o stream do provider pinado");
-  const expectedIds = builtin.getModels().map((model) => model.id).filter((id) => id !== "gpt-6-astra");
+  const expectedIds = builtin.getModels().map((model) => model.id).filter((id) => !requiredModels.includes(id));
   const wrapped = provider.getModels();
   assert.deepEqual(
-    wrapped.filter((model) => model.id !== "gpt-6-astra").map((model) => model.id),
+    wrapped.filter((model) => !requiredModels.includes(model.id)).map((model) => model.id),
     expectedIds,
     "o wrapper não pode apagar Sol/Terra/Luna nem outros modelos Codex",
   );
-  assert.equal(wrapped.filter((model) => model.id === "gpt-6-astra").length, 1, "Astra só pode ser acrescentado uma vez");
+  for (const id of requiredModels) assert.equal(wrapped.filter((model) => model.id === id).length, 1, `${id} só pode ser acrescentado uma vez`);
 
   const parentRuntime = await runtimeWithSyntheticCodexCredential();
   const parentRegistry = new ModelRegistry(parentRuntime);
   parentRegistry.registerProvider(provider);
-  assert.ok(parentRegistry.getAvailable().some((model) => model.provider === "openai-codex" && model.id === "gpt-6-astra"));
+  for (const id of requiredModels) assert.ok(parentRegistry.getAvailable().some((model) => model.provider === "openai-codex" && model.id === id));
   const reloaded = register().providers[0];
   if (reloaded) parentRegistry.registerProvider(reloaded);
   assert.equal(
-    parentRegistry.getAll().filter((model) => model.provider === "openai-codex" && model.id === "gpt-6-astra").length,
-    1,
-    "um reload registra um provider novo, sem acumular clones Astra",
+    parentRegistry.getAll().filter((model) => model.provider === "openai-codex" && requiredModels.includes(model.id)).length,
+    requiredModels.length,
+    "um reload registra um provider novo, sem acumular clones GPT-6",
   );
 
   const childRuntime = await runtimeWithSyntheticCodexCredential();
   const childRegistry = new ModelRegistry(childRuntime);
   childRegistry.registerProvider(parentRegistry.getRegisteredNativeProvider("openai-codex"));
-  assert.ok(childRegistry.find("openai-codex", "gpt-6-astra"), "a runtime filha aceita o provider registrado sem rede");
+  for (const id of requiredModels) assert.ok(childRegistry.find("openai-codex", id), "a runtime filha aceita o provider registrado sem rede");
   for (const id of ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]) {
     assert.ok(childRegistry.find("openai-codex", id), `a filha preserva ${id}`);
   }
@@ -333,7 +337,7 @@ test("createSubagentSession real aceita Astra pela registry filha sem rede", asy
   assert.ok(childRegistry.find("openai-codex", "gpt-6-astra"), "a runtime filha mantém o provider/API que recebeu por herança");
 });
 
-test("bootstrap vendorizado sem node_modules do produto resolve as bibliotecas do Pi e registra Astra", async (t) => {
+test("bootstrap vendorizado sem node_modules do produto registra Astra, Sol e Luna", async (t) => {
   const directory = mkdtempSync(join(tmpdir(), "pi-vendored-bootstrap-"));
   const vendorRoot = join(directory, "vendor");
   const agentDir = join(directory, "agent");
@@ -374,7 +378,9 @@ test("bootstrap vendorizado sem node_modules do produto resolve as bibliotecas d
   });
   t.after(() => session.dispose());
   await session.bindExtensions({});
-  assert.ok(runtime.getModel("openai-codex", "gpt-6-astra"));
+  for (const id of ["gpt-6-astra", "gpt-6-sol", "gpt-6-luna"]) {
+    assert.ok(runtime.getModel("openai-codex", id), `${id} disponível no runtime vendorizado`);
+  }
   assert.ok(runtime.getModels("openai-codex").some((model) => model.id === "gpt-5.6-sol"));
 });
 

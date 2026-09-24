@@ -335,12 +335,12 @@ export function materializeRuntime(root, runtimeDir, stateDir = harnessStateDir(
     const current = JSON.parse(readFileSync(modelsTarget, "utf8"));
     const distributedProvider = expected?.providers?.["ollama-cloud"];
     const currentProvider = current?.providers?.["ollama-cloud"];
-    if (!distributedProvider || ![1, 2, MODEL_PROFILE_VERSION].includes(modelProfile?.version) ||
+    if (!distributedProvider || ![1, 2, 3, MODEL_PROFILE_VERSION].includes(modelProfile?.version) ||
         distributedProvider.models?.length !== 2 ||
         distributedProvider.models[0]?.id !== DEEPSEEK_MODEL || distributedProvider.models[1]?.id !== GLM_MODEL) {
       throw new Error("distributed Ollama model profile invalid");
     }
-    const contextWindow = modelProfile.version < MODEL_PROFILE_VERSION
+    const contextWindow = modelProfile.version <= 2
       ? LEGACY_OLLAMA_CONTEXT_WINDOW : OLLAMA_CONTEXT_WINDOW;
     const providerForContext = (size) => ({
       ...distributedProvider,

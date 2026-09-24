@@ -441,7 +441,7 @@ test("pinned Pi overlay keeps one global auth path for parent and subagents", ()
   assert.throws(() => applyPiAuthPathPatch(packagePath, subagentsPackagePath), /altered patched bytes/);
 });
 
-test("runtime defaults select Terra/high from Pi's real registry without a CLI model override", async () => {
+test("runtime defaults select Sol 6/high from Pi's real registry without a CLI model override", async () => {
   const directory = mkdtempSync(join(tmpdir(), "pi-harness-runtime-test-"));
   const runtimeDir = join(directory, "runtime");
   try {
@@ -475,13 +475,13 @@ test("runtime defaults select Terra/high from Pi's real registry without a CLI m
     });
 
     assert.equal(settingsManager.getDefaultProvider(), "openai-codex");
-    assert.equal(settingsManager.getDefaultModel(), "gpt-5.6-terra");
+    assert.equal(settingsManager.getDefaultModel(), "gpt-6-sol");
     assert.equal(settingsManager.getDefaultThinkingLevel(), "high");
     assert.equal(selected.thinkingLevel, "high");
     assert.ok(modelRuntime.getModels("openai-codex").some((model) => model.id === "gpt-5.6-terra"), "the installed Pi catalog contains Terra");
     assert.deepEqual(selected.model && { provider: selected.model.provider, id: selected.model.id }, {
       provider: "openai-codex",
-      id: "gpt-5.6-terra",
+      id: "gpt-6-sol",
     });
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
@@ -558,7 +558,7 @@ test("runtime já materializado migra somente o antigo default do harness para o
 
       assert.deepEqual(JSON.parse(readFileSync(join(runtimeDir, "settings.json"), "utf8")), {
         defaultProvider: "openai-codex",
-        defaultModel: "gpt-5.6-terra",
+        defaultModel: "gpt-6-sol",
         defaultThinkingLevel: "high",
         hideThinkingBlock: true,
         httpIdleTimeoutMs: 900_000,

@@ -541,7 +541,7 @@ test("task prompt exposes gate-derived dispatch routes consumable at every task 
     for (const role of ["harness-test-author", "harness-executor", "harness-sniper"])
       assert.equal(envelope.contract.dispatch_routes[role].complexity, complexity);
     assert.deepEqual(envelope.contract.dispatch_routes["harness-security"], {
-      model: "openai-codex/gpt-5.6-sol",
+      model: "openai-codex/gpt-6-sol",
     });
     assert.match(prompt, /contract\.dispatch_routes/);
     assert.match(prompt, /não consulte.*Codex.*model-routing\.mjs/is);
