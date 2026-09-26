@@ -453,7 +453,8 @@ test("resume abandonment refuses drift, live processes, invalid history, and new
 
 function testOnlyRecovery({ capturedImplementation = true, productDelta = false, laterWriter = false,
   extraAuthor = false, earlierAuthorProductDrift = false, lateCapture = false, failedWriter = false,
-  overlappingCapture = false, dirtyCaptureFirst = false, originOverride = {},
+  overlappingCapture = false, dirtyCaptureFirst = false, refusedBeforeCapture = [], refusedAfterCapture = [],
+  refusedAfterAuthor = [], originOverride = {},
   fixture = inspectionFixture(), integrated = false, freshImplementation = false, suffix = "" } = {}) {
   const f = fixture;
   if (integrated) archiveInspectedIntegration(f);
@@ -466,6 +467,12 @@ function testOnlyRecovery({ capturedImplementation = true, productDelta = false,
     extra.push(event("tool_execution_end", { toolCallId: id, toolName: tool, isError: false, result }));
   };
   const prompt = '[HARNESS_TASK_CONTEXT]{"task_id":"' + TASK + '"}[/HARNESS_TASK_CONTEXT]';
+  const refuse = (role, position) => {
+    const id = `refused-${position}-${role}${suffix}`;
+    extra.push(event("tool_execution_start", { toolCallId: id, toolName: "subagent", args: { subagent_type: role, prompt } }));
+    extra.push(event("tool_execution_end", { toolCallId: id, toolName: "subagent", isError: true,
+      result: { content: [{ type: "text", text: "harness dispatch blocked: latest implementation hand has not been captured; commit then capture first" }] } }));
+  };
   if (freshImplementation) {
     assert.equal(integrated, true);
     write(path.join(f.root, "src/task.mjs"), "export const actual = 'new requested behavior';\n");
@@ -481,9 +488,11 @@ function testOnlyRecovery({ capturedImplementation = true, productDelta = false,
   const capture = () => add("prior-capture", "mark", { action: "capture-verified", task_id: TASK },
     { details: { ok: true, capture_origin: { task_id: TASK, producer_call_id: implementationCallId, head_sha: f.head,
       worktree_clean: true, ...originOverride } } });
+  for (const role of refusedBeforeCapture) refuse(role, "before-capture");
   if (dirtyCaptureFirst) add("dirty-capture", "mark", { action: "capture-verified", task_id: TASK },
     { details: { ok: true, capture_origin: { task_id: TASK, producer_call_id: "producer", head_sha: f.freeze, worktree_clean: false } } });
   if (capturedImplementation && !lateCapture) capture();
+  for (const role of refusedAfterCapture) refuse(role, "after-capture");
   if (extraAuthor || earlierAuthorProductDrift || lateCapture) {
     add("earlier-author", "subagent", { subagent_type: "harness-test-author", prompt }, { details: { status: "completed" } });
     if (earlierAuthorProductDrift) {
@@ -496,6 +505,7 @@ function testOnlyRecovery({ capturedImplementation = true, productDelta = false,
   if (capturedImplementation && lateCapture) capture();
   if (failedWriter) add("failed-sniper", "subagent", { subagent_type: "harness-sniper", prompt }, { details: { status: "failed" } });
   add("correct-author", "subagent", { subagent_type: "harness-test-author", prompt }, { details: { status: "completed" } });
+  for (const role of refusedAfterAuthor) refuse(role, "after-author");
   write(path.join(f.root, "src/task.spec.mjs"), "export const expected = { error: 'invalid_state" + suffix + "' };\n");
   if (productDelta) {
     write(path.join(f.root, "src/task.mjs"), "export const actual = 'unauthorized drift';\n");
@@ -540,6 +550,27 @@ test("a captured implementation survives a reviewed test-only correction without
   assert.equal(inspected.result.freeze_sha, f.head);
   assert.equal(inspected.result.hand_capture.freeze_sha, f.recoveryBaseline);
   assert.equal(inspected.result.hand_capture.recovery_origin.head_sha, f.recoveryBaseline);
+});
+
+test("gate-refused writers do not consume the first test-author or invalidate recovery", () => {
+  const f = testOnlyRecovery({ refusedBeforeCapture: ["harness-test-author", "harness-sniper"],
+    refusedAfterCapture: ["harness-test-author"], refusedAfterAuthor: ["harness-executor"] });
+  const inspected = inspectTaskRun(f.entry, f.dependencies);
+  assert.equal(inspected.ok, true, inspected.reason);
+  assert.equal(inspected.result.hand_capture.recovery_origin.head_sha, f.recoveryBaseline);
+  assert.equal(inspected.result.hand_capture.recovery_origin.producer_call_id, "producer");
+});
+
+test("gate-refused test-author cannot replace a missing implementation capture", () => {
+  const f = testOnlyRecovery({ capturedImplementation: false,
+    refusedBeforeCapture: ["harness-test-author"] });
+  const eventsPath = f.entry.launches.at(-1).events_path;
+  const withoutCommitProof = fs.readFileSync(eventsPath, "utf8").trimEnd().split("\n")
+    .filter((line) => JSON.parse(line).toolCallId !== "product-commit");
+  write(eventsPath, withoutCommitProof.join("\n") + "\n");
+  const inspected = inspectTaskRun(f.entry, f.dependencies);
+  assert.equal(inspected.ok, false);
+  assert.match(inspected.reason, /clean captured implementation/);
 });
 
 test("the first scoped test-author freeze recovers a missing pre-author capture without fabricating a writer", () => {
