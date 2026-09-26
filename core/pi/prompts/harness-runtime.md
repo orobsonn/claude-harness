@@ -448,6 +448,11 @@ Merge limpo: envie `resolutions: []`. Se os conflitos forem somente `MEMORY.md`,
 hash do preview. Preserve os aprendizados válidos de ambos os lados e leia a prosa
 resultante; não peça revisão humana de rotina nem substitua o documento a partir
 de excerpt. Memória de entrega não é path sem dono nem tarefa de produto.
+Para conflito de produto em path já coberto pelo plano revisado, envie em `patches`
+um patch literal por bloco completo `<<<<<<<`…`>>>>>>>` do preview, na mesma ordem,
+vinculado ao hash do arquivo. Resolva o comportamento dos dois lados, teste o merge
+e obtenha olhos finais atuais. Paths fora do plano exigem nova autoridade; a
+reconciliação os recusa sem alterar a worktree.
 Conflito de produto interrompe a operação antes de modificar arquivos: diagnostique
 a obrigação afetada, sem tentar integração global dentro da task.
 

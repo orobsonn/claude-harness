@@ -25,21 +25,28 @@ const REPORT_DIGEST = createHash("sha256").update(JSON.stringify(EMPTY_REPORT)).
 
 // Sanitized boundary from #208/#210: after final eyes and harvest, another run
 // appended memory and merged product. The PR conflicts only in MEMORY.md.
-function parallelDelivery(t, { productConflict = false, memoryConflict = true, beforeFinalReview = false } = {}) {
+function parallelDelivery(t, { productConflict = false, multipleProductHunks = false,
+  memoryConflict = true, beforeFinalReview = false } = {}) {
   const { root } = fixture(t);
   const git = (...args) => execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
   git("config", "user.name", "Pi fixture");
   git("config", "user.email", "fixture@example.test");
+  const productLines = ["start", "base-a", ...Array(12).fill("steady"), "base-b", "end"];
+  if (multipleProductHunks) writeFileSync(join(root, "product.txt"), productLines.join("\n") + "\n");
   writeFileSync(join(root, "MEMORY.md"), "# Verified knowledge\n\nExisting entry.\n");
-  git("add", "MEMORY.md"); git("commit", "-qm", "docs: base memory");
+  git("add", "MEMORY.md", "product.txt"); git("commit", "-qm", "docs: base memory");
   git("branch", "parallel-main");
   writeFileSync(join(root, "MEMORY.md"), "# Verified knowledge\n\nExisting entry.\nLocal learning.\n");
-  if (productConflict) writeFileSync(join(root, "product.txt"), "local product\n");
+  if (productConflict) writeFileSync(join(root, "product.txt"), multipleProductHunks
+    ? productLines.map((line) => line === "base-a" ? "local-a" : line === "base-b" ? "local-b" : line).join("\n") + "\n"
+    : "local product\n");
   git("add", "MEMORY.md", "product.txt"); git("commit", "-qm", "docs: local harvest");
   const expected_head = git("rev-parse", "HEAD");
   git("checkout", "-q", "parallel-main");
   if (memoryConflict) writeFileSync(join(root, "MEMORY.md"), "# Verified knowledge\n\nExisting entry.\nUpstream learning.\n");
-  writeFileSync(join(root, "product.txt"), "upstream product\n");
+  writeFileSync(join(root, "product.txt"), multipleProductHunks
+    ? productLines.map((line) => line === "base-a" ? "upstream-a" : line === "base-b" ? "upstream-b" : line).join("\n") + "\n"
+    : "upstream product\n");
   git("add", "MEMORY.md", "product.txt"); git("commit", "-qm", "feat: parallel delivery");
   const base_sha = git("rev-parse", "HEAD");
   git("checkout", "-q", "--detach", expected_head);
@@ -52,7 +59,20 @@ function parallelDelivery(t, { productConflict = false, memoryConflict = true, b
     completeHarvest(beginHarvest(root, SESSION), '[HARNESS_HARVEST_RESULT]{"changes":[],"verification_commands":[]}[/HARNESS_HARVEST_RESULT]', "native-harvester");
     assert.ok(checkMemoryShipperReady(root, SESSION));
   }
+  stampPlanApproval(root);
   return { root, git, expected_head, base_sha };
+}
+
+function stampPlanApproval(root) {
+  const planPath = join(root, ".pi/harness/plans", FEATURE, "execution-plan.json");
+  const statePath = join(root, ".pi/harness/state", SESSION, "gate-state.json");
+  const state = JSON.parse(readFileSync(statePath, "utf8"));
+  const specSha = createHash("sha256").update(readFileSync(join(root, ".pi/harness/plans", FEATURE, "spec.md"))).digest("hex");
+  state.reviewed_spec_sha256 = specSha;
+  state.plan_review_evidence = { written_by: "host-subagent-completion", parent_session_id: SESSION,
+    feature_id: FEATURE, role: "harness-plan-reviewer", status: "completed", verdict: "APPROVE",
+    plan_sha256: createHash("sha256").update(readFileSync(planPath)).digest("hex"), spec_sha256: specSha };
+  writeFileSync(statePath, JSON.stringify(state));
 }
 
 test("parallel finalization reconciles memory on the host, preserves receipts and requires current final eyes", (t) => {
@@ -164,17 +184,89 @@ test("delivery reconciliation rejects unsafe proposals and paths before mutation
         git("checkout", "-q", "--detach", input.expected_head);
       }
       const status = git("status", "--porcelain");
-      assert.throws(() => memoryCycle.reconcileMemoryDelivery(root, SESSION, params), /global parent|Commit|stale|replacement|secrets|runtime|regular|memory/i);
+      assert.throws(() => memoryCycle.reconcileMemoryDelivery(root, SESSION, params), /global parent|Commit|stale|replacement|secrets|runtime|regular|memory|plan scope/i);
       assert.equal(git("rev-parse", "HEAD"), input.expected_head);
       assert.equal(git("status", "--porcelain"), status);
     });
 });
 
-test("global reconcile refuses mixed product conflicts and stale heads without dirtying the worktree", (t) => {
+test("global reconcile resolves reviewed product and memory conflicts without promoting old eyes", (t) => {
   const { root, git, ...input } = parallelDelivery(t, { productConflict: true });
-  assert.equal(typeof memoryCycle.reconcileMemoryDelivery, "function");
-  assert.throws(() => memoryCycle.reconcileMemoryDelivery(root, SESSION, input), /product|outside.*memory/i);
+  const statePath = join(root, ".pi/harness/state", SESSION, "gate-state.json");
+  const stateBefore = readFileSync(statePath, "utf8");
+  const preview = memoryCycle.reconcileMemoryDelivery(root, SESSION, input);
+  assert.deepEqual(preview.conflicts.map((entry) => entry.path), ["MEMORY.md", "product.txt"]);
+  assert.equal(git("status", "--porcelain"), "");
+  const resolutions = preview.conflicts.map((entry) => {
+    const hunk = entry.content.match(/^<<<<<<<[^\n]*\n[\s\S]*?^>>>>>>>[^\n]*\n/m)?.[0];
+    assert.ok(hunk);
+    return entry.path === "MEMORY.md"
+      ? { path: entry.path, before_sha256: entry.sha256,
+        patch: { old_text: hunk, new_text: "Local learning.\nUpstream learning.\n" } }
+      : { path: entry.path, before_sha256: entry.sha256,
+        patches: [{ old_text: hunk, new_text: "resolved product\n" }] };
+  });
+  const merged = memoryCycle.reconcileMemoryDelivery(root, SESSION, { ...input, resolutions });
+  assert.equal(merged.applied, true);
+  assert.deepEqual(git("rev-list", "--parents", "-1", "HEAD").split(" ").slice(1), [input.expected_head, input.base_sha]);
+  assert.equal(git("status", "--porcelain"), "");
+  assert.equal(readFileSync(join(root, "product.txt"), "utf8"), "resolved product\n");
+  assert.equal(readFileSync(statePath, "utf8"), stateBefore);
+  assert.deepEqual(missingPiReviewRoles({ projectRoot: root, sessionId: SESSION, featureId: FEATURE,
+    phase: "final", roles: ["harness-adversary", "harness-compliance"] }), ["harness-adversary", "harness-compliance"]);
+  assert.throws(() => checkMemoryShipperReady(root, SESSION), /review|harvest|changed/i);
+});
+
+test("global reconcile requires one exact bounded patch per product conflict hunk", (t) => {
+  const { root, git, ...input } = parallelDelivery(t, { productConflict: true,
+    multipleProductHunks: true, memoryConflict: false, beforeFinalReview: true });
+  const preview = memoryCycle.reconcileMemoryDelivery(root, SESSION, input);
+  const product = preview.conflicts.find((entry) => entry.path === "product.txt");
+  const hunks = [...product.content.matchAll(/^<<<<<<<[^\n]*\n[\s\S]*?^>>>>>>>[^\n]*\n/gm)].map((match) => match[0]);
+  assert.equal(hunks.length, 2);
+  const valid = { path: product.path, before_sha256: product.sha256,
+    patches: hunks.map((old_text, index) => ({ old_text, new_text: `resolved-${index}\n` })) };
+  for (const invalid of [
+    { ...valid, before_sha256: "0".repeat(64) },
+    { ...valid, patches: valid.patches.slice(0, 1) },
+    { ...valid, patches: [{ ...valid.patches[0], old_text: "local-a" }, valid.patches[1]] },
+    { ...valid, patches: [{ ...valid.patches[0], new_text: "<<<<<<< bad\n" }, valid.patches[1]] },
+    { ...valid, patches: [{ ...valid.patches[0], new_text: "x".repeat(65537) }, valid.patches[1]] },
+  ]) {
+    assert.throws(() => memoryCycle.reconcileMemoryDelivery(root, SESSION, { ...input, resolutions: [invalid] }),
+      /stale|invalid|hunk|bounded|patch|hash/i);
+    assert.equal(git("rev-parse", "HEAD"), input.expected_head);
+    assert.equal(git("status", "--porcelain"), "");
+  }
+  const merged = memoryCycle.reconcileMemoryDelivery(root, SESSION, { ...input, resolutions: [valid] });
+  assert.equal(merged.applied, true);
+  assert.match(readFileSync(join(root, "product.txt"), "utf8"), /resolved-0[\s\S]*resolved-1/);
+});
+
+test("global reconcile rejects product conflicts outside the reviewed plan", (t) => {
+  const { root, git, ...input } = parallelDelivery(t, { productConflict: true });
+  const planPath = join(root, ".pi/harness/plans", FEATURE, "execution-plan.json");
+  const plan = JSON.parse(readFileSync(planPath, "utf8"));
+  plan.tasks[0].scope_paths = ["other.txt"];
+  writeFileSync(planPath, JSON.stringify(plan));
+  assert.throws(() => memoryCycle.reconcileMemoryDelivery(root, SESSION, input), /plan changed after approval/);
+  stampPlanApproval(root);
+  assert.throws(() => memoryCycle.reconcileMemoryDelivery(root, SESSION, input), /outside the reviewed plan scope/);
   assert.throws(() => memoryCycle.reconcileMemoryDelivery(root, SESSION, { ...input, expected_head: "0".repeat(40) }), /HEAD|stale/i);
+  assert.equal(git("rev-parse", "HEAD"), input.expected_head);
+  assert.equal(git("status", "--porcelain"), "");
+});
+
+test("global reconcile refuses a product conflict with executable mode", (t) => {
+  const { root, git, ...input } = parallelDelivery(t, { productConflict: true, memoryConflict: false,
+    beforeFinalReview: true });
+  git("checkout", "-q", "parallel-main");
+  chmodSync(join(root, "product.txt"), 0o755);
+  git("add", "product.txt");
+  git("commit", "-qm", "fixture: executable product");
+  const base_sha = git("rev-parse", "HEAD");
+  git("checkout", "-q", "--detach", input.expected_head);
+  assert.throws(() => memoryCycle.reconcileMemoryDelivery(root, SESSION, { ...input, base_sha }), /regular|non-executable/i);
   assert.equal(git("rev-parse", "HEAD"), input.expected_head);
   assert.equal(git("status", "--porcelain"), "");
 });

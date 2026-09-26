@@ -51,6 +51,9 @@ pela operação global `harness_memory reconcile`, antes de decidir se existe re
 real de produto. Não encaminhe incorporação de `main` a uma task ou writer.
 Conflitos em `MEMORY.md`, `CONTEXT.md` e `kaizen.md` são anotações do integrador,
 não escopo novo: o pai resolve preservando os dois lados, como no Claude/Orca.
+O pai também pode resolver conflitos de produto já cobertos pelo plano revisado
+com patches literais vinculados ao preview, seguidos de testes e olhos finais atuais.
+Conflitos fora do plano não são autorizados por essa operação.
 Esse merge pode também incorporar produto sem conflito; o pai revalida o input final,
 refaz harvest após os olhos atuais e só então volta ao shipper. Produto novo fora do
 plano exige outra entrega, não uma task inventada no fechamento.
