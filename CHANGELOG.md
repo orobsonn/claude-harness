@@ -5,6 +5,13 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [3.6.6](https://github.com/orobsonn/claude-harness/compare/v3.6.5...v3.6.6) (2026-09-26)
+
+
+### Bug Fixes
+
+* **pi:** select fidelity freeze after the approved review ([#1051](https://github.com/orobsonn/claude-harness/issues/1051)) ([683334a](https://github.com/orobsonn/claude-harness/commit/683334a12e141b80de6da33e56051b4e0f7f09af))
+
 ## [3.6.5](https://github.com/orobsonn/claude-harness/compare/v3.6.4...v3.6.5) (2026-09-26)
 
 
