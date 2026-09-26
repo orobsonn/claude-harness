@@ -630,15 +630,18 @@ export function inspectTaskRun(entry, dependencies = {}) {
     if (!fidelity.ok) return fidelity;
     let recoveryOrigin = null;
     if (recovery) {
-      const isWriter = (event) => event.tool === "subagent" &&
+      // A refused dispatch has no writing hand. Keep in-flight calls countable
+      // so the ordering checks remain conservative while a launch is running.
+      const isCountingWriter = (event) => event.tool === "subagent" &&
         !abandonedWriters.has(event.launchIndex) &&
+        event.end?.isError !== true &&
         ["harness-executor", "harness-sniper", "harness-test-author"].includes(event.args?.subagent_type);
       const implementationIndex = native.events.findLastIndex((event, index) => index < producerIndex && isImplementationForTask(event));
-      const firstAuthorIndex = native.events.findIndex((event, index) => index > implementationIndex && isWriter(event) &&
+      const firstAuthorIndex = native.events.findIndex((event, index) => index > implementationIndex && isCountingWriter(event) &&
         event.args.subagent_type === "harness-test-author");
       if (implementationIndex < 0 ||
           native.events.some((event, index) => index > implementationIndex && index < producerIndex &&
-            isWriter(event) && event.args.subagent_type !== "harness-test-author"))
+            isCountingWriter(event) && event.args.subagent_type !== "harness-test-author"))
         return failure("test-only recovery requires a prior captured implementation after dependency reconciliation");
       if (entry.integration || entry.integration_history !== undefined && !Array.isArray(entry.integration_history))
         return failure("test-only recovery requires a resumed task with valid integration history");
@@ -691,7 +694,7 @@ export function inspectTaskRun(entry, dependencies = {}) {
         };
       }
       if (!recoveryOrigin) return failure("test-only recovery requires a clean captured implementation before the first test-author; commit then capture before correcting tests", contextDiagnostics);
-      if (producerIndex !== fidelity.authorIndex || native.events.some((event, index) => index > producerIndex && isWriter(event)))
+      if (producerIndex !== fidelity.authorIndex || native.events.some((event, index) => index > producerIndex && isCountingWriter(event)))
         return failure("test-only recovery requires the latest fidelity author without a later writing hand");
       if (!fidelity.freezeSha || !ancestor(worktree, hand.freezeCommitSha, fidelity.freezeSha) ||
           !ancestor(worktree, recoveryOrigin.head_sha, hand.freezeCommitSha) ||
