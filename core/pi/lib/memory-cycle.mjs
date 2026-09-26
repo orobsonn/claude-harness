@@ -8,7 +8,6 @@ import { classifyPiFunctionalMergeTransition, readPiMergedReleaseEvidence, resol
 import { capturePiReviewInput, hasAcceptedPiReviewEvidence, isPiReviewExcludedPath, readPiReviewPlan } from "./pi-review-evidence.mjs";
 import { checkPiFinalCommands, validatePiVerificationCommands } from "./pi-command-evidence.mjs";
 import { requiredPiFinalReviewRoles } from "./roles.mjs";
-import { checkScope } from "../../shared/lib/capture-oracle.mjs";
 
 export const DURABLE_MEMORY_FILES = Object.freeze(["MEMORY.md", "CONTEXT.md", "kaizen.md"]);
 export const SHARED_CONTEXT_MAX_BYTES = 8192;
@@ -234,7 +233,8 @@ function cleanTree(root) {
 }
 
 /** Global delivery integration. Git owns the merge; task and approval receipts
- * remain untouched, and product conflicts stay inside the reviewed plan scope.
+ * remain untouched. Conflicts with concurrent work can occur outside task scopes;
+ * their resolution is checked against the exact Git preview and reviewed again.
  * Omit resolutions to preview. An explicit array (including []) applies the merge. */
 export function reconcileMemoryDelivery(projectRoot, sessionId, { expected_head, base_sha, resolutions } = {}) {
   const paths = memoryPaths(projectRoot, sessionId);
@@ -274,13 +274,6 @@ export function reconcileMemoryDelivery(projectRoot, sessionId, { expected_head,
     const reviewed = readPiReviewPlan({ projectRoot: root, featureId: state.feature_id,
       expectedSha256: approval.plan_sha256 });
     if (!reviewed.ok) throw new Error(`Product conflict plan changed after approval: ${reviewed.reason}`);
-    const plan = reviewed.plan;
-    const scopes = plan.tasks.flatMap((task) => [
-      ...(task.scope_paths ?? []), ...(task.allowed_writes ?? []),
-      ...(task.locked_tests ?? []).flatMap((test) => [test.path, ...(test.fixture_paths ?? [])]),
-    ]);
-    if (checkScope(productConflicts, scopes).length)
-      throw new Error("Merge has product conflicts outside the reviewed plan scope; no files were changed");
   }
   const changed = gitMemory(root, ["diff", "--name-only", "-z", expected_head, tree]).split("\0").filter(Boolean);
   if ([...changed, ...conflictPaths].some((file) => isPiReviewExcludedPath(root, file) || file.startsWith(".pi/harness/plans/")))

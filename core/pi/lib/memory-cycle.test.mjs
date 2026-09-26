@@ -243,7 +243,7 @@ test("global reconcile requires one exact bounded patch per product conflict hun
   assert.match(readFileSync(join(root, "product.txt"), "utf8"), /resolved-0[\s\S]*resolved-1/);
 });
 
-test("global reconcile rejects product conflicts outside the reviewed plan", (t) => {
+test("global reconcile lets the parent resolve concurrent product conflicts outside task scopes", (t) => {
   const { root, git, ...input } = parallelDelivery(t, { productConflict: true });
   const planPath = join(root, ".pi/harness/plans", FEATURE, "execution-plan.json");
   const plan = JSON.parse(readFileSync(planPath, "utf8"));
@@ -251,10 +251,26 @@ test("global reconcile rejects product conflicts outside the reviewed plan", (t)
   writeFileSync(planPath, JSON.stringify(plan));
   assert.throws(() => memoryCycle.reconcileMemoryDelivery(root, SESSION, input), /plan changed after approval/);
   stampPlanApproval(root);
-  assert.throws(() => memoryCycle.reconcileMemoryDelivery(root, SESSION, input), /outside the reviewed plan scope/);
+  const preview = memoryCycle.reconcileMemoryDelivery(root, SESSION, input);
+  assert.deepEqual(preview.conflicts.map((entry) => entry.path), ["MEMORY.md", "product.txt"]);
   assert.throws(() => memoryCycle.reconcileMemoryDelivery(root, SESSION, { ...input, expected_head: "0".repeat(40) }), /HEAD|stale/i);
   assert.equal(git("rev-parse", "HEAD"), input.expected_head);
   assert.equal(git("status", "--porcelain"), "");
+  const resolutions = preview.conflicts.map((entry) => {
+    const hunk = entry.content.match(/^<<<<<<<[^\n]*\n[\s\S]*?^>>>>>>>[^\n]*\n/m)?.[0];
+    assert.ok(hunk);
+    return entry.path === "MEMORY.md"
+      ? { path: entry.path, before_sha256: entry.sha256,
+        patch: { old_text: hunk, new_text: "Local learning.\nUpstream learning.\n" } }
+      : { path: entry.path, before_sha256: entry.sha256,
+        patches: [{ old_text: hunk, new_text: "resolved concurrent product\n" }] };
+  });
+  const merged = memoryCycle.reconcileMemoryDelivery(root, SESSION, { ...input, resolutions });
+  assert.equal(merged.applied, true);
+  assert.equal(readFileSync(join(root, "product.txt"), "utf8"), "resolved concurrent product\n");
+  assert.equal(git("status", "--porcelain"), "");
+  assert.deepEqual(missingPiReviewRoles({ projectRoot: root, sessionId: SESSION, featureId: FEATURE,
+    phase: "final", roles: ["harness-adversary", "harness-compliance"] }), ["harness-adversary", "harness-compliance"]);
 });
 
 test("global reconcile refuses a product conflict with executable mode", (t) => {
