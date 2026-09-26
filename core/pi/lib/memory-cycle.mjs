@@ -8,6 +8,7 @@ import { classifyPiFunctionalMergeTransition, readPiMergedReleaseEvidence, resol
 import { capturePiReviewInput, hasAcceptedPiReviewEvidence, isPiReviewExcludedPath, readPiReviewPlan } from "./pi-review-evidence.mjs";
 import { checkPiFinalCommands, validatePiVerificationCommands } from "./pi-command-evidence.mjs";
 import { requiredPiFinalReviewRoles } from "./roles.mjs";
+import { checkScope } from "../../shared/lib/capture-oracle.mjs";
 
 export const DURABLE_MEMORY_FILES = Object.freeze(["MEMORY.md", "CONTEXT.md", "kaizen.md"]);
 export const SHARED_CONTEXT_MAX_BYTES = 8192;
@@ -232,8 +233,8 @@ function cleanTree(root) {
   if (tracked || untracked) throw new Error("Commit and verify all delivery changes before final review or finalize");
 }
 
-/** Global delivery integration, following the Orca integrator's annotation-only
- * conflict resolution. Git owns the merge; tasks and approval receipts are untouched.
+/** Global delivery integration. Git owns the merge; task and approval receipts
+ * remain untouched, and product conflicts stay inside the reviewed plan scope.
  * Omit resolutions to preview. An explicit array (including []) applies the merge. */
 export function reconcileMemoryDelivery(projectRoot, sessionId, { expected_head, base_sha, resolutions } = {}) {
   const paths = memoryPaths(projectRoot, sessionId);
@@ -262,24 +263,48 @@ export function reconcileMemoryDelivery(projectRoot, sessionId, { expected_head,
   if (!/^[a-f0-9]{40}$/.test(tree)) throw new Error("Git did not produce a merge preview tree");
   const conflictPaths = preview.status === 0 ? [] : fields.slice(0, fields.indexOf(""));
   if (preview.status === 1 && !conflictPaths.length) throw new Error("Git reported a conflict without safe paths");
-  if (conflictPaths.some((file) => !DURABLE_MEMORY_FILES.includes(file)))
-    throw new Error("Merge has product conflicts outside durable memory; no files were changed. Reconcile the affected product obligation on the host, never ask a task to integrate globally");
+  const productConflicts = conflictPaths.filter((file) => !DURABLE_MEMORY_FILES.includes(file));
+  if (productConflicts.length) {
+    const approval = state.plan_review_evidence;
+    if (approval?.written_by !== "host-subagent-completion" || approval.parent_session_id !== sessionId ||
+        approval.feature_id !== state.feature_id || approval.role !== "harness-plan-reviewer" ||
+        approval.status !== "completed" || approval.verdict !== "APPROVE" ||
+        approval.spec_sha256 !== state.reviewed_spec_sha256)
+      throw new Error("Product conflict resolution requires the current host-confirmed plan approval");
+    const reviewed = readPiReviewPlan({ projectRoot: root, featureId: state.feature_id,
+      expectedSha256: approval.plan_sha256 });
+    if (!reviewed.ok) throw new Error(`Product conflict plan changed after approval: ${reviewed.reason}`);
+    const plan = reviewed.plan;
+    const scopes = plan.tasks.flatMap((task) => [
+      ...(task.scope_paths ?? []), ...(task.allowed_writes ?? []),
+      ...(task.locked_tests ?? []).flatMap((test) => [test.path, ...(test.fixture_paths ?? [])]),
+    ]);
+    if (checkScope(productConflicts, scopes).length)
+      throw new Error("Merge has product conflicts outside the reviewed plan scope; no files were changed");
+  }
   const changed = gitMemory(root, ["diff", "--name-only", "-z", expected_head, tree]).split("\0").filter(Boolean);
-  if (changed.some((file) => isPiReviewExcludedPath(root, file) || file.startsWith(".pi/harness/plans/")))
+  if ([...changed, ...conflictPaths].some((file) => isPiReviewExcludedPath(root, file) || file.startsWith(".pi/harness/plans/")))
     throw new Error("Base merge would import secrets or ephemeral runtime/plan files; no files were changed");
-  const memoryPathsChanged = new Set([...conflictPaths, ...changed.filter((file) => DURABLE_MEMORY_FILES.includes(file))]);
-  for (const file of memoryPathsChanged) {
-    // No rename/delete conflict, executable or symlink resolution under the notes
-    // exception. Clean upstream additions/deletions remain ordinary base integration.
+  const checkedPaths = new Set([...conflictPaths, ...changed.filter((file) => DURABLE_MEMORY_FILES.includes(file))]);
+  for (const file of checkedPaths) {
+    // No rename/delete conflict, executable or symlink resolution. Clean
+    // upstream additions/deletions remain ordinary base integration.
     for (const ref of [expected_head, base_sha, tree]) {
       const object = gitMemory(root, ["ls-tree", ref, "--", file]);
       if ((conflictPaths.includes(file) || object) && !/^100644 blob /.test(object))
-        throw new Error("Memory reconciliation requires existing regular non-executable files on both sides");
+        throw new Error("Conflict reconciliation requires existing regular non-executable files on both sides");
     }
     regularFile(join(root, file));
   }
-  const blob = (ref, file) => execFileSync("git", ["show", `${ref}:${file}`],
-    { cwd: root, encoding: "utf8", timeout: 10000, maxBuffer: 1024 * 1024 });
+  const blob = (ref, file) => {
+    const bytes = execFileSync("git", ["show", `${ref}:${file}`],
+      { cwd: root, timeout: 10000, maxBuffer: 1024 * 1024 });
+    if (bytes.includes(0)) throw new Error("Conflict resolution requires text files");
+    const content = bytes.toString("utf8");
+    if (!Buffer.from(content, "utf8").equals(bytes))
+      throw new Error("Conflict resolution requires UTF-8 text files");
+    return content;
+  };
   const conflicts = conflictPaths.map((file) => {
     const content = blob(tree, file);
     return { path: file, sha256: sha(content), content, truncated: false };
@@ -289,13 +314,18 @@ export function reconcileMemoryDelivery(projectRoot, sessionId, { expected_head,
     content: entry.content.slice(0, 24576), truncated: entry.content.length > 24576 })) };
   if (!Array.isArray(resolutions) || resolutions.length !== conflicts.length ||
       new Set(resolutions.map((entry) => entry?.path)).size !== conflicts.length)
-    throw new Error("Provide exactly one hash-bound patch per memory conflict; [] applies a clean merge");
+    throw new Error("Provide exactly one hash-bound resolution per conflict; [] applies a clean merge");
   const patches = conflicts.map((entry) => {
     const resolution = resolutions.find((item) => item?.path === entry.path);
-    if (!resolution || resolution.before_sha256 !== entry.sha256 || !resolution.patch || Object.hasOwn(resolution, "content"))
-      throw new Error("Memory conflict resolution is stale or invalid; use a small patch with the preview hash, never full replacement");
-    const content = applyMemoryDelta(entry.content, resolution);
-    if (/^(?:<{7}|={7}|>{7}|\|{7})(?:\s|$)/m.test(content)) throw new Error("Resolve all memory conflict markers and preserve both sides' verified knowledge");
+    if (!resolution || resolution.before_sha256 !== entry.sha256 || Object.hasOwn(resolution, "content"))
+      throw new Error("Conflict resolution is stale or invalid; use patches bound to the preview hash");
+    const isMemory = DURABLE_MEMORY_FILES.includes(entry.path);
+    if (isMemory ? !resolution.patch || Object.hasOwn(resolution, "patches") :
+      !Array.isArray(resolution.patches) || Object.hasOwn(resolution, "patch"))
+      throw new Error("Use one literal patch for memory or one patch per product conflict hunk");
+    const content = isMemory ? applyMemoryDelta(entry.content, resolution) :
+      applyProductConflictPatches(entry.content, resolution.patches);
+    if (/^(?:<{7}|={7}|>{7}|\|{7})(?:\s|$)/m.test(content)) throw new Error("Resolve all conflict markers before integrating the base");
     return { path: entry.path, before: entry.content, content };
   });
   cleanTree(root);
@@ -322,9 +352,10 @@ export function reconcileMemoryDelivery(projectRoot, sessionId, { expected_head,
     throw new Error("Merge differs from the preview outside memory resolutions; preserve and inspect the index");
   for (const patch of patches) {
     if (blob("", patch.path) !== patch.content || !/^100644 /.test(gitMemory(root, ["ls-files", "--stage", "--", patch.path])))
-      throw new Error("Staged memory differs from the resolution; preserve and inspect the index");
+      throw new Error("Staged conflict differs from the resolution; preserve and inspect the index");
   }
-  gitMemory(root, ["commit", "-m", "chore: reconcilia base e memória da entrega"]);
+  gitMemory(root, ["commit", "-m", productConflicts.length ?
+    "fix: reconcilia conflitos da base da entrega" : "chore: reconcilia base e memória da entrega"]);
   cleanTree(root);
   return { ...result, applied: true, head: gitMemory(root, ["rev-parse", "HEAD"]),
     next: "Inspect the incorporated delta, run affected verification and obtain current final eyes, then harvest and ship. Do not reopen completed tasks or reuse stale approvals." };
@@ -398,6 +429,24 @@ function applyMemoryDelta(original, change) {
     throw new Error("Memory patch needs a unique literal preimage; read the relevant entry and use its current hash");
   if (original.trim() === old_text.trim()) throw new Error("Memory patch cannot replace the whole document; patch a relevant entry or append");
   return original.replace(old_text, () => new_text);
+}
+
+function applyProductConflictPatches(original, patches) {
+  const hunks = [...original.matchAll(/^<<<<<<<[^\n]*\n[\s\S]*?^>>>>>>>[^\n]*\n/gm)].map((match) => match[0]);
+  if (!hunks.length || patches.length !== hunks.length)
+    throw new Error("Product resolution needs exactly one patch for each Git conflict hunk");
+  let content = original;
+  for (const [index, patch] of patches.entries()) {
+    if (!patch || Object.keys(patch).sort().join(",") !== "new_text,old_text" ||
+        patch.old_text !== hunks[index] || typeof patch.new_text !== "string" ||
+        Buffer.byteLength(patch.new_text) > 65536 || patch.new_text.includes("\0") ||
+        /^(?:<{7}|={7}|>{7}|\|{7})(?:\s|$)/m.test(patch.new_text))
+      throw new Error("Product patch must replace its exact conflict hunk with bounded resolved text");
+    if (!content.includes(patch.old_text)) throw new Error("Product conflict preimage changed");
+    content = content.replace(patch.old_text, () => patch.new_text);
+  }
+  if (Buffer.byteLength(content) > 1024 * 1024) throw new Error("Resolved product file exceeds size limit");
+  return content;
 }
 export function completeHarvest(snapshot, text, agentId) {
   if (typeof agentId !== "string" || !agentId) throw new Error("Harvest requires native completion identity");
