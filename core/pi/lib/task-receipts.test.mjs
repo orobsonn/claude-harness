@@ -947,6 +947,42 @@ test("ordinary fidelity keeps accepting a staged freeze commit chain outside leg
   assert.equal(inspected.ok, true, inspected.reason);
 });
 
+test("fidelity derives the reviewed amended freeze instead of an earlier rewritten commit", () => {
+  const fixture = inspectionFixture();
+  bindPinnedRuntime(fixture, { testReviewer: true });
+  const eventsPath = fixture.entry.launches.at(-1).events_path;
+  const oldFreeze = run(fixture.root, "git", "commit-tree", `${fixture.freeze}^{tree}`, "-p", fixture.base,
+    "-m", "test: initial freeze before review");
+  assert.notEqual(oldFreeze, fixture.freeze);
+  assert.equal(run(fixture.root, "git", "rev-parse", `${oldFreeze}^{tree}`),
+    run(fixture.root, "git", "rev-parse", `${fixture.freeze}^{tree}`));
+
+  const events = fs.readFileSync(eventsPath, "utf8").trim().split("\n").map((line) => {
+    const item = JSON.parse(line);
+    if (item.args?.subagent_type === "harness-compliance") item.args.subagent_type = "harness-test-reviewer";
+    return JSON.stringify(item);
+  });
+  const reviewerIndex = events.findIndex((line) => {
+    const item = JSON.parse(line);
+    return item.type === "tool_execution_start" && item.toolCallId === "fidelity-eye";
+  });
+  events.splice(reviewerIndex, 0,
+    event("tool_execution_start", { toolCallId: "old-freeze", toolName: "bash", args: { command: "git commit -m initial-freeze" } }),
+    event("tool_execution_end", { toolCallId: "old-freeze", toolName: "bash", isError: false,
+      result: { content: [{ type: "text", text: `[task ${oldFreeze.slice(0, 7)}] initial freeze` }] } }));
+  write(eventsPath, `${events.join("\n")}\n`);
+
+  const inspected = inspectTaskRun(fixture.entry, fixture.dependencies);
+  assert.equal(inspected.ok, true, inspected.reason);
+  assert.equal(inspected.result.freeze_sha, fixture.freeze);
+
+  const withoutReviewedCommit = events.filter((line) => !["freeze"].includes(JSON.parse(line).toolCallId));
+  write(eventsPath, `${withoutReviewedCommit.join("\n")}\n`);
+  const rejected = inspectTaskRun(fixture.entry, fixture.dependencies);
+  assert.equal(rejected.ok, false);
+  assert.match(rejected.reason, /freeze commit is missing/i);
+});
+
 test("pinned runtimes with the dedicated test reviewer cannot use compliance as new fidelity evidence", () => {
   const fixture = inspectionFixture();
   bindPinnedRuntime(fixture, { testReviewer: true });

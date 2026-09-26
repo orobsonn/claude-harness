@@ -371,15 +371,17 @@ function validateFidelity({ events, task, taskId, worktree, head, reviewRole }) 
     return failure("latest test-author work has no subsequent fidelity marker");
   }
   const authorIndex = events.findLastIndex((event, index) => index < latestMarkerIndex && event.tool === "subagent" && event.args?.subagent_type === "harness-test-author" && eventSucceeded(event));
-  const commitEvent = events.find((event, index) => index > authorIndex && index < latestMarkerIndex && commitFromEvent(event, worktree));
+  const reviewIndex = events.findLastIndex((event, index) => index > authorIndex && index < latestMarkerIndex && event.tool === "subagent" &&
+    event.args?.subagent_type === reviewRole && (reviewRole === "harness-compliance" ? eventSucceeded(event) : true));
+  if (authorIndex < 0 || reviewIndex < 0 || !fidelityReviewApproved(events[reviewIndex], reviewRole))
+    return failure(`fidelity requires native test-author then ${reviewRole} APPROVE before the freeze commit`);
+  // The marker authority freezes the first commit after the reviewer. Earlier
+  // commits can be rewritten by an amend and must not become the receipt freeze.
+  const commitEvent = events.find((event, index) => index > reviewIndex && index < latestMarkerIndex && commitFromEvent(event, worktree));
   const commitSha = commitFromEvent(commitEvent, worktree);
   if (!commitSha || !ancestor(worktree, commitSha, head)) return failure("fidelity freeze commit is missing or not ancestral to task HEAD");
   const commitIndex = events.indexOf(commitEvent);
   const markerIndex = events.findIndex((event, index) => index > commitIndex && fidelityMarkers.includes(event));
-  const reviewIndex = events.findLastIndex((event, index) => index > authorIndex && index < commitIndex && event.tool === "subagent" &&
-    event.args?.subagent_type === reviewRole && (reviewRole === "harness-compliance" ? eventSucceeded(event) : true));
-  if (authorIndex < 0 || reviewIndex < 0 || !fidelityReviewApproved(events[reviewIndex], reviewRole))
-    return failure(`fidelity requires native test-author then ${reviewRole} APPROVE before the freeze commit`);
   const changed = String(git(worktree, ["diff-tree", "--no-commit-id", "--name-only", "-r", commitSha])).trim().split("\n").filter(Boolean);
   if (changed.length === 0 || changed.some((item) => !paths.includes(item))) return failure("fidelity freeze commit must change only canonical frozen files");
   const blobs = {};
