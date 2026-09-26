@@ -469,7 +469,7 @@ test("resume abandonment refuses drift, live processes, invalid history, and new
 });
 
 function testOnlyRecovery({ capturedImplementation = true, productDelta = false, laterWriter = false,
-  extraAuthor = false, earlierAuthorProductDrift = false, lateCapture = false, failedWriter = false,
+  extraAuthor = false, interveningWriter = false, earlierAuthorProductDrift = false, lateCapture = false, failedWriter = false,
   overlappingCapture = false, dirtyCaptureFirst = false, refusedBeforeCapture = [], refusedAfterCapture = [],
   refusedAfterAuthor = [], originOverride = {},
   fixture = inspectionFixture(), integrated = false, freshImplementation = false, suffix = "" } = {}) {
@@ -520,6 +520,9 @@ function testOnlyRecovery({ capturedImplementation = true, productDelta = false,
       { content: [{ type: "text", text: "Verdict: REVISE" }], details: { status: "completed" } });
   }
   if (capturedImplementation && lateCapture) capture();
+  if (interveningWriter) add("intervening-sniper", "subagent", { subagent_type: "harness-sniper", prompt },
+    { content: [{ type: "text", text: "Disposable sensitivity probe reverted; no product change.\nStatus: DONE" }],
+      details: { status: "completed" } });
   if (failedWriter) add("failed-sniper", "subagent", { subagent_type: "harness-sniper", prompt }, { details: { status: "failed" } });
   add("correct-author", "subagent", { subagent_type: "harness-test-author", prompt }, { details: { status: "completed" } });
   for (const role of refusedAfterAuthor) refuse(role, "after-author");
@@ -576,6 +579,22 @@ test("gate-refused writers do not consume the first test-author or invalidate re
   assert.equal(inspected.ok, true, inspected.reason);
   assert.equal(inspected.result.hand_capture.recovery_origin.head_sha, f.recoveryBaseline);
   assert.equal(inspected.result.hand_capture.recovery_origin.producer_call_id, "producer");
+});
+
+test("a successful disposable writer cannot erase an earlier captured implementation with a test-only Git delta", () => {
+  const f = testOnlyRecovery({ extraAuthor: true, interveningWriter: true });
+  const inspected = inspectTaskRun(f.entry, f.dependencies);
+  assert.equal(inspected.ok, true, inspected.reason);
+  assert.deepEqual(inspected.result.hand_capture.recovery_origin, {
+    head_sha: f.recoveryBaseline, producer_call_id: "producer", producer_launch_index: 0,
+    derived_from: "earlier-native-capture",
+  });
+  for (const variant of [{ capturedImplementation: false }, { productDelta: true }]) {
+    const invalid = testOnlyRecovery({ extraAuthor: true, interveningWriter: true, ...variant });
+    const rejected = inspectTaskRun(invalid.entry, invalid.dependencies);
+    assert.equal(rejected.ok, false);
+    assert.match(rejected.reason, /clean captured implementation|cannot change product/);
+  }
 });
 
 test("gate-refused test-author cannot replace a missing implementation capture", () => {
@@ -684,7 +703,7 @@ test("legacy missing-capture recovery rejects absent commit proof, BLOCKED imple
   assert.match(inspectTaskRun(expanded.entry, expanded.dependencies).reason, /clean captured implementation/);
 });
 
-function reconciledTestRecovery({ productDelta = false, memoryDelta = false } = {}) {
+function reconciledTestRecovery({ productDelta = false, memoryDelta = false, childProductDelta = false } = {}) {
   const f = inspectionFixture();
   bindPinnedRuntime(f);
   appendImplementationReviews(f);
@@ -726,7 +745,8 @@ function reconciledTestRecovery({ productDelta = false, memoryDelta = false } = 
     scope_base_sha: f.base, pre_child_head: f.head, parent_head: parent, merged_head: merged,
     tree: run(f.root, "git", "rev-parse", "HEAD^{tree}"), launch_count: f.entry.launches.length - 1,
     upstreams: [{ task_id: "upstream", attempt_id: "upstream-attempt", previous_receipt_sha256: hashTaskReceipt(previous), receipt }] }];
-  return testOnlyRecovery({ fixture: { ...f, head: merged }, capturedImplementation: false });
+  return testOnlyRecovery({ fixture: { ...f, head: merged }, capturedImplementation: false,
+    productDelta: childProductDelta });
 }
 
 test("test-only host reconciliation preserves captured implementation without a no-op writer", () => {
@@ -744,11 +764,28 @@ test("test-only host reconciliation preserves captured implementation without a 
   }
 });
 
-test("a product change in host reconciliation still requires a current implementation producer", () => {
+test("reviewed upstream product can be the host baseline for a frozen-test-only correction", () => {
   const f = reconciledTestRecovery({ productDelta: true });
   const inspected = inspectTaskRun(f.entry, f.dependencies);
+  assert.equal(inspected.ok, true, inspected.reason);
+  assert.deepEqual(inspected.result.hand_capture.recovery_origin, {
+    head_sha: f.entry.reconciliations[0].merged_head,
+    producer_call_id: "producer", producer_launch_index: 0,
+    derived_from: "host-reconciliation",
+    reconciliation_sha256: hashTaskReceipt(f.entry.reconciliations),
+  });
+  archiveInspectedIntegration(f);
+  const resumed = testOnlyRecovery({ fixture: f, capturedImplementation: false, suffix: "-product-reopen" });
+  const again = inspectTaskRun(resumed.entry, resumed.dependencies);
+  assert.equal(again.ok, true, again.reason);
+  assert.equal(again.result.hand_capture.recovery_origin.head_sha, f.head);
+});
+
+test("host reconciliation never excuses child product writes after the test-only baseline", () => {
+  const f = reconciledTestRecovery({ productDelta: true, childProductDelta: true });
+  const inspected = inspectTaskRun(f.entry, f.dependencies);
   assert.equal(inspected.ok, false);
-  assert.match(inspected.reason, /cannot change product/);
+  assert.match(inspected.reason, /cannot change product|clean captured implementation/);
 });
 
 test("test-only reconciliation does not excuse child memory edits or a forged historical proof", () => {

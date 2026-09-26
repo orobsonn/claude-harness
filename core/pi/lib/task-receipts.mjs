@@ -693,6 +693,64 @@ export function inspectTaskRun(entry, dependencies = {}) {
           derived_from: "pre-author-product-commit",
         };
       }
+      // A later successful dispatch can inspect or revert a disposable change
+      // without writing product. Keep an older native capture when it precedes
+      // that implementation's first author and the final Git delta is test-only.
+      if (!recoveryOrigin && !captureAttemptedBeforeAuthor) {
+        for (let index = implementationIndex - 1; index >= 0; index--) {
+          const priorWriter = native.events[index];
+          if (!isImplementationForTask(priorWriter) || !captureEligibleWriterCompletion(priorWriter)) continue;
+          const authorIndex = native.events.findIndex((event, eventIndex) => eventIndex > index &&
+            isCountingWriter(event) && event.args.subagent_type === "harness-test-author");
+          if (authorIndex < 0 || authorIndex >= producerIndex) continue;
+          for (const event of native.events.slice(index + 1, authorIndex)) {
+            if (event.tool !== "mark" || event.args?.action !== "capture-verified" ||
+                event.args?.task_id !== entry.task_id || !markerSucceeded(event) ||
+                event.launchIndex < priorWriter.launchIndex ||
+                event.launchIndex === priorWriter.launchIndex && event.line <= priorWriter.endLine) continue;
+            let metadata = event.end.result?.details;
+            if (!metadata?.capture_origin) { try { metadata = JSON.parse(eventText(event.end.result)); } catch { continue; } }
+            const origin = metadata?.capture_origin;
+            if (origin?.task_id !== entry.task_id || origin.producer_call_id !== priorWriter.callId ||
+                origin.worktree_clean !== true || !COMMIT_SHA.test(origin.head_sha ?? "") ||
+                !ancestor(worktree, origin.head_sha, hand.freezeCommitSha) ||
+                !onlyRecoveryChanges(entry, worktree, origin.head_sha, head, binding.task, binding.plan)) continue;
+            recoveryOrigin = { head_sha: origin.head_sha, producer_call_id: origin.producer_call_id,
+              producer_launch_index: priorWriter.launchIndex, derived_from: "earlier-native-capture" };
+            break;
+          }
+          if (recoveryOrigin) break;
+        }
+      }
+      // A dependency correction can import reviewed upstream product through a
+      // host-owned merge while this task only repairs its frozen test. The merge
+      // is the product baseline in that case: require its exact validated Git
+      // HEAD, the immediately previous integration and a test-only delta. A
+      // completed but non-writing implementation call cannot replace this proof.
+      if ((!recoveryOrigin || !onlyRecoveryChanges(entry, worktree, recoveryOrigin.head_sha, head, binding.task, binding.plan)) &&
+          !captureAttemptedBeforeAuthor && reconciliation?.kind !== "integration-conflict" &&
+          reconciliation?.upstreams?.length && hand.freezeCommitSha === reconciliation.merged_head &&
+          native.events[producerIndex].launchIndex >= reconciliation.launch_count &&
+          onlyRecoveryChanges(entry, worktree, reconciliation.merged_head, head, binding.task, binding.plan)) {
+        const historicalIntegration = entry.integration_history?.at(-1);
+        const historicalResult = object(entry.result_history)?.[historicalIntegration?.result_sha256];
+        if (historicalResult?.child_head === reconciliation.pre_child_head &&
+            historicalResult.launches?.length <= reconciliation.launch_count) {
+          const historicalHand = historicalResult.hand_capture;
+          const historicalCallId = historicalHand?.agent === "harness-test-author"
+            ? historicalHand.recovery_origin?.producer_call_id : historicalHand?.producer_call_id;
+          const historicalIndex = native.events.findIndex((event) => event.callId === historicalCallId &&
+            isImplementationForTask(event) && event.launchIndex < historicalResult.launches.length);
+          if (historicalIndex >= 0) {
+            const previous = integratedRecoveryOrigin(entry, { sessionId: claim.session_id, task: binding.task,
+              events: native.events, implementationIndex: historicalIndex, producerIndex });
+            if (!previous.ok) return previous;
+            if (previous.origin) recoveryOrigin = { ...previous.origin,
+              head_sha: reconciliation.merged_head, derived_from: "host-reconciliation",
+              reconciliation_sha256: taskReconciliationDigest(entry) };
+          }
+        }
+      }
       if (!recoveryOrigin) return failure("test-only recovery requires a clean captured implementation before the first test-author; commit then capture before correcting tests", contextDiagnostics);
       if (producerIndex !== fidelity.authorIndex || native.events.some((event, index) => index > producerIndex && isCountingWriter(event)))
         return failure("test-only recovery requires the latest fidelity author without a later writing hand");
@@ -875,6 +933,23 @@ function validateIntegration(entry, integration, { projectRoot, sessionId, featu
       (result.reconciliation_sha256 ?? null) !== taskReconciliationDigest(entry))
     return failure("task integration reconciliation proof differs from its inspection receipt");
   const reconciliation = entry.reconciliations?.at(-1);
+  if (recoveryOrigin?.derived_from === "host-reconciliation") {
+    const historyIndex = entry.integration_history?.findIndex((receipt) =>
+      receipt.result_sha256 === integration.result_sha256 && receipt.child_head === integration.child_head) ?? -1;
+    const priorIntegration = historyIndex >= 0 ? entry.integration_history[historyIndex - 1] : entry.integration_history?.at(-1);
+    const priorResult = object(entry.result_history)?.[priorIntegration?.result_sha256];
+    const priorHand = priorResult?.hand_capture;
+    const priorOrigin = priorHand?.agent === "harness-test-author" ? priorHand.recovery_origin : priorHand;
+    if (!reconciliation?.upstreams?.length || reconciliation.kind === "integration-conflict" ||
+        reconciliation.merged_head !== recoveryOrigin.head_sha ||
+        recoveryOrigin.reconciliation_sha256 !== taskReconciliationDigest(entry) ||
+        !priorResult || hashTaskReceipt(priorResult) !== priorIntegration.result_sha256 ||
+        priorResult.child_head !== reconciliation.pre_child_head ||
+        priorResult.launches?.length > reconciliation.launch_count ||
+        priorOrigin?.producer_call_id !== recoveryOrigin.producer_call_id ||
+        priorOrigin?.producer_launch_index !== recoveryOrigin.producer_launch_index)
+      return failure("host-reconciled test-only origin differs from its prior integration and merge proof");
+  }
   if (reconciliation) {
     const producerIndex = result.hand_capture.producer_launch_index;
     if (!Number.isInteger(producerIndex) || producerIndex < 0 || producerIndex >= entry.launches.length)
