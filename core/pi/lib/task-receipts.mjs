@@ -1076,13 +1076,22 @@ export function inspectTaskResumeAbandonment(entry, { headSha } = {}, dependenci
       featureId: entry.feature_id }, entry.task_id).path, worktree);
     const violations = recordViolations(hand);
     if (hand.featureId !== entry.feature_id || hand.taskId !== entry.task_id || hand.sessionId !== result.session_id ||
-        hand.writtenBy !== "host-hand-finished" || violations.scope.length || violations.frozen.length)
+        hand.writtenBy !== "host-hand-finished" || violations.frozen.length)
       return failure("resume abandonment hand identity or violations require ordinary recovery");
     const originalHand = hand.producerCallId === result.hand_capture.producer_call_id;
-    if (originalHand ? (!isCaptureEligibleHandRecord(hand) || hand.agent !== result.hand_capture.agent ||
+    // A later blocked writer may have recorded out-of-scope edits that were
+    // subsequently reverted. The clean original child HEAD above proves no
+    // product delta survives; retain the host hand and its violations in the
+    // abandonment proof instead of requiring another writer to replace it.
+    const restoredScopeViolation = !originalHand && violations.scope.length > 0 &&
+      Array.isArray(hand.touchedPaths) && hand.touchedPaths.length > 0 &&
+      violations.scope.every((file) => typeof file === "string" && hand.touchedPaths.includes(file));
+    if (originalHand ? (violations.scope.length || !isCaptureEligibleHandRecord(hand) || hand.agent !== result.hand_capture.agent ||
         hand.freezeCommitSha !== result.hand_capture.freeze_sha || hand.capturedVerifiedAt !== result.hand_capture.captured_verified_at)
       : (hand.outcome !== "BLOCKED" || hand.freezeCommitSha !== result.child_head ||
-        !Array.isArray(hand.touchedPaths) || hand.touchedPaths.length || !events.events.some((event) =>
+        !Array.isArray(hand.touchedPaths) ||
+        (violations.scope.length ? !restoredScopeViolation : hand.touchedPaths.length) ||
+        !events.events.some((event) =>
           event.launchIndex >= result.launches.length && event.callId === hand.producerCallId && event.tool === "subagent" &&
           event.args.subagent_type === hand.agent && ["harness-executor", "harness-sniper"].includes(hand.agent) &&
           taskFromPrompt(event.args.prompt) === entry.task_id && eventSucceeded(event))))

@@ -284,6 +284,23 @@ test("abandoning an operational resume revalidates the original integration with
   assert.equal(inspectTaskRun(f.entry, f.dependencies).ok, false, "the resumed hand remains blocked");
 });
 
+test("abandoning a restored blocked resume retains its out-of-scope hand as evidence", () => {
+  const f = abandonedResumeFixture();
+  const hand = JSON.parse(fs.readFileSync(f.handPath));
+  hand.touchedPaths = ["src/task.mjs", "package-lock.json"];
+  hand.scopeViolations = ["package-lock.json"];
+  write(f.handPath, hand);
+  const inspected = inspectTaskResumeAbandonment(f.entry, { headSha: f.head }, f.dependencies);
+  assert.equal(inspected.ok, true, inspected.reason);
+  assert.deepEqual(inspected.proof.hand_record.scopeViolations, ["package-lock.json"]);
+  assert.deepEqual(inspected.proof.hand_record.touchedPaths, ["src/task.mjs", "package-lock.json"]);
+  assert.equal(inspectTaskRun(f.entry, f.dependencies).ok, false,
+    "the out-of-scope hand must remain ineligible for integration");
+  fs.appendFileSync(path.join(f.root, "src/task.mjs"), "// new edit\n");
+  assert.match(inspectTaskResumeAbandonment(f.entry, { headSha: f.head }, f.dependencies).reason,
+    /original clean child HEAD/);
+});
+
 test("abandoning a resume refuses a later host reconciliation and directs current receipt integration", () => {
   const f = abandonedResumeFixture();
   run(f.root, "git", "checkout", "-b", "late-parent", f.base);
