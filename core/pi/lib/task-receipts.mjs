@@ -973,6 +973,20 @@ function validateIntegration(entry, integration, { projectRoot, sessionId, featu
       !ancestor(projectRoot, result.child_head, integration.integrated_head) || !ancestor(projectRoot, integration.integrated_head, headSha)) {
     return failure("task integration is not ancestral to the requested HEAD");
   }
+  const frozenParent = integration.frozen_parent;
+  if (frozenParent !== undefined) {
+    const blobs = frozenParent?.blobs;
+    const parents = String(git(projectRoot, ["rev-list", "--parents", "-n", "1", integration.integrated_head])).trim().split(" ");
+    const ancestral = frozenParent?.ancestral === true;
+    if (!object(frozenParent) || !COMMIT_SHA.test(frozenParent.head_sha ?? "") ||
+        (frozenParent.ancestral !== undefined && frozenParent.ancestral !== true) ||
+        !object(blobs) || !Object.keys(blobs).length ||
+        Object.entries(blobs).some(([file, digest]) => !Object.hasOwn(result.frozen_blobs, file) || !SHA256.test(digest)) ||
+        (ancestral
+          ? integration.integrated_head !== frozenParent.head_sha || !ancestor(projectRoot, result.child_head, frozenParent.head_sha)
+          : parents.length !== 3 || parents[1] !== frozenParent.head_sha || parents[2] !== result.child_head))
+      return failure("frozen parent reconciliation proof is invalid");
+  }
   if (!ancestor(projectRoot, result.hand_capture.freeze_sha, result.child_head) ||
       (recovery ? !result.freeze_sha || !ancestor(projectRoot, result.hand_capture.freeze_sha, result.freeze_sha) ||
         !ancestor(projectRoot, recoveryOrigin.head_sha, result.hand_capture.freeze_sha) ||
@@ -984,8 +998,15 @@ function validateIntegration(entry, integration, { projectRoot, sessionId, featu
   if (JSON.stringify(actualChanged) !== JSON.stringify(result.changed_paths)) return failure("task inspection changed-path receipt no longer matches Git");
   for (const [file, expected] of Object.entries(result.frozen_blobs)) {
     try {
-      const bytes = git(projectRoot, ["show", `${headSha}:${file}`], null);
-      if (crypto.createHash("sha256").update(bytes).digest("hex") !== expected) return failure(`integrated frozen file changed: ${file}`);
+      const digestAt = (revision) => crypto.createHash("sha256").update(
+        git(projectRoot, ["show", `${revision}:${file}`], null)).digest("hex");
+      const parentDigest = frozenParent?.blobs?.[file];
+      if (parentDigest !== undefined &&
+          (parentDigest === expected || digestAt(result.freeze_sha) !== expected ||
+            digestAt(result.child_head) !== expected || digestAt(frozenParent.head_sha) !== parentDigest ||
+            digestAt(integration.integrated_head) !== parentDigest))
+        return failure(`frozen parent reconciliation proof differs from Git: ${file}`);
+      if (digestAt(headSha) !== (parentDigest ?? expected)) return failure(`integrated frozen file changed: ${file}`);
     } catch { return failure(`integrated frozen file is unavailable: ${file}`); }
   }
   return { ok: true };

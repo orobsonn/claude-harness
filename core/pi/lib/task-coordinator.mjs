@@ -232,18 +232,36 @@ function summary(entry, { compact = false } = {}) {
     })) } : {}),
   };
 }
-function requireFrozen(root, tree, results) {
-  for (const result of results)
+function requireFrozen(root, tree, parentHead, results) {
+  const parentBlobs = {};
+  for (const [index, { result, integration }] of results.entries())
     for (const [file, expected] of Object.entries(result?.frozen_blobs ?? {})) {
       const actual = execFileSync("git", ["show", `${tree}:${file}`], {
         cwd: root,
         stdio: ["ignore", "pipe", "pipe"],
       });
-      if (hash(actual) !== expected)
+      const actualHash = hash(actual);
+      if (actualHash === expected) continue;
+      // A global base merge may have changed a frozen test before this task
+      // integrates. The task may carry that parent version through unchanged;
+      // it may never supply a different version of its own.
+      const parentHash = hash(execFileSync("git", ["show", `${parentHead}:${file}`], {
+        cwd: root,
+        stdio: ["ignore", "pipe", "pipe"],
+      }));
+      const childHash = hash(execFileSync("git", ["show", `${result.child_head}:${file}`], {
+        cwd: root,
+        stdio: ["ignore", "pipe", "pipe"],
+      }));
+      if (actualHash !== parentHash || childHash !== expected)
         throw new Error(`integration would change frozen test ${file}`);
+      if (index === 0) parentBlobs[file] = parentHash;
+      else if (integration?.frozen_parent?.blobs?.[file] !== parentHash)
+        throw new Error(`prior integration has no current frozen parent proof for ${file}`);
     }
+  return parentBlobs;
 }
-function receiptFor(entry, head) {
+function receiptFor(entry, head, intent) {
   return {
     version: 1,
     written_by: "host-task-integration",
@@ -260,6 +278,10 @@ function receiptFor(entry, head) {
     child_head: entry.result.child_head,
     integrated_head: head,
     result_sha256: hashTaskReceipt(entry.result),
+    ...(Object.keys(intent.frozen_parent_blobs ?? {}).length ? {
+      frozen_parent: { head_sha: intent.parent_head, blobs: intent.frozen_parent_blobs,
+        ...(intent.already_ancestral ? { ancestral: true } : {}) },
+    } : {}),
   };
 }
 function reconcileMerge(owner, registry, persist) {
@@ -274,6 +296,21 @@ function reconcileMerge(owner, registry, persist) {
     throw new Error("integration journal identity mismatch");
   const current = git(owner.root, "rev-parse", "HEAD");
   if (current === intent.parent_head) {
+    if (intent.already_ancestral) {
+      let merging;
+      try { merging = git(owner.root, "rev-parse", "--verify", "MERGE_HEAD"); } catch {}
+      if (!isAncestor(owner.root, intent.child_head, current) ||
+          git(owner.root, "rev-parse", `${current}^{tree}`) !== intent.tree || merging)
+        throw new Error("ancestral integration journal differs from the parent tree");
+      requireClean(owner.root);
+      entry.integration = receiptFor(entry, current, intent);
+      entry.status = "integrated";
+      delete entry.reason;
+      delete registry.integration_intent;
+      completeCorrectionBarrier(registry, entry.task_id);
+      persist();
+      return;
+    }
     let merging;
     try {
       merging = git(owner.root, "rev-parse", "--verify", "MERGE_HEAD");
@@ -311,7 +348,7 @@ function reconcileMerge(owner, registry, persist) {
       "integration journal needs reconciliation: current HEAD differs from the reserved merge",
     );
   requireClean(owner.root);
-  entry.integration = receiptFor(entry, current);
+  entry.integration = receiptFor(entry, current, intent);
   entry.status = "integrated";
   delete entry.reason;
   delete registry.integration_intent;
@@ -1175,14 +1212,17 @@ export async function executeTaskAction(params, context = {}, injected = {}) {
     const parentHead = git(owner.root, "rev-parse", "HEAD");
     if (!isAncestor(owner.root, entry.base_sha, parentHead))
       throw new Error("task base is no longer an ancestor of parent HEAD");
-    const { tree, conflicts } = taskMergePreview(owner.root, parentHead, params.expected_head);
+    const alreadyAncestral = isAncestor(owner.root, params.expected_head, parentHead);
+    const { tree, conflicts } = alreadyAncestral
+      ? { tree: git(owner.root, "rev-parse", `${parentHead}^{tree}`), conflicts: [] }
+      : taskMergePreview(owner.root, parentHead, params.expected_head);
     if (conflicts.length)
       throw new Error(`task merge conflicts in ${conflicts.join(", ")}; use resume on this same task/attempt to resolve with sniper, capture and affected reviews`);
-    requireFrozen(owner.root, tree, [
-      entry.result,
+    const frozenParentBlobs = requireFrozen(owner.root, tree, parentHead, [
+      { result: entry.result },
       ...Object.values(registry.tasks)
         .filter((item) => item.status === "integrated")
-        .map((item) => item.result),
+        .map((item) => ({ result: item.result, integration: item.integration })),
     ]);
     registry.integration_intent = {
       task_id: entry.task_id,
@@ -1191,9 +1231,11 @@ export async function executeTaskAction(params, context = {}, injected = {}) {
       child_head: params.expected_head,
       tree,
       result_sha256: hashTaskReceipt(entry.result),
+      ...(Object.keys(frozenParentBlobs).length ? { frozen_parent_blobs: frozenParentBlobs } : {}),
+      ...(alreadyAncestral ? { already_ancestral: true } : {}),
     };
     persist();
-    git(
+    if (!alreadyAncestral) git(
       owner.root,
       "merge",
       "--no-ff",
