@@ -22,6 +22,7 @@ import {
   extractPiFeatureTaskIds,
   isWritingHandRole,
   recordPiTaskCompletion,
+  verifyPiDoneLabelTransition,
 } from "./entry-gate.mjs";
 import { claimPiDispatchForRuntime, readPiDispatchRecord } from "./pi-state-records.mjs";
 import { piHandRecordPath } from "./pi-paths.mjs";
@@ -1036,6 +1037,32 @@ test("label harness:* numa sessão ROTINA (env) é negado mesmo sem sessão filh
   });
   assert.equal(out.decision, "deny");
   assert.match(out.reason, /attaching `harness:queued`/);
+});
+
+test("apenas o done da issue fechada pelo PR mergeado da branch é permitido", async () => {
+  const command = "gh issue edit 398 --add-label harness:done --remove-label harness:in-progress";
+  const run = (binary, args) => {
+    if (binary === "git") return "orobsonn/harness-398\n";
+    if (args[0] === "pr") return JSON.stringify({
+      state: "MERGED", mergedAt: "2026-09-27T06:10:37Z", headRefName: "orobsonn/harness-398",
+      closingIssuesReferences: [{ number: 398 }],
+    });
+    return JSON.stringify({ state: "CLOSED" });
+  };
+  assert.equal(verifyPiDoneLabelTransition(command, ROOT, run), true);
+  assert.equal(verifyPiDoneLabelTransition("gh issue edit 398 --add-label harness:done; gh issue edit 99 --add-label harness:ready", ROOT, run), false);
+  assert.equal(verifyPiDoneLabelTransition("gh issue create --label harness:done", ROOT, run), false);
+  assert.equal(verifyPiDoneLabelTransition(command, ROOT, (binary, args) =>
+    args[0] === "pr" ? JSON.stringify({ state: "OPEN" }) : run(binary, args)), false);
+  assert.equal(verifyPiDoneLabelTransition(command, ROOT, (binary, args) =>
+    args[0] === "issue" ? JSON.stringify({ state: "OPEN" }) : run(binary, args)), false);
+  const allowed = await bash({ command, isSubagent: true, verifyDoneLabelTransitionFn: () => true });
+  assert.equal(allowed.decision, "allow");
+  const denied = await bash({ command, isSubagent: true, verifyDoneLabelTransitionFn: () => false });
+  assert.equal(denied.decision, "deny");
+  const queued = await bash({ command: "gh issue edit 398 --add-label harness:ready", isSubagent: true,
+    verifyDoneLabelTransitionFn: () => true });
+  assert.equal(queued.decision, "deny");
 });
 
 test("gh issue create sem label em sessão filha recebe o ROUTINE_ISSUE_ADVISORY", async () => {

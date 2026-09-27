@@ -232,6 +232,14 @@ Execute-os antes dos olhos, depois do commit, usando o shell nativo; resolva fal
 e reaproveite os resultados atuais já aprovados pelo processo. Saída de outra sessão,
 HEAD anterior ou execução iniciada com árvore suja não satisfaz essa preparação.
 Essa verificação não aprova revisores nem autoriza publicação.
+Num monorepo cujo plano inteiro e testes congelados apontam para um único pacote,
+se a raiz não tem script `test`, execute `npm test --prefix <pacote>` e preserve
+o argumento após `--`. O host só reconhece essa forma quando o pacote é
+comprovado pelo plano; não escolha outro pacote por conta própria.
+
+Depois de confirmar que o PR da branch foi mergeado e fechou a issue, conclua
+os labels numa chamada: `gh issue edit <n> --remove-label harness:in-progress --add-label harness:done`.
+O gate confere o PR e a issue; `harness:ready` continua reservado ao operador.
 
 Antes de redespachar executor/sniper, compare HEAD, captura e recibo produtor vigentes
 com o delta de produto solicitado. Se a implementação já está comprovada e não há

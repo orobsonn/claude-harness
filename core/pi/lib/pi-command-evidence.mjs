@@ -343,6 +343,51 @@ export function validatePiVerificationCommands(commands, { optional = false } = 
   return { ok: true, commands: [...new Set(commands)] };
 }
 
+// A monorepo plan can name npm tests relative to its only scoped package. In
+// that case the parent shell still runs at the repository root, and npm's
+// --prefix form is the same test invocation at the declared package cwd.
+// Derive the package from the approved frozen tests; never guess from a passing
+// command or accept an arbitrary other package's test script.
+function packageScopedFinalCommands(root, sessionId, commands) {
+  const aliases = new Map();
+  try {
+    const state = readRegularJson(path.join(root, ".pi/harness/state", sessionId, "gate-state.json"));
+    if (state.session_id !== sessionId || !isSafeFeatureId(state.feature_id)) return aliases;
+    const plan = readRegularJson(path.join(root, ".pi/harness/plans", state.feature_id, "execution-plan.json"));
+    if (plan.feature_id !== state.feature_id || !Array.isArray(plan.tasks) || !plan.tasks.length) return aliases;
+    const rootPackage = readRegularJson(path.join(root, "package.json"));
+    if (typeof rootPackage.scripts?.test === "string") return aliases;
+    let prefix = null;
+    const frozenCommands = new Set();
+    for (const task of plan.tasks) {
+      if (!Array.isArray(task.scope_paths) || !task.scope_paths.length || !Array.isArray(task.locked_tests)) return new Map();
+      for (const locked of task.locked_tests) {
+        const match = /^npm test -- ([A-Za-z0-9_.\/-]+)$/.exec(locked?.command ?? "");
+        const target = match?.[1];
+        if (!target || target.split("/").some((part) => !part || part === "." || part === "..") ||
+            typeof locked.path !== "string" || !locked.path.endsWith(`/${target}`)) return new Map();
+        const candidate = locked.path.slice(0, -target.length - 1);
+        if (!candidate || candidate.split("/").some((part) => !/^[A-Za-z0-9_.-]+$/.test(part) || part === "." || part === "..")) return new Map();
+        if (prefix !== null && prefix !== candidate) return new Map();
+        prefix = candidate;
+        frozenCommands.add(locked.command);
+      }
+    }
+    if (!prefix || !plan.tasks.every((task) => task.scope_paths.every((item) =>
+      typeof item === "string" && item.startsWith(`${prefix}/`)))) return aliases;
+    const packageDir = path.join(root, prefix);
+    if (fs.realpathSync(packageDir) !== packageDir) return aliases;
+    const packageJson = readRegularJson(path.join(packageDir, "package.json"));
+    if (typeof packageJson.scripts?.test !== "string" || !packageJson.scripts.test.trim()) return aliases;
+    for (const command of commands) {
+      if (command === "npm test" || frozenCommands.has(command)) {
+        aliases.set(command, command.replace(/^npm test/, `npm test --prefix ${prefix}`));
+      }
+    }
+  } catch { /* malformed or absent plan/package evidence retains literal matching */ }
+  return aliases;
+}
+
 /** Read existing native output for declared final checks; never execute or approve a command. */
 export function checkPiFinalCommands({ projectRoot, sessionId, commands } = {}) {
   const validated = validatePiVerificationCommands(commands, { optional: true });
@@ -353,6 +398,8 @@ export function checkPiFinalCommands({ projectRoot, sessionId, commands } = {}) 
   try {
     const identity = worktreeIdentity(projectRoot);
     if (identity.worktree_identity_status !== "available" || identity.worktree_dirty) throw new Error("clean HEAD required");
+    const aliases = packageScopedFinalCommands(identity.worktree_root, sessionId, commands);
+    const declaredForActual = new Map(commands.map((command) => [aliases.get(command) ?? command, command]));
     const directory = evidenceDirectory(projectRoot, sessionId, false);
     const latest = new Map();
     for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
@@ -360,12 +407,13 @@ export function checkPiFinalCommands({ projectRoot, sessionId, commands } = {}) 
       try {
         const metadataPath = path.join(directory, entry.name);
         const record = evidenceRecord(directory, metadataPath, identity, sessionId, false);
-        if (record.freshness !== "exact-current" || !missing.has(record.command)) continue;
+        const declared = declaredForActual.get(record.command);
+        if (record.freshness !== "exact-current" || !missing.has(declared)) continue;
         const modified = fs.statSync(metadataPath, { bigint: true }).mtimeNs;
-        if (!latest.has(record.command) || latest.get(record.command).modified < modified) latest.set(record.command, { metadataPath, modified });
+        if (!latest.has(declared) || latest.get(declared).modified < modified) latest.set(declared, { metadataPath, modified });
       } catch { /* altered, foreign or stale evidence cannot satisfy preparation */ }
     }
-    for (const { metadataPath } of latest.values()) {
+    for (const [declared, { metadataPath }] of latest) {
       try {
         const record = evidenceRecord(directory, metadataPath, identity, sessionId);
         const start = record.started_identity;
@@ -373,7 +421,7 @@ export function checkPiFinalCommands({ projectRoot, sessionId, commands } = {}) 
           record.original_status.is_error === false && record.original_status.exit_code === 0 &&
           start?.worktree_identity_status === "available" && start.worktree_dirty === false &&
           start.worktree_root === identity.worktree_root && start.head_sha === identity.head_sha &&
-          start.worktree_status_sha256 === identity.worktree_status_sha256) missing.delete(record.command);
+          start.worktree_status_sha256 === identity.worktree_status_sha256) missing.delete(declared);
       } catch { /* unreadable latest output cannot fall back to an older success */ }
     }
   } catch { /* missing native evidence is reported with the exact next commands */ }

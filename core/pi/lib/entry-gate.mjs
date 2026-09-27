@@ -129,6 +129,28 @@ export function isWritingHandRole(role) {
   return isExecutorRole(bare) || isSniperRole(bare) || isTestAuthorRole(bare);
 }
 
+/** Permit the already merged run to finish its own issue label. This does not
+ * admit work to the queue: `harness:ready` and every other harness label keep
+ * the #808 rail. Exact argv shape prevents a second label or shell command from
+ * riding along with the verified `done` transition. */
+export function verifyPiDoneLabelTransition(command, projectRoot, run = execFileSync) {
+  if (typeof command !== "string" || typeof projectRoot !== "string") return false;
+  const match = /^gh issue edit ([1-9][0-9]*) --add-label harness:done(?: --remove-label harness:in-progress)?$/.exec(command) ??
+    /^gh issue edit ([1-9][0-9]*) --remove-label harness:in-progress --add-label harness:done$/.exec(command);
+  if (!match) return false;
+  try {
+    const options = { cwd: projectRoot, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 10000 };
+    const branch = run("git", ["symbolic-ref", "--quiet", "--short", "HEAD"], options).trim();
+    if (!branch || branch.startsWith("-")) return false;
+    const pr = JSON.parse(run("gh", ["pr", "view", branch, "--json", "state,mergedAt,closingIssuesReferences,headRefName"], options));
+    if (pr.state !== "MERGED" || !pr.mergedAt || pr.headRefName !== branch ||
+        !Array.isArray(pr.closingIssuesReferences) ||
+        !pr.closingIssuesReferences.some((issue) => issue?.number === Number(match[1]))) return false;
+    const issue = JSON.parse(run("gh", ["issue", "view", match[1], "--json", "state"], options));
+    return issue.state === "CLOSED";
+  } catch { return false; }
+}
+
 /** @description Executa git e devolve stdout trimado; lança em erro (o chamador é quem decide
  * o fail-open). Espelha realGitRunner do entry-gate.ts.
  * @param {string[]} args
@@ -492,6 +514,7 @@ export function piIsLifecycleOnlyMerge(projectRoot) {
  *   readReviewPlanFn?: typeof readPiReviewPlan,
  *   readAllIntegratedTaskEvidenceFn?: typeof readAllIntegratedTaskEvidence,
  *   importDenylistFn?: () => Promise<object>,
+ *   verifyDoneLabelTransitionFn?: typeof verifyPiDoneLabelTransition,
  * }} input
  * @returns {Promise<{ok: boolean, decision: "allow"|"deny", reason: string, advisory?: string, details?: unknown}>}
  */
@@ -544,7 +567,13 @@ export async function decidePiBashGate(input = {}) {
   const routineSession = labelRailRelevant ? isRoutineSession(env) : false;
   const isSubagentForLabelRail =
     labelRailRelevant && !routineSession ? Boolean(input.isSubagent) : false;
-  const labelDecision = decideBashHarnessLabel({
+  let verifiedDone = false;
+  if ((routineSession || isSubagentForLabelRail) && detectHarnessLabelWrite(command) === "harness:done") {
+    try {
+      verifiedDone = (input.verifyDoneLabelTransitionFn ?? verifyPiDoneLabelTransition)(command, projectRoot) === true;
+    } catch { /* missing delivery proof retains the queue-contamination denial */ }
+  }
+  const labelDecision = verifiedDone ? { ok: true, decision: "allow", reason: "verified-merged-delivery" } : decideBashHarnessLabel({
     command,
     isRoutine: routineSession,
     isSubagent: isSubagentForLabelRail,
