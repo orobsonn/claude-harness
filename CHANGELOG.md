@@ -5,6 +5,13 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [3.6.8](https://github.com/orobsonn/claude-harness/compare/v3.6.7...v3.6.8) (2026-09-27)
+
+
+### Bug Fixes
+
+* **pi:** preserve earlier clean capture after dirty probe ([#1056](https://github.com/orobsonn/claude-harness/issues/1056)) ([dd9940b](https://github.com/orobsonn/claude-harness/commit/dd9940b7f83d0a376fe3500c142a2b2ac4535883))
+
 ## [3.6.7](https://github.com/orobsonn/claude-harness/compare/v3.6.6...v3.6.7) (2026-09-26)
 
 
