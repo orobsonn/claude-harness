@@ -2160,6 +2160,54 @@ test("readIntegratedTaskEvidence preserves the child session and accepts ancestr
   assert.equal(evidence.result.integrated_head, fixture.base);
 });
 
+test("integrated frozen parent proof preserves the original freeze and rejects forged or later changes", () => {
+  const f = integratedFixture({ lockedPaths: ["acceptance.test.mjs"] });
+  write(path.join(f.root, "acceptance.test.mjs"), "original test\n");
+  const freeze = commit(f.root, "freeze original test");
+  const branch = run(f.root, "git", "branch", "--show-current");
+  run(f.root, "git", "switch", "-qc", "task-child");
+  run(f.root, "git", "commit", "--allow-empty", "-m", "task implementation");
+  const childHead = run(f.root, "git", "rev-parse", "HEAD");
+  run(f.root, "git", "switch", "-q", branch);
+  write(path.join(f.root, "acceptance.test.mjs"), "parent base test\n");
+  const parentHead = commit(f.root, "external base changes test");
+  run(f.root, "git", "merge", "--no-ff", "-m", "integrate task", "task-child");
+  const integratedHead = run(f.root, "git", "rev-parse", "HEAD");
+  const originalDigest = crypto.createHash("sha256").update("original test\n").digest("hex");
+  const parentDigest = crypto.createHash("sha256").update("parent base test\n").digest("hex");
+  const result = f.entry.result;
+  f.entry.base_sha = result.base_sha = f.integration.base_sha = freeze;
+  result.child_head = f.integration.child_head = childHead;
+  result.freeze_sha = freeze;
+  result.frozen_blobs = { "acceptance.test.mjs": originalDigest };
+  result.hand_capture.freeze_sha = freeze;
+  result.hand_capture.capture_marker = `${FEATURE}/${TASK}@${freeze}`;
+  f.integration.integrated_head = integratedHead;
+  f.integration.result_sha256 = hashTaskReceipt(result);
+  f.integration.frozen_parent = { head_sha: parentHead, blobs: { "acceptance.test.mjs": parentDigest } };
+  write(f.registryPath, f.registry);
+  const read = (headSha = integratedHead) => readIntegratedTaskEvidence({ projectRoot: f.root,
+    sessionId: PARENT, featureId: FEATURE, taskId: TASK, headSha });
+  assert.equal(read().ok, true, read().reason);
+
+  f.integration.frozen_parent.blobs["acceptance.test.mjs"] = originalDigest;
+  write(f.registryPath, f.registry);
+  assert.match(read().reason, /frozen parent reconciliation proof/);
+  f.integration.frozen_parent.blobs["acceptance.test.mjs"] = parentDigest;
+  write(f.registryPath, f.registry);
+  f.integration.frozen_parent = { head_sha: integratedHead, blobs: { "acceptance.test.mjs": parentDigest }, ancestral: true };
+  write(f.registryPath, f.registry);
+  assert.equal(read().ok, true, read().reason);
+  f.integration.frozen_parent.head_sha = parentHead;
+  write(f.registryPath, f.registry);
+  assert.match(read().reason, /frozen parent reconciliation proof/);
+  f.integration.frozen_parent.head_sha = integratedHead;
+  write(f.registryPath, f.registry);
+  write(path.join(f.root, "acceptance.test.mjs"), "later unreviewed test\n");
+  const laterHead = commit(f.root, "later test mutation");
+  assert.match(read(laterHead).reason, /integrated frozen file changed/);
+});
+
 test("integration accepts the inspected test-author recovery lineage but not product drift", () => {
   for (const scenario of ["valid", "product-drift", "forged-frozen-product"]) {
     const productDrift = scenario !== "valid";

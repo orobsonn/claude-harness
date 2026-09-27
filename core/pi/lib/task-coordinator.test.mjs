@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import {
   executeTaskAction,
@@ -31,6 +32,7 @@ const write = (file, obj) => {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, JSON.stringify(obj));
 };
+const sha256 = (value) => createHash("sha256").update(value).digest("hex");
 const strategy = {
   hand_tiers: { low: "test/model", medium: "test/model", high: "test/model" },
   ...Object.fromEntries(
@@ -1657,4 +1659,75 @@ test("large admitted plan stays readable and is rehydrated from authority after 
   corrupt.plan_snapshot.text += " ";
   write(registryPath, corrupt);
   assert.throws(() => preserveTaskPlanForPlanner(identity, f.deps), /snapshot is invalid/);
+});
+
+test("integration records a parent-owned frozen test change without changing the task freeze", async (t) => {
+  const f = fixture(t, [task("a")]);
+  const testFile = "tests/a.test.mjs";
+  fs.mkdirSync(path.join(f.dir, "tests"));
+  fs.writeFileSync(path.join(f.dir, testFile), "old test\n");
+  git(f.dir, "add", testFile);
+  git(f.dir, "commit", "-qm", "original test");
+  const original = sha256("old test\n");
+  const inspect = f.deps.inspectRun;
+  f.deps.inspectRun = (entry) => {
+    const checked = inspect(entry);
+    checked.result.freeze_sha = checked.result.child_head;
+    checked.result.frozen_blobs = { [testFile]: original };
+    return checked;
+  };
+  const action = (params) => executeTaskAction(params, f.context, f.deps);
+  assert.equal((await action({ action: "dispatch", task_ids: ["a"] })).ok, true);
+  const entry = f.registry().tasks.a;
+  fs.mkdirSync(path.join(entry.worktree, "src"));
+  fs.writeFileSync(path.join(entry.worktree, "src/a.mjs"), "export const a = 1;\n");
+  git(entry.worktree, "add", "src/a.mjs");
+  git(entry.worktree, "commit", "-qm", "implement task");
+  const childHead = git(entry.worktree, "rev-parse", "HEAD");
+  assert.equal((await action({ action: "integrate", task_id: "a", attempt_id: entry.attempt_id,
+    expected_head: childHead })).ok, true);
+
+  git(f.dir, "switch", "-qc", "external-base");
+  fs.writeFileSync(path.join(f.dir, testFile), "new base test\n");
+  git(f.dir, "add", testFile);
+  git(f.dir, "commit", "-qm", "external test update");
+  git(f.dir, "switch", "-q", "feature/test");
+  git(f.dir, "merge", "--no-ff", "-qm", "merge external base", "external-base");
+  const parentHead = git(f.dir, "rev-parse", "HEAD");
+  assert.equal((await action({ action: "resume", task_id: "a", attempt_id: entry.attempt_id })).ok, true);
+  const integrated = await action({ action: "integrate", task_id: "a", attempt_id: entry.attempt_id,
+    expected_head: childHead });
+  assert.equal(integrated.ok, true, integrated.reason);
+  const current = f.registry().tasks.a;
+  assert.equal(current.result.frozen_blobs[testFile], original);
+  assert.deepEqual(current.integration.frozen_parent, {
+    head_sha: parentHead, blobs: { [testFile]: sha256("new base test\n") }, ancestral: true,
+  });
+  assert.equal(fs.readFileSync(path.join(f.dir, testFile), "utf8"), "new base test\n");
+});
+
+test("integration still rejects a task-authored change to a frozen test", async (t) => {
+  const f = fixture(t, [task("a")]);
+  const testFile = "tests/a.test.mjs";
+  fs.mkdirSync(path.join(f.dir, "tests"));
+  fs.writeFileSync(path.join(f.dir, testFile), "old test\n");
+  git(f.dir, "add", testFile);
+  git(f.dir, "commit", "-qm", "original test");
+  const inspect = f.deps.inspectRun;
+  f.deps.inspectRun = (entry) => {
+    const checked = inspect(entry);
+    checked.result.freeze_sha = entry.base_sha;
+    checked.result.frozen_blobs = { [testFile]: sha256("old test\n") };
+    return checked;
+  };
+  const action = (params) => executeTaskAction(params, f.context, f.deps);
+  assert.equal((await action({ action: "dispatch", task_ids: ["a"] })).ok, true);
+  const entry = f.registry().tasks.a;
+  fs.writeFileSync(path.join(entry.worktree, testFile), "task changed test\n");
+  git(entry.worktree, "add", testFile);
+  git(entry.worktree, "commit", "-qm", "change frozen test");
+  const result = await action({ action: "integrate", task_id: "a", attempt_id: entry.attempt_id,
+    expected_head: git(entry.worktree, "rev-parse", "HEAD") });
+  assert.equal(result.ok, false);
+  assert.match(result.reason, /frozen test/);
 });
