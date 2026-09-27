@@ -469,7 +469,8 @@ test("resume abandonment refuses drift, live processes, invalid history, and new
 });
 
 function testOnlyRecovery({ capturedImplementation = true, productDelta = false, laterWriter = false,
-  extraAuthor = false, interveningWriter = false, earlierAuthorProductDrift = false, lateCapture = false, failedWriter = false,
+  extraAuthor = false, interveningWriter = false, dirtyInterveningCapture = false,
+  earlierAuthorProductDrift = false, lateCapture = false, failedWriter = false,
   overlappingCapture = false, dirtyCaptureFirst = false, refusedBeforeCapture = [], refusedAfterCapture = [],
   refusedAfterAuthor = [], originOverride = {},
   fixture = inspectionFixture(), integrated = false, freshImplementation = false, suffix = "" } = {}) {
@@ -523,6 +524,12 @@ function testOnlyRecovery({ capturedImplementation = true, productDelta = false,
   if (interveningWriter) add("intervening-sniper", "subagent", { subagent_type: "harness-sniper", prompt },
     { content: [{ type: "text", text: "Disposable sensitivity probe reverted; no product change.\nStatus: DONE" }],
       details: { status: "completed" } });
+  if (dirtyInterveningCapture) {
+    assert.equal(interveningWriter, true);
+    add("dirty-intervening-capture", "mark", { action: "capture-verified", task_id: TASK },
+      { details: { ok: true, capture_origin: { task_id: TASK, producer_call_id: "intervening-sniper" + suffix,
+        head_sha: baseline, worktree_clean: false } } });
+  }
   if (failedWriter) add("failed-sniper", "subagent", { subagent_type: "harness-sniper", prompt }, { details: { status: "failed" } });
   add("correct-author", "subagent", { subagent_type: "harness-test-author", prompt }, { details: { status: "completed" } });
   for (const role of refusedAfterAuthor) refuse(role, "after-author");
@@ -594,6 +601,27 @@ test("a successful disposable writer cannot erase an earlier captured implementa
     const rejected = inspectTaskRun(invalid.entry, invalid.dependencies);
     assert.equal(rejected.ok, false);
     assert.match(rejected.reason, /clean captured implementation|cannot change product/);
+  }
+});
+
+test("dirty capture of a disposable writer cannot erase an earlier clean native capture", () => {
+  for (const history of [{}, { integrated: true, freshImplementation: true }]) {
+    const options = { extraAuthor: true, interveningWriter: true, dirtyInterveningCapture: true, ...history };
+    const f = testOnlyRecovery(options);
+    const inspected = inspectTaskRun(f.entry, f.dependencies);
+    assert.equal(inspected.ok, true, inspected.reason);
+    assert.deepEqual(inspected.result.hand_capture.recovery_origin, {
+      head_sha: f.recoveryBaseline,
+      producer_call_id: history.integrated ? "fresh-producer" : "producer",
+      producer_launch_index: history.integrated ? 1 : 0,
+      derived_from: "earlier-native-capture",
+    });
+    for (const variant of [{ capturedImplementation: false }, { productDelta: true }]) {
+      const invalid = testOnlyRecovery({ ...options, ...variant });
+      const rejected = inspectTaskRun(invalid.entry, invalid.dependencies);
+      assert.equal(rejected.ok, false, JSON.stringify({ history, variant }));
+      assert.match(rejected.reason, /clean captured implementation|cannot change product/);
+    }
   }
 });
 

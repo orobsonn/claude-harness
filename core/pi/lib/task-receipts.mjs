@@ -698,7 +698,9 @@ export function inspectTaskRun(entry, dependencies = {}) {
       // A later successful dispatch can inspect or revert a disposable change
       // without writing product. Keep an older native capture when it precedes
       // that implementation's first author and the final Git delta is test-only.
-      if (!recoveryOrigin && !captureAttemptedBeforeAuthor) {
+      // A dirty capture of the disposable dispatch cannot serve as proof, but
+      // it also cannot invalidate an independently clean earlier capture.
+      if (!recoveryOrigin) {
         for (let index = implementationIndex - 1; index >= 0; index--) {
           const priorWriter = native.events[index];
           if (!isImplementationForTask(priorWriter) || !captureEligibleWriterCompletion(priorWriter)) continue;
