@@ -5,6 +5,13 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [3.6.10](https://github.com/orobsonn/claude-harness/compare/v3.6.9...v3.6.10) (2026-09-27)
+
+
+### Bug Fixes
+
+* **pi:** reconcile parent-owned frozen tests during task integration ([#1060](https://github.com/orobsonn/claude-harness/issues/1060)) ([fa1c514](https://github.com/orobsonn/claude-harness/commit/fa1c5146ab9dc352dd349fe9ad3e795763fc93e6))
+
 ## [3.6.9](https://github.com/orobsonn/claude-harness/compare/v3.6.8...v3.6.9) (2026-09-27)
 
 
