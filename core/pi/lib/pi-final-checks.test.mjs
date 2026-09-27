@@ -72,3 +72,37 @@ test("declared custom commands are archived without executing them and malformed
   assert.equal(checkPiFinalCommands({ ...f.input, commands: "npm test" }).ok, false);
   assert.deepEqual(checkPiFinalCommands({ ...f.input }), { ok: true });
 });
+
+test("final npm checks accept only the package proven by every frozen test and task scope", async (t) => {
+  const commands = ["npm test -- src/one.test.ts", "npm test -- src/two.test.ts", "npm test"];
+  const f = fixture(t, commands);
+  fs.mkdirSync(path.join(f.root, "api/src"), { recursive: true });
+  fs.writeFileSync(path.join(f.root, "package.json"), JSON.stringify({ name: "monorepo", private: true }));
+  fs.writeFileSync(path.join(f.root, "api/package.json"), JSON.stringify({ name: "api", scripts: { test: "vitest run" } }));
+  fs.writeFileSync(path.join(f.root, "api/src/one.test.ts"), "test one\n");
+  fs.writeFileSync(path.join(f.root, "api/src/two.test.ts"), "test two\n");
+  f.git("add", "."); f.git("commit", "-qm", "add scoped package");
+  const planFile = path.join(f.root, ".pi/harness/plans/feature/execution-plan.json");
+  const plan = JSON.parse(fs.readFileSync(planFile, "utf8"));
+  plan.tasks = [
+    { scope_paths: ["api/src/one.test.ts"], locked_tests: [{ path: "api/src/one.test.ts", command: commands[0] }] },
+    { scope_paths: ["api/src/two.test.ts"], locked_tests: [{ path: "api/src/two.test.ts", command: commands[1] }] },
+  ];
+  fs.writeFileSync(planFile, JSON.stringify(plan));
+  const check = () => checkPiFinalCommands({ projectRoot: f.root, sessionId: f.input.sessionId, commands });
+  await f.record("npm test --prefix other -- src/one.test.ts");
+  assert.deepEqual(check().commands, commands, "an unrelated package cannot satisfy the plan");
+  await f.record("npm test --prefix api -- src/one.test.ts");
+  await f.record("npm test --prefix api -- src/two.test.ts");
+  await f.record("npm test --prefix api");
+  assert.deepEqual(check(), { ok: true });
+  await f.record(commands[0], { failure: true });
+  assert.deepEqual(check(), { ok: true }, "an impossible root invocation does not erase scoped success");
+  await f.record("npm test --prefix api", { failure: true });
+  assert.deepEqual(check().commands, ["npm test"], "a later failure of the actual scoped command wins");
+  await f.record("npm test --prefix api");
+  assert.deepEqual(check(), { ok: true });
+  plan.tasks[1].scope_paths = ["dashboard/src/two.test.ts"];
+  fs.writeFileSync(planFile, JSON.stringify(plan));
+  assert.deepEqual(check().commands, commands, "mixed task scope cannot infer one package cwd");
+});
