@@ -1,5 +1,5 @@
 /** Run-local curated context and evidence-backed harvest, never a substitute for gate-state. */
-import { constants, closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readSync, readdirSync, realpathSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { constants, closeSync, fchmodSync, fsyncSync, lstatSync, mkdirSync, openSync, readSync, readdirSync, realpathSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { join } from "node:path";
@@ -48,12 +48,12 @@ function readSmall(path, limit) {
     return buffer.subarray(0, count).toString("utf8");
   } finally { closeSync(fd); }
 }
-function atomicWrite(path, content) {
+function atomicWrite(path, content, mode = 0o600) {
   regularFile(path);
   const temporary = `${path}.${randomUUID()}.tmp`;
   try {
-    const fd = openSync(temporary, "wx", 0o600);
-    try { writeFileSync(fd, content, "utf8"); fsyncSync(fd); } finally { closeSync(fd); }
+    const fd = openSync(temporary, "wx", mode);
+    try { writeFileSync(fd, content, "utf8"); fchmodSync(fd, mode); fsyncSync(fd); } finally { closeSync(fd); }
     regularFile(path);
     renameSync(temporary, path);
   } finally {
@@ -279,14 +279,20 @@ export function reconcileMemoryDelivery(projectRoot, sessionId, { expected_head,
   if ([...changed, ...conflictPaths].some((file) => isPiReviewExcludedPath(root, file) || file.startsWith(".pi/harness/plans/")))
     throw new Error("Base merge would import secrets or ephemeral runtime/plan files; no files were changed");
   const checkedPaths = new Set([...conflictPaths, ...changed.filter((file) => DURABLE_MEMORY_FILES.includes(file))]);
+  const conflictModes = new Map();
   for (const file of checkedPaths) {
-    // No rename/delete conflict, executable or symlink resolution. Clean
-    // upstream additions/deletions remain ordinary base integration.
+    // Resolve executable text only when all three Git trees agree on its mode.
+    // Memory stays non-executable; renames, deletions and symlinks stay refused.
+    const conflict = conflictPaths.includes(file);
+    const headObject = gitMemory(root, ["ls-tree", expected_head, "--", file]);
+    const mode = conflict && !DURABLE_MEMORY_FILES.includes(file) && /^100755 blob /.test(headObject)
+      ? "100755" : "100644";
     for (const ref of [expected_head, base_sha, tree]) {
       const object = gitMemory(root, ["ls-tree", ref, "--", file]);
-      if ((conflictPaths.includes(file) || object) && !/^100644 blob /.test(object))
-        throw new Error("Conflict reconciliation requires existing regular non-executable files on both sides");
+      if ((conflict || object) && !object.startsWith(`${mode} blob `))
+        throw new Error("Conflict reconciliation requires existing regular files with matching modes on both sides");
     }
+    if (conflict) conflictModes.set(file, mode);
     regularFile(join(root, file));
   }
   const blob = (ref, file) => {
@@ -338,13 +344,15 @@ export function reconcileMemoryDelivery(projectRoot, sessionId, { expected_head,
   for (const patch of patches) {
     if (readSmall(join(root, patch.path), 1024 * 1024) !== patch.before) throw new Error("Memory preimage changed during merge; preserve and inspect the worktree");
   }
-  for (const patch of patches) atomicWrite(join(root, patch.path), patch.content);
+  for (const patch of patches) atomicWrite(join(root, patch.path), patch.content,
+    conflictModes.get(patch.path) === "100755" ? 0o755 : 0o600);
   if (patches.length) gitMemory(root, ["add", "--", ...patches.map((patch) => patch.path)]);
   const indexDelta = gitMemory(root, ["diff", "--cached", "--name-only", "-z", tree]).split("\0").filter(Boolean);
   if (indexDelta.some((file) => !conflictPaths.includes(file)) || gitMemory(root, ["diff", "--name-only"]))
     throw new Error("Merge differs from the preview outside memory resolutions; preserve and inspect the index");
   for (const patch of patches) {
-    if (blob("", patch.path) !== patch.content || !/^100644 /.test(gitMemory(root, ["ls-files", "--stage", "--", patch.path])))
+    if (blob("", patch.path) !== patch.content ||
+        !gitMemory(root, ["ls-files", "--stage", "--", patch.path]).startsWith(`${conflictModes.get(patch.path)} `))
       throw new Error("Staged conflict differs from the resolution; preserve and inspect the index");
   }
   gitMemory(root, ["commit", "-m", productConflicts.length ?

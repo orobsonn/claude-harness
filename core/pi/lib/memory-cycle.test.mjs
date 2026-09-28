@@ -3,7 +3,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -284,6 +284,34 @@ test("global reconcile refuses a product conflict with executable mode", (t) => 
   git("checkout", "-q", "--detach", input.expected_head);
   assert.throws(() => memoryCycle.reconcileMemoryDelivery(root, SESSION, { ...input, base_sha }), /regular|non-executable/i);
   assert.equal(git("rev-parse", "HEAD"), input.expected_head);
+  assert.equal(git("status", "--porcelain"), "");
+});
+
+test("global reconcile resolves executable text without dropping its Git or worktree mode", (t) => {
+  const { root, git, ...input } = parallelDelivery(t, { productConflict: true, memoryConflict: false,
+    beforeFinalReview: true });
+  chmodSync(join(root, "product.txt"), 0o755);
+  git("add", "product.txt"); git("commit", "-qm", "fixture: executable local product");
+  const expected_head = git("rev-parse", "HEAD");
+  git("checkout", "-q", "parallel-main");
+  chmodSync(join(root, "product.txt"), 0o755);
+  git("add", "product.txt"); git("commit", "-qm", "fixture: executable upstream product");
+  const base_sha = git("rev-parse", "HEAD");
+  git("checkout", "-q", "--detach", expected_head);
+  const params = { ...input, expected_head, base_sha };
+  const preview = memoryCycle.reconcileMemoryDelivery(root, SESSION, params);
+  assert.deepEqual(preview.conflicts.map((entry) => entry.path), ["product.txt"]);
+  const conflict = preview.conflicts[0];
+  const hunk = conflict.content.match(/^<<<<<<<[^\n]*\n[\s\S]*?^>>>>>>>[^\n]*\n/m)?.[0];
+  assert.ok(hunk);
+  const merged = memoryCycle.reconcileMemoryDelivery(root, SESSION, { ...params, resolutions: [{
+    path: conflict.path, before_sha256: conflict.sha256,
+    patches: [{ old_text: hunk, new_text: "resolved executable product\n" }],
+  }] });
+  assert.equal(merged.applied, true);
+  assert.equal(readFileSync(join(root, "product.txt"), "utf8"), "resolved executable product\n");
+  assert.equal(statSync(join(root, "product.txt")).mode & 0o111, 0o111);
+  assert.match(git("ls-tree", "HEAD", "--", "product.txt"), /^100755 blob /);
   assert.equal(git("status", "--porcelain"), "");
 });
 
