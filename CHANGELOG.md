@@ -5,6 +5,13 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [3.6.13](https://github.com/orobsonn/claude-harness/compare/v3.6.12...v3.6.13) (2026-09-28)
+
+
+### Bug Fixes
+
+* **pi:** allow bounded memory conflict merges above harvest limit ([#1067](https://github.com/orobsonn/claude-harness/issues/1067)) ([4a67a13](https://github.com/orobsonn/claude-harness/commit/4a67a1324543055689264e75dffa70d0f5d7158c))
+
 ## [3.6.12](https://github.com/orobsonn/claude-harness/compare/v3.6.11...v3.6.12) (2026-09-28)
 
 
