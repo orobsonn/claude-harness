@@ -862,6 +862,23 @@ test("host-integrated implementation survives dirty capture and two test-only re
   assert.equal(again.result.hand_capture.recovery_origin.head_sha, first.head);
 });
 
+test("a no-write resume revalidates the same integrated test author and exact child HEAD", () => {
+  const f = testOnlyRecovery();
+  archiveInspectedIntegration(f);
+  const replay = inspectTaskRun(f.entry, f.dependencies);
+  assert.equal(replay.ok, true, replay.reason);
+  assert.equal(replay.result.child_head, f.head);
+  assert.equal(replay.result.hand_capture.recovery_origin.head_sha, f.recoveryBaseline);
+  assert.equal(replay.result.hand_capture.producer_call_id,
+    f.entry.result_history[f.entry.integration_history.at(-1).result_sha256].hand_capture.producer_call_id);
+
+  write(path.join(f.root, "src/task.mjs"), "export const actual = 'unreviewed product';\n");
+  commit(f.root, "unreviewed product after integration");
+  const drift = inspectTaskRun(f.entry, f.dependencies);
+  assert.equal(drift.ok, false);
+  assert.match(drift.reason, /outside canonical scope|historical producer|cannot change product/);
+});
+
 test("historical recovery revalidates the immediate host pair without older fallback", () => {
   const mutations = {
     hash: (result, integration) => { integration.result_sha256 = "0".repeat(64); },

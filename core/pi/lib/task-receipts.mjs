@@ -417,7 +417,7 @@ function onlyRecoveryChanges(entry, root, baseline, head, task, plan) {
   return onlyFrozenChanges(root, cursor, head, paths);
 }
 
-function integratedRecoveryOrigin(entry, { sessionId, task, events, implementationIndex, producerIndex }) {
+function integratedRecoveryOrigin(entry, { sessionId, task, events, implementationIndex, producerIndex, hand, head }) {
   // A failed immediate pair must not revive an older integration or event capture.
   const integration = entry.integration_history.at(-1);
   const result = object(integration) && SHA256.test(integration.result_sha256 ?? "") &&
@@ -440,19 +440,28 @@ function integratedRecoveryOrigin(entry, { sessionId, task, events, implementati
   // supply or replace it merely because this task has integration history.
   if (events[implementationIndex].launchIndex >= result.launches.length)
     return { ok: true, origin: null };
-  const hand = result.hand_capture;
-  const historicalProducerIndex = events.findIndex((event) => event.callId === hand.producer_call_id &&
-    event.launchIndex === hand.producer_launch_index && event.tool === "subagent" &&
-    event.args?.subagent_type === hand.agent && taskFromPrompt(event.args?.prompt) === entry.task_id && eventSucceeded(event));
+  const historicalHand = result.hand_capture;
+  const historicalProducerIndex = events.findIndex((event) => event.callId === historicalHand.producer_call_id &&
+    event.launchIndex === historicalHand.producer_launch_index && event.tool === "subagent" &&
+    event.args?.subagent_type === historicalHand.agent && taskFromPrompt(event.args?.prompt) === entry.task_id && eventSucceeded(event));
   const implementation = events[implementationIndex];
-  const origin = hand.agent === "harness-test-author" ? hand.recovery_origin : {
-    producer_call_id: hand.producer_call_id, producer_launch_index: hand.producer_launch_index,
+  const origin = historicalHand.agent === "harness-test-author" ? historicalHand.recovery_origin : {
+    producer_call_id: historicalHand.producer_call_id, producer_launch_index: historicalHand.producer_launch_index,
   };
-  if (historicalProducerIndex < implementationIndex || historicalProducerIndex >= producerIndex ||
-      hand.producer_launch_index >= result.launches.length || origin.producer_call_id !== implementation.callId ||
+  // A no-write resume can revalidate the same test-author and exact child HEAD
+  // after an integration. Its sealed producer is still the current producer;
+  // a different HEAD or hand must follow the ordinary new-author lineage.
+  const sameProducerReplay = historicalProducerIndex === producerIndex &&
+    result.child_head === head && hand.producerCallId === historicalHand.producer_call_id &&
+    hand.freezeCommitSha === historicalHand.freeze_sha &&
+    hand.capturedVerifiedAt === historicalHand.captured_verified_at;
+  if (historicalProducerIndex < implementationIndex ||
+      (historicalProducerIndex >= producerIndex && !sameProducerReplay) ||
+      historicalHand.producer_launch_index >= result.launches.length || origin.producer_call_id !== implementation.callId ||
       origin.producer_launch_index !== implementation.launchIndex)
     return failure("test-only recovery historical producer is not bound to the native implementation lineage");
-  return { ok: true, origin: { head_sha: result.child_head, producer_call_id: origin.producer_call_id,
+  return { ok: true, origin: { head_sha: sameProducerReplay ? origin.head_sha : result.child_head,
+    producer_call_id: origin.producer_call_id,
     producer_launch_index: origin.producer_launch_index } };
 }
 
@@ -649,7 +658,7 @@ export function inspectTaskRun(entry, dependencies = {}) {
         return failure("test-only recovery requires a resumed task with valid integration history");
       if (entry.integration_history?.length) {
         const previous = integratedRecoveryOrigin(entry, { sessionId: claim.session_id, task: binding.task,
-          events: native.events, implementationIndex, producerIndex });
+          events: native.events, implementationIndex, producerIndex, hand, head });
         if (!previous.ok) return previous;
         recoveryOrigin = previous.origin;
       }
@@ -747,7 +756,7 @@ export function inspectTaskRun(entry, dependencies = {}) {
             isImplementationForTask(event) && event.launchIndex < historicalResult.launches.length);
           if (historicalIndex >= 0) {
             const previous = integratedRecoveryOrigin(entry, { sessionId: claim.session_id, task: binding.task,
-              events: native.events, implementationIndex: historicalIndex, producerIndex });
+              events: native.events, implementationIndex: historicalIndex, producerIndex, hand, head });
             if (!previous.ok) return previous;
             if (previous.origin) recoveryOrigin = { ...previous.origin,
               head_sha: reconciliation.merged_head, derived_from: "host-reconciliation",
