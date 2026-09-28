@@ -5,6 +5,14 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [3.6.11](https://github.com/orobsonn/claude-harness/compare/v3.6.10...v3.6.11) (2026-09-28)
+
+
+### Bug Fixes
+
+* **pi:** remove partial admission claim after ENOSPC ([#1062](https://github.com/orobsonn/claude-harness/issues/1062)) ([960455f](https://github.com/orobsonn/claude-harness/commit/960455fa8740723e0e2501fb8169526c21cd7f3d))
+* **pi:** revalidate integrated test author on unchanged resume ([#1064](https://github.com/orobsonn/claude-harness/issues/1064)) ([93f42ec](https://github.com/orobsonn/claude-harness/commit/93f42ecaac15c32a1aee5cb1ca235ee8f143ec49))
+
 ## [3.6.10](https://github.com/orobsonn/claude-harness/compare/v3.6.9...v3.6.10) (2026-09-27)
 
 
