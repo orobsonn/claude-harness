@@ -266,6 +266,7 @@ export function admitTaskRun(grantPath, { cwd, sessionId }) {
   let stateFile;
   let stateText;
   let claimCreated = false;
+  let claimIdentity;
   try {
     admission = inspectTaskAdmission(grantPath, { cwd, sessionId });
     if (!admission.ok) return admission;
@@ -283,8 +284,15 @@ export function admitTaskRun(grantPath, { cwd, sessionId }) {
       classification_source: "delegated-task",
       task_run: admission.binding,
     }, null, 2)}\n`;
-    fs.writeFileSync(`${admission.grantPath}.claim`, claimText, { flag: "wx", mode: 0o600 });
+    const claimFile = `${admission.grantPath}.claim`;
+    const claimFd = fs.openSync(claimFile, "wx", 0o600);
     claimCreated = true;
+    try {
+      claimIdentity = fs.fstatSync(claimFd);
+      fs.writeFileSync(claimFd, claimText);
+    } finally {
+      fs.closeSync(claimFd);
+    }
     fs.mkdirSync(stateDir, { recursive: true });
     fs.writeFileSync(stateFile, stateText, { flag: "wx", mode: 0o600 });
     return admission;
@@ -296,8 +304,13 @@ export function admitTaskRun(grantPath, { cwd, sessionId }) {
         fs.unlinkSync(stateFile);
         try { fs.rmdirSync(path.dirname(stateFile)); } catch { /* preserve non-empty/changed state */ }
       }
-      if (claimCreated && admission?.grantPath && claimText && fs.readFileSync(`${admission.grantPath}.claim`, "utf8") === claimText) {
-        fs.unlinkSync(`${admission.grantPath}.claim`);
+      if (claimCreated && admission?.grantPath && claimText && claimIdentity) {
+        const claimFile = `${admission.grantPath}.claim`;
+        const current = fs.lstatSync(claimFile);
+        if (current.isFile() && current.dev === claimIdentity.dev && current.ino === claimIdentity.ino &&
+            claimText.startsWith(fs.readFileSync(claimFile, "utf8"))) {
+          fs.unlinkSync(claimFile);
+        }
       }
     } catch { /* preserve the original admission failure */ }
     return fail(error instanceof Error ? error.message : String(error));

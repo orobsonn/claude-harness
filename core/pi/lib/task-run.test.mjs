@@ -229,6 +229,37 @@ test("admission requires the current host-owned plan APPROVE and initializes no 
   assert.equal(readTaskRunBinding(f.root, "task-parent").ok, true);
 });
 
+test("ENOSPC during exclusive claim write removes only this admission's partial claim", (t) => {
+  for (const prefix of ["", '{"session_id":']) {
+    const f = fixture(t);
+    const originalWrite = fs.writeFileSync.bind(fs);
+    const mockedWrite = t.mock.method(fs, "writeFileSync", (target, ...args) => {
+      if (typeof target === "number") {
+        if (prefix) originalWrite(target, prefix);
+        const error = new Error("ENOSPC");
+        error.code = "ENOSPC";
+        throw error;
+      }
+      return originalWrite(target, ...args);
+    });
+    let admitted;
+    try {
+      admitted = admitTaskRun(f.grantPath, { cwd: f.root, sessionId: "task-parent" });
+    } finally {
+      mockedWrite.mock.restore();
+    }
+    assert.equal(admitted.ok, false);
+    assert.match(admitted.reason, /ENOSPC/);
+    assert.equal(fs.existsSync(`${f.grantPath}.claim`), false, "the partial exclusive claim must not strand the attempt");
+    const retry = admitTaskRun(f.grantPath, { cwd: f.root, sessionId: "task-parent" });
+    assert.equal(retry.ok, true, retry.reason);
+  }
+  const occupied = fixture(t);
+  fs.writeFileSync(`${occupied.grantPath}.claim`, "foreign claim");
+  assert.equal(admitTaskRun(occupied.grantPath, { cwd: occupied.root, sessionId: "task-parent" }).ok, false);
+  assert.equal(fs.readFileSync(`${occupied.grantPath}.claim`, "utf8"), "foreign claim", "a pre-existing claim is never removed");
+});
+
 test("fresh admission rejects unsupported scope globs before claim or local state", (t) => {
   const f = fixture(t);
   const plan = JSON.parse(fs.readFileSync(f.planPath, "utf8"));
