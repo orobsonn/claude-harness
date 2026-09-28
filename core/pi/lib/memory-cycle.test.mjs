@@ -315,6 +315,35 @@ test("global reconcile resolves executable text without dropping its Git or work
   assert.equal(git("status", "--porcelain"), "");
 });
 
+test("global reconcile preserves both sides of a memory hunk larger than the harvest patch limit", (t) => {
+  const { root, git, ...input } = parallelDelivery(t, { beforeFinalReview: true });
+  const local = `Local learning.\n${"L".repeat(3500)}\n`;
+  const upstream = `Upstream learning.\n${"U".repeat(4500)}\n`;
+  writeFileSync(join(root, "MEMORY.md"), `# Verified knowledge\n\nExisting entry.\n${local}`);
+  git("add", "MEMORY.md"); git("commit", "-qm", "docs: detailed local memory");
+  const expected_head = git("rev-parse", "HEAD");
+  git("checkout", "-q", "parallel-main");
+  writeFileSync(join(root, "MEMORY.md"), `# Verified knowledge\n\nExisting entry.\n${upstream}`);
+  git("add", "MEMORY.md"); git("commit", "-qm", "docs: detailed upstream memory");
+  const base_sha = git("rev-parse", "HEAD");
+  git("checkout", "-q", "--detach", expected_head);
+  const params = { ...input, expected_head, base_sha };
+  const preview = memoryCycle.reconcileMemoryDelivery(root, SESSION, params);
+  const conflict = preview.conflicts.find((entry) => entry.path === "MEMORY.md");
+  const hunk = conflict.content.match(/^<<<<<<<[^\n]*\n[\s\S]*?^>>>>>>>[^\n]*\n/m)?.[0];
+  assert.ok(hunk);
+  assert.ok(Buffer.byteLength(hunk + local + upstream) > 8192);
+  assert.ok(Buffer.byteLength(hunk + local + upstream) <= 24576);
+  const merged = memoryCycle.reconcileMemoryDelivery(root, SESSION, { ...params, resolutions: [{
+    path: conflict.path, before_sha256: conflict.sha256,
+    patch: { old_text: hunk, new_text: local + upstream },
+  }] });
+  assert.equal(merged.applied, true);
+  assert.equal(readFileSync(join(root, "MEMORY.md"), "utf8"),
+    `# Verified knowledge\n\nExisting entry.\n${local}${upstream}`);
+  assert.equal(git("status", "--porcelain"), "");
+});
+
 function fixture(t) {
   const root = mkdtempSync(join(tmpdir(), "pi-memory-review-evidence-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));

@@ -322,7 +322,10 @@ export function reconcileMemoryDelivery(projectRoot, sessionId, { expected_head,
     if (isMemory ? !resolution.patch || Object.hasOwn(resolution, "patches") :
       !Array.isArray(resolution.patches) || Object.hasOwn(resolution, "patch"))
       throw new Error("Use one literal patch for memory or one patch per product conflict hunk");
-    const content = isMemory ? applyMemoryDelta(entry.content, resolution) :
+    // Git may place several kilobytes from each side in one memory conflict
+    // hunk. Keep ordinary harvest edits at 8 KiB; only the hash-bound merge
+    // resolution needs room to carry that exact preimage plus both sides.
+    const content = isMemory ? applyMemoryDelta(entry.content, resolution, 24576) :
       applyProductConflictPatches(entry.content, resolution.patches);
     if (/^(?:<{7}|={7}|>{7}|\|{7})(?:\s|$)/m.test(content)) throw new Error("Resolve all conflict markers before integrating the base");
     return { path: entry.path, before: entry.content, content };
@@ -410,7 +413,7 @@ export function beginHarvest(projectRoot, sessionId) {
       memory_paths: reviewed.reviewBinding?.memory_paths ?? [],
     } } : {}) };
 }
-function validateMemoryDelta(change) {
+function validateMemoryDelta(change, maxBytes = 8192) {
   if (Object.hasOwn(change, "content")) throw new Error("Full replacement is forbidden; use a small patch or append with the current before_sha256, or changes: []");
   const append = Object.hasOwn(change, "append");
   const patch = change.patch;
@@ -419,11 +422,11 @@ function validateMemoryDelta(change) {
     : !patch || typeof patch !== "object" || Array.isArray(patch) || Object.keys(patch).sort().join(",") !== "new_text,old_text" ||
       typeof patch.old_text !== "string" || !patch.old_text.trim() || typeof patch.new_text !== "string")
     throw new Error("Use nonempty append or patch {old_text, new_text} with a unique literal preimage");
-  if (Buffer.byteLength(append ? change.append : patch.old_text + patch.new_text) > 8192)
-    throw new Error("Each memory patch/append must be at most 8 KiB; reduce to the relevant entry");
+  if (Buffer.byteLength(append ? change.append : patch.old_text + patch.new_text) > maxBytes)
+    throw new Error(`Each memory patch/append must be at most ${maxBytes / 1024} KiB; reduce to the relevant entry`);
 }
-function applyMemoryDelta(original, change) {
-  validateMemoryDelta(change);
+function applyMemoryDelta(original, change, maxBytes = 8192) {
+  validateMemoryDelta(change, maxBytes);
   if (Object.hasOwn(change, "append")) return (original ?? "") + change.append;
   const { old_text, new_text } = change.patch;
   if (original === null || !original.includes(old_text) || original.indexOf(old_text) !== original.lastIndexOf(old_text))
@@ -524,7 +527,7 @@ export function applyHarvest(projectRoot, sessionId) {
   const harvest = raw === null ? null : JSON.parse(raw);
   if (!harvest || harvest.written_by !== "host-subagent-completion" || harvest.status !== "completed" || harvest.session_id !== sessionId || harvest.project_root !== paths.root) throw new Error("Apply requires this session's completed harvest proposal");
   if (!Array.isArray(harvest.changes) || harvest.proposal_sha256 !== sha(JSON.stringify(harvest.changes))) throw new Error("Invalid harvest receipt");
-  harvest.changes.forEach(validateMemoryDelta);
+  harvest.changes.forEach((change) => validateMemoryDelta(change));
   if (gitMemory(paths.root, ["rev-parse", "HEAD"]) !== harvest.base_head) throw new Error("HEAD changed before harvest apply; rerun harvest");
   if (snapshotPlan(paths, harvest.feature_id).hash !== harvest.plan_snapshot?.hash) throw new Error("Canonical plan changed before harvest apply");
   const expected = harvest.changes.map((change) => change.path);
@@ -560,7 +563,7 @@ export function checkHarvestReady(projectRoot, sessionId) {
   const { harvestReceipt: harvest } = readMemory(paths.root, sessionId);
   if (!harvest || harvest.written_by !== "host-subagent-completion" || harvest.status !== "completed") throw new Error("Run a successful [HARNESS_HARVEST] after final review and before shipping");
   if (!Array.isArray(harvest.changes) || harvest.proposal_sha256 !== sha(JSON.stringify(harvest.changes))) throw new Error("Invalid harvest receipt");
-  harvest.changes.forEach(validateMemoryDelta);
+  harvest.changes.forEach((change) => validateMemoryDelta(change));
   const current = snapshotPlan(paths, harvest.feature_id);
   const old = harvest.plan_snapshot;
   if (!old || current.hash !== old.hash) throw new Error("Finalization must preserve the canonical plan exactly");
