@@ -2523,8 +2523,8 @@ test("fresh-install check fails while naming each missing native skill/template 
 test("canonical harness task form exposes every required roadmap field", () => {
   const form = readFileSync(join(harnessRoot, "core/github/ISSUE_TEMPLATE/harness-task.yml"), "utf8");
   assert.match(form, /^title: "\[harness\] "$/m);
-  assert.match(form, /^labels: \["harness:ready"\]$/m);
-  for (const id of ["user_journeys", "acceptance_criteria", "scope", "sensitive", "priority", "size"]) {
+  assert.doesNotMatch(form, /^labels:.*harness:ready/m, "the form cannot validate dependencies before auto-labeling");
+  for (const id of ["user_journeys", "acceptance_criteria", "scope", "dependencies", "sensitive", "priority", "size"]) {
     assert.match(form, new RegExp(`^    id: ${id}$`, "m"), `form missing ${id}`);
   }
   assert.match(form, /#uj-N/);

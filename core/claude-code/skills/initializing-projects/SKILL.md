@@ -75,7 +75,7 @@ It performs, **idempotently**:
 - **`.claude/settings.json`:** copied if absent; if one already exists, written as `settings.harness.json` for the operator to merge (never clobbered).
 - **`.claude/.gitignore`:** ignores ephemerals (`plans/`, `settings.local.json`, `*.local.md`) — keeps `memory/` and `kaizen.md` committed.
 - **`.claude/.harness-version`:** the vendored version + timestamp.
-- **`.github/ISSUE_TEMPLATE/harness-task.yml`** (repo root, non-clobber): the issue form that makes an issue harness-ready (auto-labels `harness:ready`). Feeds the issue-poll routine.
+- **`.github/ISSUE_TEMPLATE/harness-task.yml`** (repo root, non-clobber): the issue form with an explicit dependency field. Apply `harness:ready` only after checking the saved dependency metadata.
 
 ### Step 3 — Reconcile settings (only if `settings.harness.json` was written)
 If the project already had a `settings.json`, the installer wrote `settings.harness.json` beside it.

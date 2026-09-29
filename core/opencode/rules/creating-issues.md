@@ -80,7 +80,7 @@ Universal — sem `paths:`, carrega em toda conversa.
 - Se existir `CONTEXT.md` na raiz do projeto, usar os termos dele **literalmente** no título e no corpo da issue — o mesmo vocabulário que os agentes de plano e de escrita leem. Não inventar vocabulário paralelo; não criar nem editar o arquivo (`oc-surveying-codebase` semeia, o `harvester` mantém)
 
 ### Roadmap encadeado (issues com dependência/ordem)
-- Um **roadmap** é um conjunto de issues criadas TODAS com `harness:ready` (o form já aplica) — a ordem NÃO vem da ordem de criação, vem das **dependências declaradas**
+- Um **roadmap** é criado sem label automática; valide o bloco de dependências e só então aplique `harness:ready` a cada issue. A ordem vem das **dependências declaradas**.
 - Uma issue que precisa que outra(s) tenha(m) **merjado antes** declara isso no bloco fechado `harness-deps` do corpo (campo "Dependências" do form), um `#N` por linha:
   ```harness-deps
   #12

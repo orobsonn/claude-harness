@@ -2653,7 +2653,7 @@ test("LOCKED #808 §6.1-h: adviseIssueForm's 4th param defaults to false — the
   const withDefault = adviseIssueForm("gh issue create --title x", "/abs/repo", () => true);
   const withExplicitFalse = adviseIssueForm("gh issue create --title x", "/abs/repo", () => true, false);
   assert.equal(withDefault, withExplicitFalse, "omitting isRoutine must behave exactly like passing false");
-  assert.match(withDefault, /label `harness:ready`/, "interactive advisory must still tell the operator to label harness:ready");
+  assert.match(withDefault, /validate dependencies before adding `harness:ready`/, "interactive advisory must validate dependencies before labeling");
   // #807: same replacement as issue-form-advisory #6 above — the retired lint's command is gone, the
   // standard it served is pinned instead. #808's #ac-3.2 regression lock is about the 4th parameter's
   // DEFAULT (the equality assertion above), not about this sentence, so it is untouched.

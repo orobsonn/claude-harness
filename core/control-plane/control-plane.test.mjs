@@ -182,7 +182,8 @@ class FakeExternal {
 function issue(number, title, extra = {}) {
   const { labels = [], ...rest } = extra;
   return {
-    number, title, body: "", createdAt: `2026-01-${String(number).padStart(2, "0")}T00:00:00Z`,
+    number, title, body: "Issue sem dependências declaradas.", blockedBy: { nodes: [], totalCount: 0 },
+    createdAt: `2026-01-${String(number).padStart(2, "0")}T00:00:00Z`,
     labels: [{ name: "harness:ready" }, ...labels], url: `https://example.test/issues/${number}`, ...rest,
   };
 }
@@ -516,6 +517,19 @@ test("Recommendation accepts a canonical dependency only after GitHub proves it 
   assert.equal(external.calls.some((call) => call[0] === "gh" && call[1] === "issue" && call[2] === "view" && call[3] === "1"), true);
 });
 
+test("Recommendation holds ambiguous prose, malformed fences and native open blockers", async () => {
+  const { control } = await setupControl({
+    issues: [
+      issue(2, "Ambiguous", { body: "depende de: filha 1", labels: [{ name: "p0" }] }),
+      issue(3, "Malformed", { body: "```harness-deps\n#\n```", labels: [{ name: "p0" }] }),
+      issue(4, "Native blocker", { blockedBy: { nodes: [{ state: "OPEN" }], totalCount: 1 }, labels: [{ name: "p0" }] }),
+      issue(5, "Ready", { body: "```harness-deps\n#1\n```" }),
+    ],
+    issueStates: { 1: "CLOSED" },
+  });
+  assert.equal((await control.recommendIssue("x")).recommendation.issue.number, 5);
+});
+
 test("Given an exact recommendation, start binds one issue, worktree, terminal and real session idempotently", async () => {
   const { control, external } = await setupControl();
   const recommendation = (await control.recommendIssue("Project X")).recommendation;
@@ -549,6 +563,15 @@ test("Start revalidates the recommended issue before reserving a delivery", asyn
   const result = await control.startDelivery(recommendation.recommendation_id, AUTHORIZATION);
   assert.equal(result.ok, false);
   assert.equal(result.reason, "issue-not-ready");
+  assert.deepEqual(fs.readdirSync(path.join(home, "deliveries")), []);
+});
+
+test("Start refuses dependency metadata invalidated after recommendation", async () => {
+  const { control, external, home } = await setupControl();
+  const recommendation = (await control.recommendIssue("x")).recommendation;
+  external.issues[0].body = "depende de: filha 1";
+  const result = await control.startDelivery(recommendation.recommendation_id, AUTHORIZATION);
+  assert.equal(result.reason, "issue-dependency-metadata-invalid");
   assert.deepEqual(fs.readdirSync(path.join(home, "deliveries")), []);
 });
 

@@ -28,7 +28,7 @@ test("invalid drafts name missing fields and reject enum/title/tag violations", 
   assert.throws(() => validateIssueDraft(validDraft({ size: "XL" })), /size/);
 });
 
-test("rendered issue body contains every exact required field and harness-deps fence", () => {
+test("rendered independent issue body contains every exact required field", () => {
   const body = renderIssueBody(validateIssueDraft(validDraft()));
   for (const required of [
     "### Resumo + por quê",
@@ -41,7 +41,7 @@ test("rendered issue body contains every exact required field and harness-deps f
     "### Prioridade",
     "### Tamanho estimado",
     "### Dependências",
-    "```harness-deps",
+    "Nenhuma.",
   ]) {
     assert.ok(body.includes(required), `missing required body field: ${required}`);
   }
@@ -62,6 +62,8 @@ test("dependencies reject mixed sentinel and preserve multiple references in can
 test("dependencies reject malformed and injection-bearing references", () => {
   for (const dependencies of [
     ["12"],
+    ["#0"],
+    ["#999999999999999999999999"],
     ["#12; touch /tmp/pwned"],
     ["#12\n```\nmalicious"],
     ["#12", "$(id)"],
