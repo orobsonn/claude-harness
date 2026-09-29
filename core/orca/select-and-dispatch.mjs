@@ -61,7 +61,7 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-import { parseDependsOn } from "../shared/lib/harness-deps.mjs";
+import { inspectIssueDependencies, nativeBlockersClosed } from "../shared/lib/harness-deps.mjs";
 
 export const LABEL_READY = "harness:ready";
 export const LABEL_IN_PROGRESS = "harness:in-progress";
@@ -188,8 +188,9 @@ export function eligibleIssues(issues, opts = {}) {
 export function selectIssue(opts) {
   const { issues, isClosed } = opts;
   for (const candidate of issues) {
-    const deps = parseDependsOn(candidate.body);
-    if (deps.every((dep) => isClosed(dep) === true)) return candidate;
+    const deps = inspectIssueDependencies(candidate.body);
+    if (deps.status === "invalid" || !nativeBlockersClosed(candidate.blockedBy)) continue;
+    if (deps.numbers.every((dep) => isClosed(dep) === true)) return candidate;
   }
   return null;
 }
@@ -300,7 +301,7 @@ export function runTick(deps) {
       "--label", LABEL_READY,
       "--state", "open",
       // `body` is REQUIRED — it carries the ```harness-deps``` block the gate below reads.
-      "--json", "number,title,createdAt,body,labels",
+      "--json", "number,title,createdAt,body,labels,blockedBy",
     ]);
   } catch (err) {
     log(`[${config.project}] skip: could not list issues — ${err?.message ?? err}`);

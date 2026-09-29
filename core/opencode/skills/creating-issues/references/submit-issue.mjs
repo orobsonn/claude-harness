@@ -37,12 +37,14 @@ function requireDependencies(value) {
   const dependencies = requireTaggedLines(
     value ?? ["Nenhuma."],
     "dependencies",
-    /^(?:#\d+|Nenhuma\.)$/,
+    /^(?:#[1-9]\d*|Nenhuma\.)$/,
     "#N ou Nenhuma.",
   );
   if (dependencies.includes("Nenhuma.") && dependencies.length !== 1) {
     throw new Error("dependencies: Nenhuma. deve ser usada sozinha");
   }
+  if (dependencies.some((entry) => entry !== "Nenhuma." && !Number.isSafeInteger(Number(entry.slice(1)))))
+    throw new Error("dependencies: issue number is outside the safe integer range");
   return dependencies;
 }
 
@@ -88,10 +90,8 @@ export function renderIssueBody(draft) {
     ["Tamanho estimado", draft.size],
   ];
   if (draft.resolved_decisions) sections.splice(4, 0, ["Decisões já resolvidas (opcional)", draft.resolved_decisions]);
-  const dependencyLines = draft.dependencies.length === 1 && draft.dependencies[0] === "Nenhuma."
-    ? ""
-    : draft.dependencies.join("\n");
-  sections.push(["Dependências", `\`\`\`harness-deps\n${dependencyLines}\n\`\`\``]);
+  const noDependencies = draft.dependencies.length === 1 && draft.dependencies[0] === "Nenhuma.";
+  sections.push(["Dependências", noDependencies ? "Nenhuma." : `\`\`\`harness-deps\n${draft.dependencies.join("\n")}\n\`\`\``]);
   return `${sections.map(([heading, value]) => `### ${heading}\n\n${value}`).join("\n\n")}\n`;
 }
 

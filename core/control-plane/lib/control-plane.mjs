@@ -2,7 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
-import { parseDependsOn } from "../../shared/lib/harness-deps.mjs";
+import { inspectIssueDependencies, nativeBlockersClosed } from "../../shared/lib/harness-deps.mjs";
 import { readCanonicalTaskProgress } from "../../pi/lib/task-progress.mjs";
 import { readTaskProcess } from "../../pi/lib/task-process.mjs";
 import { createExternalRunner, terminalCommand } from "./external.mjs";
@@ -985,7 +985,7 @@ export class ControlPlane {
     if (!compatibility.ok) return { ok: false, reason: "consumer-incompatible", diagnostic: compatibility.reason, project: project.id };
     const issues = await this.external.gh([
       "issue", "list", "--repo", project.gh_repo, "--label", "harness:ready", "--state", "open", "--limit", "200",
-      "--json", "number,title,body,createdAt,labels,url",
+      "--json", "number,title,body,createdAt,labels,url,blockedBy",
     ], { cwd: project.repo_path });
     let worktreeInventory;
     try {
@@ -1007,7 +1007,7 @@ export class ControlPlane {
     const eligible = issues.filter((issue) => Number.isInteger(issue.number))
       .filter((issue) => !activeIssues.has(issue.number))
       .filter((issue) => !labelNames(issue).some((label) => BLOCKED_LABELS.has(label)));
-    const dependencyNumbers = [...new Set(eligible.flatMap((issue) => parseDependsOn(issue.body)))];
+    const dependencyNumbers = [...new Set(eligible.flatMap((issue) => inspectIssueDependencies(issue.body).numbers))];
     const dependencyStates = new Map(await Promise.all(dependencyNumbers.map(async (number) => {
       try {
         const viewed = await this.external.gh([
@@ -1019,7 +1019,11 @@ export class ControlPlane {
       }
     })));
     const candidates = eligible
-      .filter((issue) => parseDependsOn(issue.body).every((dep) => dependencyStates.get(dep) === "CLOSED"))
+      .filter((issue) => {
+        const deps = inspectIssueDependencies(issue.body);
+        return deps.status !== "invalid" && nativeBlockersClosed(issue.blockedBy) &&
+          deps.numbers.every((dep) => dependencyStates.get(dep) === "CLOSED");
+      })
       .sort((a, b) => issuePriority(a) - issuePriority(b) || new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime() || a.number - b.number);
     if (!candidates.length) return { ok: true, project: project.id, recommendation: null, reason: "no compatible unblocked issue is available" };
     const issue = candidates[0];
@@ -1222,7 +1226,7 @@ export class ControlPlane {
     try {
       viewed = await this.external.gh([
         "issue", "view", String(issue.number), "--repo", project.gh_repo,
-        "--json", "number,title,state,labels,url,body",
+        "--json", "number,title,state,labels,url,body,blockedBy",
       ], { cwd: project.repo_path });
     } catch (error) {
       return { ok: false, reason: "issue-state-unavailable", diagnostic: safeDiagnostic(error) };
@@ -1231,7 +1235,10 @@ export class ControlPlane {
     if (String(viewed?.state ?? "").toUpperCase() !== "OPEN") return { ok: false, reason: "issue-not-open" };
     if (!labels.includes("harness:ready")) return { ok: false, reason: "issue-not-ready" };
     if (labels.some((label) => BLOCKED_LABELS.has(label))) return { ok: false, reason: "issue-not-admissible" };
-    for (const dependency of parseDependsOn(viewed.body)) {
+    const declared = inspectIssueDependencies(viewed.body);
+    if (declared.status === "invalid" || !nativeBlockersClosed(viewed.blockedBy))
+      return { ok: false, reason: "issue-dependency-metadata-invalid" };
+    for (const dependency of declared.numbers) {
       let dependencyState;
       try {
         const result = await this.external.gh([

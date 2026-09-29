@@ -1015,7 +1015,7 @@ test("#808 §6.2-h: the advisory splits on isRoutine — routine text carries th
 
   // 4th arg omitted => interactive, byte-identical to the pre-#808 behaviour.
   const interactive = adviseIssueForm("gh issue create --title x", "/abs/repo", () => true);
-  assert.match(interactive, /label `harness:ready`/);
+  assert.match(interactive, /validate dependencies before adding `harness:ready`/);
   assert.equal(
     interactive,
     adviseIssueForm("gh issue create --title x", "/abs/repo", () => true, false),

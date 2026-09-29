@@ -1,6 +1,7 @@
 /**
- * @description Single source of truth for turning a GitHub issue body into its declared dependency
- * set. A roadmap issue names the issues that must be DONE before it may run inside a fenced,
+ * @description Shared parsing for GitHub issue dependencies. Scheduling uses the strict
+ * inspectIssueDependencies result, so missing or malformed metadata never means "ready".
+ * A roadmap issue names the issues that must be DONE before it may run inside a fenced,
  * machine-readable block:
  *
  *   ```harness-deps
@@ -12,16 +13,47 @@
  * reformatting — far less fragile than a free-text `depends-on:` prose line, which an operator's
  * reflow or a GitHub render could silently mangle.
  *
- * This module lives in `core/shared/lib/` (never in the now-deleted `core/vps/`) because BOTH the
- * retired VPS cron engine (which re-exported from here until it was deleted) and the Orca selector
- * (`core/orca/select-and-dispatch.mjs`) parse the same block. What differs is how each one decides
- * a dependency is SATISFIED — see the note in `core/orca/README.md`: the VPS engine anchored on a
- * merged PR whose head branch is literally `harness/<N>`, which is a branch-NAME test, not a
- * delivery test; the selector anchors on the dependency ISSUE being CLOSED.
+ * Both the Orca cron selector and the control plane use the strict inspection result and require
+ * GitHub's native blockedBy relationship to be complete and closed. parseDependsOn remains for
+ * compatibility with callers that only need the numeric set; it must not decide scheduling.
  */
 
 const DEPS_BLOCK_PATTERN = /```harness-deps[^\n]*\n([\s\S]*?)```/g;
 const ISSUE_REF_PATTERN = /#?(\d+)/g;
+const DEPENDENCY_CUE = /(?:^|\n)\s*(?:#{1,6}\s*)?(?:depend[eê]ncias?|depende\s+d[aeo]|depends?\s+on|blocked\s+by|bloquead[ao]\s+por)(?=\s|:|$)/im;
+const STRICT_BLOCK = /^```harness-deps(?:[^\n]*)\r?\n([\s\S]*?)^```[ \t]*$/gm;
+
+/** Distinguishes an unblocked issue from a dependency declaration the selector cannot trust. */
+export function inspectIssueDependencies(body) {
+  if (typeof body !== "string" || body.trim() === "") return { status: "invalid", numbers: [] };
+  const blocks = [...body.matchAll(STRICT_BLOCK)];
+  const openings = body.match(/^```harness-deps/gm) ?? [];
+  if (openings.length !== blocks.length) return { status: "invalid", numbers: [] };
+  if (blocks.length === 0) {
+    if (!DEPENDENCY_CUE.test(body)) return { status: "none", numbers: [] };
+    return /(?:^|\n)\s*(?:#{1,6}\s*)?depend[eê]ncias?\s*:?\s*(?:\r?\n\s*)?nenhuma\.?\s*(?:\n|$)/im.test(body)
+      ? { status: "none", numbers: [] } : { status: "invalid", numbers: [] };
+  }
+  const found = new Set();
+  for (const block of blocks) {
+    const tokens = block[1].trim().split(/[\s,]+/).filter(Boolean);
+    if (tokens.length === 0) return { status: "invalid", numbers: [] };
+    for (const token of tokens) {
+      if (!/^#?[1-9]\d*$/.test(token)) return { status: "invalid", numbers: [] };
+      const number = Number(token.replace(/^#/, ""));
+      if (!Number.isSafeInteger(number)) return { status: "invalid", numbers: [] };
+      found.add(number);
+    }
+  }
+  return { status: "valid", numbers: [...found].sort((a, b) => a - b) };
+}
+
+/** GitHub CLI returns a connection; a truncated or absent connection cannot prove readiness. */
+export function nativeBlockersClosed(blockedBy) {
+  return Boolean(blockedBy && Number.isInteger(blockedBy.totalCount) &&
+    Array.isArray(blockedBy.nodes) && blockedBy.nodes.length === blockedBy.totalCount &&
+    blockedBy.nodes.every((issue) => String(issue?.state ?? "").toUpperCase() === "CLOSED"));
+}
 
 /**
  * @description Parses an issue body's `harness-deps` fenced block(s) into the sorted, de-duplicated

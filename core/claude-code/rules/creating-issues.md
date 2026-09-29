@@ -45,7 +45,7 @@ Universal — sem `paths:`, carrega em toda conversa.
   - `## Decisões travadas` → corpo da issue, como restrições que a implementação deve respeitar
   - `## Suposições do modelo` → corpo da issue, em bloco **rotulado como suposição**
 - **Decisão e suposição são dois blocos separados, nunca um.** Decisão travada é do operador e o `adversary` a DEFENDE; suposição é dedução do modelo e o `adversary` precisa continuar LIVRE PARA ATACÁ-LA. Fundir as duas categorias lava um palpite em restrição inquestionável — é a falha que este handoff existe para evitar
-- **`## Em aberto` bloqueia a criação de qualquer fatia que dependa dele** — pergunta não resolvida é uma decisão que o motor autônomo inventaria sozinho e merjaria. Default: deixar a fatia FORA do lote (ela fica estacionada no `## Em aberto` do PRD, de onde a próxima sessão de `grill` retoma). Só com autorização explícita do operador crie um registro de acompanhamento **sem nenhuma label `harness:*`** — o seletor só pega `harness:ready`, então issue sem label é inerte; isso exige contornar o form (que estampa `harness:ready` sempre). `harness:queued` e `harness:blocked` são do motor — nunca aplicar à mão
+- **`## Em aberto` bloqueia a criação de qualquer fatia que dependa dele** — pergunta não resolvida é uma decisão que o motor autônomo inventaria sozinho e merjaria. Default: deixar a fatia FORA do lote (ela fica estacionada no `## Em aberto` do PRD, de onde a próxima sessão de `grill` retoma). Só com autorização explícita do operador crie um registro de acompanhamento **sem nenhuma label `harness:*`** — o seletor só pega `harness:ready`, então issue sem label é inerte; o form deixa a issue sem label até a validação. `harness:queued` e `harness:blocked` são do motor — nunca aplicar à mão
 - **PRD não autoriza issue maior**: um PRD que gera N fatias vira N issues sob a mesma regra de tamanho acima
 
 ### Candidato a aprofundamento como fonte (handoff da skill `proposing-deepening`)
@@ -56,7 +56,7 @@ Universal — sem `paths:`, carrega em toda conversa.
   - `oráculo independente` → critérios de aceite `#ac-N.M` — o oráculo É a verificação
   - `rota: FULL-equivalente` → `size` + nota de revisão cuidadosa/segurança, mesmo com `sensível: não`
 - **Todo campo do candidato entra como SUPOSIÇÃO do modelo, nunca como decisão travada.** Um candidato é 100% dedução do modelo — o mesmo modelo leu o código e julgou o código. A única decisão travada disponível é o "sim, vale reformar isso" do operador, que é decisão de FAZER, não de COMO
-- **Issue derivada de candidato é criada SEM `harness:ready` — é entrega LOCAL, com o operador olhando o resultado.** Reestruturar código que já funciona no escuro não pode merjar sozinho às 3h da manhã. O seletor só pega `harness:ready` aberta, então a issue sem label é inerte e nunca é despachada; isso exige contornar o form (que estampa a label sempre). Não invente label nova; `harness:queued` e `harness:blocked` continuam sendo do motor
+- **Issue derivada de candidato é criada SEM `harness:ready` — é entrega LOCAL, com o operador olhando o resultado.** Reestruturar código que já funciona no escuro não pode merjar sozinho às 3h da manhã. O seletor só pega `harness:ready` aberta, então a issue sem label é inerte e nunca é despachada; o form deixa a issue sem label até a validação. Não invente label nova; `harness:queued` e `harness:blocked` continuam sendo do motor
 - **Por que a rota escala**: o eixo de risco de uma reforma é **raio de explosão**, não sensibilidade de domínio — a allowlist de path sensível não enxerga uma reestruturação grande de código comum que funciona. Sem essa escalada, o caso de maior raio de explosão cairia na cerimônia mais barata
 
 ### Defeito desarmado parqueado como fonte (handoff do `orchestrating-delivery`)
@@ -79,7 +79,7 @@ Universal — sem `paths:`, carrega em toda conversa.
 - Se existir `CONTEXT.md` na raiz do projeto, usar os termos dele **literalmente** no título e no corpo da issue — o mesmo vocabulário que o planner e o executor leem. Não inventar vocabulário paralelo; não criar nem editar o arquivo (`surveying-codebase` semeia, o `harvester` mantém)
 
 ### Roadmap encadeado (issues com dependência/ordem)
-- Um **roadmap** é um conjunto de issues criadas TODAS com `harness:ready` (o form já aplica) — a ordem NÃO vem da ordem de criação, vem das **dependências declaradas**
+- Um **roadmap** nasce sem label automática. Valide o corpo de cada issue e só então aplique `harness:ready`; a ordem vem das **dependências declaradas**.
 - Uma issue que precisa que outra(s) tenha(m) **merjado antes** declara isso no bloco fechado `harness-deps` do corpo (campo "Dependências" do form), um `#N` por linha:
   ```harness-deps
   #12

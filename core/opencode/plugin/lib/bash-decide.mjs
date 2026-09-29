@@ -49,16 +49,16 @@ import { checkRealFileCaptureRail } from "../../../shared/lib/real-file-capture-
  */
 const ISSUE_FORM_ADVISORY =
   "This repo vendors the Claude Harness issue form (.github/ISSUE_TEMPLATE/harness-task.yml). " +
-  "Prefer creating issues through it so they enter the autonomous routine -- or run the " +
+  "Prefer creating issues through it, then validate dependencies before adding `harness:ready` -- or run the " +
   "`creating-issues` skill, which authors them to standard for you. " +
   "The `gh issue create` CLI bypasses issue forms silently -- if you proceed, replicate the form: " +
-  "title `[harness] <slug>`, label `harness:ready`, and a body with #uj-N journeys, " +
-  "#ac-N.M acceptance criteria, scope, sensitive domain, priority, and size " +
+  "title `[harness] <slug>` and a body with #uj-N journeys, " +
+  "#ac-N.M acceptance criteria, scope, sensitive domain, priority, size and numeric `harness-deps` when needed; validate before labeling `harness:ready` " +
   "(these become the spec, locked_tests and scope_paths). " +
   "Size each issue as ONE independently-shippable, independently-revertible outcome (<= ~400 changed " +
   "lines): if you can name two things that could merge separately, they are two issues -- retry, " +
   "partial delivery and merge blast radius are all per-issue, so prefer small over one big issue that is cohesive only by theme. " +
-  "For a CHAINED ROADMAP, create EVERY issue with `harness:ready` (never `harness:queued` by hand) " +
+  "For a CHAINED ROADMAP, add `harness:ready` only after validating each saved dependency block (never `harness:queued` by hand) " +
   "and, in each dependent issue's body, declare its prerequisites in a fenced ```harness-deps block " +
   "(one `#N` per line). The engine gates order and serialization on its own -- a dependent is held " +
   "until every prerequisite's PR merges, and only one issue is built at a time. There is NO " +

@@ -96,8 +96,8 @@ requirement that depends on an open item:
    which is exactly where a later `grill` session resumes.
 2. **Only with the operator's explicit authorization** — a tracking-only record with **no `harness:*`
    label at all**. `cron-a-select` picks only open `harness:ready`, so an unlabelled issue is inert.
-   This means bypassing the issue form, which always stamps `harness:ready`; do it deliberately or not
-   at all. Never hand-apply `harness:queued` or `harness:blocked` — both are engine-owned.
+   The issue form now leaves the issue unlabelled. Never hand-apply `harness:queued` or
+   `harness:blocked` — both are engine-owned.
 
 Then tell the operator, in pt-br, which slices were held back and which open question holds each.
 
@@ -107,8 +107,8 @@ An issue derived from a **deepening candidate** is created **WITHOUT the `harnes
 delivered **locally, with the operator watching the result**, because a blind restructure of working
 code must never auto-merge. This reuses the inert path already documented above: `cron-a-select` picks
 only open `harness:ready`, so an unlabelled issue is invisible to the engine and never dispatched. It
-means bypassing the issue form (which always stamps the label) — do it deliberately. Never invent a
-new label and never hand-apply `harness:queued` or `harness:blocked`; both are engine-owned.
+means leaving the new issue unlabelled. Never invent a new label and never hand-apply
+`harness:queued` or `harness:blocked`; both are engine-owned.
 
 Why this and not "just be careful": a retrofit's risk axis is **blast radius**, not domain
 sensitivity, so the sensitive-path allowlist cannot see it — a large restructure of ordinary,
@@ -195,8 +195,10 @@ Produce the form fields for each unit:
 
 ### 3. Create the issue(s)
 
-- Every issue is created **`harness:ready`** — NEVER `harness:queued` by hand. The engine gates order
-  itself (a dependent is held until its prerequisites' PRs merge) and serializes (one build at a time).
+- Create the issue without `harness:ready`. Before adding that label, inspect the saved body:
+  independent issues say `Dependências: Nenhuma.`; dependent issues have a closed `harness-deps`
+  fence with real `#N` issue numbers, one per line. Check each number exists and the graph has no
+  cycle. Then apply `harness:ready`; the engine holds open predecessors and serializes delivery.
   **Two exceptions, both unlabelled and inert:** a slice blocked by the PRD's `## Em aberto`, and any
   issue derived from a deepening candidate (local delivery — see above).
 - Prefer the vendored issue form (`.github/ISSUE_TEMPLATE/harness-task.yml`). If you must use the CLI,

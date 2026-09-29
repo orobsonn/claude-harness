@@ -98,7 +98,8 @@ const issue = (number, over = {}) => ({
   number,
   title: `task ${number}`,
   createdAt: `2026-01-${String(number).padStart(2, "0")}T00:00:00Z`,
-  body: "",
+  body: "Issue sem dependências declaradas.",
+  blockedBy: { nodes: [], totalCount: 0 },
   labels: [],
   ...over,
 });
@@ -201,6 +202,26 @@ test("selectIssue picks the oldest issue whose harness-deps are all CLOSED, skip
 test("selectIssue is fail-CLOSED: an unreadable dependency state never releases a gated issue", () => {
   const rows = [issue(5, { body: "```harness-deps\n#1\n```" })];
   assert.equal(selectIssue({ issues: rows, isClosed: () => false }), null);
+});
+
+test("selectIssue holds ambiguous dependency prose, malformed blocks and open predecessors", () => {
+  const rows = [
+    issue(1, { body: "depende de: filha 1" }),
+    issue(2, { body: "```harness-deps\n#\n```" }),
+    issue(3, { body: "```harness-deps\n#9\n```" }),
+    issue(4, { body: "```harness-deps\n#10\n```" }),
+  ];
+  assert.equal(selectIssue({ issues: rows, isClosed: () => false }), null);
+  assert.equal(selectIssue({ issues: rows, isClosed: (n) => n === 10 })?.number, 4);
+});
+
+test("selectIssue respects native blockedBy and rejects incomplete native metadata", () => {
+  const rows = [
+    issue(1, { blockedBy: { nodes: [{ state: "OPEN" }], totalCount: 1 } }),
+    issue(2, { blockedBy: { nodes: [{ state: "CLOSED" }], totalCount: 1 } }),
+  ];
+  assert.equal(selectIssue({ issues: rows, isClosed: () => true })?.number, 2);
+  assert.equal(selectIssue({ issues: [issue(3, { blockedBy: undefined })], isClosed: () => true }), null);
 });
 
 test("runTick skips the tick when the GLOBAL ceiling is already reached", () => {

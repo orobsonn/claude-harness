@@ -6,15 +6,34 @@
  * REHOMED by issue #807 from `core/vps/chain-deps.test.mjs`. `chain-deps.mjs` was a pure re-export
  * shim (`export { parseDependsOn } from "../shared/lib/harness-deps.mjs"`), so these 9 tests were
  * always this module's ONLY semantic oracle — and `core/orca/select-and-dispatch.mjs` imports
- * `parseDependsOn` to gate autonomous dispatch. Line coverage is a false all-clear here: the live
- * tests in `core/orca/select-and-dispatch.test.mjs` already reach 100% because every live fixture is
- * a well-formed fence. The load-bearing case is the fence-only rule below — a regex widened to match
- * prose would keep 100% coverage, pass every live test, and let arbitrary issue prose gate dispatch.
+ * The strict inspection cases below pin the distinction between no dependency and invalid
+ * metadata; both selectors rely on that distinction before dispatch.
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { parseDependsOn } from "./harness-deps.mjs";
+import { inspectIssueDependencies, nativeBlockersClosed, parseDependsOn } from "./harness-deps.mjs";
+
+test("strict metadata distinguishes no dependency from missing or malformed declarations", () => {
+  assert.deepEqual(inspectIssueDependencies("Resumo de uma tarefa independente."), { status: "none", numbers: [] });
+  assert.deepEqual(inspectIssueDependencies("depende de: filha 1"), { status: "invalid", numbers: [] });
+  assert.deepEqual(inspectIssueDependencies("```harness-deps\n#\n```"), { status: "invalid", numbers: [] });
+  assert.deepEqual(inspectIssueDependencies("```harness-deps\n#2"), { status: "invalid", numbers: [] });
+  assert.deepEqual(inspectIssueDependencies("```harness-deps\n#2\nfilha\n```"), { status: "invalid", numbers: [] });
+  assert.deepEqual(inspectIssueDependencies("```harness-deps\n#2\n```"), { status: "valid", numbers: [2] });
+  assert.deepEqual(inspectIssueDependencies("### Dependências\n\nNenhuma.\n"), { status: "none", numbers: [] });
+  assert.deepEqual(inspectIssueDependencies("Dependências: Nenhuma."), { status: "none", numbers: [] });
+  assert.deepEqual(inspectIssueDependencies("### Dependências\n\nfilha 1"), { status: "invalid", numbers: [] });
+  assert.deepEqual(inspectIssueDependencies(undefined), { status: "invalid", numbers: [] });
+});
+
+test("native blockedBy must be complete and closed", () => {
+  assert.equal(nativeBlockersClosed({ totalCount: 0, nodes: [] }), true);
+  assert.equal(nativeBlockersClosed({ totalCount: 1, nodes: [{ state: "OPEN" }] }), false);
+  assert.equal(nativeBlockersClosed({ totalCount: 1, nodes: [{ state: "CLOSED" }] }), true);
+  assert.equal(nativeBlockersClosed({ totalCount: 2, nodes: [{ state: "CLOSED" }] }), false);
+  assert.equal(nativeBlockersClosed(undefined), false);
+});
 
 test("parseDependsOn: extracts #N refs from a harness-deps fenced block", () => {
   const body = [

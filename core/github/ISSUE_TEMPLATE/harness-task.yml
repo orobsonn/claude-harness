@@ -1,13 +1,12 @@
 name: Harness Task
 description: Tarefa pronta para a pipeline autônoma do Claude Harness (issue → spec → plano → PR draft).
 title: "[harness] "
-labels: ["harness:ready"]
 body:
   - type: markdown
     attributes:
       value: |
         Preencha de forma específica — estes campos viram a spec, os `locked_tests` e o `scope_paths` do plano.
-        Issues criadas por este form entram no radar da routine (label `harness:ready`).
+        Aplique `harness:ready` somente depois de validar as dependências no corpo da issue.
         **Não use** este form para tarefas sensíveis críticas (auth/pagamento/segredos) ou arquiteturais grandes
         sem antes alinhar — autônomo nelas é risco alto, mesmo com PR draft.
   - type: textarea
@@ -48,6 +47,18 @@ body:
       description: chave → valor concreto, pra o executor não inventar. Ex.- `redirect_status: 301`.
     validations:
       required: false
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: Dependências
+      description: Escreva `Nenhuma.` se a issue for independente. Caso contrário, use somente números reais de issues no bloco `harness-deps`, um `#N` por linha. Não use nomes como "filha 1". Valide o corpo antes de aplicar `harness:ready`.
+      value: "Nenhuma."
+      placeholder: |
+        ```harness-deps
+        #123
+        ```
+    validations:
+      required: true
   - type: dropdown
     id: sensitive
     attributes:
