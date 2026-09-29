@@ -2,7 +2,7 @@ import { StringEnum, Type } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { isChildSession, piSessionId } from "../lib/pi-adapter-map.mjs";
 import { piResultText } from "../lib/obs.mjs";
-import { applyHarvest, beginHarvest, checkMemoryShipperReady, completeHarvest, completeMemoryShipment, finalizationStarted, finalizeMemory, invalidateMemoryAttempt, memoryBrief, memoryPaths, readMemory, readMemoryStatus, reconcileMemoryDelivery, updateSharedContext } from "../lib/memory-cycle.mjs";
+import { applyHarvest, beginHarvest, canRecoverTaskScopeDuringFinalization, checkMemoryShipperReady, completeHarvest, completeMemoryShipment, finalizationStarted, finalizeMemory, invalidateMemoryAttempt, memoryBrief, memoryPaths, readMemory, readMemoryStatus, reconcileMemoryDelivery, updateSharedContext } from "../lib/memory-cycle.mjs";
 
 /** Parent-only lifecycle. The mutable tool_result hook binds receipts to the actual completed call. */
 export default function harnessMemory(pi: ExtensionAPI) {
@@ -41,7 +41,9 @@ export default function harnessMemory(pi: ExtensionAPI) {
     if (!isHarvest && !isShipper && !isLatePlanner) return;
     try {
       const sessionId = identity(ctx);
-      if (isLatePlanner && finalizationStarted(ctx.cwd, sessionId)) throw new Error("Finalization cannot dispatch planner or plan-reviewer; reuse existing task IDs for reconciliation, or start a separate delivery for new scope");
+      if (isLatePlanner && finalizationStarted(ctx.cwd, sessionId) &&
+          !canRecoverTaskScopeDuringFinalization(ctx.cwd, sessionId))
+        throw new Error("Finalization cannot dispatch planner or plan-reviewer after shipping or outside an admitted task scope correction");
       if (isShipper) checkMemoryShipperReady(ctx.cwd, sessionId);
       if (isHarvest) {
         if (!/^\[HARNESS_HARVEST\](?:\r?\n|$)/.test(input.prompt ?? "")) throw new Error("Start harvester prompt with [HARNESS_HARVEST]");
