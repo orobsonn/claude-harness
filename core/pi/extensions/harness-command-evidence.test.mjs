@@ -45,7 +45,10 @@ function fixture(t) {
       result = { content: [{ type: "text", text: error.message }], details: undefined };
       isError = true;
     }
-    const event = { toolName: "bash", toolCallId: callId, input, ...result, isError };
+    // Pi 0.99.1 returns non-zero exits as an isError result; thrown failures
+    // still become an isError result in the agent event pipeline.
+    const event = { toolName: "bash", toolCallId: callId, input, ...result,
+      isError: isError || result?.isError === true };
     const patch = await hooks.get("tool_result")?.(event, ctx);
     return { native: event, final: { ...event, ...patch } };
   }
@@ -73,7 +76,7 @@ for (const exitCode of [0, 1]) {
     const f = fixture(t);
     const { native, final } = await f.run(exitCode);
     assert.equal(native.isError, exitCode !== 0);
-    if (exitCode !== 0) assert.equal(native.details, undefined, "native RED loses final output metadata");
+    if (exitCode !== 0) assert.ok(native.details?.fullOutputPath, "native RED retains final output metadata");
     const evidence = final.details?.command_evidence;
     assert.equal(evidence?.status, "available", "the harness must hand back an accessible artifact");
     assert.ok(evidence.path.startsWith(join(f.root, ".pi/harness/state/task-session/evidence/")));
