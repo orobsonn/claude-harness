@@ -13,6 +13,7 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -542,6 +543,37 @@ test("harness-memory harvest: finalização bloqueia planner e plan-reviewer sem
   await assertBlocked(await api.handlers.get("tool_call")(plannerEvent(), ctx(root)));
   await assertBlocked(await api.handlers.get("tool_call")(plannerEvent("harness-plan-reviewer"), ctx(root)));
   assert.equal(readFileSync(planPath(root), "utf8"), original);
+});
+
+test("harness-memory harvest: task admitida pode corrigir escopo antes de shipping", async (t) => {
+  const root = fixture(t, { reviewed: false });
+  const api = register();
+  seedFinalReviewState(root);
+  emitHarvest(api, root);
+  const statePath = join(root, ".pi", "harness", "state", SESSION, "gate-state.json");
+  const state = JSON.parse(readFileSync(statePath, "utf8"));
+  writeFileSync(statePath, JSON.stringify({ ...state, task_pipeline_version: 1, spec_sha256: "a".repeat(64) }));
+  const runs = join(root, ".pi", "harness", "state", SESSION, "task-runs");
+  mkdirSync(runs);
+  const registryPath = join(runs, "index.json");
+  const registry = { version: 1, parent_session_id: SESSION, feature_id: FEATURE,
+    plan_sha256: "b".repeat(64), spec_sha256: "a".repeat(64), tasks: { "task-1": {} } };
+  writeFileSync(registryPath, JSON.stringify(registry));
+
+  assert.equal(await api.handlers.get("tool_call")(plannerEvent(), ctx(root)), undefined);
+  assert.equal(await api.handlers.get("tool_call")(plannerEvent("harness-plan-reviewer"), ctx(root)), undefined);
+  writeFileSync(registryPath, JSON.stringify({ ...registry, tasks: {} }));
+  await assertBlocked(await api.handlers.get("tool_call")(plannerEvent(), ctx(root)));
+  writeFileSync(registryPath, "{invalid");
+  await assertBlocked(await api.handlers.get("tool_call")(plannerEvent(), ctx(root)));
+  writeFileSync(registryPath, JSON.stringify(registry));
+  writeFileSync(shipmentPath(root), JSON.stringify({ session_id: SESSION }));
+  await assertBlocked(await api.handlers.get("tool_call")(plannerEvent(), ctx(root)));
+  await assertBlocked(await api.handlers.get("tool_call")(plannerEvent("harness-plan-reviewer"), ctx(root)));
+  unlinkSync(shipmentPath(root));
+  writeFileSync(finalizedPath(root), JSON.stringify({ session_id: SESSION }));
+  await assertBlocked(await api.handlers.get("tool_call")(plannerEvent(), ctx(root)));
+  await assertBlocked(await api.handlers.get("tool_call")(plannerEvent("harness-plan-reviewer"), ctx(root)));
 });
 
 test("harness-memory harvest: planner continua bloqueado depois de shipper e finalize apagarem recibos", async (t) => {

@@ -8,6 +8,7 @@ import { classifyPiFunctionalMergeTransition, readPiMergedReleaseEvidence, resol
 import { capturePiReviewInput, hasAcceptedPiReviewEvidence, isPiReviewExcludedPath, readPiReviewPlan } from "./pi-review-evidence.mjs";
 import { checkPiFinalCommands, validatePiVerificationCommands } from "./pi-command-evidence.mjs";
 import { requiredPiFinalReviewRoles } from "./roles.mjs";
+import { TASK_PIPELINE_VERSION } from "./task-contract.mjs";
 
 export const DURABLE_MEMORY_FILES = Object.freeze(["MEMORY.md", "CONTEXT.md", "kaizen.md"]);
 export const SHARED_CONTEXT_MAX_BYTES = 8192;
@@ -204,7 +205,7 @@ export function readMemoryStatus(projectRoot, sessionId) {
   };
 }
 
-/** Finalization is a one-way phase for planning, even after receipts are cleaned up. */
+/** Finalization closes new planning; admitted task scope can still recover before shipping. */
 export function finalizationStarted(projectRoot, sessionId) {
   const paths = memoryPaths(projectRoot, sessionId);
   const harvest = JSON.parse(readSmall(paths.harvest, 262144) ?? "null");
@@ -214,6 +215,24 @@ export function finalizationStarted(projectRoot, sessionId) {
   return harvest?.session_id === sessionId || shipment?.session_id === sessionId ||
     finalized?.session_id === sessionId ||
     (state?.session_id === sessionId && state.final_review_done === true);
+}
+
+/** An admitted task may gain reviewed scope after an early harvest, but never after shipping. */
+export function canRecoverTaskScopeDuringFinalization(projectRoot, sessionId) {
+  const paths = memoryPaths(projectRoot, sessionId);
+  if (readSmall(paths.shipment, 8192) !== null || readSmall(paths.finalized, 8192) !== null) return false;
+  const state = JSON.parse(readSmall(join(paths.directory, "gate-state.json"), 1024 * 1024) ?? "null");
+  if (state?.session_id !== sessionId || state.task_pipeline_version !== TASK_PIPELINE_VERSION ||
+      !isSafeFeatureId(state.feature_id)) return false;
+  const runs = join(paths.directory, "task-runs");
+  const directory = stat(runs);
+  if (!directory || !directory.isDirectory() || directory.isSymbolicLink()) return false;
+  const registry = JSON.parse(readSmall(join(runs, "index.json"), 16 * 1024 * 1024) ?? "null");
+  return Boolean(registry?.version === TASK_PIPELINE_VERSION && registry.parent_session_id === sessionId &&
+    registry.feature_id === state.feature_id && /^[a-f0-9]{64}$/.test(registry.plan_sha256) &&
+    registry.spec_sha256 === state.spec_sha256 && registry.tasks &&
+    typeof registry.tasks === "object" && !Array.isArray(registry.tasks) &&
+    Object.keys(registry.tasks).length > 0);
 }
 export function updateSharedContext(projectRoot, sessionId, content) {
   if (typeof content !== "string" || Buffer.byteLength(content) > SHARED_CONTEXT_MAX_BYTES) throw new Error("shared_context must be at most 8192 UTF-8 bytes");

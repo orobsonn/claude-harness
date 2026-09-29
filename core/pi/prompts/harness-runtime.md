@@ -299,6 +299,9 @@ tarefa/tentativa com `harness_tasks resume`; o host conserva a admissão origina
 escopo revisado. Não repita spec, tarefas prontas ou testes intactos. Achados finais seguem
 ao sniper e aos gates afetados, como os achados locais. Mudança real de comportamento
 aprovado exige tratar essa decisão, mas uma lacuna de arquivo no plano não exige outra run.
+Essa correção aditiva de escopo também vale após harvest se a entrega ainda não tem
+recibo de shipping; depois da correção, obtenha olhos finais atuais e refaça o harvest
+antes de publicar. Shipping ou finalização concluídos encerram essa recuperação.
 
 **Colheita durável — depois dos olhos finais.** Com as tarefas funcionais verificadas e
 commitadas, colete os olhos finais sobre o agregado. Resolva os achados aplicáveis,
