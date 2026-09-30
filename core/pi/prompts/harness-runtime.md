@@ -436,6 +436,12 @@ habilitar um merge. Isso não manda atualizar a base por rotina: avalie a necess
 O Bash comum do coordenador não é a via de integração e filhos nunca recebem essa ordem.
 
 Após a reconciliação global, preserve tarefas cujos recibos continuam válidos.
+Quando o host importar de uma dependência os bytes exatos de um teste congelado
+por um merge verificado, o recibo mantém a fidelidade original e registra a linhagem
+da reconciliação. Refaça a captura nativa no HEAD importado e revise os inputs que
+mudaram; não acrescente comentários nem crie commit só para obter um novo freeze.
+Alterações feitas pelo filho no teste, inclusive resolução de conflito nesse arquivo,
+continuam exigindo autoria e fidelidade sobre o conteúdo alterado.
 Se a base mudou um teste congelado e o host recusar o recibo integrado, retome e
 integre o mesmo task/attempt para renovar a prova da versão herdada no pai.
 Faça isso sequencialmente, começando pelo dono da barreira de correção atual.

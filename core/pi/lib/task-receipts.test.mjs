@@ -1117,7 +1117,7 @@ test("dedicated test reviewer accepts consistent boundary approvals in persisted
   }
 });
 
-test("reconciled dependencies keep original audit paths but require fresh reviews and exact host merge proof", () => {
+for (const importFrozen of [false, true]) test(`reconciled dependencies keep original audit paths and exact host merge proof (parent frozen import: ${importFrozen})`, () => {
   const f = inspectionFixture();
   appendImplementationReviews(f);
   const specPath = path.join(f.root, ".pi/harness/plans", FEATURE, "spec.md");
@@ -1125,9 +1125,11 @@ test("reconciled dependencies keep original audit paths but require fresh review
   f.entry.spec_sha256 = f.dependencies.readTaskRunBindingFn().grant.spec_sha256 =
     crypto.createHash("sha256").update(fs.readFileSync(specPath)).digest("hex");
   // A correction outside the dependent task scope is supplied only by a host merge.
-  run(f.root, "git", "checkout", "-b", "parent-correction", f.base);
+  run(f.root, "git", "checkout", "-b", "parent-correction", importFrozen ? f.freeze : f.base);
   write(path.join(f.root, "upstream.mjs"), "export const corrected = true;\n");
+  if (importFrozen) write(path.join(f.root, "src/task.spec.mjs"), "export const expected = 1;\n// Parent adds its reconciled coverage.\n");
   run(f.root, "git", "add", "upstream.mjs");
+  if (importFrozen) run(f.root, "git", "add", "src/task.spec.mjs");
   run(f.root, "git", "commit", "-m", "upstream correction");
   const parent = run(f.root, "git", "rev-parse", "HEAD");
   run(f.root, "git", "checkout", "-b", "dependent-recovery", f.head);
@@ -1209,6 +1211,37 @@ test("reconciled dependencies keep original audit paths but require fresh review
   const recaptured = inspectTaskRun(f.entry, f.dependencies);
   assert.equal(recaptured.ok, true, recaptured.reason);
   assert.equal(recaptured.result.hand_capture.producer_call_id, hand.producerCallId);
+  if (importFrozen) {
+    assert.equal(recaptured.result.freeze_sha, f.freeze, "original fidelity anchor remains intact");
+    assert.equal(recaptured.result.frozen_blobs["src/task.spec.mjs"],
+      crypto.createHash("sha256").update(fs.readFileSync(path.join(f.root, "src/task.spec.mjs"))).digest("hex"));
+    const history = f.entry.reconciliations;
+    const task = f.dependencies.readTaskRunBindingFn().task;
+    const scopes = task.scope_paths;
+    task.scope_paths = [...scopes, "upstream.mjs"];
+    delete f.entry.reconciliations;
+    assert.match(inspectTaskRun(f.entry, f.dependencies).reason, /frozen file changed after fidelity/,
+      "parent ancestry alone cannot replace the verified host proof");
+    f.entry.reconciliations = history;
+    task.scope_paths = scopes;
+    const capture = f.dependencies.captureReviewInputFn;
+    f.dependencies.captureReviewInputFn = () => ({ ok: true, snapshot: { head_sha: head, input_digest: "e".repeat(64) } });
+    assert.equal(inspectTaskRun(f.entry, f.dependencies).ok, false,
+      "a verified parent import cannot bypass review input freshness");
+    f.dependencies.captureReviewInputFn = capture;
+    const frozenBytes = fs.readFileSync(path.join(f.root, "src/task.spec.mjs"));
+    write(path.join(f.root, "src/task.spec.mjs"), "export const expected = 0;\n// Child weakens the imported test.\n");
+    run(f.root, "git", "add", "src/task.spec.mjs");
+    run(f.root, "git", "commit", "-m", "unauthorized child frozen edit");
+    const editedHead = run(f.root, "git", "rev-parse", "HEAD");
+    const replay = fs.readFileSync(launch.events_path, "utf8");
+    write(launch.events_path, replay.replaceAll(head, editedHead));
+    assert.match(inspectTaskRun(f.entry, f.dependencies).reason, /frozen file changed after fidelity/,
+      "the imported baseline does not authorize subsequent child changes");
+    run(f.root, "git", "reset", "--hard", head);
+    assert.deepEqual(fs.readFileSync(path.join(f.root, "src/task.spec.mjs")), frozenBytes);
+    write(launch.events_path, replay);
+  }
   // The exact inspection emitted above must remain consumable after integration
   // and reopening; preserving capture only at status is not sufficient.
   const grant = { ...f.dependencies.readTaskRunBindingFn().grant, version: 1, kind: "task-run",
