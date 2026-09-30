@@ -441,7 +441,7 @@ test("pinned Pi overlay keeps one global auth path for parent and subagents", ()
   assert.throws(() => applyPiAuthPathPatch(packagePath, subagentsPackagePath), /altered patched bytes/);
 });
 
-test("runtime defaults select Sol 6/high from Pi's real registry without a CLI model override", async () => {
+test("runtime defaults select Sol 6.1/high from Pi's real registry without a CLI model override", async () => {
   const directory = mkdtempSync(join(tmpdir(), "pi-harness-runtime-test-"));
   const runtimeDir = join(directory, "runtime");
   try {
@@ -475,13 +475,13 @@ test("runtime defaults select Sol 6/high from Pi's real registry without a CLI m
     });
 
     assert.equal(settingsManager.getDefaultProvider(), "openai-codex");
-    assert.equal(settingsManager.getDefaultModel(), "gpt-6-sol");
+    assert.equal(settingsManager.getDefaultModel(), "gpt-6.1-sol");
     assert.equal(settingsManager.getDefaultThinkingLevel(), "high");
     assert.equal(selected.thinkingLevel, "high");
     assert.ok(modelRuntime.getModels("openai-codex").some((model) => model.id === "gpt-5.6-terra"), "the installed Pi catalog contains Terra");
     assert.deepEqual(selected.model && { provider: selected.model.provider, id: selected.model.id }, {
       provider: "openai-codex",
-      id: "gpt-6-sol",
+      id: "gpt-6.1-sol",
     });
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
@@ -558,7 +558,7 @@ test("runtime já materializado migra somente o antigo default do harness para o
 
       assert.deepEqual(JSON.parse(readFileSync(join(runtimeDir, "settings.json"), "utf8")), {
         defaultProvider: "openai-codex",
-        defaultModel: "gpt-6-sol",
+        defaultModel: "gpt-6.1-sol",
         defaultThinkingLevel: "high",
         hideThinkingBlock: true,
         httpIdleTimeoutMs: 900_000,
@@ -567,6 +567,45 @@ test("runtime já materializado migra somente o antigo default do harness para o
         harnessChildResources: { version: 1, ...piChildResourceSettings(process.cwd()) },
       });
     }
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("runtime já materializado migra o default distribuído Sol 6 para Sol 6.1", () => {
+  const directory = mkdtempSync(join(tmpdir(), "pi-harness-sol-default-migration-"));
+  try {
+    const runtimeDir = join(directory, "runtime");
+    mkdirSync(runtimeDir, { recursive: true });
+    writeFileSync(join(runtimeDir, "settings.json"), JSON.stringify({
+      defaultProvider: "openai-codex", defaultModel: "gpt-6-sol",
+      defaultThinkingLevel: "high", retained: true,
+    }));
+
+    materializeRuntime(process.cwd(), runtimeDir);
+
+    const settings = JSON.parse(readFileSync(join(runtimeDir, "settings.json"), "utf8"));
+    assert.equal(settings.defaultProvider, "openai-codex");
+    assert.equal(settings.defaultModel, "gpt-6.1-sol");
+    assert.equal(settings.defaultThinkingLevel, "high");
+    assert.equal(settings.retained, true);
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("retomada com perfil v4 preserva o default Sol 6 já materializado", () => {
+  const directory = mkdtempSync(join(tmpdir(), "pi-harness-v4-default-"));
+  try {
+    const runtimeDir = join(directory, "runtime");
+    mkdirSync(runtimeDir, { recursive: true });
+    writeFileSync(join(runtimeDir, "settings.json"), JSON.stringify({
+      defaultProvider: "openai-codex", defaultModel: "gpt-6-sol",
+      defaultThinkingLevel: "high", retained: true,
+    }));
+
+    materializeRuntime(process.cwd(), runtimeDir, undefined,
+      resolveModelProfile({ profile: "baseline", version: 4 }));
+
+    const settings = JSON.parse(readFileSync(join(runtimeDir, "settings.json"), "utf8"));
+    assert.equal(settings.defaultModel, "gpt-6-sol");
+    assert.equal(settings.retained, true);
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
 

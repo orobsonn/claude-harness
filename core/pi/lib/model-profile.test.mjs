@@ -16,7 +16,7 @@ test("AC-01 baseline uses the new Pi OpenAI routes and needs no Ollama credentia
   const profile = resolveModelProfile({ profile: "baseline" });
   assert.equal(profile.profile, "baseline");
   assert.equal(routeFromModelProfile(profile, "harness-executor", "low").model, "openai-codex/gpt-6-luna");
-  assert.equal(routeFromModelProfile(profile, "harness-executor", "high").model, "openai-codex/gpt-6-sol");
+  assert.equal(routeFromModelProfile(profile, "harness-executor", "high").model, "openai-codex/gpt-6.1-sol");
   assert.equal(routeFromModelProfile(profile, "harness-plan-reviewer").model, "openai-codex/gpt-6-astra");
   assert.equal(profile.parents.global.route, null);
   assert.equal(profile.parents.local.route, null);
@@ -24,8 +24,8 @@ test("AC-01 baseline uses the new Pi OpenAI routes and needs no Ollama credentia
 
 test("new sessions default to DeepSeek orchestration while baseline stays explicit", () => {
   const profile = resolveModelProfile();
-  assert.equal(MODEL_PROFILE_VERSION, 4);
-  assert.equal(profile.version, 4);
+  assert.equal(MODEL_PROFILE_VERSION, 5);
+  assert.equal(profile.version, 5);
   assert.equal(DEFAULT_MODEL_PROFILE, "trial-orchestration-deepseek");
   assert.equal(profile.profile, DEFAULT_MODEL_PROFILE);
   assert.equal(profile.parents.global.route.model, DEEPSEEK_MODEL);
@@ -44,11 +44,11 @@ test("AC-02 hands profiles change executor, sniper and test-author while eyes st
         assert.equal(routeFromModelProfile(profile, role, complexity).model, `ollama-cloud/${tierModel(complexity)}`);
       }
     }
-    assert.equal(routeFromModelProfile(profile, "harness-planner").model, "openai-codex/gpt-6-sol");
+    assert.equal(routeFromModelProfile(profile, "harness-planner").model, "openai-codex/gpt-6.1-sol");
     assert.equal(routeFromModelProfile(profile, "harness-test-author", "low").model, `ollama-cloud/${tierModel("low")}`);
     assert.equal(routeFromModelProfile(profile, "harness-test-author", "high").model, `ollama-cloud/${tierModel("high")}`);
     assert.equal(routeFromModelProfile(profile, "harness-test-reviewer").model, "openai-codex/gpt-6-luna");
-    assert.equal(routeFromModelProfile(profile, "harness-compliance").model, "openai-codex/gpt-6-sol");
+    assert.equal(routeFromModelProfile(profile, "harness-compliance").model, "openai-codex/gpt-6.1-sol");
   }
 });
 
@@ -58,7 +58,7 @@ test("AC-03 parent targets are independent and do not change eyes", () => {
   });
   assert.equal(profile.parents.global.route.model, DEEPSEEK_MODEL);
   assert.equal(profile.parents.local.route, null);
-  assert.equal(routeFromModelProfile(profile, "harness-security").model, "openai-codex/gpt-6-sol");
+  assert.equal(routeFromModelProfile(profile, "harness-security").model, "openai-codex/gpt-6.1-sol");
 });
 
 test("AC-04 unknown profiles and parent targets fail closed", () => {
@@ -117,6 +117,26 @@ test("v3 admitted routes and 256 Ki context remain canonical across the model up
   }), old);
 });
 
+test("v4 admitted Sol 6 routes remain canonical across the Sol 6.1 upgrade", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-model-profile-v4-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const old = resolveModelProfile({ profile: "baseline", version: 4 });
+  assert.equal(old.sha256, "ceeb649eeaffd14cf82f91467b791c104143c3f61d8897421cc963213588f270");
+  for (const role of ["harness-planner", "harness-compliance", "harness-test-author"]) {
+    assert.equal(routeFromModelProfile(old, role, "high").model, "openai-codex/gpt-6-sol");
+  }
+  const saved = writeModelProfileSnapshot(root, "old-v4", old);
+  assert.deepEqual(readModelProfileSnapshot(root, "old-v4").snapshot, old);
+  assert.deepEqual(loadModelProfileFromEnv({
+    [MODEL_PROFILE_ENV]: saved.path,
+    [MODEL_PROFILE_HASH_ENV]: saved.sha256,
+  }), old);
+  const oldTrial = resolveModelProfile({ profile: "trial-orchestration-deepseek", version: 4 });
+  assert.equal(oldTrial.sha256, "d9a1e3882a0d1abf598fc44ad43054586c8ddb61953d7a778651d462c7c11c77");
+  assert.equal(routeFromModelProfile(oldTrial, "harness-planner").model, "openai-codex/gpt-6-sol");
+  assert.equal(routeFromModelProfile(oldTrial, "harness-executor", "high").model, `ollama-cloud/${DEEPSEEK_MODEL}`);
+});
+
 test("AC-07 admitted snapshot is immutable and disk defaults cannot replace it", (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-model-profile-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -134,6 +154,7 @@ test("AC-08 legacy absence resolves baseline while malformed snapshots are rejec
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   assert.equal(readModelProfileSnapshot(root, "legacy").absent, true);
   assert.equal(loadModelProfileFromEnv({}).profile, "baseline");
+  assert.equal(loadModelProfileFromEnv({}).version, 5);
   const saved = writeModelProfileSnapshot(root, "bad", resolveModelProfile());
   fs.writeFileSync(saved.path, "{}\n");
   assert.throws(() => loadModelProfileFromEnv({

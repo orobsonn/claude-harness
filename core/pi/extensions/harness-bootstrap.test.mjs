@@ -182,9 +182,9 @@ test("bootstrap registra os modelos GPT-6 antes do subagents, preservando o catÃ
   const handlers = register();
   const builtin = builtinProviders().find((entry) => entry.id === "openai-codex");
   assert.ok(builtin);
-  const requiredModels = ["gpt-6-astra", "gpt-6-sol", "gpt-6-luna"];
+  const requiredModels = ["gpt-6-astra", "gpt-6-sol", "gpt-6.1-sol", "gpt-6-luna"];
   const builtinHasAstra = builtin.getModels().some((model) => model.id === "gpt-6-astra");
-  for (const id of ["gpt-6-sol", "gpt-6-luna"]) {
+  for (const id of ["gpt-6-sol", "gpt-6.1-sol", "gpt-6-luna"]) {
     assert.ok(builtin.getModels().some((model) => model.id === id), `${id} existe no Pi pinado`);
   }
   assert.equal(
@@ -378,7 +378,7 @@ test("bootstrap vendorizado sem node_modules do produto registra Astra, Sol e Lu
   });
   t.after(() => session.dispose());
   await session.bindExtensions({});
-  for (const id of ["gpt-6-astra", "gpt-6-sol", "gpt-6-luna"]) {
+  for (const id of ["gpt-6-astra", "gpt-6-sol", "gpt-6.1-sol", "gpt-6-luna"]) {
     assert.ok(runtime.getModel("openai-codex", id), `${id} disponÃ­vel no runtime vendorizado`);
   }
   assert.ok(runtime.getModels("openai-codex").some((model) => model.id === "gpt-5.6-sol"));

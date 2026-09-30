@@ -50,7 +50,7 @@ into a locked plan or count a discussion review as pipeline approval.
 5. For a non-trivial technical proposal, request an independent read-only attack via
    `subagent` with `subagent_type: "harness-discussion-adversary"`,
    `model` from the admitted `HARNESS_MODEL_PROFILE` for `harness-discussion-adversary`
-   (`openai-codex/gpt-6-sol` + `medium` on new sessions), and the proposal,
+   (`openai-codex/gpt-6.1-sol` + `medium` on new sessions), and the proposal,
    constraints and relevant paths. Omit max_turns/background/resume. This is not
    `harness-adversary`, which belongs to delivery. Give the discussion eye no
    implementation work or permission to mark state. Inspect existing flows and

@@ -32,7 +32,7 @@ export function piDispatchRoute(role, complexity, profileSnapshot = loadModelPro
   if (profileSnapshot) return routeFromModelProfile(profileSnapshot, role, complexity);
   if (role === "harness-test-author") {
     if (!["low", "medium", "high", "max"].includes(complexity)) return { ok: false, reason: "hand-complexity" };
-    return { ok: true, model: "openai-codex/gpt-6-sol", thinking: "high" };
+    return { ok: true, model: "openai-codex/gpt-6.1-sol", thinking: "high" };
   }
   const fixed = FIXED_PI_ROUTES[role];
   if (fixed) return { ok: true, ...fixed };
