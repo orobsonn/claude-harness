@@ -5,6 +5,13 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [3.6.17](https://github.com/orobsonn/claude-harness/compare/v3.6.16...v3.6.17) (2026-09-30)
+
+
+### Bug Fixes
+
+* **pi:** route Sol lanes to GPT-6.1 Sol ([#1075](https://github.com/orobsonn/claude-harness/issues/1075)) ([1bcdf0c](https://github.com/orobsonn/claude-harness/commit/1bcdf0ccb4112dc22e5290902d001c444abe8ac0))
+
 ## [3.6.16](https://github.com/orobsonn/claude-harness/compare/v3.6.15...v3.6.16) (2026-09-29)
 
 
