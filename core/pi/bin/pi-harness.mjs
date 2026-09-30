@@ -335,7 +335,7 @@ export function materializeRuntime(root, runtimeDir, stateDir = harnessStateDir(
     const current = JSON.parse(readFileSync(modelsTarget, "utf8"));
     const distributedProvider = expected?.providers?.["ollama-cloud"];
     const currentProvider = current?.providers?.["ollama-cloud"];
-    if (!distributedProvider || ![1, 2, 3, MODEL_PROFILE_VERSION].includes(modelProfile?.version) ||
+    if (!distributedProvider || ![1, 2, 3, 4, MODEL_PROFILE_VERSION].includes(modelProfile?.version) ||
         distributedProvider.models?.length !== 2 ||
         distributedProvider.models[0]?.id !== DEEPSEEK_MODEL || distributedProvider.models[1]?.id !== GLM_MODEL) {
       throw new Error("distributed Ollama model profile invalid");
@@ -370,6 +370,8 @@ export function materializeRuntime(root, runtimeDir, stateDir = harnessStateDir(
   const settingsTarget = join(runtimeDir, "settings.json");
   try {
     const expected = JSON.parse(readFileSync(settingsSource, "utf8"));
+    // Resumed snapshots keep the parent default from their admitted model era.
+    if (modelProfile.version < MODEL_PROFILE_VERSION) expected.defaultModel = "gpt-6-sol";
     const current = JSON.parse(readFileSync(settingsTarget, "utf8"));
     for (const key of ["defaultProvider", "defaultModel"]) {
       if (current[key] !== undefined && (typeof current[key] !== "string" || !current[key].trim() || /\s/.test(current[key]))) {
@@ -389,17 +391,20 @@ export function materializeRuntime(root, runtimeDir, stateDir = harnessStateDir(
     // This exact pair was the old distributed default. Project preferences and
     // native per-model settings remain under Pi's own precedence/trust rules.
     const oldParentDefault = current.defaultProvider === "openai-codex" && current.defaultModel === "gpt-5.6-sol" && current.defaultThinkingLevel === undefined;
+    const previousHarnessDefault = modelProfile.version === MODEL_PROFILE_VERSION &&
+      current.defaultProvider === "openai-codex" &&
+      current.defaultModel === "gpt-6-sol" && current.defaultThinkingLevel === "high";
     const needsThinkingDefault = current.defaultThinkingLevel === undefined;
     const needsChildResources =
       JSON.stringify(current?.extensions) !== JSON.stringify(childResources.extensions) ||
       JSON.stringify(current?.skills) !== JSON.stringify(childResources.skills) ||
       JSON.stringify(current?.harnessChildResources) !== JSON.stringify(childResources.harnessChildResources);
-    if (legacyHarnessDefault || oldParentDefault || needsThinkingDefault || needsThinkingVisibilityDefault || needsIdleTimeout || needsChildResources) {
+    if (legacyHarnessDefault || oldParentDefault || previousHarnessDefault || needsThinkingDefault || needsThinkingVisibilityDefault || needsIdleTimeout || needsChildResources) {
       writeFileSync(
         settingsTarget,
         `${JSON.stringify({
           ...current,
-          ...(legacyHarnessDefault || oldParentDefault ? {
+          ...(legacyHarnessDefault || oldParentDefault || previousHarnessDefault ? {
             defaultProvider: expected.defaultProvider,
             defaultModel: expected.defaultModel,
           } : {}),

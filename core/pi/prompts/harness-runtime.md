@@ -191,21 +191,21 @@ Deixe `max_turns` ausente: o runtime aplica o teto finito de 144 turns. Em **tod
 Em **todo** `subagent`, use primeiro as rotas do `HARNESS_MODEL_PROFILE` admitido
 na sessão; ele prevalece sobre os exemplos a seguir e conserva as rotas de sessões
 antigas. No perfil atual, preencha `model` com o ID literal e declare `thinking`
-quando indicado: `harness-planner` = `openai-codex/gpt-6-sol` + `high`;
+quando indicado: `harness-planner` = `openai-codex/gpt-6.1-sol` + `high`;
 `harness-plan-reviewer` = `openai-codex/gpt-6-astra` + `high`;
-`harness-adversary` = `openai-codex/gpt-6-sol` + `medium`;
-`harness-security` = `openai-codex/gpt-6-sol` e omita `thinking`;
-`harness-compliance` = `openai-codex/gpt-6-sol` + `high`;
+`harness-adversary` = `openai-codex/gpt-6.1-sol` + `medium`;
+`harness-security` = `openai-codex/gpt-6.1-sol` e omita `thinking`;
+`harness-compliance` = `openai-codex/gpt-6.1-sol` + `high`;
 `harness-test-reviewer` = `openai-codex/gpt-6-luna` + `xhigh`;
 `harness-shipper` e `harness-harvester` = `openai-codex/gpt-6-luna` + `high`.
 `harness-test-author` deriva da complexidade canônica: low/medium usa
-`openai-codex/gpt-6-sol` + `high`; high (e max legado) usa
-`openai-codex/gpt-6-sol` + `high`. Se `complexity` for omitida nesse papel, o host
+`openai-codex/gpt-6.1-sol` + `high`; high (e max legado) usa
+`openai-codex/gpt-6.1-sol` + `high`. Se `complexity` for omitida nesse papel, o host
 herda e registra a do plano; divergência explícita continua negada.
 Para `harness-executor` e `harness-sniper`, inclua `complexity` igual à tarefa:
 `low` = `openai-codex/gpt-6-luna` + `high`, `medium` =
-`openai-codex/gpt-6-sol` + `medium`, `high` (e max legado) =
-`openai-codex/gpt-6-sol` + `xhigh`. Não escolha modelo/effort fora dessas rotas.
+`openai-codex/gpt-6.1-sol` + `medium`, `high` (e max legado) =
+`openai-codex/gpt-6.1-sol` + `xhigh`. Não escolha modelo/effort fora dessas rotas.
 
 O agente principal tem as ferramentas normais do Pi, mas elas passam por rails determinísticos que negam a chamada antes de ela executar: comando ou leitura sobre caminho com segredo e comando destrutivo; mutação direta de caminho do harness (`.pi`, `.codex`, `.agents`); `gh pr merge` sem evidência de CI verde; anexar `harness:ready` sem o pipeline fechado; escrita em `.pi/harness/state/` ou no plano canônico por qualquer via que não seja a ferramenta marcadora; despacho de role não canônica, sombreada pelo projeto, em background, acima do limite de turnos, sem plano estável válido ou fora do escopo da tarefa; e `lavish-axi share` / `setup hooks`.
 
@@ -267,7 +267,7 @@ obter recibos.
 **Suporte diagnóstico opcional, não outra revisão.** Quando uma task retorna bloqueada
 sem causa clara, perde a mesma obrigação entre correções, ou revela uma contradição
 entre tasks/spec/código, você pode despachar `harness-support` com
-`model="openai-codex/gpt-6-sol"`, `thinking="high"`, `inherit_context=false`.
+`model="openai-codex/gpt-6.1-sol"`, `thinking="high"`, `inherit_context=false`.
 Use somente a quantidade útil, no máximo três agentes por investigação, cada um
 com pergunta e objetivo distintos (por exemplo contrato, fronteira de dependência,
 fixture/oráculo). Não convoque três por rotina nem repita sem evidência nova.
