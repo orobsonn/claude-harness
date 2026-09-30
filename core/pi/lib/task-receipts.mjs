@@ -360,7 +360,7 @@ function validateLaunches(entry, jobRoot, readTaskProcessFn = readTaskProcess, a
   return { ok: true, lifecycles, interruptedIndexes };
 }
 
-function validateFidelity({ events, task, taskId, worktree, head, reviewRole }) {
+function validateFidelity({ events, task, taskId, worktree, head, reviewRole, reconciliations = [] }) {
   const paths = frozenPaths(task);
   if (paths.length === 0) return { ok: true, freezeSha: null, frozenBlobs: {}, markerIndex: -1 };
   const fidelityMarkers = events.filter((event) => event.tool === "mark" && event.args?.action === "fidelity" && event.args?.task_id === taskId && markerSucceeded(event));
@@ -387,7 +387,26 @@ function validateFidelity({ events, task, taskId, worktree, head, reviewRole }) 
   const blobs = {};
   for (const file of paths) {
     try {
-      const frozen = git(worktree, ["show", `${commitSha}:${file}`], null);
+      let frozen = git(worktree, ["show", `${commitSha}:${file}`], null);
+      // taskScopeBase already verified these host-owned merges. An unchanged
+      // child may inherit a frozen file from the parent without a cosmetic new
+      // freeze commit. Keep the original fidelity chain; accept only exact
+      // parent bytes, never a child edit or a native conflict resolution.
+      for (const proof of reconciliations) {
+        if (ancestor(worktree, proof.merged_head, commitSha)) continue;
+        if (!ancestor(worktree, commitSha, proof.pre_child_head))
+          return failure(`frozen file has no ancestral fidelity before reconciliation: ${file}`);
+        const before = git(worktree, ["show", `${proof.pre_child_head}:${file}`], null);
+        const merged = git(worktree, ["show", `${proof.merged_head}:${file}`], null);
+        if (!Buffer.from(frozen).equals(Buffer.from(before)))
+          return failure(`frozen file changed before host reconciliation: ${file}`);
+        if (!Buffer.from(before).equals(Buffer.from(merged))) {
+          const parent = git(worktree, ["show", `${proof.parent_head}:${file}`], null);
+          if (proof.conflicts?.includes(file) || !Buffer.from(merged).equals(Buffer.from(parent)))
+            return failure(`frozen file changed outside parent import: ${file}`);
+        }
+        frozen = merged;
+      }
       const current = git(worktree, ["show", `${head}:${file}`], null);
       if (!Buffer.from(frozen).equals(Buffer.from(current))) return failure(`frozen file changed after fidelity: ${file}`);
       blobs[file] = crypto.createHash("sha256").update(current).digest("hex");
@@ -637,6 +656,7 @@ export function inspectTaskRun(entry, dependencies = {}) {
       worktree,
       head,
       reviewRole: fidelityReviewRole(entry.runtime),
+      reconciliations: entry.reconciliations,
     });
     if (!fidelity.ok) return fidelity;
     let recoveryOrigin = null;
