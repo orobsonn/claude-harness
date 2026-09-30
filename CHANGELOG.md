@@ -5,6 +5,13 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [3.6.23](https://github.com/orobsonn/claude-harness/compare/v3.6.22...v3.6.23) (2026-09-30)
+
+
+### Bug Fixes
+
+* **pi:** allow Python verification commands in parent policy ([#1087](https://github.com/orobsonn/claude-harness/issues/1087)) ([e952e54](https://github.com/orobsonn/claude-harness/commit/e952e54e4c068ce944eecd33cf9c1daa1731b26c))
+
 ## [3.6.22](https://github.com/orobsonn/claude-harness/compare/v3.6.21...v3.6.22) (2026-09-30)
 
 
