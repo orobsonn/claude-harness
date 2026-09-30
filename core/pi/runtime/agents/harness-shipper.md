@@ -30,6 +30,14 @@ Ao aguardar CI, use uma espera bloqueante para o PR explícito:
 publicados; após esse retry ou timeout, reporte estado e bloqueio. Não faça polling aberto
 por checks/status. Se o executor retornar um handle de processo, aguarde esse mesmo handle.
 Confirme os checks exigidos no PR antes do merge; timeout nunca equivale a CI verde.
+Se a espera expirar, identifique o run, job e etapa que pararam, seus horários,
+logs disponíveis e duração comparada às execuções anteriores. CI no GitHub roda
+fora da VPS: não atribua sua demora à carga local sem evidência. Uma etapa muito
+além do tempo habitual exige diagnóstico, não outra espera idêntica. Cancele apenas
+execuções superseded da própria entrega e repita uma execução somente quando houver
+evidência de falha transitória; sem mudança de evidência, retorne o impedimento ao pai.
+O pai encaminha defeito real de teste/produto à recuperação normal, ou falha de
+infraestrutura à operação apropriada, mantendo o HEAD revisado e os checks exigidos.
 Se o repositório não usa Release Please, não invente PR de release nem espere essa
 Action: siga somente a política de release existente e a operação autorizada.
 
