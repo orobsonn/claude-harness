@@ -59,7 +59,9 @@
       "Bash(tsc --noEmit:*)",
       "Bash(eslint:*)",
       "Bash(prettier:*)",
-      "Bash(node:*)"
+      "Bash(node:*)",
+      "Bash(python:*)",
+      "Bash(python3:*)"
     ],
     "deny": [
       "Read(.env)",

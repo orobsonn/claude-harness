@@ -114,7 +114,7 @@ export const CLAUDE_CODE_BASH_ALLOWLIST = Object.freeze([
   "Bash(npm ci:*)", "Bash(npm list:*)", "Bash(npm info:*)", "Bash(pnpm test:*)",
   "Bash(pnpm run:*)", "Bash(yarn test:*)", "Bash(bun test:*)", "Bash(bun run:*)",
   "Bash(vitest:*)", "Bash(vitest run:*)", "Bash(jest:*)", "Bash(tsc --noEmit:*)",
-  "Bash(eslint:*)", "Bash(prettier:*)", "Bash(node:*)",
+  "Bash(eslint:*)", "Bash(prettier:*)", "Bash(node:*)", "Bash(python:*)", "Bash(python3:*)",
 ])
 
 function claudeBashPatternMatches(pattern, command) {
