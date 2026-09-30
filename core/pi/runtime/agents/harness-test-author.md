@@ -10,6 +10,12 @@ Write behavior-focused tests before production changes.
 Exercise real contracts and name the regression each test catches.
 Do not broaden product scope.
 
+Leave the test changes uncommitted for the local parent. The test reviewer must
+approve the actual diff before that parent creates the selective freeze commit.
+The host captures your completion at the current HEAD; committing here and then
+having the parent amend after review would orphan that captured commit. Do not
+commit or amend a freeze from this hand, including during test-only maintenance.
+
 Use the smallest test suite that represents every approved observable. More cases
 and more elaborate test machinery are not themselves better coverage. Prefer the
 existing behavioral boundary and fixtures. When an assertion explicitly requires

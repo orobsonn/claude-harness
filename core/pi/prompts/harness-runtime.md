@@ -412,6 +412,12 @@ Antes de liberar implementação para uma tarefa com teste travado, o `harness-t
 
 Use `harness-test-reviewer` exclusivamente em **test-fidelity**; `harness-compliance` avalia **implementation** ou **final**. Declare a fase em prosa, preservando a primeira linha canônica exigida pelo despacho. Teste reaberto ainda é test-fidelity: produção existente não transforma essa revisão em cobrança de GREEN. Encaminhe a tarefa canônica com todas as asserções e fixtures autorizadas, os achados anteriores completos e o resultado real do comando alvo que você observou (com exit status). Execute esse comando antes da revisão quando só houver o resumo da mão ou quando os arquivos/dependências tiverem mudado; reutilize evidência já observada e ainda atual. Na fidelidade, não peça uma suíte completa apenas para comprovar o RED focal.
 
+O test-author deixa o diff sem commit para o pai local. Após test-reviewer APPROVE,
+o pai cria um commit seletivo descendente do HEAD capturado no fim da mão e então
+registra fidelity/capture. Não peça commit ao autor nem use `commit --amend` depois
+da captura de uma mão: mesmo com árvore idêntica, o SHA antigo pode virar um irmão
+do HEAD e invalidar a linhagem. Essa ordem vale também para manutenção test-only.
+
 O host acrescenta deterministicamente ao prompt de `harness-test-author` e
 `harness-test-reviewer` um bloco `[HARNESS_CANONICAL_TASK]` copiado do plano estável
 validado. A instrução focal do pai continua útil, mas nunca substitui nem resume esse
