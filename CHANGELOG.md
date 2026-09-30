@@ -5,6 +5,13 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [3.6.18](https://github.com/orobsonn/claude-harness/compare/v3.6.17...v3.6.18) (2026-09-30)
+
+
+### Bug Fixes
+
+* **pi:** recover task freezes after concurrent base reconciliation ([#1077](https://github.com/orobsonn/claude-harness/issues/1077)) ([de47bb6](https://github.com/orobsonn/claude-harness/commit/de47bb6b1b41eb9dad340058a7f03085d43ff071))
+
 ## [3.6.17](https://github.com/orobsonn/claude-harness/compare/v3.6.16...v3.6.17) (2026-09-30)
 
 
