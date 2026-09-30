@@ -234,7 +234,7 @@ function summary(entry, { compact = false } = {}) {
 }
 function requireFrozen(root, tree, parentHead, results) {
   const parentBlobs = {};
-  for (const [index, { result, integration }] of results.entries())
+  for (const [index, { result }] of results.entries())
     for (const [file, expected] of Object.entries(result?.frozen_blobs ?? {})) {
       const actual = execFileSync("git", ["show", `${tree}:${file}`], {
         cwd: root,
@@ -256,8 +256,10 @@ function requireFrozen(root, tree, parentHead, results) {
       if (actualHash !== parentHash || childHash !== expected)
         throw new Error(`integration would change frozen test ${file}`);
       if (index === 0) parentBlobs[file] = parentHash;
-      else if (integration?.frozen_parent?.blobs?.[file] !== parentHash)
-        throw new Error(`prior integration has no current frozen parent proof for ${file}`);
+      // Other tasks may still need their own receipt renewed after the same
+      // base merge. Requiring that renewal here makes two changed freezes
+      // depend on each other. This merge must preserve their current parent
+      // bytes; their stale receipts still block aggregate approval separately.
     }
   return parentBlobs;
 }
