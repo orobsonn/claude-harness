@@ -147,6 +147,8 @@ test('em cerimônia LIGHT/FULL o pai aplica a mesma allowlist Bash do Claude Cod
     'npm test',
     'npm run typecheck',
     'node --test test/unit.test.mjs',
+    'python --version',
+    'python3 -c "from pathlib import Path; assert Path(\'MEMORY.md\').is_file()"',
   ]) {
     assert.deepEqual(decidePiPolicy({ toolName: 'bash', input: { command } }, fullParent), { block: false }, command)
   }
@@ -353,6 +355,7 @@ test('procfs nunca pode expor ambiente, argv ou descritores do processo', () => 
   }
   for (const command of [
     'cat /proc/self/environ',
+    'python3 -c "open(\'/proc/self/environ\').read()"',
     'node -e "require(\'fs\').readFileSync(\'/proc/1/environ\')"',
     'cat ../../proc/self/cmdline',
   ]) {
