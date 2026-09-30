@@ -435,6 +435,15 @@ A operação não exige revisão ou harvest anterior; não crie esses recibos s�
 habilitar um merge. Isso não manda atualizar a base por rotina: avalie a necessidade.
 O Bash comum do coordenador não é a via de integração e filhos nunca recebem essa ordem.
 
+Após a reconciliação global, preserve tarefas cujos recibos continuam válidos.
+Se a base mudou um teste congelado e o host recusar o recibo integrado, retome e
+integre o mesmo task/attempt para renovar a prova da versão herdada no pai.
+Faça isso sequencialmente, começando pelo dono da barreira de correção atual.
+A integração preserva os bytes atuais dos testes das outras tarefas; os recibos
+delas podem ser renovados em seguida. Olhos despachados no pai global não
+substituem os recibos da sessão local. Não invente delta de produto nem lance
+writer só para obter frescor; recupere apenas a evidência que o host invalidou.
+
 Se o merge do shipper encontrar conflito, ele termina `BLOCKED` com o HEAD revisado, a
 nova base observada e a evidência de conflito disponível. Primeiro diagnostique no
 **pai global** com `harness_memory action="reconcile"`, `expected_head` e `base_sha`

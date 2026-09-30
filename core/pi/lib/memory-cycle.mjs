@@ -381,7 +381,7 @@ export function reconcileMemoryDelivery(projectRoot, sessionId, { expected_head,
     "fix: reconcilia conflitos da base da entrega" : "chore: reconcilia base e memória da entrega"]);
   cleanTree(root);
   return { ...result, applied: true, head: gitMemory(root, ["rev-parse", "HEAD"]),
-    next: "Inspect the incorporated delta, run affected verification and obtain current final eyes, then harvest and ship. Do not reopen completed tasks or reuse stale approvals." };
+    next: "Inspect the incorporated delta and run affected verification. Preserve valid task receipts; if a frozen test changed with the base, resume and integrate each affected exact task/attempt sequentially to renew its parent proof before final eyes. Do not invent a writer delta or replace task receipts with global reviews. Then obtain current final eyes, harvest and ship." };
 }
 
 function snapshotPlan(paths, featureId) {
