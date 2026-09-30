@@ -94,11 +94,12 @@ function appendImplementationReviews(f, roles = ["harness-adversary", "harness-c
   }
 }
 
-function inspectionFixture({ historicFailure = false, frozenFixture = false } = {}) {
+function inspectionFixture({ historicFailure = false, frozenFixture = false, extraTest = false } = {}) {
   const { root, base } = repo();
   write(path.join(root, "src", "task.spec.mjs"), "export const expected = 1;\n");
   if (frozenFixture) write(path.join(root, "fixtures", "task.json"), '{"expected":1}\n');
   const freeze = commit(root, "freeze tests");
+  if (extraTest) write(path.join(root, "src", "extra.spec.mjs"), "export const expected = true;\n");
   write(path.join(root, "src", "task.mjs"), "export const actual = 1;\n");
   const head = commit(root, "implement task");
   const grantPath = path.join(root, ".pi", "harness", "state", "task-admission", `${ATTEMPT}.json`);
@@ -919,6 +920,64 @@ test("historical recovery requires the result at its exact digest key", () => {
   for (const history of [{ wrong_key: result }, [result]]) {
     f.entry.result_history = history;
     assert.equal(inspectTaskRun(f.entry, f.dependencies).ok, false);
+  }
+});
+
+test("historical recovery uses the admitted frozen set after reviewed append-only scope correction", () => {
+  for (const historicalAuthor of [false, true]) {
+    let f = inspectionFixture({ extraTest: true });
+    const binding = f.dependencies.readTaskRunBindingFn();
+    binding.task.severity = "medium";
+    binding.task.criterion_refs = ["ac-1"];
+    binding.task.locked_tests[0].assertion = "Given input When invoked Then output is correct";
+    binding.plan.kind = "full";
+    binding.plan.feature_id = FEATURE;
+    binding.plan.model_strategy = { hand_tiers: { low: "test/model", medium: "test/model", high: "test/model" },
+      ...Object.fromEntries(["planner", "plan-reviewer", "compliance", "adversary", "security", "shipper", "harvester"].map((role) => [role, "test/model"])) };
+    f.dependencies.readTaskRunBindingFn = () => binding;
+    const specPath = path.join(f.root, ".pi/harness/plans", FEATURE, "spec.md");
+    write(specPath, "Approved spec\n");
+    f.entry.spec_sha256 = binding.grant.spec_sha256 = crypto.createHash("sha256").update(fs.readFileSync(specPath)).digest("hex");
+    if (historicalAuthor) f = testOnlyRecovery({ fixture: f });
+    const archived = archiveInspectedIntegration(f);
+    const planPath = path.join(f.root, ".pi/harness/plans", FEATURE, "execution-plan.json");
+    const text = fs.readFileSync(planPath, "utf8");
+    const approval = { written_by: "host-subagent-completion", parent_session_id: PARENT, feature_id: FEATURE,
+      role: "harness-plan-reviewer", status: "completed", verdict: "APPROVE", dispatch_call_id: "original-plan-review",
+      child_session_id: "plan-child", agent_id: "plan-agent", plan_sha256: f.entry.plan_sha256, spec_sha256: f.entry.spec_sha256 };
+    f.entry.grant = { ...binding.grant, origin: { plan_review_call_id: approval.dispatch_call_id } };
+    const registry = { version: 1, parent_session_id: PARENT, feature_id: FEATURE, plan_sha256: f.entry.plan_sha256,
+      spec_sha256: f.entry.spec_sha256, tasks: { [TASK]: f.entry },
+      plan_snapshot: { written_by: "host-task-plan-snapshot", text, approval } };
+    const registryPath = path.join(f.root, ".pi/harness/state", PARENT, "task-runs/index.json");
+    write(registryPath, registry);
+    binding.task.locked_tests.push({ id: "extra-test", path: "src/extra.spec.mjs", assertion: "Given input When invoked Then output is correct" });
+    write(planPath, binding.plan);
+    const parentStatePath = path.join(f.root, ".pi/harness/state", PARENT, "gate-state.json");
+    const currentApproval = { ...approval, dispatch_call_id: "corrected-plan-review",
+      plan_sha256: crypto.createHash("sha256").update(fs.readFileSync(planPath)).digest("hex") };
+    write(parentStatePath, { session_id: PARENT, feature_id: FEATURE, plan_review_evidence: currentApproval });
+    binding.recovered_task_contract_sha256 = hashTaskReceipt(binding.task);
+    const recovery = testOnlyRecovery({ fixture: f, capturedImplementation: false, suffix: "-appended" });
+    const inspected = inspectTaskRun(recovery.entry, recovery.dependencies);
+    assert.equal(inspected.ok, true, inspected.reason);
+    assert.equal(inspected.result.hand_capture.recovery_origin.head_sha, archived.result.child_head);
+    assert.equal(inspected.result.recovered_task_contract_sha256, hashTaskReceipt(binding.task));
+    assert.deepEqual(Object.keys(inspected.result.frozen_blobs).sort(), ["src/extra.spec.mjs", "src/task.spec.mjs"]);
+    assert.equal(Object.hasOwn(archived.result.frozen_blobs, "src/extra.spec.mjs"), false);
+
+    for (const mutate of [
+      () => { registry.plan_snapshot.text += " "; },
+      () => { currentApproval.verdict = "REVISE"; },
+    ]) {
+      const saved = structuredClone(registry.plan_snapshot);
+      mutate();
+      write(registryPath, registry);
+      write(parentStatePath, { session_id: PARENT, feature_id: FEATURE, plan_review_evidence: currentApproval });
+      assert.equal(inspectTaskRun(recovery.entry, recovery.dependencies).ok, false);
+      registry.plan_snapshot = saved;
+      currentApproval.verdict = "APPROVE";
+    }
   }
 });
 

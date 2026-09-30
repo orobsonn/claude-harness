@@ -452,7 +452,8 @@ function integratedRecoveryOrigin(entry, { sessionId, task, events, implementati
     featureId: entry.feature_id, taskId: entry.task_id, headSha: integration.integrated_head,
   });
   if (!validated.ok) return failure("test-only recovery historical receipt is invalid: " + validated.reason);
-  if (JSON.stringify(frozenPaths(task).sort()) !== JSON.stringify(Object.keys(result.frozen_blobs).sort()))
+  if (JSON.stringify(frozenPaths(validated.canonicalTask).sort()) !== JSON.stringify(Object.keys(result.frozen_blobs).sort()) ||
+      frozenPaths(validated.canonicalTask).some((file) => !frozenPaths(task).includes(file)))
     return failure("test-only recovery historical frozen paths must match the canonical task");
   // A resumed task can implement new behavior and then repair its tests. That
   // implementation needs its own clean capture; the old integration cannot
@@ -944,7 +945,10 @@ function validateIntegration(entry, integration, { projectRoot, sessionId, featu
   if (!canonical.ok) {
     const recovered = readTaskPlanAuthority({ projectRoot, sessionId, featureId,
       planSha256: entry.plan_sha256, specSha256: entry.spec_sha256, originCallId: entry.grant?.origin?.plan_review_call_id });
-    canonical = { ok: true, plan: recovered.plan };
+    const contractHash = result.recovered_task_contract_sha256 ?? null;
+    // Historical receipts prove the reviewed contract at that time. Appended
+    // obligations require fresh inspection through the current authority check.
+    canonical = { ok: true, plan: contractHash === null ? recovered.originalPlan : recovered.plan };
   }
   const canonicalTask = canonical.ok && canonical.plan.tasks.find((item) => item.id === taskId);
   if (!canonicalTask || requiredPiTaskReviewRoles(canonical.plan, canonicalTask).some((role) =>
@@ -1038,7 +1042,7 @@ function validateIntegration(entry, integration, { projectRoot, sessionId, featu
       if (digestAt(headSha) !== (parentDigest ?? expected)) return failure(`integrated frozen file changed: ${file}`);
     } catch { return failure(`integrated frozen file is unavailable: ${file}`); }
   }
-  return { ok: true };
+  return { ok: true, canonicalTask };
 }
 
 function validateCurrentIntegrationAuthority(entry, registry, { projectRoot, sessionId, featureId }) {
