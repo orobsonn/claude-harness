@@ -5,6 +5,13 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [3.6.20](https://github.com/orobsonn/claude-harness/compare/v3.6.19...v3.6.20) (2026-09-30)
+
+
+### Bug Fixes
+
+* **pi:** retain admitted frozen lineage after scope correction ([#1081](https://github.com/orobsonn/claude-harness/issues/1081)) ([36ea571](https://github.com/orobsonn/claude-harness/commit/36ea5712cc225954ad6ff13cc9e8689cf984d4d2))
+
 ## [3.6.19](https://github.com/orobsonn/claude-harness/compare/v3.6.18...v3.6.19) (2026-09-30)
 
 
