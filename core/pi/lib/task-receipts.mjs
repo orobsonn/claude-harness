@@ -360,6 +360,32 @@ function validateLaunches(entry, jobRoot, readTaskProcessFn = readTaskProcess, a
   return { ok: true, lifecycles, interruptedIndexes };
 }
 
+function frozenBytesAfterReconciliation(root, freezeSha, head, file, reconciliations = []) {
+  let frozen = git(root, ["show", `${freezeSha}:${file}`], null);
+  // taskScopeBase already verified these host-owned merges. An unchanged
+  // child may inherit a frozen file from the parent without a cosmetic new
+  // freeze commit. Keep the original fidelity chain; accept only exact
+  // parent bytes, never a child edit or a native conflict resolution.
+  for (const proof of reconciliations) {
+    if (ancestor(root, proof.merged_head, freezeSha)) continue;
+    if (!ancestor(root, freezeSha, proof.pre_child_head))
+      throw new Error(`frozen file has no ancestral fidelity before reconciliation: ${file}`);
+    const before = git(root, ["show", `${proof.pre_child_head}:${file}`], null);
+    const merged = git(root, ["show", `${proof.merged_head}:${file}`], null);
+    if (!Buffer.from(frozen).equals(Buffer.from(before)))
+      throw new Error(`frozen file changed before host reconciliation: ${file}`);
+    if (!Buffer.from(before).equals(Buffer.from(merged))) {
+      const parent = git(root, ["show", `${proof.parent_head}:${file}`], null);
+      if (proof.conflicts?.includes(file) || !Buffer.from(merged).equals(Buffer.from(parent)))
+        throw new Error(`frozen file changed outside parent import: ${file}`);
+    }
+    frozen = merged;
+  }
+  const current = git(root, ["show", `${head}:${file}`], null);
+  if (!Buffer.from(frozen).equals(Buffer.from(current))) throw new Error(`frozen file changed after fidelity: ${file}`);
+  return current;
+}
+
 function validateFidelity({ events, task, taskId, worktree, head, reviewRole, reconciliations = [] }) {
   const paths = frozenPaths(task);
   if (paths.length === 0) return { ok: true, freezeSha: null, frozenBlobs: {}, markerIndex: -1 };
@@ -387,30 +413,9 @@ function validateFidelity({ events, task, taskId, worktree, head, reviewRole, re
   const blobs = {};
   for (const file of paths) {
     try {
-      let frozen = git(worktree, ["show", `${commitSha}:${file}`], null);
-      // taskScopeBase already verified these host-owned merges. An unchanged
-      // child may inherit a frozen file from the parent without a cosmetic new
-      // freeze commit. Keep the original fidelity chain; accept only exact
-      // parent bytes, never a child edit or a native conflict resolution.
-      for (const proof of reconciliations) {
-        if (ancestor(worktree, proof.merged_head, commitSha)) continue;
-        if (!ancestor(worktree, commitSha, proof.pre_child_head))
-          return failure(`frozen file has no ancestral fidelity before reconciliation: ${file}`);
-        const before = git(worktree, ["show", `${proof.pre_child_head}:${file}`], null);
-        const merged = git(worktree, ["show", `${proof.merged_head}:${file}`], null);
-        if (!Buffer.from(frozen).equals(Buffer.from(before)))
-          return failure(`frozen file changed before host reconciliation: ${file}`);
-        if (!Buffer.from(before).equals(Buffer.from(merged))) {
-          const parent = git(worktree, ["show", `${proof.parent_head}:${file}`], null);
-          if (proof.conflicts?.includes(file) || !Buffer.from(merged).equals(Buffer.from(parent)))
-            return failure(`frozen file changed outside parent import: ${file}`);
-        }
-        frozen = merged;
-      }
-      const current = git(worktree, ["show", `${head}:${file}`], null);
-      if (!Buffer.from(frozen).equals(Buffer.from(current))) return failure(`frozen file changed after fidelity: ${file}`);
+      const current = frozenBytesAfterReconciliation(worktree, commitSha, head, file, reconciliations);
       blobs[file] = crypto.createHash("sha256").update(current).digest("hex");
-    } catch { return failure(`canonical frozen file is absent from the fidelity chain: ${file}`); }
+    } catch (error) { return failure(error.message.startsWith("frozen file ") ? error.message : `canonical frozen file is absent from the fidelity chain: ${file}`); }
   }
   return { ok: true, freezeSha: commitSha, frozenBlobs: blobs, markerIndex, authorIndex };
 }
@@ -1035,7 +1040,8 @@ function validateIntegration(entry, integration, { projectRoot, sessionId, featu
         git(projectRoot, ["show", `${revision}:${file}`], null)).digest("hex");
       const parentDigest = frozenParent?.blobs?.[file];
       if (parentDigest !== undefined &&
-          (parentDigest === expected || digestAt(result.freeze_sha) !== expected ||
+          (parentDigest === expected || crypto.createHash("sha256").update(
+            frozenBytesAfterReconciliation(projectRoot, result.freeze_sha, result.child_head, file, entry.reconciliations)).digest("hex") !== expected ||
             digestAt(result.child_head) !== expected || digestAt(frozenParent.head_sha) !== parentDigest ||
             digestAt(integration.integrated_head) !== parentDigest))
         return failure(`frozen parent reconciliation proof differs from Git: ${file}`);

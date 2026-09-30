@@ -1318,10 +1318,23 @@ for (const importFrozen of [false, true]) test(`reconciled dependencies keep ori
     feature_id: FEATURE, task_id: TASK, attempt_id: ATTEMPT, parent_root: f.root, worktree: f.root,
     session_id: CHILD, plan_sha256: f.entry.plan_sha256, spec_sha256: f.entry.spec_sha256,
     base_sha: f.base, child_head: head, integrated_head: head, result_sha256: hashTaskReceipt(result) };
+  // Final parent may also supersede an already imported frozen baseline.
+  // The child keeps its original fidelity anchor and exact host import proof.
+  let finalHead = head;
+  if (importFrozen) {
+    write(path.join(f.root, "src/task.spec.mjs"), "export const expected = 1;\n// Final parent coverage.\n");
+    run(f.root, "git", "add", "src/task.spec.mjs");
+    run(f.root, "git", "commit", "-m", "later parent coverage");
+    finalHead = run(f.root, "git", "rev-parse", "HEAD");
+    integration.integrated_head = finalHead;
+    integration.frozen_parent = { head_sha: finalHead, ancestral: true, blobs: {
+      "src/task.spec.mjs": crypto.createHash("sha256").update(fs.readFileSync(path.join(f.root, "src/task.spec.mjs"))).digest("hex"),
+    } };
+  }
   registry.tasks[TASK] = { ...f.entry, grant, status: "integrated", result, integration };
   write(registryPath, registry);
   const readFinal = () => readIntegratedTaskEvidence({ projectRoot: f.root, sessionId: PARENT,
-    featureId: FEATURE, taskId: TASK, headSha: head });
+    featureId: FEATURE, taskId: TASK, headSha: finalHead });
   const registryBefore = fs.readFileSync(registryPath, "utf8");
   for (let restart = 0; restart < 2; restart++) {
     const final = readFinal();
