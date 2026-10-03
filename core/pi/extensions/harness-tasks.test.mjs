@@ -93,6 +93,22 @@ const toolContext = {
   sessionManager: { getSessionId: () => "parent", getHeader: () => ({}) },
 };
 
+test("an invalid bounded wait offers an executable host wait without starting work", async () => {
+  const actions = [];
+  const tool = taskTool({ executeAction: async (params) => {
+    actions.push(params);
+    return { ok: true, tasks: [] };
+  } });
+  const invalid = await tool.execute("invalid-wait", { action: "wait", task_id: "a", wait_seconds: 30 }, undefined, undefined, toolContext);
+  assert.equal(invalid.isError, true);
+  assert.deepEqual(actions, []);
+  assert.deepEqual(invalid.details.retry_action, { action: "wait", task_id: "a" });
+  const retried = await tool.execute("corrected-wait", invalid.details.retry_action, undefined, undefined, toolContext);
+  assert.equal(retried.details.ok, true);
+  assert.deepEqual(actions, [{ action: "status", task_id: "a" }]);
+  assert.equal(retried.details.wait.outcome, "settled");
+});
+
 test("task dispatch exports the admitted profile pointers for an Orca local parent", async (t) => {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "pi-task-profile-tool-")));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));

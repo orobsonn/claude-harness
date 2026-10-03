@@ -174,7 +174,7 @@ export default function harnessTasks(pi: ExtensionAPI, injected: Parameters<type
             minimum: 0,
             maximum: 30,
             description:
-              "For status: wait up to this many seconds if work is running. Default 20; zero returns immediately.",
+              "For one-time status only: wait up to this many seconds if work is running. Default 20; zero returns immediately. For continued observation use action=wait without wait_seconds; it waits in the host without repeated model calls.",
           }),
         ),
         compact: Type.Optional(Type.Boolean({ description: "For status or wait only: omit repeated context_return bodies while preserving task identity, state, heads and diagnostics." })),
@@ -196,7 +196,14 @@ export default function harnessTasks(pi: ExtensionAPI, injected: Parameters<type
           requestedWait < 0 ||
           requestedWait > 30)
       ) {
-        const result = { ok: false, reason: `[harness-tasks:${String(action.action ?? "unknown")}] wait_seconds is only valid for status, from 0 to 30.` };
+        const result = {
+          ok: false,
+          reason: `[harness-tasks:${String(action.action ?? "unknown")}] wait_seconds is only valid for status, from 0 to 30.`,
+          ...(action.action === "wait" ? {
+            retry_action: { action: "wait", ...(action.task_id ? { task_id: action.task_id } : {}) },
+            guidance: "Retry this wait without wait_seconds. The host waits for task state changes without new model calls; do not replace it with a loop of status calls.",
+          } : {}),
+        };
         return { content: [{ type: "text" as const, text: JSON.stringify(result) }], details: result, isError: true };
       }
       if (action.action !== "dispatch" && action.task_ids !== undefined) {

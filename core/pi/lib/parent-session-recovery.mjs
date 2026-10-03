@@ -213,6 +213,28 @@ export function recoverPiParentSession(projectRoot, sessionId, options = {}) {
   if (state.classified !== true || state.classification_source === "delegated-task") {
     return { ok: false, reason: "resume global classification invalid" };
   }
+  if (state.spec_status === undefined) {
+    const discoveryFields = new Set([
+      "session_id", "feature_id", "mode", "peak_mode", "classified", "triaged",
+      "task_pipeline_version", "classification_source",
+    ]);
+    const specPath = piSpecPath({ projectRoot: root, featureId: state.feature_id });
+    const planPath = piExecutionPlanPath({ projectRoot: root, featureId: state.feature_id });
+    if (Object.keys(state).some((key) => !discoveryFields.has(key)) ||
+        !specPath.ok || !planPath.ok ||
+        !inspectOwnedPath(root, specPath.path).absent || !inspectOwnedPath(root, planPath.path).absent ||
+        hasPostPlanEvidence(root, statePath.path, state)) {
+      return { ok: false, reason: "resume discovery state inconsistent" };
+    }
+    return {
+      ok: true, root, sessionId, sessionFile: transcript.sessionFile, statePath: statePath.path,
+      context: `<HARNESS_PARENT_RECOVERY>\n${JSON.stringify({
+        session_id: sessionId, feature_id: state.feature_id, mode: stateMode,
+        stage: "pre-spec", spec_approval: "not_verified_by_recovery", plan_approval: "not_verified_by_recovery",
+        resume_guidance: "Continue discovery in this exact conversation. No specification or plan exists yet; recovery grants no approval. Write and review the specification, seal it through the native gate, then obtain the canonical plan and its review before dispatching implementation.",
+      })}\n</HARNESS_PARENT_RECOVERY>`,
+    };
+  }
   const draft = state.spec_status === "draft";
   if (draft) {
     // A completed native review (or its consumed marker) is not the spec seal.

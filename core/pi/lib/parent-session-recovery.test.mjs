@@ -540,3 +540,47 @@ test("Linux encontra starttime mesmo quando o nome do processo contém parêntes
 
   assert.deepEqual(identity, { pid: 4321, state: "S", start: "424242" });
 });
+
+function discoveryFixture() {
+  const f = fixture();
+  fs.unlinkSync(f.specPath);
+  fs.unlinkSync(f.plan);
+  fs.writeFileSync(f.state, JSON.stringify({ session_id: SESSION, feature_id: FEATURE,
+    mode: "FULL", peak_mode: "FULL", classified: true, triaged: true, task_pipeline_version: 1 }));
+  return f;
+}
+
+test("provider interruption before spec resumes discovery without approving delivery", () => {
+  const f = discoveryFixture();
+  try {
+    const before = fs.readFileSync(f.state);
+    const result = recoverPiParentSession(f.root, SESSION);
+    assert.equal(result.ok, true, result.reason);
+    const envelope = JSON.parse(result.context.split("\n")[1]);
+    assert.equal(envelope.stage, "pre-spec");
+    assert.equal(envelope.spec_approval, "not_verified_by_recovery");
+    assert.equal(readPiSpecApproval({ projectRoot: f.root, sessionId: SESSION }).ok, false);
+    for (const subagentType of ["harness-planner", "harness-executor"]) {
+      assert.equal(decidePiDispatchGate({ projectRoot: f.root, sessionId: SESSION, subagentType, env: {} }).decision, "deny");
+    }
+    assert.deepEqual(fs.readFileSync(f.state), before);
+    assert.equal(fs.existsSync(f.specPath), false);
+    assert.equal(fs.existsSync(f.plan), false);
+    assert.equal(fs.readdirSync(f.sessions).length, 1);
+  } finally { f.cleanup(); }
+});
+
+test("discovery recovery rejects orphan artifacts, delivery markers, task registry and symlinks", () => {
+  for (const setup of [
+    (f) => fs.writeFileSync(f.specPath, "orphan spec"),
+    (f) => fs.writeFileSync(f.plan, "{}"),
+    (f) => { const s = JSON.parse(fs.readFileSync(f.state)); s.brainstormed = true; fs.writeFileSync(f.state, JSON.stringify(s)); },
+    (f) => { const s = JSON.parse(fs.readFileSync(f.state)); s.hand_finished = []; fs.writeFileSync(f.state, JSON.stringify(s)); },
+    (f) => { const p = path.join(path.dirname(f.state), "task-runs", "index.json"); fs.mkdirSync(path.dirname(p), { recursive: true }); fs.writeFileSync(p, "{}"); },
+    (f) => fs.symlinkSync(f.state, f.specPath),
+  ]) {
+    const f = discoveryFixture();
+    try { setup(f); assert.equal(recoverPiParentSession(f.root, SESSION).ok, false); }
+    finally { f.cleanup(); }
+  }
+});

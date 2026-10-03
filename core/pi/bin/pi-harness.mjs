@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { providerTraceEnvironment } from "../lib/provider-http-trace.mjs";
 import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -14,7 +15,7 @@ import { materializePiReviewConfig } from "../lib/pi-review-config.mjs";
 import {
   DEEPSEEK_MODEL, GLM_MODEL, LEGACY_OLLAMA_CONTEXT_WINDOW, MODEL_PROFILE_ENV, MODEL_PROFILE_HASH_ENV,
   MODEL_PROFILE_VERSION, OLLAMA_CONTEXT_WINDOW, loadModelProfileFromEnv, modelStrategyFromProfile,
-  parseModelProfileArgs, profilePrompt, readModelProfileSnapshot, resolveModelProfile,
+  parseModelProfileArgs, profilePrompt, readDefaultModelProfile, readModelProfileSnapshot, resolveModelProfile,
   writeModelProfileSnapshot,
 } from "../lib/model-profile.mjs";
 import { acquirePiParentWorktreeLock, recoverPiParentSession } from "../lib/parent-session-recovery.mjs";
@@ -89,6 +90,9 @@ const REQUIRED_LIBS = [
   "core/pi/lib/marker-authority.mjs",
   "core/pi/lib/memory-cycle.mjs",
   "core/pi/lib/model-profile.mjs",
+  "core/pi/lib/verboo-provider-retry.mjs",
+  "core/pi/lib/provider-request-control.mjs",
+  "core/pi/lib/provider-http-trace.mjs",
   "core/pi/lib/native-bootstrap.mjs",
   "core/pi/lib/obs.mjs",
   "core/pi/lib/jev-fidelity-shadow.mjs",
@@ -333,6 +337,10 @@ export function materializeRuntime(root, runtimeDir, stateDir = harnessStateDir(
   try {
     const expected = JSON.parse(readFileSync(modelsSource, "utf8"));
     const current = JSON.parse(readFileSync(modelsTarget, "utf8"));
+    if (!current.providers?.verboo && expected.providers?.verboo) {
+      current.providers = { ...(current.providers ?? {}), verboo: expected.providers.verboo };
+      writeFileSync(modelsTarget, `${JSON.stringify(current, null, 2)}\n`, "utf8");
+    }
     const distributedProvider = expected?.providers?.["ollama-cloud"];
     const currentProvider = current?.providers?.["ollama-cloud"];
     if (!distributedProvider || ![1, 2, 3, 4, MODEL_PROFILE_VERSION].includes(modelProfile?.version) ||
@@ -530,6 +538,15 @@ export function runPiHarnessCli(argv, options = {}) {
     return { exitCode: 2 };
   }
   if (profileArgs.inspect) {
+    if (!profileArgs.selection.profile) {
+      try {
+        selectedProfile = resolveModelProfile({ ...profileArgs.selection,
+          profile: readDefaultModelProfile(options.userHome ?? env.HOME) });
+      } catch (error) {
+        errorSink(`Pi harness: ${error instanceof Error ? error.message : String(error)}`);
+        return { exitCode: 2 };
+      }
+    }
     outputSink(JSON.stringify(selectedProfile, null, 2));
     return { exitCode: 0 };
   }
@@ -568,6 +585,15 @@ export function runPiHarnessCli(argv, options = {}) {
   }
   let admittedProfile = selectedProfile;
   let admittedProfileFile = null;
+  if (!parsed.resumeSessionId && !taskGrant && !dispatchedChild(env) && !profileArgs.selection.profile) {
+    try {
+      admittedProfile = resolveModelProfile({ ...profileArgs.selection,
+        profile: readDefaultModelProfile(options.userHome ?? env.HOME) });
+    } catch (error) {
+      errorSink(`Pi harness: ${error instanceof Error ? error.message : String(error)}`);
+      return { exitCode: 2 };
+    }
+  }
   if (!parsed.resumeSessionId && (taskGrant || dispatchedChild(env))) {
     if (env[MODEL_PROFILE_ENV] || env[MODEL_PROFILE_HASH_ENV]) {
       try {
@@ -599,8 +625,14 @@ export function runPiHarnessCli(argv, options = {}) {
   }
   const usesOllama = admittedProfile.profile !== "baseline" ||
     admittedProfile.parents.global.target !== "baseline" || admittedProfile.parents.local.target !== "baseline";
-  if (usesOllama && !env.OLLAMA_API_KEY) {
-    errorSink("Pi harness: admitted Ollama profile requires OLLAMA_API_KEY in the host environment");
+  if (usesOllama && admittedProfile.provider.id === "verboo" && !env.VERBOO_API_KEY) {
+    try {
+      const auth = JSON.parse(readFileSync(join(resolve(options.userHome ?? homedir()), ".pi", "agent", "auth.json"), "utf8"));
+      if (auth.verboo?.type === "api_key" && typeof auth.verboo.key === "string") env.VERBOO_API_KEY = auth.verboo.key;
+    } catch { /* Missing host credential is reported below. */ }
+  }
+  if (usesOllama && !env[admittedProfile.provider.credential_env]) {
+    errorSink(`Pi harness: admitted ${admittedProfile.provider.id} profile requires ${admittedProfile.provider.credential_env} in the host environment`);
     return { exitCode: 2 };
   }
   const parentOperation = Boolean(taskGrant) || Boolean(parsed.resumeSessionId) ||
@@ -677,6 +709,9 @@ export function runPiHarnessCli(argv, options = {}) {
       sessionId,
     });
     materializeRuntimeFn(packageRoot, invocation.env.PI_CODING_AGENT_DIR, undefined, admittedProfile);
+    if (admittedProfile.provider.id === "verboo") {
+      invocation.env = providerTraceEnvironment(invocation.env, { userHome: options.userHome ?? homedir(), sessionId, providerId: "verboo" });
+    }
     // A delegated task is a new local parent with its own resume identity. Even
     // when it inherited the global parent's immutable profile, persist that
     // same snapshot under the local session so resume never falls back to the
