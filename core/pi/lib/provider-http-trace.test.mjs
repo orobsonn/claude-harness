@@ -15,13 +15,38 @@ test("a late dispatcher installation retains tracing and uses the replacement tr
   installProviderHttpTrace({ target, append: (row) => rows.push(row), trackFetchReplacement: true });
   const wrapped = target.fetch;
   target.fetch = async () => { newCalls++; return new Response("new", { status: 429 }); };
-  assert.equal(target.fetch, wrapped);
+  assert.notEqual(target.fetch, wrapped);
   assert.equal(await (await target.fetch(endpoint)).text(), "new");
   assert.equal(oldCalls, 0);
   assert.equal(newCalls, 1);
   assert.equal(rows[1].status, 429);
   target.fetch = wrapped;
-  assert.equal(await (await target.fetch(endpoint)).text(), "new");
+  assert.equal(target.fetch, wrapped);
+  assert.equal(await (await target.fetch(endpoint)).text(), "old");
+  assert.equal(oldCalls, 1);
+  assert.equal(newCalls, 1);
+});
+
+test("fetch mocks retain identity on restoration and saved transports do not change", async () => {
+  const target = { fetch: async () => new Response("original") };
+  installProviderHttpTrace({ target, append: () => {}, trackFetchReplacement: true });
+  const saved = target.fetch;
+  const mock = async () => new Response("mock");
+  target.fetch = mock;
+  const wrappedMock = target.fetch;
+  assert.notEqual(wrappedMock, saved);
+  assert.equal(await (await saved("https://example.invalid")).text(), "original");
+  assert.equal(await (await target.fetch("https://example.invalid")).text(), "mock");
+  target.fetch = saved;
+  assert.equal(target.fetch, saved);
+  assert.equal(await (await target.fetch("https://example.invalid")).text(), "original");
+  target.fetch = mock;
+  assert.equal(target.fetch, wrappedMock);
+  target.fetch = undefined;
+  assert.equal(target.fetch, undefined);
+  target.fetch = wrappedMock;
+  assert.equal(target.fetch, wrappedMock);
+  assert.equal(await (await target.fetch(endpoint)).text(), "mock");
 });
 
 test("HTTP trace preserves SSE bytes and captures status/timing without prompts or credentials", async () => {
