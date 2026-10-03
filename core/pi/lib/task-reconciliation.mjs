@@ -95,8 +95,19 @@ export function taskScopeBase(entry, root, head, scopes) {
         ![proof.pre_child_head, proof.parent_head, proof.merged_head, proof.tree].every((value) => sha.test(value ?? "")) ||
         !Number.isInteger(proof.launch_count) || proof.launch_count < 1 || proof.launch_count > entry.launches.length)
       throw new Error("invalid task reconciliation identity");
-    if (!Array.isArray(proof.upstreams) || (!proof.upstreams.length && proof.kind !== "integration-conflict"))
+    if (!Array.isArray(proof.upstreams) || (!proof.upstreams.length && !["integration-conflict", "aggregate-refresh"].includes(proof.kind)))
       throw new Error("task reconciliation requires corrected dependency receipts");
+    if (proof.kind === "aggregate-refresh") {
+      const current = authority.registry.tasks?.[entry.task_id];
+      const receipt = current?.integration_history?.find((item) => hashTaskReceipt(item) === proof.source_integration_sha256);
+      if (proof.upstreams.length || !receipt || receipt.task_id !== entry.task_id ||
+          receipt.attempt_id !== entry.attempt_id || receipt.child_head !== proof.pre_child_head ||
+          hashTaskReceipt(current.result_history?.[receipt.result_sha256] ?? null) !== receipt.result_sha256)
+        throw new Error("aggregate refresh lacks the task's historical integration and result");
+      ancestor(entry.parent_root, receipt.child_head, receipt.integrated_head);
+      ancestor(entry.parent_root, receipt.integrated_head, proof.parent_head);
+      ancestor(entry.parent_root, proof.parent_head, "HEAD");
+    }
     if (proof.kind === "integration-conflict") {
       if (!proof.conflicts?.length || proof.upstreams.length)
         throw new Error("invalid integration conflict recovery");

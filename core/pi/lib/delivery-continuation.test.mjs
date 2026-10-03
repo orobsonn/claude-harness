@@ -99,13 +99,18 @@ test("real run states move from waiting to final review to shipping, but stop at
   assert.equal(readDeliveryContinuation(f.ctx).stage, "tasks");
   f.registry.tasks.one.status = "integrated";
   f.write("task-runs/index.json", f.registry);
+  fs.mkdirSync(path.join(f.ctx.cwd, ".pi/harness/plans/issue-22"), { recursive: true });
+  fs.writeFileSync(path.join(f.ctx.cwd, ".pi/harness/plans/issue-22/execution-plan.json"), JSON.stringify({ final_review: { verification_commands: ["npm run build"] } }));
   const before = readDeliveryContinuation(f.ctx);
   assert.equal(before.stage, "final-review");
   f.write("evidence/build.json", { head_sha: f.head, command: "npm run build", worktree_dirty: false, original_status: { exit_code: 0 } });
+  f.write("evidence/status.json", { head_sha: f.head, command: "git status --short", worktree_dirty: false, original_status: { exit_code: 0 } });
   const verified = readDeliveryContinuation(f.ctx);
   assert.notEqual(verified.key, before.key, "current command is real progress");
   f.write("evidence/build-again.json", { head_sha: f.head, command: "npm run build", worktree_dirty: false, original_status: { exit_code: 0 } });
   assert.equal(readDeliveryContinuation(f.ctx).key, verified.key, "repeating same check cannot renew loop");
+  f.write("evidence/diff.json", { head_sha: f.head, command: "git diff --stat", worktree_dirty: false, original_status: { exit_code: 0 } });
+  assert.equal(readDeliveryContinuation(f.ctx).key, verified.key, "new diagnostic commands cannot renew a blocked obligation");
   f.state.final_review_done = true; f.write("gate-state.json", f.state);
   assert.equal(readDeliveryContinuation(f.ctx).stage, "shipping");
   f.write("memory-shipment.json", { written_by: "host-subagent-completion", session_id: "parent", feature_id: "issue-22", head: "wrong", status: "completed" });

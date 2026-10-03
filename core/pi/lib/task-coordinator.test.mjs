@@ -1816,3 +1816,121 @@ test("integration still rejects a task-authored change to a frozen test", async 
   assert.equal(result.ok, false);
   assert.match(result.reason, /frozen test/);
 });
+
+
+async function aggregateRefreshFixture(t) {
+  const f = fixture(t, [task("a")]);
+  f.action = params => executeTaskAction(params, f.context, f.deps);
+  assert.equal((await f.action({ action: "dispatch", task_ids: ["a"] })).ok, true);
+  const entry = f.registry().tasks.a;
+  fs.mkdirSync(path.join(entry.worktree, "src"));
+  fs.writeFileSync(path.join(entry.worktree, "src/a.mjs"), "export const a = 1;\n");
+  git(entry.worktree, "add", "src/a.mjs");
+  git(entry.worktree, "commit", "-qm", "implement a");
+  const head = git(entry.worktree, "rev-parse", "HEAD");
+  assert.equal((await f.action({ action: "integrate", task_id: "a", attempt_id: entry.attempt_id, expected_head: head })).ok, true);
+  write(`${entry.grant_path}.claim`, { session_id: "local-session" });
+  fs.writeFileSync(path.join(f.dir, "base.txt"), "new delivery base");
+  git(f.dir, "add", "base.txt");
+  git(f.dir, "commit", "-qm", "incorporate main bytes");
+  f.original = f.registry().tasks.a;
+  f.parentHead = git(f.dir, "rev-parse", "HEAD");
+  f.request = { action: "resume", task_id: "a", attempt_id: entry.attempt_id,
+    reconcile_head: f.parentHead, instruction: "Regenerate evidence invalidated by the reconciled delivery base." };
+  return f;
+}
+
+test("integrated evidence owner imports a clean aggregate before same-attempt recapture", async t => {
+  const f = await aggregateRefreshFixture(t);
+  const originalGrant = fs.readFileSync(f.original.grant_path, "utf8");
+  const start = f.deps.startProcess;
+  f.deps.startProcess = async options => {
+    assert.equal(fs.readFileSync(path.join(options.cwd, "base.txt"), "utf8"), "new delivery base");
+    assert.match(options.args.at(-1), /delivery aggregate refresh/);
+    return start(options);
+  };
+  const result = await f.action(f.request);
+  assert.equal(result.ok, true, result.reason);
+  const entry = f.registry().tasks.a;
+  assert.equal(entry.attempt_id, f.original.attempt_id);
+  assert.equal(entry.base_sha, f.original.base_sha);
+  assert.equal(fs.readFileSync(entry.grant_path, "utf8"), originalGrant);
+  assert.deepEqual(entry.integration_history.at(-1), f.original.integration);
+  assert.equal(entry.integration, null);
+  assert.equal(f.registry().correction_barrier.aggregate_invalidated, true);
+  const head = git(entry.worktree, "rev-parse", "HEAD");
+  assert.equal(taskScopeBase(entry, entry.worktree, head, ["src/a.mjs"]), f.parentHead);
+  assert.deepEqual(git(entry.worktree, "diff", "--name-only", f.parentHead, head), "");
+  const forged = structuredClone(entry);
+  forged.reconciliations[0].source_integration_sha256 = "0".repeat(64);
+  assert.throws(() => taskScopeBase(forged, entry.worktree, head), /historical integration/);
+  fs.writeFileSync(path.join(entry.worktree, "src/a.mjs"), "export const a = 2;\n");
+  git(entry.worktree, "add", "src/a.mjs");
+  git(entry.worktree, "commit", "-qm", "recapture corrected evidence");
+  const corrected = git(entry.worktree, "rev-parse", "HEAD");
+  assert.equal(taskScopeBase(entry, entry.worktree, corrected, ["src/a.mjs"]), f.parentHead);
+  const integrated = await f.action({ action: "integrate", task_id: "a", attempt_id: entry.attempt_id, expected_head: corrected });
+  assert.equal(integrated.ok, true, integrated.reason);
+});
+
+test("aggregate refresh rejects stale HEAD, missing finding, dirty trees and external conflict before invalidation", async t => {
+  for (const variant of ["stale", "instruction", "dirty-child", "dirty-parent", "outside-conflict"]) {
+    const f = await aggregateRefreshFixture(t);
+    const request = { ...f.request };
+    if (variant === "stale") request.reconcile_head = f.original.base_sha;
+    if (variant === "instruction") delete request.instruction;
+    if (variant === "dirty-child") fs.writeFileSync(path.join(f.original.worktree, "base.txt"), "pending");
+    if (variant === "dirty-parent") fs.writeFileSync(path.join(f.dir, "base.txt"), "pending");
+    if (variant === "outside-conflict") {
+      fs.writeFileSync(path.join(f.original.worktree, "base.txt"), "outside task");
+      git(f.original.worktree, "add", "base.txt");
+      git(f.original.worktree, "commit", "-qm", "unauthorized change");
+    }
+    const result = await f.action(request);
+    assert.equal(result.ok, false, variant);
+    assert.deepEqual(f.registry().tasks.a.integration, f.original.integration, variant);
+    assert.equal(f.registry().correction_barrier, undefined, variant);
+    assert.equal(f.launches(), 1, variant);
+  }
+});
+
+test("aggregate refresh survives a failed launch and does not replay the merge", async t => {
+  const f = await aggregateRefreshFixture(t);
+  const start = f.deps.startProcess;
+  f.deps.startProcess = async () => { throw new Error("transport unavailable"); };
+  await f.action(f.request);
+  const before = f.registry().tasks.a;
+  assert.equal(before.reconciliations.length, 1);
+  const head = git(before.worktree, "rev-parse", "HEAD");
+  f.deps.startProcess = start;
+  const retried = await f.action(f.request);
+  assert.equal(retried.ok, true, retried.reason);
+  assert.equal(f.registry().tasks.a.reconciliations.length, 1);
+  assert.equal(git(before.worktree, "rev-parse", "HEAD"), head);
+});
+
+
+test("aggregate refresh replays a durable intent after an interrupted merge hook", async t => {
+  const f = await aggregateRefreshFixture(t);
+  const hooks = path.join(f.dir, ".git/hooks");
+  const hook = path.join(hooks, "pre-merge-commit");
+  fs.writeFileSync(hook, "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+  const failed = await f.action(f.request);
+  assert.equal(failed.ok, false);
+  const interrupted = f.registry().tasks.a;
+  assert.equal(interrupted.reconciliation_intent.kind, "aggregate-refresh");
+  assert.equal(interrupted.integration, null);
+  assert.equal(f.launches(), 1);
+  fs.unlinkSync(hook);
+  const observed = await f.action({ action: "status", task_id: "a" });
+  assert.equal(observed.ok, true, observed.reason);
+  const replayed = f.registry().tasks.a;
+  assert.equal(replayed.reconciliation_intent, undefined);
+  assert.equal(replayed.reconciliations.length, 1);
+  const head = git(replayed.worktree, "rev-parse", "HEAD");
+  assert.equal(taskScopeBase(replayed, replayed.worktree, head, ["src/a.mjs"]), f.parentHead);
+  assert.equal(f.launches(), 1, "status completes the reserved merge, never launches a writer");
+  const resumed = await f.action(f.request);
+  assert.equal(resumed.ok, true, resumed.reason);
+  assert.equal(f.registry().tasks.a.reconciliations.length, 1);
+});
