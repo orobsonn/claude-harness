@@ -1,3 +1,5 @@
+import { registerVerbooProviderRetry } from "../lib/verboo-provider-retry.mjs";
+import { loadModelProfileFromEnv, MODEL_PROFILE_ENV } from "../lib/model-profile.mjs";
 import { getAgentDir, resolveCliModel, SettingsManager, type ExtensionAPI, type ExtensionContext, type ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 
@@ -78,6 +80,11 @@ export default function harnessBootstrap(pi: ExtensionAPI) {
   // its manager/snapshots. It must precede the launcher early return as the
   // launcher's isolated runtime needs the same registry entry.
   registerAstraCompatibilityModel(pi);
+  if (process.env[MODEL_PROFILE_ENV] && loadModelProfileFromEnv(process.env).provider.id === "verboo") {
+    const completions = builtinProviders().find((provider) => provider.id === "deepseek");
+    if (!completions) throw new Error("Pi has no DeepSeek completions adapter");
+    registerVerbooProviderRetry(pi, completions.streamSimple);
+  }
 
   let preferenceError: string | null = null;
   pi.on("before_agent_start", (_event, ctx) => {

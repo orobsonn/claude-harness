@@ -8,7 +8,7 @@ import {
   DEEPSEEK_MODEL, DEFAULT_MODEL_PROFILE, GLM_MODEL, MODEL_PROFILE_ENV, MODEL_PROFILE_HASH_ENV,
   MODEL_PROFILE_VERSION,
   loadModelProfileFromEnv, modelStrategyFromProfile, parseModelProfileArgs,
-  profilePrompt, readModelProfileSnapshot, resolveModelProfile, routeFromModelProfile,
+  profilePrompt, readDefaultModelProfile, readModelProfileSnapshot, resolveModelProfile, routeFromModelProfile,
   stableProfileJson, writeModelProfileSnapshot,
 } from "./model-profile.mjs";
 
@@ -214,4 +214,42 @@ test("model strategy projects only the plan contract", () => {
     medium: "ollama-cloud/deepseek-v4.1-flash",
     high: "ollama-cloud/deepseek-v4.1-flash",
   });
+});
+
+test("host provider preference leaves unconfigured Ollama intact and never rewrites admitted snapshots", (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "pi-provider-default-"));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  assert.equal(readDefaultModelProfile(home), DEFAULT_MODEL_PROFILE);
+  const old = resolveModelProfile({ profile: DEFAULT_MODEL_PROFILE });
+  writeModelProfileSnapshot(home, "old", old);
+  const directory = path.join(home, ".config", "claude-harness");
+  fs.mkdirSync(directory, { recursive: true });
+  const file = path.join(directory, "providers.json");
+  fs.writeFileSync(file, '{"deepseek":"verboo"}');
+  assert.equal(readDefaultModelProfile(home), "verboo-orchestration-deepseek");
+  assert.deepEqual(readModelProfileSnapshot(home, "old").snapshot, old);
+  fs.writeFileSync(file, '{"deepseek":"ollama"}');
+  assert.equal(readDefaultModelProfile(home), DEFAULT_MODEL_PROFILE);
+  fs.writeFileSync(file, '{"deepseek":"unknown"}');
+  assert.throws(() => readDefaultModelProfile(home), /must be verboo or ollama/);
+  fs.writeFileSync(file, 'invalid');
+  assert.throws(() => readDefaultModelProfile(home), /invalid host provider/);
+});
+
+test("Verboo routes both parents and every writing tier to DeepSeek while preserving review roles", (t) => {
+  const profile = resolveModelProfile({ profile: "verboo-orchestration-deepseek" });
+  assert.equal(profile.provider.credential_env, "VERBOO_API_KEY");
+  assert.equal(profile.provider.endpoint, "https://code.verboo.ai/router/v1");
+  for (const kind of ["global", "local"]) assert.equal(profile.parents[kind].route.provider, "verboo");
+  for (const role of ["harness-executor", "harness-sniper", "harness-test-author"]) {
+    for (const tier of ["low", "medium", "high", "max"]) {
+      assert.equal(routeFromModelProfile(profile, role, tier).model, "verboo/deepseek-v4.1-flash");
+    }
+  }
+  assert.equal(routeFromModelProfile(profile, "harness-security").model, routeFromModelProfile(resolveModelProfile(), "harness-security").model);
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-verboo-profile-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const saved = writeModelProfileSnapshot(root, "verboo", profile);
+  assert.equal(readModelProfileSnapshot(root, "verboo").ok, true);
+  assert.equal(loadModelProfileFromEnv({ [MODEL_PROFILE_ENV]: saved.path, [MODEL_PROFILE_HASH_ENV]: saved.sha256 }).sha256, profile.sha256);
 });

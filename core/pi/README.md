@@ -278,3 +278,76 @@ constrói somente chamadas de leitura para o `code` do MP. A integração usa o
 `pi-mcp-adapter` instalado e configurado pelo operador em `~/.pi/agent`; não
 instala MCP nem copia credenciais. Ausência, falha ou timeout permitem continuar.
 Plan-reviewer usa essas lentes somente na revisão INITIAL, sem redescoberta em REVISE.
+
+## Fornecedor DeepSeek: Ollama ou Verboo
+
+Para usar Verboo como fornecedor padrão neste host, configure
+`~/.config/claude-harness/providers.json` com `{"deepseek":"verboo"}`.
+Sem esse arquivo, ou com `{"deepseek":"ollama"}`, o comportamento Ollama
+continua igual. A escolha afeta somente pais novos: sessões retomadas e filhos
+conservam seus snapshots admitidos. Um `--harness-profile` explícito prevalece.
+O mesmo harness atende ambos os fornecedores; não há uma distribuição separada.
+
+Para usar DeepSeek V4.1 Flash no endpoint Verboo nos pais e em todas as mãos,
+selecione `--harness-profile verboo-orchestration-deepseek`. Os olhos de revisão
+preservam as rotas Codex. O perfil fica fixado na sessão e é herdado pelas tasks.
+Configure `VERBOO_API_KEY` no ambiente do host ou uma credencial Pi do tipo
+`api_key` para o provider `verboo` em `~/.pi/agent/auth.json` (permissão 0600).
+Nunca grave a chave no projeto. Uma task lançada pelo Orca pode ler a mesma
+credencial do host sem transportar o segredo no comando ou no job JSON.
+
+O provider anuncia contexto de 1.048.576 tokens. Seus custos locais são zero por
+se tratar de assinatura; esse valor não representa o saldo gratuito nem uma
+confirmação de ausência de limites contratuais. A API mantém seus limites de
+concorrência e RPM. O cliente precisa respeitar `Retry-After` ao receber 429;
+não retome automaticamente uma resposta parcialmente transmitida.
+
+Nos runtimes Pi 0.87.1 e 0.99.1, o retry do provider foi validado em fixture
+offline para honrar `Retry-After`. O bootstrap de sessões admitidas Verboo
+usa o transporte nativo do SDK com duas novas tentativas e prazo máximo de
+60 segundos para o backoff, sem modificar settings ou providers Ollama/Codex.
+Overrides explícitos de retry continuam prevalecendo. A política equivalente
+do SDK é:
+
+```json
+{ "retry": { "provider": { "maxRetries": 2, "maxRetryDelayMs": 60000 } } }
+```
+
+O retry externo de conversa do Pi não substitui essa configuração: seu backoff
+padrão pode terminar antes do reset de RPM. A retomada com
+`--harness-resume <session-id>` também aceita uma descoberta classificada ainda
+sem spec, desde que não haja artefatos ou evidências posteriores contraditórios;
+essa retomada preserva a conversa e não aprova spec, plano ou implementação.
+
+Para medir tentativas HTTP sem gravar prompts, respostas ou credenciais, crie
+`~/.config/claude-harness/provider-tracing.json` no host com
+`{"verboo":{"directory":"/caminho/absoluto/para/traces"}}`. Somente lançamentos
+Verboo ativam o preload. O arquivo por processo registra início, headers de
+limite/status, primeiro byte e término de stream; isso permite distinguir uma
+chamada lógica do agente das tentativas HTTP do SDK. Processos já iniciados
+mantêm a instrumentação carregada. A captura de metadados é opcional e
+independente do controle de admissão. `max_local_concurrency` no perfil é
+metadado; a proteção efetiva abaixo conta cada tentativa HTTP, inclusive os
+retries internos do SDK, sem reexecutar ferramentas.
+
+Novos lançamentos Verboo admitem tentativas em uma fila única neste host Linux,
+com dois requests ativos e no máximo 38 admissões em uma
+janela móvel de 60 segundos, incluindo retries HTTP. Pais e filhos compartilham
+um coordenador local por socket Unix privado; ele recebe apenas a conexão de
+admissão, sem prompts ou chaves, e encerra após cinco minutos sem trabalho.
+O slot dura até o fim/cancelamento da resposta, não durante ferramentas locais.
+Cancelar a espera ou encerrar o processo libera a conexão; perder o coordenador
+aborta o transporte em andamento. A fila tem até 128 esperas, com prazo de
+15 minutos, e falha explicitamente quando não consegue admitir uma tentativa.
+
+Essa proteção afeta somente o endpoint Verboo e não modifica os
+perfis de modelo. Processos já iniciados e clientes externos ao Pi não entram
+automaticamente na fila. O orçamento é compartilhado neste host; usar a mesma
+conta em outro host exige considerar também suas chamadas. Um override explícito
+`~/.config/claude-harness/provider-request-control.json` com `{"verboo":false}`
+desativa o controle em novos lançamentos; o padrão Verboo mantém a proteção ativa.
+
+Quando só restam tasks em execução, use `harness_tasks` com `action="wait"`
+e, opcionalmente, `task_id`, sem `wait_seconds`. A espera ocorre no host e não
+gera novas inferências. `wait_seconds` pertence somente à consulta `status`;
+repetir essa consulta retransmite o contexto e ocupa capacidade do provider.

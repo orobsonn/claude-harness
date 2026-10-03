@@ -25,6 +25,7 @@ import { createJiti } from "../../../node_modules/@earendil-works/pi-coding-agen
 import { fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
 import harnessBootstrap, { validateParentModelPreferences } from "./harness-bootstrap.ts";
 import { RUNTIME_ROLES } from "../lib/roles.mjs";
+import { resolveModelProfile, writeModelProfileSnapshot, MODEL_PROFILE_ENV, MODEL_PROFILE_HASH_ENV } from "../lib/model-profile.mjs";
 
 const PACKAGE_ROOT = resolve(fileURLToPath(new URL("../../../", import.meta.url)));
 const PI_CLI = join(PACKAGE_ROOT, "node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js");
@@ -56,6 +57,27 @@ const EXPECTED_EXTENSION_BASENAMES = [
   "harness-context-files.ts",
   "harness-plan-tracker.ts",
 ];
+
+test("admitted Verboo startup installs its SDK retry adapter without changing native defaults", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "pi-verboo-bootstrap-"));
+  const saved = writeModelProfileSnapshot(root, "verboo", resolveModelProfile({ profile: "verboo-orchestration-deepseek" }));
+  const names = [MODEL_PROFILE_ENV, MODEL_PROFILE_HASH_ENV, "PI_HARNESS_LAUNCHER"];
+  const previous = names.map((name) => process.env[name]);
+  t.after(() => {
+    names.forEach((name, index) => { if (previous[index] === undefined) delete process.env[name]; else process.env[name] = previous[index]; });
+    rmSync(root, { recursive: true, force: true });
+  });
+  process.env[MODEL_PROFILE_ENV] = saved.path;
+  process.env[MODEL_PROFILE_HASH_ENV] = saved.sha256;
+  process.env.PI_HARNESS_LAUNCHER = "1";
+  const registrations = [];
+  harnessBootstrap({ registerProvider: (...args) => registrations.push(args), on() {} });
+  const verboo = registrations.filter(([name]) => name === "verboo");
+  assert.equal(verboo.length, 1);
+  assert.equal(verboo[0][1].api, "openai-completions");
+  assert.equal(typeof verboo[0][1].streamSimple, "function");
+  assert.equal(registrations.some(([name]) => name === "ollama-cloud"), false);
+});
 
 test("native effective parent settings preserve trusted override and reject unknown model/invalid JSON", () => {
   const root = mkdtempSync(join(tmpdir(), "pi-model-preferences-"));

@@ -760,3 +760,76 @@ test("delegated task persists the inherited profile for its own resume identity"
     admittedProfileFile: inherited,
   }), false);
 });
+
+test("Verboo provider is materialized without replacing operator providers", () => {
+  const directory = mkdtempSync(join(tmpdir(), "pi-verboo-runtime-"));
+  const runtimeDir = join(directory, "runtime");
+  try {
+    materializeRuntime(process.cwd(), runtimeDir);
+    const file = join(runtimeDir, "models.json");
+    const models = JSON.parse(readFileSync(file, "utf8"));
+    assert.equal(models.providers.verboo.apiKey, "$VERBOO_API_KEY");
+    assert.equal(models.providers.verboo.models[0].contextWindow, 1048576);
+    models.providers.verboo.baseUrl = "https://operator.example/v1";
+    writeFileSync(file, JSON.stringify(models));
+    materializeRuntime(process.cwd(), runtimeDir);
+    assert.equal(JSON.parse(readFileSync(file, "utf8")).providers.verboo.baseUrl, "https://operator.example/v1");
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("host Verboo default affects new parents; explicit Ollama and admitted resumes stay unchanged", () => {
+  const directory = mkdtempSync(join(tmpdir(), "pi-host-provider-launch-"));
+  const userHome = join(directory, "home");
+  const configDirectory = join(userHome, ".config", "claude-harness");
+  mkdirSync(configDirectory, { recursive: true });
+  const configFile = join(configDirectory, "providers.json");
+  writeFileSync(configFile, '{"deepseek":"verboo"}');
+  let spawned;
+  const common = {
+    cwd: directory, userHome,
+    env: { VERBOO_API_KEY: "test-verboo", OLLAMA_API_KEY: "test-ollama" },
+    runtimePrompt: "runtime", randomSessionIdFn: () => "host-new",
+    acquireParentLockFn: () => ({ ok: true, release() {} }),
+    materializeRuntimeFn() {},
+    recoverParentSessionFn: () => ({ ok: true, context: "resume", sessionFile: "/test/session.jsonl" }),
+    buildInvocationFn: ({ argv, env }) => ({ command: "pi", args: argv, env: { ...env, PI_CODING_AGENT_DIR: join(directory, "runtime") } }),
+    spawnSyncFn: (command, args, options) => { spawned = { args, env: options.env }; return { status: 0 }; },
+  };
+  try {
+    assert.equal(runPiHarnessCli([], common).exitCode, 0);
+    assert.deepEqual(spawned.args.slice(0, 4), ["--provider", "verboo", "--model", "deepseek-v4.1-flash"]);
+    assert.match(spawned.env.PI_HARNESS_VERBOO_CONTROL_SOCKET, /verboo.sock$/);
+    assert.equal(runPiHarnessCli(["--harness-profile", "trial-orchestration-deepseek"], {
+      ...common, randomSessionIdFn: () => "host-old",
+    }).exitCode, 0);
+    assert.equal(spawned.args[1], "ollama-cloud");
+    assert.equal(spawned.env.PI_HARNESS_VERBOO_CONTROL_SOCKET, undefined);
+    writeFileSync(configFile, 'invalid');
+    assert.equal(runPiHarnessCli(["--harness-resume", "host-old"], common).exitCode, 0);
+    assert.equal(spawned.args[1], "ollama-cloud");
+    assert.equal(spawned.env.PI_HARNESS_VERBOO_CONTROL_SOCKET, undefined);
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("Verboo launcher loads the host API credential without persisting its value in the profile", () => {
+  const directory = mkdtempSync(join(tmpdir(), "pi-verboo-auth-"));
+  const userHome = join(directory, "operator");
+  const authDirectory = join(userHome, ".pi", "agent");
+  mkdirSync(authDirectory, { recursive: true });
+  writeFileSync(join(authDirectory, "auth.json"), JSON.stringify({ verboo: { type: "api_key", key: "verboo-test-secret" } }));
+  let spawned;
+  try {
+    const result = runPiHarnessCli(["--harness-profile", "verboo-orchestration-deepseek"], {
+      cwd: directory, userHome, env: {}, runtimePrompt: "runtime",
+      randomSessionIdFn: () => "verboo-session",
+      acquireParentLockFn: () => ({ ok: true, release() {} }),
+      materializeRuntimeFn() {},
+      buildInvocationFn: ({ argv, env }) => ({ command: "pi", args: argv, env: { ...env, PI_CODING_AGENT_DIR: join(directory, "runtime") } }),
+      spawnSyncFn: (command, args, options) => { spawned = { args, env: options.env }; return { status: 0 }; },
+    });
+    assert.equal(result.exitCode, 0);
+    assert.equal(spawned.env.VERBOO_API_KEY, "verboo-test-secret");
+    assert.deepEqual(spawned.args.slice(0, 4), ["--provider", "verboo", "--model", "deepseek-v4.1-flash"]);
+    assert.doesNotMatch(readFileSync(spawned.env.PI_HARNESS_MODEL_PROFILE, "utf8"), /verboo-test-secret/);
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});

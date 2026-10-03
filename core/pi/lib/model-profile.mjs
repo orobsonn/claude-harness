@@ -13,6 +13,21 @@ export const DEEPSEEK_MODEL = "deepseek-v4.1-flash";
 export const GLM_MODEL = "glm-5.3";
 export const DEFAULT_MODEL_PROFILE = "trial-orchestration-deepseek";
 
+/** Host preference applies only to new parents, never to admitted sessions. */
+export function readDefaultModelProfile(userHome) {
+  if (!userHome) return DEFAULT_MODEL_PROFILE;
+  let config;
+  try {
+    config = JSON.parse(fs.readFileSync(path.join(userHome, ".config", "claude-harness", "providers.json"), "utf8"));
+  } catch (error) {
+    if (error.code === "ENOENT") return DEFAULT_MODEL_PROFILE;
+    throw new Error("invalid host provider configuration", { cause: error });
+  }
+  if (config.deepseek === "verboo") return "verboo-orchestration-deepseek";
+  if (config.deepseek === "ollama") return DEFAULT_MODEL_PROFILE;
+  throw new Error("host DeepSeek provider must be verboo or ollama");
+}
+
 const COMPLEXITIES = Object.freeze(["low", "medium", "high", "max"]);
 const SUPPORTED_MODEL_PROFILE_VERSIONS = new Set([1, 2, 3, 4, MODEL_PROFILE_VERSION]);
 const PARENT_TARGETS = new Set(["baseline", "deepseek"]);
@@ -55,6 +70,7 @@ const CURRENT_HANDS = Object.freeze(Object.fromEntries(Object.entries(V4_HANDS).
 ])));
 
 const PROFILE_DEFAULTS = Object.freeze({
+  "verboo-orchestration-deepseek": Object.freeze({ handModel: DEEPSEEK_MODEL, globalParent: "deepseek", localParent: "deepseek", provider: "verboo" }),
   baseline: Object.freeze({ handModel: null, globalParent: "baseline", localParent: "baseline" }),
   "trial-hands-deepseek": Object.freeze({ handModel: DEEPSEEK_MODEL, globalParent: "baseline", localParent: "baseline" }),
   "trial-hands-glm": Object.freeze({ handModel: GLM_MODEL, globalParent: "baseline", localParent: "baseline" }),
@@ -81,13 +97,13 @@ export function hashModelProfile(value) {
   return createHash("sha256").update(stableProfileJson(value)).digest("hex");
 }
 
-function ollamaRoute(model) {
-  return { model: `${OLLAMA_PROVIDER}/${model}`, thinking: "high" };
+function ollamaRoute(model, provider = OLLAMA_PROVIDER) {
+  return { model: `${provider}/${model}`, thinking: "high" };
 }
 
-function parentRoute(target) {
+function parentRoute(target, provider = OLLAMA_PROVIDER) {
   return target === "deepseek"
-    ? { provider: OLLAMA_PROVIDER, model: DEEPSEEK_MODEL, thinking_requested: "high", thinking_effective: "high" }
+    ? { provider, model: DEEPSEEK_MODEL, thinking_requested: "high", thinking_effective: "high" }
     : null;
 }
 
@@ -96,6 +112,7 @@ export function resolveModelProfile({ profile = DEFAULT_MODEL_PROFILE, globalPar
   if (!SUPPORTED_MODEL_PROFILE_VERSIONS.has(version)) throw new Error(`unsupported harness model profile version: ${String(version)}`);
   const defaults = (version === 1 ? LEGACY_PROFILE_DEFAULTS : PROFILE_DEFAULTS)[profile];
   if (!defaults) throw new Error(`unknown harness model profile: ${String(profile)}`);
+  const provider = defaults.provider ?? OLLAMA_PROVIDER;
   const selectedGlobal = globalParent ?? defaults.globalParent;
   const selectedLocal = localParent ?? defaults.localParent;
   if (!PARENT_TARGETS.has(selectedGlobal)) throw new Error(`invalid global parent target: ${String(selectedGlobal)}`);
@@ -103,7 +120,7 @@ export function resolveModelProfile({ profile = DEFAULT_MODEL_PROFILE, globalPar
   if (budgetUsd !== null && (!Number.isFinite(Number(budgetUsd)) || Number(budgetUsd) <= 0)) {
     throw new Error("harness Ollama budget must be a positive USD amount");
   }
-  const handRoute = defaults.handModel && defaults.handModel !== "tiered-open" ? ollamaRoute(defaults.handModel) : null;
+  const handRoute = defaults.handModel && defaults.handModel !== "tiered-open" ? ollamaRoute(defaults.handModel, provider) : null;
   const fixedRoutes = version < 4 ? BASELINE_FIXED : version === 4 ? V4_FIXED : CURRENT_FIXED;
   const handRoutes = version < 4 ? BASELINE_HANDS : version === 4 ? V4_HANDS : CURRENT_HANDS;
   const handTiers = Object.fromEntries(COMPLEXITIES.map((complexity) => [
@@ -126,19 +143,19 @@ export function resolveModelProfile({ profile = DEFAULT_MODEL_PROFILE, globalPar
     profile,
     budget_usd: budgetUsd === null ? null : Number(budgetUsd),
     provider: {
-      id: OLLAMA_PROVIDER,
-      endpoint: OLLAMA_ENDPOINT,
+      id: provider,
+      endpoint: provider === "verboo" ? "https://code.verboo.ai/router/v1" : OLLAMA_ENDPOINT,
       api: "openai-completions",
-      credential_env: "OLLAMA_API_KEY",
+      credential_env: provider === "verboo" ? "VERBOO_API_KEY" : "OLLAMA_API_KEY",
       max_local_concurrency: 2,
     },
     models: {
-      deepseek: { id: DEEPSEEK_MODEL, context_window: contextWindow, max_output_tokens: 32768 },
+      deepseek: { id: DEEPSEEK_MODEL, context_window: provider === "verboo" ? 1048576 : contextWindow, max_output_tokens: 32768 },
       glm: { id: GLM_MODEL, context_window: contextWindow, max_output_tokens: 32768 },
     },
     parents: {
-      global: { target: selectedGlobal, route: parentRoute(selectedGlobal) },
-      local: { target: selectedLocal, route: parentRoute(selectedLocal) },
+      global: { target: selectedGlobal, route: parentRoute(selectedGlobal, provider) },
+      local: { target: selectedLocal, route: parentRoute(selectedLocal, provider) },
     },
     routes: {
       fixed: Object.fromEntries(Object.entries(fixedRoutes).map(([role, route]) => [role, { ...route }])),
