@@ -70,6 +70,16 @@ Sessões novas LIGHT/FULL usam a pipeline por tarefa. Depois de a spec estar sel
 - `harness_tasks integrate` recebe `task_id`, `attempt_id` e `expected_head`, faz merge daquele SHA exato e grava o recibo global. O tip posterior da branch nunca substitui esse argumento.
 - `harness_tasks resume` reabre a mesma tentativa e sessão pai local após comprovar que o processo anterior terminou. Feedback volta para a task que produziu a mudança; resultado e validação antigos deixam de liberar integração enquanto a correção está ativa. Para corrigir uma dependência compartilhada, os descendentes já admitidos precisam estar integrados; uma barreira pausa novos dispatches e outras integrações até o novo recibo da dependência.
 
+Quando a reconciliação global com `main` invalidar uma evidência produzida por
+uma task integrada, retome a dona com `harness_tasks resume`, `task_id`,
+`attempt_id`, `instruction` descrevendo o finding e `reconcile_head` igual ao SHA
+completo do agregado atual. O host incorpora esse agregado antes do lançamento,
+preserva a base original e registra a prova do merge. Imports da base não ampliam
+o escopo da task. A recaptura, os testes e as revisões afetadas continuam
+obrigatórios; o merge não promove recibos antigos. Árvores sujas, HEAD obsoleto
+ou conflitos fora do escopo são recusados. A integração da PR com `main` continua
+sendo responsabilidade de `harness_memory reconcile` no pai global.
+
 Após a primeira admissão, plano e spec ficam fixos nessa sessão, inclusive quando todas as tasks terminarem. `resume` permite corrigir implementação dentro do contrato aprovado. Alterar o próprio plano exige nova sessão e aprovação, preservando worktrees e evidências; encerrar tasks não libera a substituição do plano antigo.
 
 Cada pai local executa a pipeline nativa completa da sua task: autoria de testes, fidelidade, freeze, executor, captura, revisões aplicáveis, sniper e re-gate. Ele não repete triagem, brainstorming, spec ou plano globais. Compliance, adversary e security de implementação podem rodar em paralelo, até o limite de três olhos incorporado pelo PR #902; mãos, fidelidade e revisão da spec mantêm exclusividade. O pai global integra os recibos e só então executa testes do conjunto, harvest, olhos finais no HEAD agregado e shipping. Uma correção integrada depois de seus consumers exige repetir esses gates agregados no novo HEAD.

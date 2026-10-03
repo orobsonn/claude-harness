@@ -92,9 +92,11 @@ export function readDeliveryContinuation(ctx, { readBinding = readTaskRunBinding
   const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
   const feature = state.feature_id;
   let stage, progress;
+  let verificationCommands = [];
   if (state.task_run) {
     const binding = readBinding(root, sessionId);
     if (!binding.ok) return null;
+    verificationCommands = (binding.task?.locked_tests ?? []).map(test => test.command).filter(Boolean);
     const taskId = binding.grant.task_id;
     const key = `${feature}/${taskId}`;
     const pendingContent = pendingTaskContent(root, binding.task);
@@ -111,6 +113,7 @@ export function readDeliveryContinuation(ctx, { readBinding = readTaskRunBinding
   } else {
     const registry = read(root, `${directory}/task-runs/index.json`);
     if (registry?.parent_session_id !== sessionId || registry.feature_id !== feature || !registry.tasks) return null;
+    verificationCommands = read(root, `.pi/harness/plans/${feature}/execution-plan.json`)?.final_review?.verification_commands ?? [];
     const shipment = read(root, `${directory}/memory-shipment.json`);
     const finalized = read(root, `${directory}/memory-finalized.json`);
     if (shipment?.written_by === "host-subagent-completion" && shipment.session_id === sessionId &&
@@ -138,7 +141,7 @@ export function readDeliveryContinuation(ctx, { readBinding = readTaskRunBinding
     commands = fs.readdirSync(path.join(root, directory, "evidence")).filter(f => f.endsWith(".json")).slice(-2000)
       .map(f => read(root, `${directory}/evidence/${f}`))
       .filter(e => e?.head_sha === head && e.worktree_dirty === false && e.original_status?.exit_code === 0)
-      .map(e => e.command).filter(c => typeof c === "string");
+      .map(e => e.command).filter(c => typeof c === "string" && verificationCommands.includes(c));
   } catch { /* Evidence is advisory; absence never waives a gate. */ }
   return { sessionId, stage, key: hash({ sessionId, feature, stage, progress, commands: [...new Set(commands)].sort() }), content: instructions[stage] };
 }

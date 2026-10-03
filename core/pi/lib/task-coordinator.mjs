@@ -428,6 +428,11 @@ function reconcileDependentMerge(entry, persist, scopes) {
       git(root, "merge", "--abort");
     }
     requireTaskIdentity(entry);
+    if (intent.kind === "aggregate-refresh") {
+      git(root, "merge", "--no-ff", "--no-edit", "-m",
+        `Reconcile harness aggregate for ${entry.task_id}`, intent.parent_head);
+      return reconcileDependentMerge(entry, persist, scopes);
+    }
     delete entry.reconciliation_intent;
     persist();
     return;
@@ -536,6 +541,55 @@ function prepareIntegrationConflict(entry, task, owner, persist) {
   entry.result = null;
   persist();
   beginConflictMerge(entry);
+}
+// Explicit recapture against an already reconciled aggregate. This imports the
+// parent's bytes without turning those bytes into task-owned writes.
+function previewAggregateRefresh(entry, task, owner, params) {
+  if (params.reconcile_head === undefined) return null;
+  if (!/^[a-f0-9]{40}$/.test(params.reconcile_head) ||
+      git(owner.root, "rev-parse", "HEAD") !== params.reconcile_head)
+    throw new Error("reconcile_head must be the exact current committed aggregate HEAD");
+  requireTaskIdentity(entry);
+  requireClean(owner.root);
+  if (entry.reconciliation_intent?.kind === "aggregate-refresh") {
+    if (entry.reconciliation_intent.parent_head !== params.reconcile_head)
+      throw new Error("aggregate refresh journal belongs to another HEAD; preserve it and use status");
+    return null; // Status replays a completed merge; unresolved conflicts stay native.
+  }
+  if (entry.reconciliations?.at(-1)?.kind === "aggregate-refresh" &&
+      entry.reconciliations.at(-1).parent_head === params.reconcile_head && !entry.integration)
+    return null; // A failed launch can resume the recorded merge.
+  if (!entry.integration || entry.reconciliation_required || entry.reconciliation_intent ||
+      !params.instruction?.trim())
+    throw new Error("aggregate refresh requires an integrated task and a concrete correction instruction; finish pending dependency recovery first");
+  const head = git(entry.worktree, "rev-parse", "HEAD");
+  if (head !== entry.integration.child_head ||
+      !isAncestor(owner.root, entry.integration.integrated_head, params.reconcile_head))
+    throw new Error("aggregate refresh requires the task's exact historical integration in current parent ancestry");
+  if (isAncestor(entry.worktree, params.reconcile_head, head)) return null;
+  if (!fs.existsSync(`${entry.grant_path}.claim`))
+    throw new Error("complete initial task admission before aggregate refresh");
+  const scopes = scopeOf(task);
+  const base = taskScopeBase(entry, entry.worktree, head, scopes);
+  const preview = taskMergePreview(entry.worktree, head, params.reconcile_head);
+  const changed = git(entry.worktree, "diff", "--name-only", "-z", params.reconcile_head, preview.tree).split("\0").filter(Boolean);
+  if (checkScope([...changed, ...preview.conflicts], scopes).length)
+    throw new Error("aggregate refresh changes paths outside canonical task scope");
+  return { written_by: "host-task-reconciliation", kind: "aggregate-refresh",
+    task_id: entry.task_id, attempt_id: entry.attempt_id, scope_base_sha: base,
+    pre_child_head: head, parent_head: params.reconcile_head, tree: preview.tree,
+    launch_count: entry.launches.length, upstreams: [],
+    source_integration_sha256: hashTaskReceipt(entry.integration),
+    ...(preview.conflicts.length ? { conflicts: preview.conflicts } : {}) };
+}
+function applyAggregateRefresh(entry, intent, task, persist) {
+  if (!intent) return;
+  entry.reconciliation_intent = intent;
+  persist();
+  if (intent.conflicts?.length) return beginConflictMerge(entry);
+  git(entry.worktree, "merge", "--no-ff", "--no-edit", "-m",
+    `Reconcile harness aggregate for ${entry.task_id}`, intent.parent_head);
+  reconcileDependentMerge(entry, persist, scopeOf(task));
 }
 async function prepareWorktree(entry, artifacts, deps, persist) {
   if (deps.orcaBackend) await deps.orcaBackend.prepareWorktree(entry, persist);
@@ -656,7 +710,7 @@ async function launchTask(entry, context, persist, deps, instruction) {
   const prompt = conflict?.conflicts?.length
     ? `The host has already started the task merge with parent ${conflict.parent_head}. Resolve the existing conflicts in ${conflict.conflicts.join(", ")} through harness-sniper in this same task. Preserve both the task correction and the parent's already integrated behavior. Do not start another merge, rebase or cherry-pick. Resolve only the listed conflicts, stage those paths and commit the existing merge in the local parent; clean merged paths are already staged. Do not edit unrelated paths in that merge commit. Then use the existing capture-verified, tests and affected reviewers on the resolved HEAD. Any further product fix uses a separate ordinary fix commit. Preserve frozen tests and valid unaffected evidence. This merge is not approval.\n\nBehavioral feedback:\n${feedback}`
     : reconciliation
-    ? `The host merged a dependency correction at ${reconciliation.merged_head}; dependency integration is already complete. Preserve the original task, scope and frozen tests. Before choosing a hand, compare the current HEAD, capture and producer receipt. If they already prove the reconciled implementation and no product delta is requested, do not dispatch executor/sniper just for freshness; resolve only affected test/evidence obligations. If provenance after this merge is still missing, obtain it through the existing task pipeline; a launch alone is not validation. A real product finding requires the appropriate implementation hand, commit, capture and affected eyes. Preserve valid unaffected reviews.\n\nBehavioral feedback:\n${feedback}\n\nDependency integration remains host-owned. Any upstream integration request in that feedback is already fulfilled; never ask a child to merge, rebase or cherry-pick.`
+    ? `The host merged a ${reconciliation.kind === "aggregate-refresh" ? "delivery aggregate refresh" : "dependency correction"} at ${reconciliation.merged_head}; dependency integration is already complete. Preserve the original task, scope and frozen tests. Before choosing a hand, compare the current HEAD, capture and producer receipt. If they already prove the reconciled implementation and no product delta is requested, do not dispatch executor/sniper just for freshness; resolve only affected test/evidence obligations. If provenance after this merge is still missing, obtain it through the existing task pipeline; a launch alone is not validation. A real product finding requires the appropriate implementation hand, commit, capture and affected eyes. Preserve valid unaffected reviews.\n\nBehavioral feedback:\n${feedback}\n\nDependency integration remains host-owned. Any upstream integration request in that feedback is already fulfilled; never ask a child to merge, rebase or cherry-pick.`
     : feedback;
   const args = [
     entry.runtime.launcher_path,
@@ -726,7 +780,7 @@ export const TASK_ACTION_FIELDS = Object.freeze({
   dispatch: Object.freeze(["action", "task_ids", "task_contexts"]),
   status: Object.freeze(["action", "task_id", "compact"]),
   integrate: Object.freeze(["action", "task_id", "attempt_id", "expected_head"]),
-  resume: Object.freeze(["action", "task_id", "attempt_id", "instruction"]),
+  resume: Object.freeze(["action", "task_id", "attempt_id", "instruction", "reconcile_head"]),
   "abandon-resume": Object.freeze(["action", "task_id", "attempt_id", "expected_head", "no_product_obligation", "reason"]),
 });
 
@@ -1118,6 +1172,8 @@ export async function executeTaskAction(params, context = {}, injected = {}) {
         );
       if (entry.launches.some((launch) => !deps.readProcess(launch).terminal))
         throw new Error("task is still running; use status or wait to observe it before resume");
+      const task = artifacts.plan.tasks.find((task) => task.id === entry.task_id);
+      const aggregateRefresh = previewAggregateRefresh(entry, task, owner, params);
       const affected = descendants(artifacts.plan, entry.task_id).filter(
         (id) => registry.tasks[id],
       );
@@ -1186,9 +1242,11 @@ export async function executeTaskAction(params, context = {}, injected = {}) {
         entry.integration = null;
         entry.result = null;
         entry.status = "blocked";
+        if (aggregateRefresh) entry.reconciliation_intent = aggregateRefresh;
         persist();
         invalidateAggregate(owner, registry, persist);
       }
+      applyAggregateRefresh(entry, aggregateRefresh, task, persist);
       await reconcileDependent(entry, artifacts.plan.tasks.find((task) => task.id === entry.task_id), owner, registry, persist, deps);
       prepareIntegrationConflict(entry, artifacts.plan.tasks.find((task) => task.id === entry.task_id), owner, persist);
       await prepareWorktree(entry, artifacts, deps, persist);

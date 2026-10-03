@@ -181,6 +181,7 @@ export default function harnessTasks(pi: ExtensionAPI, injected: Parameters<type
         attempt_id: Type.Optional(Type.String({ description: "Required for integrate, resume and abandon-resume. Copy the exact current attempt_id returned by dispatch/status; resume never creates a new attempt." })),
         expected_head: Type.Optional(Type.String({ description: "Exact observed HEAD for integrate or abandon-resume only; never send this field with resume." })),
         instruction: Type.Optional(Type.String({ maxLength: 16000, description: "For resume only: focused correction or diagnostic context. The field is instruction, not feedback. Preserve unresolved material concerns." })),
+        reconcile_head: Type.Optional(Type.String({ description: "For resume only: exact current aggregate HEAD to import into an integrated task before repairing a concrete finding or regenerating evidence. Supply instruction. Reconcile main globally first; the host preserves admission and records this merge, never delegate Git integration to the child." })),
         no_product_obligation: Type.Optional(Type.Boolean({ description: "For abandon-resume only: explicitly declare that the resumed task has no remaining product correction obligation." })),
         reason: Type.Optional(Type.String({ maxLength: 4000, description: "For abandon-resume only: record why this operational resume is being abandoned; not a replacement verdict." })),
       },
