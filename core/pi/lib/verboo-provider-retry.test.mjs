@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import http from "node:http";
 import { once } from "node:events";
 import { registerVerbooProviderRetry } from "./verboo-provider-retry.mjs";
-import { resolveVerifiedPiRuntime } from "./pi-runtime-cache.mjs";
+import { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 
 test("Verboo wraps only its own stream, preserves transport options and respects explicit retry limits", () => {
   let registered, received;
@@ -20,10 +21,6 @@ test("Verboo wraps only its own stream, preserves transport options and respects
 });
 
 test("native ModelRuntime registration honors Retry-After before delivering a recovered stream", async (t) => {
-  const runtime = resolveVerifiedPiRuntime();
-  assert.equal(runtime.ok, true, runtime.reason);
-  const { ModelRuntime } = await import(`${runtime.cacheDir}/node_modules/@earendil-works/pi-coding-agent/dist/core/model-runtime.js`);
-  const { builtinProviders } = await import(`${runtime.cacheDir}/node_modules/@earendil-works/pi-ai/dist/providers/all.js`);
   let attempts = [];
   let mode = "recover";
   const server = http.createServer((req, res) => {
