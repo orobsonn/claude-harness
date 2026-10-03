@@ -707,12 +707,12 @@ test("runtime materialization switches only exact harness Ollama defaults by adm
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
 
-test("default launcher requires the Ollama credential and injects the admitted DeepSeek parent route", () => {
+test("default launcher requires the Verboo credential and injects the admitted DeepSeek parent route", () => {
   const directory = mkdtempSync(join(tmpdir(), "pi-harness-profile-launch-"));
   const errors = [];
   let builtRuntimePrompt = "";
   const common = {
-    cwd: directory,
+    cwd: directory, userHome: directory,
     env: {},
     runtimePrompt: "runtime",
     errorSink: (message) => errors.push(message),
@@ -727,17 +727,17 @@ test("default launcher requires the Ollama credential and injects the admitted D
     },
   };
   assert.equal(runPiHarnessCli([], common).exitCode, 2);
-  assert.match(errors.pop(), /OLLAMA_API_KEY/);
+  assert.match(errors.pop(), /VERBOO_API_KEY/);
 
   let spawned;
   const result = runPiHarnessCli([], {
     ...common,
-    env: { OLLAMA_API_KEY: "test-only-key" },
+    env: { VERBOO_API_KEY: "test-only-key" },
     spawnSyncFn: (command, args, options) => { spawned = { command, args, env: options.env }; return { status: 0 }; },
   });
   assert.equal(result.exitCode, 0);
   assert.deepEqual(spawned.args.slice(0, 6), [
-    "--provider", "ollama-cloud", "--model", "deepseek-v4.1-flash", "--thinking", "high",
+    "--provider", "verboo", "--model", "deepseek-v4.1-flash", "--thinking", "high",
   ]);
   assert.match(spawned.env.PI_HARNESS_MODEL_PROFILE, /model-profiles\/profile-session\.json$/);
   assert.match(spawned.env.PI_HARNESS_MODEL_PROFILE_SHA256, /^[a-f0-9]{64}$/);

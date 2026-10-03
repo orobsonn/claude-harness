@@ -216,10 +216,11 @@ test("model strategy projects only the plan contract", () => {
   });
 });
 
-test("host provider preference leaves unconfigured Ollama intact and never rewrites admitted snapshots", (t) => {
+test("Verboo is the new-session default while explicit Ollama and admitted snapshots stay intact", (t) => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "pi-provider-default-"));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
-  assert.equal(readDefaultModelProfile(home), DEFAULT_MODEL_PROFILE);
+  assert.equal(readDefaultModelProfile(home), "verboo-orchestration-deepseek");
+  assert.equal(readDefaultModelProfile(), "verboo-orchestration-deepseek");
   const old = resolveModelProfile({ profile: DEFAULT_MODEL_PROFILE });
   writeModelProfileSnapshot(home, "old", old);
   const directory = path.join(home, ".config", "claude-harness");
