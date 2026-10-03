@@ -304,14 +304,28 @@ não retome automaticamente uma resposta parcialmente transmitida.
 
 Nos runtimes Pi 0.87.1 e 0.99.1, o retry do provider foi validado em fixture
 offline para honrar `Retry-After`. O bootstrap de sessões admitidas Verboo
-usa o transporte nativo do SDK com duas novas tentativas e prazo máximo de
-60 segundos para o backoff, sem modificar settings ou providers Ollama/Codex.
+usa o transporte nativo do SDK com até 30 novas tentativas HTTP e máximo de
+60 segundos por espera indicada pelo servidor, sem modificar settings ou
+providers Ollama/Codex.
 Overrides explícitos de retry continuam prevalecendo. A política equivalente
 do SDK é:
 
 ```json
-{ "retry": { "provider": { "maxRetries": 2, "maxRetryDelayMs": 60000 } } }
+{ "retry": { "provider": { "maxRetries": 30, "maxRetryDelayMs": 60000 } } }
 ```
+
+Esse orçamento mantém a mesma inferência aberta durante erros temporários antes
+do stream, sem reiniciar sessão, task, ferramentas ou efeitos externos. Uma
+sequência persistente encerra após no máximo 31 requests por invocação do
+adaptador. O backoff nativo sem `Retry-After` acumula aproximadamente três minutos
+de espera; latência, fila e instruções do servidor podem ampliar esse tempo.
+O retry de conversa do Pi continua com seu próprio limite e pode chamar o
+adaptador novamente; portanto 31 não é o limite de uma tarefa inteira. Não há
+loop adicional de retomada, mudança automática de provider nem garantia de
+recuperação de uma queda arbitrariamente longa. Cancelamento interrompe a espera;
+400/401/402/403 não são repetidos normalmente. Streams parcialmente entregues
+não recebem replay adicional pelo transporte. Limites explícitos, inclusive
+`maxRetries: 0`, continuam prevalecendo.
 
 O retry externo de conversa do Pi não substitui essa configuração: seu backoff
 padrão pode terminar antes do reset de RPM. A retomada com
