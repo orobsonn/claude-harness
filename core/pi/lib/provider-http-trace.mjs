@@ -43,8 +43,7 @@ export function providerTraceEnvironment(env, { userHome = homedir(), sessionId,
 export function installProviderHttpTrace({ target = globalThis, directory, sessionId, append, controlSocket, acquire = acquireAdmission, trackFetchReplacement = false } = {}) {
   if (!directory && !append && !controlSocket) return false;
   if (target[INSTALLED]) return false;
-  let original = target.fetch;
-  if (typeof original !== "function") return false;
+  if (typeof target.fetch !== "function") return false;
   const record = (data) => {
     if (!append && !directory) return;
     try {
@@ -56,7 +55,14 @@ export function installProviderHttpTrace({ target = globalThis, directory, sessi
     } catch { /* Observability must not interrupt inference. */ }
   };
   target[INSTALLED] = true;
-  const tracedFetch = async function (input, options) {
+  // Cache per transport so replacing/restoring fetch preserves function identity.
+  const wrappers = new WeakMap();
+  const originals = new WeakMap();
+  const wrap = (replacement) => {
+    if (typeof replacement !== "function") return replacement;
+    const original = originals.get(replacement) ?? replacement;
+    if (wrappers.has(original)) return wrappers.get(original);
+    const tracedFetch = async function (input, options) {
     let url;
     try { url = new URL(typeof input === "string" || input instanceof URL ? input : input.url); }
     catch { return original.call(target, input, options); }
@@ -115,7 +121,12 @@ export function installProviderHttpTrace({ target = globalThis, directory, sessi
       emit("request_error", { error_type: error?.name ?? "Error" });
       throw error;
     }
+    };
+    wrappers.set(original, tracedFetch);
+    originals.set(tracedFetch, original);
+    return tracedFetch;
   };
+  let activeFetch = wrap(target.fetch);
   if (trackFetchReplacement) {
     const descriptor = Object.getOwnPropertyDescriptor(target, "fetch");
     // Pi 0.99 installs npm Undici after preloads. Keep its chosen transport,
@@ -123,10 +134,10 @@ export function installProviderHttpTrace({ target = globalThis, directory, sessi
     Object.defineProperty(target, "fetch", {
       configurable: true,
       enumerable: descriptor?.enumerable ?? true,
-      get: () => tracedFetch,
-      set: (replacement) => { if (replacement !== tracedFetch) original = replacement; },
+      get: () => activeFetch,
+      set: (replacement) => { activeFetch = wrap(replacement); },
     });
-  } else target.fetch = tracedFetch;
+  } else target.fetch = activeFetch;
   return true;
 }
 
