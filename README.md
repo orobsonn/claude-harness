@@ -677,3 +677,8 @@ O estado atual não é o README antigo com “suporte ao Pi” adicionado. A arq
 O Claude Harness transforma agentes de código em um processo de entrega: **a intenção vira contrato, o contrato vira tarefas, as tarefas produzem provas, olhos independentes julgam essas provas e somente o estado exato que foi revisado pode ser entregue**.
 
 As releases são distribuídas por tag + GitHub Release. Não há publicação npm; o `package.json` mantém `bin` e `files` para que `npx github:` resolva o CLI diretamente da release.
+
+O fornecedor oficial do DeepSeek no Pi é **Verboo**, com admissão compartilhada
+de duas requisições e controle de RPM. Ollama permanece selecionável explicitamente.
+Veja o [estudo de validação e custo](docs/evaluations/verboo-2026-10-03.html)
+e a [configuração do Pi](core/pi/README.md#fornecedor-deepseek-ollama-ou-verboo).

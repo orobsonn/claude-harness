@@ -246,7 +246,7 @@ sempre pela task canônica; complexity omitida é herdada, divergência é rejei
 Executor/sniper mantêm low Luna/high, medium Terra/medium, high/max Terra/xhigh.
 O transporte mantém limite de inatividade de 15 minutos por chamada de modelo.
 
-Sessões novas usam `trial-orchestration-deepseek` por padrão. Nesse perfil,
+Sessões novas usam `verboo-orchestration-deepseek` por padrão. Nesse perfil,
 DeepSeek V4.1 Flash orquestra os pais global e local; executor, sniper e
 test-author usam DeepSeek em low/medium/high/max. `max` permanece somente como
 fallback defensivo para planos legados; o planner deve decompor a task antes da
@@ -291,10 +291,10 @@ Plan-reviewer usa essas lentes somente na revisão INITIAL, sem redescoberta em 
 
 ## Fornecedor DeepSeek: Ollama ou Verboo
 
-Para usar Verboo como fornecedor padrão neste host, configure
-`~/.config/claude-harness/providers.json` com `{"deepseek":"verboo"}`.
-Sem esse arquivo, ou com `{"deepseek":"ollama"}`, o comportamento Ollama
-continua igual. A escolha afeta somente pais novos: sessões retomadas e filhos
+Verboo é o fornecedor oficial padrão do DeepSeek para sessões novas, inclusive
+sem configuração de host. Para escolher Ollama neste host, configure
+`~/.config/claude-harness/providers.json` com `{"deepseek":"ollama"}`;
+`{"deepseek":"verboo"}` seleciona Verboo explicitamente. A escolha afeta somente pais novos: sessões retomadas e filhos
 conservam seus snapshots admitidos. Um `--harness-profile` explícito prevalece.
 O mesmo harness atende ambos os fornecedores; não há uma distribuição separada.
 
@@ -375,3 +375,6 @@ Quando só restam tasks em execução, use `harness_tasks` com `action="wait"`
 e, opcionalmente, `task_id`, sem `wait_seconds`. A espera ocorre no host e não
 gera novas inferências. `wait_seconds` pertence somente à consulta `status`;
 repetir essa consulta retransmite o contexto e ocupa capacidade do provider.
+
+O [estudo de uso com quatro pipelines](../../docs/evaluations/verboo-2026-10-03.html)
+documenta filas, disponibilidade, custo, entregas e as proteções implementadas.

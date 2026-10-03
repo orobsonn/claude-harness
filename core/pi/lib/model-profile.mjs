@@ -11,16 +11,18 @@ export const OLLAMA_PROVIDER = "ollama-cloud";
 export const OLLAMA_ENDPOINT = "https://ollama.com/v1";
 export const DEEPSEEK_MODEL = "deepseek-v4.1-flash";
 export const GLM_MODEL = "glm-5.3";
+// Preserve the historical profile default for snapshot canonicalization.
+// New parents select the official provider through readDefaultModelProfile.
 export const DEFAULT_MODEL_PROFILE = "trial-orchestration-deepseek";
 
 /** Host preference applies only to new parents, never to admitted sessions. */
 export function readDefaultModelProfile(userHome) {
-  if (!userHome) return DEFAULT_MODEL_PROFILE;
+  if (!userHome) return "verboo-orchestration-deepseek";
   let config;
   try {
     config = JSON.parse(fs.readFileSync(path.join(userHome, ".config", "claude-harness", "providers.json"), "utf8"));
   } catch (error) {
-    if (error.code === "ENOENT") return DEFAULT_MODEL_PROFILE;
+    if (error.code === "ENOENT") return "verboo-orchestration-deepseek";
     throw new Error("invalid host provider configuration", { cause: error });
   }
   if (config.deepseek === "verboo") return "verboo-orchestration-deepseek";
