@@ -429,16 +429,22 @@ export function materializeRuntime(root, runtimeDir, stateDir = harnessStateDir(
     throw new Error(`harness-child-resources: ${error instanceof Error ? error.message : String(error)}`);
   }
   // defaultMaxTurns é um rail de entrega. Atualizamos só esse teto nos runtimes já
-  // materializados: os demais campos continuam pertencendo ao operador/local.
+  // materializados e migramos o nome removido graceTurns; demais campos são locais.
   const subagentsSource = join(root, "core/pi/runtime/subagents.json");
   const subagentsTarget = join(runtimeDir, "subagents.json");
   try {
     const expected = JSON.parse(readFileSync(subagentsSource, "utf8"));
     const current = JSON.parse(readFileSync(subagentsTarget, "utf8"));
-    if (current?.defaultMaxTurns !== expected?.defaultMaxTurns) {
+    const hasLegacyWrapUp = Object.hasOwn(current, "graceTurns");
+    if (current?.defaultMaxTurns !== expected?.defaultMaxTurns || hasLegacyWrapUp) {
+      const { graceTurns, ...updated } = current;
+      if (hasLegacyWrapUp && !Object.hasOwn(current, "wrapUpTurns")) {
+        updated.wrapUpTurns = Number.isInteger(graceTurns)
+          ? Math.max(1, graceTurns) : expected.wrapUpTurns;
+      }
       writeFileSync(
         subagentsTarget,
-        `${JSON.stringify({ ...current, defaultMaxTurns: expected.defaultMaxTurns }, null, 2)}\n`,
+        `${JSON.stringify({ ...updated, defaultMaxTurns: expected.defaultMaxTurns }, null, 2)}\n`,
         "utf8",
       );
     }
