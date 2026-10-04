@@ -429,16 +429,22 @@ export function materializeRuntime(root, runtimeDir, stateDir = harnessStateDir(
     throw new Error(`harness-child-resources: ${error instanceof Error ? error.message : String(error)}`);
   }
   // defaultMaxTurns é um rail de entrega. Atualizamos só esse teto nos runtimes já
-  // materializados: os demais campos continuam pertencendo ao operador/local.
+  // materializados e migramos o nome removido graceTurns; demais campos são locais.
   const subagentsSource = join(root, "core/pi/runtime/subagents.json");
   const subagentsTarget = join(runtimeDir, "subagents.json");
   try {
     const expected = JSON.parse(readFileSync(subagentsSource, "utf8"));
     const current = JSON.parse(readFileSync(subagentsTarget, "utf8"));
-    if (current?.defaultMaxTurns !== expected?.defaultMaxTurns) {
+    const hasLegacyWrapUp = Object.hasOwn(current, "graceTurns");
+    if (current?.defaultMaxTurns !== expected?.defaultMaxTurns || hasLegacyWrapUp) {
+      const { graceTurns, ...updated } = current;
+      if (hasLegacyWrapUp && !Object.hasOwn(current, "wrapUpTurns")) {
+        updated.wrapUpTurns = Number.isInteger(graceTurns)
+          ? Math.max(1, graceTurns) : expected.wrapUpTurns;
+      }
       writeFileSync(
         subagentsTarget,
-        `${JSON.stringify({ ...current, defaultMaxTurns: expected.defaultMaxTurns }, null, 2)}\n`,
+        `${JSON.stringify({ ...updated, defaultMaxTurns: expected.defaultMaxTurns }, null, 2)}\n`,
         "utf8",
       );
     }
@@ -482,8 +488,8 @@ export function verifyPiHarness(root, cacheOptions = {}) {
   if (missing) return { ok: false, reason: `missing:${missing}` };
   const runtime = JSON.parse(readFileSync(dependencies.piPackage, "utf8"));
   const subagents = JSON.parse(readFileSync(dependencies.subagentsPackage, "utf8"));
-  if (runtime.version !== "0.99.1") return { ok: false, reason: `runtime-version:${runtime.version}` };
-  if (subagents.version !== "21.7.4") return { ok: false, reason: `subagents-version:${subagents.version}` };
+  if (runtime.version !== "1.0.2") return { ok: false, reason: `runtime-version:${runtime.version}` };
+  if (subagents.version !== "23.0.0") return { ok: false, reason: `subagents-version:${subagents.version}` };
   const authPatch = verifyPiAuthPathPatch(dependencies.piPackage, dependencies.subagentsPackage);
   if (!authPatch.ok) return { ok: false, reason: `auth-path-patch:${authPatch.reason}` };
   return { ok: true, runtimeVersion: runtime.version, subagentsVersion: subagents.version, roles: CANONICAL_ROLES.length };

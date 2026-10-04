@@ -1,5 +1,5 @@
 /**
- * Compatibility overlay for the pinned Pi 0.99.1 runtime.
+ * Compatibility overlay for the pinned Pi 1.0.2 runtime.
  *
  * Pi binds credentials to PI_CODING_AGENT_DIR. The harness keeps that directory
  * per worktree, so this sealed patch introduces PI_CODING_AGENT_AUTH_PATH while
@@ -15,8 +15,8 @@ export const PI_SUBAGENTS_AUTH_PATH_PATCH_MARKER = "CLAUDE_HARNESS_SUBAGENTS_AUT
 export const PI_AUTH_PATH_ENV = "PI_CODING_AGENT_AUTH_PATH";
 export const PI_RESUME_ENV = "PI_HARNESS_RESUME";
 const PI_RESUME_PATCH_MARKER = "CLAUDE_HARNESS_EXACT_RESUME_PATCH_v1";
-const PINNED_PI_VERSION = "0.99.1";
-const PINNED_SUBAGENTS_VERSION = "21.7.4";
+const PINNED_PI_VERSION = "1.0.2";
+const PINNED_SUBAGENTS_VERSION = "23.0.0";
 
 function sha256(content) {
   return createHash("sha256").update(content).digest("hex");
@@ -72,7 +72,7 @@ const PATCHES = [
   },
   {
     rel: "dist/config.js",
-    sha256: "c1142ae8703f8d6e913d5b7b0f32edcf6de28cebb14fe2949d920ce5c860e6e1",
+    sha256: "1cb67c079000a6ec800601e9774f7c23bcce6f8064c62251b97bd0232b8601d1",
     transform(content) {
       let next = replaceExactly(
         content,
@@ -107,7 +107,7 @@ const PATCHES = [
   },
   {
     rel: "dist/core/sdk.js",
-    sha256: "e4700d60ee0ac30afa185a771c14a3f59670b60bf700a8f6ab4e218a0feffea3",
+    sha256: "fe643170de3d259c7e06179d9e18270a009dfb54df915f6e3de515425b8d009b",
     transform(content) {
       let next = replaceExactly(content, 'import { getAgentDir } from "../config.js";', 'import { getAgentDir, getAuthPath } from "../config.js";');
       next = replaceExactly(next, 'const authPath = options.agentDir ? join(agentDir, "auth.json") : undefined;', "const authPath = getAuthPath();");
@@ -130,7 +130,7 @@ const PATCHES = [
   },
   {
     rel: "dist/package-manager-cli.js",
-    sha256: "b857fb711b2a2c78eceb803b1a83ee532a9e7bb76f5dedcda380720d4bbe64a0",
+    sha256: "aefcf40b94d7b7f457ec37c030d6961b255a6808773cee679593acb6c0a8c016",
     transform(content) {
       let next = replaceExactly(
         content,
@@ -165,14 +165,14 @@ function patchFile(path, spec) {
 
 
 // Pinned internal PromptOptions.preflightResult seam, not a stable public SDK API.
-const PI_REVIEW_PREFLIGHT_SHA = "fc2ea38a53937a66dc39322c1e97387694580765078f1736a3f11a0330b8bb23";
+const PI_REVIEW_PREFLIGHT_SHA = "35ca1dabd54d98c236c9601b569c2856b726ade392d06b2eaaf50158f48913ab";
 const PI_SUBAGENTS_LIFECYCLE_MARKER = "CLAUDE_HARNESS_SUBAGENTS_LIFECYCLE_PATCH_v1";
 const SUBAGENTS_LIFECYCLE_PATCHES = [
   {
     rel: "src/lifecycle/create-subagent-session.ts",
     marker: PI_SUBAGENTS_LIFECYCLE_MARKER,
-    sha256: "519fa77bac82a082316f7939e3b97605bbb7f364c2977b06e8bfddf5136ddafa",
-    patchedSha256: "898a87c64d39949c386207e9a17787bbf01fa48e4bfc284b614c84d9f11e530b",
+    sha256: "fba6a47e2f0623d6a41619d752de35ba30798887351dc4297b5a59bb1dcb343f",
+    patchedSha256: "3068e238ad70b6388e2ca4377b6d364537e994f9471a5a0b4b6481fda49b2158",
     transform(content) {
       let next = replaceExactly(content,
         "  deps.lifecycle.sessionCreated({ sessionId, parentSessionId });\n\n  try {\n",
@@ -205,8 +205,8 @@ const SUBAGENTS_LIFECYCLE_PATCHES = [
   {
     rel: "src/lifecycle/subagent-session.ts",
     marker: PI_SUBAGENTS_LIFECYCLE_MARKER,
-    sha256: "909e4e802a27a4dc178f56d4eea429b2b85e6b043596264482c7461d458bdf51",
-    patchedSha256: "adb458855786692e50f8d4adaac206da233193c920e04f637655dd9bf84408d4",
+    sha256: "90b4322ca028dba9f04df1d9917e5ae260b33a502f6f6e0f1a6b445bad6546c8",
+    patchedSha256: "93ad66671ce6caf6dae3da013a6effc8b182900bf483520fb6149e02c84592b8",
     transform(content) {
       const next = replaceExactly(content,
         "      await session.prompt(effectivePrompt);",
@@ -246,7 +246,7 @@ function applySubagentsAuthPathPatch(subagentsPackagePath) {
   if (!info.isFile() || info.isSymbolicLink()) throw new Error("subagents auth-path patch refuses non-regular src/index.ts");
   const current = readFileSync(indexPath, "utf8");
   if (current.includes(PI_SUBAGENTS_AUTH_PATH_PATCH_MARKER)) return { ok: true };
-  if (sha256(current) !== "245846b0f63c5b9bdf4eadb905d515adcaf45ffc2c46479e1c898905c07d6092") {
+  if (sha256(current) !== "363847a3f95b30f9a2ef86303c66fae29b899dc0618c20c8a0c85373d914dd23") {
     throw new Error("subagents auth-path patch refused unexpected bytes: src/index.ts");
   }
   const patched = `// ${PI_SUBAGENTS_AUTH_PATH_PATCH_MARKER}\n${replaceExactly(

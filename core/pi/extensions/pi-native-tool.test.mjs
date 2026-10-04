@@ -1,6 +1,6 @@
 import { convertToLlm } from "@earendil-works/pi-coding-agent";
 import { createFauxCore, fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
-import { runAgentLoop } from "../../../node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-agent-core/dist/agent-loop.js";
+import { runAgentLoop } from "@earendil-works/pi-agent-core";
 
 function mergeToolResult(event, patch) {
   if (!patch) return event;

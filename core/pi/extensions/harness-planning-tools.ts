@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import { join, relative, resolve } from "node:path";
 import * as nodeModule from "node:module";
 import { fileURLToPath } from "node:url";
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { PLANNING_TOOLS, isPlanningRole, planningRetrieval, scorePlannedChange } from "../lib/planning-tools.mjs";
 import { readPiChildIdentity } from "../lib/pi-child-identity.mjs";
@@ -33,7 +33,7 @@ export default async function harnessPlanningTools(pi: ExtensionAPI, deps: any =
         const requireRuntime = nodeModule.createRequire(runtime.paths.piPackage);
         const { createJiti } = requireRuntime("jiti");
         const runtimeLoader = createJiti(runtime.paths.piPackage);
-        const alias = Object.fromEntries(["@earendil-works/pi-ai/compat", "@earendil-works/pi-ai", "@earendil-works/pi-coding-agent", "@earendil-works/pi-tui", "@sinclair/typebox"].map((name) => [name, fileURLToPath(runtimeLoader.esmResolve(name))]));
+        const alias = Object.fromEntries(["@earendil-works/pi-ai/compat", "@earendil-works/pi-ai", "@earendil-works/pi-coding-agent", "@earendil-works/pi-tui", "typebox"].map((name) => [name, fileURLToPath(runtimeLoader.esmResolve(name))]));
         const adapter: any = await createJiti(import.meta.url, { alias }).import(requireAdapter.resolve("pi-mcp-adapter"));
         const mcpServers = Object.fromEntries(["mv", "mp"].filter((name) => config.mcpServers?.[name]).map((name) => [name, { ...config.mcpServers[name], lifecycle: "lazy", directTools: false }]));
         return adapter.createMcpAdapter({ config: { mcpServers, settings: { ...config.settings, directTools: false, scriptMode: false, sampling: false, elicitation: false, hostConfigDiscovery: "off", requestTimeoutMs: 10000 } } });

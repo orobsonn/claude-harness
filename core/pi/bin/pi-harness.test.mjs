@@ -411,7 +411,7 @@ test("pinned Pi overlay keeps one global auth path for parent and subagents", ()
   const packagePath = join(runtime, "package.json");
   const subagentsPackagePath = join(subagentsRuntime, "package.json");
   const sessionManager = join(runtime, "dist/core/session-manager.js");
-  // Restore this test copy to the exact published 0.99.1 bytes, even if another
+  // Restore this test copy to the exact published 1.0.2 bytes, even if another
   // test/launcher already patched node_modules. The digest was checked against
   // npm's original tarball; never accept an already-patched fixture as pristine.
   const pristineSessionManager = readFileSync(sessionManager, "utf8")
@@ -661,6 +661,26 @@ test("runtime já materializado recebe o novo teto de turns sem perder campos pr
     defaultMaxTurns: 144,
     retained: true,
   });
+});
+
+test("runtime migration renames legacy grace turns and preserves explicit wrap-up settings", () => {
+  const directory = mkdtempSync(join(tmpdir(), "pi-wrap-up-migration-"));
+  try {
+    for (const [legacy, explicit, expected] of [[2, undefined, 2], [0, undefined, 1], [2, 4, 4]]) {
+      const runtimeDir = join(directory, String(expected));
+      mkdirSync(runtimeDir, { recursive: true });
+      const file = join(runtimeDir, "subagents.json");
+      writeFileSync(file, JSON.stringify({ maxConcurrent: 3, defaultMaxTurns: 144,
+        graceTurns: legacy, ...(explicit === undefined ? {} : { wrapUpTurns: explicit }), retained: true }));
+      materializeRuntime(process.cwd(), runtimeDir);
+      assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), {
+        maxConcurrent: 3, defaultMaxTurns: 144, wrapUpTurns: expected, retained: true,
+      });
+      const once = readFileSync(file, "utf8");
+      materializeRuntime(process.cwd(), runtimeDir);
+      assert.equal(readFileSync(file, "utf8"), once);
+    }
+  } finally { rmSync(directory, { recursive: true, force: true }); }
 });
 
 test("runtime materialization adds Ollama without replacing operator providers", () => {
