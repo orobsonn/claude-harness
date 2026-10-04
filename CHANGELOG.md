@@ -5,6 +5,22 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [3.7.0](https://github.com/orobsonn/claude-harness/compare/v3.6.23...v3.7.0) (2026-10-04)
+
+
+### Features
+
+* **pi:** atualizar runtime para Pi 1.0.2 ([#1096](https://github.com/orobsonn/claude-harness/issues/1096)) ([9d254e6](https://github.com/orobsonn/claude-harness/commit/9d254e694919037873b3b1896e0c014ff80fe7b2))
+* **pi:** DeepSeek via Verboo com controle compartilhado de requests ([#1090](https://github.com/orobsonn/claude-harness/issues/1090)) ([906ce2c](https://github.com/orobsonn/claude-harness/commit/906ce2cf44cf07e5564f4c1e51adb7b0ddbf0305))
+* **pi:** make Verboo the official DeepSeek provider ([#1095](https://github.com/orobsonn/claude-harness/issues/1095)) ([a37e6ec](https://github.com/orobsonn/claude-harness/commit/a37e6eca4a723faaa127993d719a52a71024c687))
+
+
+### Bug Fixes
+
+* **pi:** preserve fetch transport identity with Verboo admission ([#1094](https://github.com/orobsonn/claude-harness/issues/1094)) ([6196bbd](https://github.com/orobsonn/claude-harness/commit/6196bbd96e3233d7c7076e4fda1791d1728f640f))
+* **pi:** reconcile integrated tasks for aggregate recapture ([#1093](https://github.com/orobsonn/claude-harness/issues/1093)) ([3544ff0](https://github.com/orobsonn/claude-harness/commit/3544ff0d958cf603ce1bede6e7ca2ae443db7002))
+* **pi:** tolerate Verboo outages with bounded native HTTP retry ([#1092](https://github.com/orobsonn/claude-harness/issues/1092)) ([6b72b32](https://github.com/orobsonn/claude-harness/commit/6b72b32c816ce10441517aa5e698250137e3388b))
+
 ## [3.6.23](https://github.com/orobsonn/claude-harness/compare/v3.6.22...v3.6.23) (2026-09-30)
 
 
