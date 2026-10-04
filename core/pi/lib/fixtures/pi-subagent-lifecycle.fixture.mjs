@@ -47,7 +47,7 @@ writeFileSync(
 );
 writeFileSync(
   join(agentDir, "subagents.json"),
-  JSON.stringify({ maxConcurrent: 1, defaultMaxTurns: 6, graceTurns: 1 }),
+  JSON.stringify({ maxConcurrent: 1, defaultMaxTurns: 6, wrapUpTurns: 1 }),
 );
 writeFileSync(factPath, "controlled lifecycle fact\n");
 

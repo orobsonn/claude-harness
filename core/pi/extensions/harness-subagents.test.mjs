@@ -119,7 +119,7 @@ async function observeRealForegroundLimit(t, maxParallelEyes) {
   writeFileSync(join(agentDir, "subagents.json"), JSON.stringify({
     maxConcurrent: 1,
     defaultMaxTurns: 8,
-    graceTurns: 1,
+    wrapUpTurns: 1,
   }));
 
   const gates = new Map(Array.from({ length: 4 }, (_, index) => [`job-${index + 1}`, deferred()]));
