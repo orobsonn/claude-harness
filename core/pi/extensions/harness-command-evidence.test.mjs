@@ -45,7 +45,7 @@ function fixture(t) {
       result = { content: [{ type: "text", text: error.message }], details: undefined };
       isError = true;
     }
-    // Pi 0.99.1 returns non-zero exits as an isError result; thrown failures
+    // Pi 1.0.2 returns non-zero exits as an isError result; thrown failures
     // still become an isError result in the agent event pipeline.
     const event = { toolName: "bash", toolCallId: callId, input, ...result,
       isError: isError || result?.isError === true };

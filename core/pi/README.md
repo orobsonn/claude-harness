@@ -18,7 +18,7 @@ Na worktree onde o harness foi instalado, rode:
 node .pi/harness/pi-harness.mjs --verify
 ```
 
-O resultado precisa incluir `"ok":true`, `"runtimeVersion":"0.99.1"` e `"subagentsVersion":"21.7.4"`. Ele não chama modelo, lê credenciais, instala ou corrige dependências. Cache ausente ou alterado é um erro: execute o init/update do harness nesse host antes de iniciar a run.
+O resultado precisa incluir `"ok":true`, `"runtimeVersion":"1.0.2"` e `"subagentsVersion":"23.0.0"`. Ele não chama modelo, lê credenciais, instala ou corrige dependências. Cache ausente ou alterado é um erro: execute o init/update do harness nesse host antes de iniciar a run.
 
 O init/update que inclui Pi prepara primeiro o runtime fixado em um cache do usuário (`~/.cache/claude-harness/pi-runtime`, ou sob `XDG_CACHE_HOME` absoluto). Worktrees no mesmo host reutilizam a mesma geração; plataformas e versões incompatíveis usam gerações distintas. O launcher não usa nem modifica o Pi global ou `node_modules` do produto. Uma falha de provisionamento impede a atualização dos arquivos do harness. O pacote nativo Pi mantém suas dependências próprias para preservar `pi install`; isso pode duplicar downloads no instalador npx, mas não muda o runtime isolado usado pelo launcher.
 
@@ -312,7 +312,7 @@ confirmação de ausência de limites contratuais. A API mantém seus limites de
 concorrência e RPM. O cliente precisa respeitar `Retry-After` ao receber 429;
 não retome automaticamente uma resposta parcialmente transmitida.
 
-Nos runtimes Pi 0.87.1 e 0.99.1, o retry do provider foi validado em fixture
+Nos runtimes Pi 0.87.1, 0.99.1 e 1.0.2, o retry do provider foi validado em fixture
 offline para honrar `Retry-After`. O bootstrap de sessões admitidas Verboo
 usa o transporte nativo do SDK com até 30 novas tentativas HTTP e máximo de
 60 segundos por espera indicada pelo servidor, sem modificar settings ou
@@ -378,3 +378,19 @@ repetir essa consulta retransmite o contexto e ocupa capacidade do provider.
 
 O [estudo de uso com quatro pipelines](../../docs/evaluations/verboo-2026-10-03.html)
 documenta filas, disponibilidade, custo, entregas e as proteções implementadas.
+
+## Runtime Pi 1.0
+
+A distribuição fixa Pi e pi-ai em `1.0.2`, com pi-subagents `23.0.0`,
+compatível com a major 1.0. O cache do runtime continua sendo provisionado
+e verificado pelo init/update; gerações anteriores não são sobrescritas.
+Autenticação compartilhada, retomada exata e validação dos recursos das filhas
+continuam protegidas pelos overlays verificados. Verboo permanece o padrão.
+
+O Pi 1.0 usa TUI fullscreen por padrão; para manter o scrollback tradicional,
+configure `tuiMode: "regular"` nas configurações do Pi. Subagentes agora expõem
+o orçamento de turnos em `turnBudget` e recebem orçamento novo ao retomar;
+a conclusão da task continua dependendo dos recibos e gates do harness.
+
+Referências: [changelog do Pi](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/CHANGELOG.md)
+e [changelog dos subagentes](https://github.com/gotgenes/pi-packages/blob/main/packages/pi-subagents/CHANGELOG.md).

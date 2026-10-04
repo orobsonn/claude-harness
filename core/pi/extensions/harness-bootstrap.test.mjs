@@ -313,6 +313,8 @@ test("createSubagentSession real aceita Astra pela registry filha sem rede", asy
     },
   }, {
     exec: async () => ({ code: 1, stdout: "", stderr: "" }),
+    listParentToolNames: () => [],
+    resolvePromptInheritance: () => "full",
     registry: {
       resolveAgentConfig: () => ({
         name: "harness-plan-reviewer",

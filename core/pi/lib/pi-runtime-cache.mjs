@@ -27,8 +27,8 @@ import { applyPiAuthPathPatch, verifyPiAuthPathPatch } from "./pi-auth-path-patc
 
 const RUNTIME_MANIFEST = "runtime-manifest.json";
 const MANIFEST_FORMAT = 1;
-const PINNED_PI_VERSION = "0.99.1";
-const PINNED_SUBAGENTS_VERSION = "21.7.4";
+const PINNED_PI_VERSION = "1.0.2";
+const PINNED_SUBAGENTS_VERSION = "23.0.0";
 const DEFAULT_LOCK_WAIT_MS = 150_000;
 const DEFAULT_STALE_LOCK_MS = 120_000;
 const DEFAULT_NPM_TIMEOUT_MS = 120_000;

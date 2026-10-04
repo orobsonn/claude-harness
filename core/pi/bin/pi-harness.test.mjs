@@ -411,7 +411,7 @@ test("pinned Pi overlay keeps one global auth path for parent and subagents", ()
   const packagePath = join(runtime, "package.json");
   const subagentsPackagePath = join(subagentsRuntime, "package.json");
   const sessionManager = join(runtime, "dist/core/session-manager.js");
-  // Restore this test copy to the exact published 0.99.1 bytes, even if another
+  // Restore this test copy to the exact published 1.0.2 bytes, even if another
   // test/launcher already patched node_modules. The digest was checked against
   // npm's original tarball; never accept an already-patched fixture as pristine.
   const pristineSessionManager = readFileSync(sessionManager, "utf8")
