@@ -51,6 +51,15 @@ root `tests/` directory, grouped by domain or feature, with fixtures there too.
 Include any runner configuration needed to discover that directory in the first
 task that introduces tests. An empty repository alone does not override an
 explicit project convention or runner configuration.
+Inspect the actual package script before choosing a focal command: a script
+containing `&&` may run a full suite before forwarding the file filter. For
+installed Vitest projects using `test/`, the harness provides
+`node .pi/harness/bin/pi-verify.mjs --pool test/example.test.ts`;
+use `--node test/node/example.test.ts` only with `vitest.config.node.ts`.
+Record that literal command in `locked_tests[].command` when it matches the
+project's runner configuration. Preserve required setup and custom configuration;
+use the existing project command for other runners/layouts. The aggregate suite
+remains a final parent verification obligation.
 The sealed spec is the complete delivery authority for this ceremony: do not
 ask for the original issue body, a PRD copy, or external `#uj`/`#ac` references
 when its outcome, acceptance evidence, and constraints are present there. Map

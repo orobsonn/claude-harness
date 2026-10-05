@@ -1,5 +1,6 @@
 /** Host coordination only: admission, durable task handles and exact integration. */
 import fs from "node:fs";
+import { providerTaskTimeoutMs } from "./provider-control-config.mjs";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
@@ -740,6 +741,7 @@ async function launchTask(entry, context, persist, deps, instruction) {
       presentation,
       runtime: entry.runtime,
       profileEnvironment: context.profileEnvironment,
+      timeoutMs: providerTaskTimeoutMs(context.taskProviderId ?? context.model?.provider),
       ...(deps.orcaBackend ? {
         launchTerminal: (input) => deps.orcaBackend.launchTerminal({ ...input, worktreeId: entry.orca.worktree_id, instanceId: entry.orca.instance_id, title: `${entry.task_id} · ${localSession ? "resume" : "implementação"}` }),
       } : {}),

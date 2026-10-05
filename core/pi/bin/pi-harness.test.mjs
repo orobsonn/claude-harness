@@ -561,6 +561,7 @@ test("runtime já materializado migra somente o antigo default do harness para o
         defaultModel: "gpt-6.1-sol",
         defaultThinkingLevel: "high",
         hideThinkingBlock: true,
+        theme: "dark",
         httpIdleTimeoutMs: 900_000,
         retained: true,
         ...piChildResourceSettings(process.cwd()),
@@ -626,6 +627,7 @@ test("runtime já materializado preserva um default explícito compatível do op
     defaultModel: "gpt-5.6-terra",
     defaultThinkingLevel: "high",
     hideThinkingBlock: true,
+    theme: "dark",
     httpIdleTimeoutMs: 900_000,
     retained: true,
     ...piChildResourceSettings(process.cwd()),
@@ -852,4 +854,16 @@ test("Verboo launcher loads the host API credential without persisting its value
     assert.deepEqual(spawned.args.slice(0, 4), ["--provider", "verboo", "--model", "deepseek-v4.1-flash"]);
     assert.doesNotMatch(readFileSync(spawned.env.PI_HARNESS_MODEL_PROFILE, "utf8"), /verboo-test-secret/);
   } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("runtime usa dark por padrão e preserva tema explícito", (t) => {
+  for (const theme of [undefined, "light"]) {
+    const directory = mkdtempSync(join(tmpdir(), "pi-dark-default-"));
+    t.after(() => rmSync(directory, { recursive: true, force: true }));
+    const runtimeDir = join(directory, ".pi/harness/runtime");
+    mkdirSync(runtimeDir, { recursive: true });
+    writeFileSync(join(runtimeDir, "settings.json"), JSON.stringify({ theme }));
+    materializeRuntime(process.cwd(), runtimeDir);
+    assert.equal(JSON.parse(readFileSync(join(runtimeDir, "settings.json"), "utf8")).theme, theme ?? "dark");
+  }
 });

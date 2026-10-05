@@ -157,6 +157,20 @@ function fixture(t, tasks = [task("a"), task("b"), task("c", ["a"])], { vendored
       JSON.parse(fs.readFileSync(taskRegistryPath(dir, "parent"), "utf8")),
   };
 }
+test("task launches use their admitted provider deadline even with a Codex parent model", async t => {
+  for (const [provider, expected] of [["verboo", 21_600_000], ["ollama-cloud", 7_200_000]]) {
+    const f = fixture(t, [task("a")]);
+    f.context.taskProviderId = provider;
+    f.context.model = { provider: "openai-codex" };
+    let launched;
+    const start = f.deps.startProcess;
+    f.deps.startProcess = async options => { launched = options; return start(options); };
+    const result = await executeTaskAction({ action: "dispatch", task_ids: ["a"] }, f.context, f.deps);
+    assert.equal(result.ok, true, result.reason);
+    assert.equal(launched.timeoutMs, expected);
+  }
+});
+
 test("unchanged-stop diagnosis can resume the owning attempt with a real process, without approval", { timeout: 20000 }, async t => {
   const f = fixture(t, [task("a")]);
   const action = params => executeTaskAction(params, f.context, f.deps);

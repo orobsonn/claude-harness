@@ -87,6 +87,15 @@ claim the task is ready for `fidelity-pass` when the test did not execute. When 
 context, identify the exact locked assertion and literal evidence, then classify the recovery as
 `TRANSCRIPTION`, `TEST_INFRA`, or `PLAN_CONTRADICTION`. This is recovery evidence for the parent,
 not a terminal autonomous-delivery outcome.
+Use the locked test's focal command. For installed Vitest under `test/`,
+`node .pi/harness/bin/pi-verify.mjs --pool test/example.test.ts` runs the
+installed runner directly; `--node test/node/example.test.ts` uses
+`vitest.config.node.ts`. Confirm those configurations match this project before
+using the helper. Do not repeat a denied `npx`/local-bin command or pass a filter
+through a package script whose `&&` chain first runs the complete suite.
+Run the plain command once, preserve its real exit status, and read the returned
+`command_evidence` artifact for the complete log instead of rerunning merely to
+archive/filter output. Required project setup and final aggregate checks remain.
 An expected SUT type error for the approved missing behavior is acceptable RED when
 the targeted evidence identifies it. A fixture-local type error, broken import or
 zero collection is not. Inspect relevant project code beyond named starting paths

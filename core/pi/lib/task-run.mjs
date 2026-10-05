@@ -485,6 +485,9 @@ export function decideTaskRunTool(binding, event) {
   }
   if (["bash", "powershell"].includes(name)) {
     const command = String(input.command ?? "");
+    if (/(?:^|[;&|]\s*)git\s+commit\b[^\n;&|]*--amend\b/.test(command.trim())) {
+      return deny("Do not amend task commits: this can orphan producer evidence. Preserve the recorded SHA and create a selective follow-up commit; do not repeat authorship solely to repair an amended SHA.");
+    }
     // Only a standalone literal ancestry query gets the exception. Do not mask
     // merge-base inside a chain: a later integration command may be obfuscated.
     const ancestryQuery = /^[ \t]*git[ \t]+merge-base(?:[ \t]+[A-Za-z0-9_./@~^:+-]+)+[ \t]*$/.test(command);

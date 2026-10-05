@@ -7,6 +7,16 @@ import { installProviderHttpTrace, providerTraceEnvironment, TRACE_DIR_ENV } fro
 
 const endpoint = "https://code.verboo.ai/router/v1/chat/completions";
 
+test("invalid Verboo limits fail its launch without blocking an Ollama launch", t => {
+  const userHome = fs.mkdtempSync(path.join(os.tmpdir(), "verboo-invalid-limits-"));
+  t.after(() => fs.rmSync(userHome, { recursive: true, force: true }));
+  const directory = path.join(userHome, ".config/claude-harness");
+  fs.mkdirSync(directory, { recursive: true });
+  fs.writeFileSync(path.join(directory, "provider-request-control.json"), JSON.stringify({ verboo: { maxConcurrent: 7 } }));
+  assert.throws(() => providerTraceEnvironment({}, { userHome, providerId: "verboo" }), /maxConcurrent/);
+  assert.deepEqual(providerTraceEnvironment({}, { userHome, providerId: "ollama-cloud" }), {});
+});
+
 test("a late dispatcher installation retains tracing and uses the replacement transport", async () => {
   const rows = [];
   let oldCalls = 0;
