@@ -5,6 +5,13 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [3.7.2](https://github.com/orobsonn/claude-harness/compare/v3.7.1...v3.7.2) (2026-10-05)
+
+
+### Bug Fixes
+
+* **pi:** permite reconciliar hunks grandes dentro do limite de arquivo ([#1099](https://github.com/orobsonn/claude-harness/issues/1099)) ([ebdac9f](https://github.com/orobsonn/claude-harness/commit/ebdac9fd92824a3bcc20fce0ae179673c4d1d12d))
+
 ## [3.7.1](https://github.com/orobsonn/claude-harness/compare/v3.7.0...v3.7.1) (2026-10-05)
 
 
