@@ -773,3 +773,10 @@ test("worker refuses a changed runtime before launching the child and records on
     "task runtime verification failed\n",
   );
 });
+
+test("task wall deadline remains finite and rejects invalid budgets before launch", async t => {
+  const dir=fixture(t);
+  for(const timeoutMs of [0,-1,Infinity,1.5,86_400_001]) {
+    await assert.rejects(startTaskProcess({jobDir:path.join(dir,String(timeoutMs)),runId:"bad",cwd:dir,command:process.execPath,args:[],timeoutMs}),/task timeout/);
+  }
+});

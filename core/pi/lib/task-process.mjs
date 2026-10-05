@@ -396,6 +396,8 @@ export async function startTaskProcess({
   let launch;
   let worker;
   try {
+    if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 86_400_000)
+      throw new Error("task timeout must be a positive integer up to 24 hours");
     if (presentation !== "json" && presentation !== "tui")
       throw new Error(`unsupported task presentation: ${presentation}`);
     if (presentation === "tui" && !launchTerminal)

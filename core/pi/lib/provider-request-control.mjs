@@ -5,6 +5,8 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
+import { readProviderControlConfig } from "./provider-control-config.mjs";
+
 export const CONTROL_SOCKET_ENV = "PI_HARNESS_VERBOO_CONTROL_SOCKET";
 
 export function createAdmissionServer({ maxConcurrent = 2, requestsPerWindow = 38, windowMs = 60000, maxQueued = 128, idleMs = 300000 } = {}) {
@@ -50,12 +52,12 @@ export function createAdmissionServer({ maxConcurrent = 2, requestsPerWindow = 3
   return server;
 }
 
-export function startCoordinator(socketPath) {
+export function startCoordinator(socketPath, { maxConcurrent = readProviderControlConfig().maxConcurrent } = {}) {
   const directory = path.dirname(socketPath);
   fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
   if (!fs.lstatSync(directory).isDirectory() || fs.lstatSync(directory).isSymbolicLink()) throw new Error("Unsafe Verboo control directory");
   fs.chmodSync(directory, 0o700);
-  const child = spawn(process.execPath, [fileURLToPath(import.meta.url), "--serve", socketPath], {
+  const child = spawn(process.execPath, [fileURLToPath(import.meta.url), "--serve", socketPath, String(maxConcurrent)], {
     detached: true, stdio: "ignore", env: {},
   });
   child.on("error", () => {});
@@ -119,7 +121,9 @@ function connectAdmission(socketPath, { signal, waitMs }) {
 if (process.argv[1] === fileURLToPath(import.meta.url) && process.argv[2] === "--serve") {
   const socketPath = process.argv[3];
   process.umask(0o077);
-  const server = createAdmissionServer();
+  const maxConcurrent = Number(process.argv[4] ?? 2);
+  if (!Number.isInteger(maxConcurrent) || maxConcurrent < 1 || maxConcurrent > 6) process.exit(2);
+  const server = createAdmissionServer({ maxConcurrent });
   server.on("error", () => process.exit(1));
   server.listen(socketPath);
 }

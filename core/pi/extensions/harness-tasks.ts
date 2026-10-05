@@ -229,6 +229,7 @@ export default function harnessTasks(pi: ExtensionAPI, injected: Parameters<type
           const profileHash = process.env[MODEL_PROFILE_HASH_ENV];
           return {
             separateParentRouting,
+            taskProviderId: profile.provider.id,
             ...(separateParentRouting && profilePath && profileHash ? {
               profileEnvironment: {
                 [MODEL_PROFILE_ENV]: profilePath,

@@ -396,6 +396,7 @@ export function materializeRuntime(root, runtimeDir, stateDir = harnessStateDir(
       LEGACY_HARNESS_DEFAULT_MODELS.has(current.defaultModel);
     const needsIdleTimeout = current?.httpIdleTimeoutMs !== expected?.httpIdleTimeoutMs;
     const needsThinkingVisibilityDefault = current?.hideThinkingBlock === undefined;
+    const needsThemeDefault = current?.theme === undefined;
     // This exact pair was the old distributed default. Project preferences and
     // native per-model settings remain under Pi's own precedence/trust rules.
     const oldParentDefault = current.defaultProvider === "openai-codex" && current.defaultModel === "gpt-5.6-sol" && current.defaultThinkingLevel === undefined;
@@ -407,7 +408,7 @@ export function materializeRuntime(root, runtimeDir, stateDir = harnessStateDir(
       JSON.stringify(current?.extensions) !== JSON.stringify(childResources.extensions) ||
       JSON.stringify(current?.skills) !== JSON.stringify(childResources.skills) ||
       JSON.stringify(current?.harnessChildResources) !== JSON.stringify(childResources.harnessChildResources);
-    if (legacyHarnessDefault || oldParentDefault || previousHarnessDefault || needsThinkingDefault || needsThinkingVisibilityDefault || needsIdleTimeout || needsChildResources) {
+    if (legacyHarnessDefault || oldParentDefault || previousHarnessDefault || needsThinkingDefault || needsThinkingVisibilityDefault || needsThemeDefault || needsIdleTimeout || needsChildResources) {
       writeFileSync(
         settingsTarget,
         `${JSON.stringify({
@@ -418,6 +419,7 @@ export function materializeRuntime(root, runtimeDir, stateDir = harnessStateDir(
           } : {}),
           ...(needsThinkingDefault ? { defaultThinkingLevel: expected.defaultThinkingLevel } : {}),
           ...(needsThinkingVisibilityDefault ? { hideThinkingBlock: expected.hideThinkingBlock } : {}),
+          ...(needsThemeDefault ? { theme: expected.theme } : {}),
           ...(needsIdleTimeout ? { httpIdleTimeoutMs: expected.httpIdleTimeoutMs } : {}),
           ...(needsChildResources ? childResources : {}),
         }, null, 2)}\n`,

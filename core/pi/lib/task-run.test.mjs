@@ -749,3 +749,15 @@ test("task extension accepts only the admitted parent and its exact native child
   assert.equal(hooks.get("tool_call")({ toolName: "harness_tasks", input: { action: "dispatch", task_ids: ["task-two"] } }, context("task-parent")).block, true);
   assert.equal(hooks.get("before_agent_start")({}, context("native-child")), undefined);
 });
+
+test("task coordinator cannot amend a producer SHA but can create follow-up commits", t => {
+  const f = fixture(t);
+  assert.equal(admitTaskRun(f.grantPath, { cwd: f.root, sessionId: "task-parent" }).ok, true);
+  const binding = readTaskRunBinding(f.root, "task-parent");
+  for (const command of ["git commit --amend --no-edit", "git status && git commit -q --amend", "cd . && git commit --amend"]) {
+    const decision = decideTaskRunTool(binding, { toolName: "bash", input: { command } });
+    assert.equal(decision.block, true);
+    assert.match(decision.reason, /producer evidence/);
+  }
+  assert.equal(decideTaskRunTool(binding, { toolName: "bash", input: { command: "git commit -m fix" } }).block, false);
+});

@@ -355,7 +355,7 @@ metadado; a proteção efetiva abaixo conta cada tentativa HTTP, inclusive os
 retries internos do SDK, sem reexecutar ferramentas.
 
 Novos lançamentos Verboo admitem tentativas em uma fila única neste host Linux,
-com dois requests ativos e no máximo 38 admissões em uma
+com dois requests ativos por padrão e no máximo 38 admissões em uma
 janela móvel de 60 segundos, incluindo retries HTTP. Pais e filhos compartilham
 um coordenador local por socket Unix privado; ele recebe apenas a conexão de
 admissão, sem prompts ou chaves, e encerra após cinco minutos sem trabalho.
@@ -370,6 +370,32 @@ automaticamente na fila. O orçamento é compartilhado neste host; usar a mesma
 conta em outro host exige considerar também suas chamadas. Um override explícito
 `~/.config/claude-harness/provider-request-control.json` com `{"verboo":false}`
 desativa o controle em novos lançamentos; o padrão Verboo mantém a proteção ativa.
+
+O mesmo arquivo aceita limites explícitos do host:
+
+```json
+{"verboo":{"enabled":true,"maxConcurrent":2,"taskTimeoutMs":21600000}}
+```
+
+`maxConcurrent` aceita 1 a 6 e deve corresponder à concorrência contratada.
+Mantenha 2 no plano atual; configurar 4 ou 6 não contrata o upgrade.
+O coordenador lê os slots ao iniciar: para aplicar uma mudança, deixe a fila
+drenar e o processo encerrar após cinco minutos ocioso, antes dos novos lançamentos.
+O limite de 38 admissões/minuto permanece independente dos slots.
+Tarefas Verboo têm prazo finito de seis horas por lançamento, incluindo ferramentas
+e espera; `taskTimeoutMs` aceita de um minuto a 24 horas. Outros fornecedores
+mantêm duas horas. Um timeout preserva a tentativa para retomada explícita pelo
+fluxo existente; não há loop novo de retomada automática.
+
+Para projetos Vitest com layout `test/`, o comando focal
+`node .pi/harness/bin/pi-verify.mjs --pool test/exemplo.test.ts` executa o runner
+instalado diretamente. A opção `--node test/node/exemplo.test.ts` exige
+`vitest.config.node.ts`. Use somente quando essas configurações correspondem ao
+projeto e preserve seu setup obrigatório. O helper não instala dependências,
+preserva saída e exit code e permite a captura automática de evidências; a suite
+agregada continua no gate final. Pais de task recusam `git commit --amend` para
+preservar os SHAs de produtores já capturados; correções usam commits seletivos novos.
+O runtime usa tema `dark` por padrão e preserva um tema explicitamente configurado.
 
 Quando só restam tasks em execução, use `harness_tasks` com `action="wait"`
 e, opcionalmente, `task_id`, sem `wait_seconds`. A espera ocorre no host e não

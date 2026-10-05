@@ -6,6 +6,8 @@ import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { acquireAdmission, CONTROL_SOCKET_ENV } from "./provider-request-control.mjs";
 
+import { readProviderControlConfig } from "./provider-control-config.mjs";
+
 export const TRACE_DIR_ENV = "PI_HARNESS_HTTP_TRACE_DIR";
 const TRACE_SESSION_ENV = "PI_HARNESS_HTTP_TRACE_LAUNCHER_SESSION";
 const INSTALLED = Symbol.for("pi.harness.verboo.http.trace");
@@ -21,11 +23,7 @@ export function providerTraceEnvironment(env, { userHome = homedir(), sessionId,
   }
   if (typeof directory !== "string" || !path.isAbsolute(directory)) directory = undefined;
   if (!controlSocket) {
-    let enabled = providerId === "verboo";
-    try {
-      const config = JSON.parse(fs.readFileSync(path.join(userHome, ".config", "claude-harness", "provider-request-control.json"), "utf8"));
-      if (typeof config.verboo === "boolean") enabled = config.verboo;
-    } catch { /* Verboo launchers use safe admission by default. */ }
+    const enabled = readProviderControlConfig(userHome).enabled ?? (providerId === "verboo");
     if (enabled) controlSocket = path.join(userHome, ".cache", "claude-harness", "provider-control", "verboo.sock");
   }
   if (typeof controlSocket !== "string" || !path.isAbsolute(controlSocket)) controlSocket = undefined;

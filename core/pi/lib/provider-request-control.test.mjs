@@ -158,3 +158,14 @@ test("queue overflow fails explicitly and a cancelled body error releases admiss
   await assert.rejects(response.text(), /broken body/);
   (await acquireAdmission(socketPath)).release();
 });
+
+test("detached coordinator honors the configured four slots while the fifth waits", async t => {
+  const directory=fs.mkdtempSync(path.join(os.tmpdir(), "verboo-four-"));
+  const socketPath=path.join(directory,"gate.sock");
+  const child=startCoordinator(socketPath,{maxConcurrent:4});
+  t.after(()=>{child.kill();fs.rmSync(directory,{recursive:true,force:true});});
+  const leases=await Promise.all(Array.from({length:4},()=>acquireAdmission(socketPath,{start:()=>{}})));
+  let admitted=false;const fifth=acquireAdmission(socketPath).then(l=>{admitted=true;return l;});
+  await pause(30);assert.equal(admitted,false);leases[0].release();(await fifth).release();
+  for(const l of leases)l.release();
+});

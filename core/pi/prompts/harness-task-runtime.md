@@ -143,6 +143,15 @@ registre `capture-verified` do hand-record atual com a árvore limpa. Envie aos 
 somente o pacote focal da task: contrato, critérios,
 diff, comandos/resultados, freeze e HEAD atuais. Olhos de task não podem exigir
 comandos de `final_review.parent_verification`; a suite global pertence ao pai final.
+Execute o comando focal registrado em `locked_tests[].command` sem pipes,
+redirecionamentos ou filtros que escondam o exit code. Para Vitest instalado com
+layout `test/`, o helper `node .pi/harness/bin/pi-verify.mjs --pool test/exemplo.test.ts`
+evita scripts npm com `&&` que executam a suite inteira antes do filtro;
+`--node test/node/exemplo.test.ts` usa `vitest.config.node.ts` quando essa é a
+configuração correta do projeto. Preserve setup e configuração obrigatórios.
+Leia o artefato `command_evidence` retornado para inspecionar o log completo;
+não repita a execução somente para arquivá-lo. Repita a validação afetada após
+mudanças relevantes e mantenha a verificação agregada final.
 Despache adversary, compliance e security
 aplicáveis como um lote consolidado sobre esse HEAD imutável e aguarde todos antes de
 corrigir. Consolide os defeitos concretos e peça a menor correção necessária.

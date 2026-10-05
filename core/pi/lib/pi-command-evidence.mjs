@@ -499,7 +499,8 @@ function sensitiveCommand(command) {
 // and does not prove that project scripts cannot print private data.
 function shortEvidenceCommand(command) {
   if (typeof command !== "string" || /[;&|`$\n\r]/.test(command)) return false;
-  return /^(?:git\s+(?:diff|status|log|show|rev-parse)|rg|(?:vitest|jest|mocha|tsc)|(?:npm|pnpm|yarn|bun)\s+(?:test|run(?:-script)?|typecheck)|npx\s+(?:--no-install\s+)?(?:vitest|jest|mocha|tsc))\b/.test(command.trim()) ||
+  return /^node\s+\.pi\/harness\/bin\/pi-verify\.mjs\s+--(?:pool|node)\s/.test(command.trim()) ||
+    /^(?:git\s+(?:diff|status|log|show|rev-parse)|rg|(?:vitest|jest|mocha|tsc)|(?:npm|pnpm|yarn|bun)\s+(?:test|run(?:-script)?|typecheck)|npx\s+(?:--no-install\s+)?(?:vitest|jest|mocha|tsc))\b/.test(command.trim()) ||
     /^(?:\S*\/)?node\s+(?=[^\n]*--test(?:[=\s]|$))/.test(command.trim());
 }
 

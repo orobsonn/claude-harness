@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -212,6 +212,21 @@ test("short test and typecheck results remain automatically accessible", async (
     assert.equal(patch.details.command_evidence.status, "available", command);
     assert.equal(readFileSync(patch.details.command_evidence.path, "utf8"), "verification output\n");
   }
+});
+
+test("focal verification helper archives native output and preserves behavioral RED", async (t) => {
+  const f = fixture(t);
+  for (const directory of [".pi/harness/bin", "node_modules/vitest", "test"]) mkdirSync(join(f.root, directory), { recursive: true });
+  copyFileSync(new URL("../bin/pi-verify.mjs", import.meta.url), join(f.root, ".pi/harness/bin/pi-verify.mjs"));
+  writeFileSync(join(f.root, "test/focal.test.ts"), "// runner fixture\n");
+  writeFileSync(join(f.root, "node_modules/vitest/vitest.mjs"), "console.log('AssertionError: observed value differs'); process.exitCode = 1;\n");
+  const command = "node .pi/harness/bin/pi-verify.mjs --pool test/focal.test.ts";
+  const callId = "focal-red";
+  const { native, final } = await f.run(1, { command, callId });
+  assert.equal(native.isError, true);
+  assert.equal(final.isError, true);
+  assert.match(readFileSync(final.details.command_evidence.path, "utf8"), /AssertionError: observed value differs/);
+  assertEvidenceIdentity(final.details.command_evidence, f, { command, callId, kind: "exit", exitCode: 1 });
 });
 
 test("timed out native output remains accessible without being reported as a behavioral RED", async (t) => {
