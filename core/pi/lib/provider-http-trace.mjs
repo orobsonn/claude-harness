@@ -23,7 +23,9 @@ export function providerTraceEnvironment(env, { userHome = homedir(), sessionId,
   }
   if (typeof directory !== "string" || !path.isAbsolute(directory)) directory = undefined;
   if (!controlSocket) {
-    const enabled = readProviderControlConfig(userHome).enabled ?? (providerId === "verboo");
+    let enabled = providerId === "verboo";
+    try { enabled = readProviderControlConfig(userHome).enabled ?? enabled; }
+    catch (error) { if (providerId === "verboo") throw error; }
     if (enabled) controlSocket = path.join(userHome, ".cache", "claude-harness", "provider-control", "verboo.sock");
   }
   if (typeof controlSocket !== "string" || !path.isAbsolute(controlSocket)) controlSocket = undefined;
