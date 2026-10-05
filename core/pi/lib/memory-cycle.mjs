@@ -460,9 +460,11 @@ function applyProductConflictPatches(original, patches) {
     throw new Error("Product resolution needs exactly one patch for each Git conflict hunk");
   let content = original;
   for (const [index, patch] of patches.entries()) {
+    // A single-line JSON artifact can put the whole file in one Git hunk.
+    // Use the same bound as the resolved file, retaining exact hash/preimage checks.
     if (!patch || Object.keys(patch).sort().join(",") !== "new_text,old_text" ||
         patch.old_text !== hunks[index] || typeof patch.new_text !== "string" ||
-        Buffer.byteLength(patch.new_text) > 65536 || patch.new_text.includes("\0") ||
+        Buffer.byteLength(patch.new_text) > 1024 * 1024 || patch.new_text.includes("\0") ||
         /^(?:<{7}|={7}|>{7}|\|{7})(?:\s|$)/m.test(patch.new_text))
       throw new Error("Product patch must replace its exact conflict hunk with bounded resolved text");
     if (!content.includes(patch.old_text)) throw new Error("Product conflict preimage changed");

@@ -231,7 +231,7 @@ test("global reconcile requires one exact bounded patch per product conflict hun
     { ...valid, patches: valid.patches.slice(0, 1) },
     { ...valid, patches: [{ ...valid.patches[0], old_text: "local-a" }, valid.patches[1]] },
     { ...valid, patches: [{ ...valid.patches[0], new_text: "<<<<<<< bad\n" }, valid.patches[1]] },
-    { ...valid, patches: [{ ...valid.patches[0], new_text: "x".repeat(65537) }, valid.patches[1]] },
+    { ...valid, patches: [{ ...valid.patches[0], new_text: "x".repeat(1024 * 1024 + 1) }, valid.patches[1]] },
   ]) {
     assert.throws(() => memoryCycle.reconcileMemoryDelivery(root, SESSION, { ...input, resolutions: [invalid] }),
       /stale|invalid|hunk|bounded|patch|hash/i);
@@ -241,6 +241,44 @@ test("global reconcile requires one exact bounded patch per product conflict hun
   const merged = memoryCycle.reconcileMemoryDelivery(root, SESSION, { ...input, resolutions: [valid] });
   assert.equal(merged.applied, true);
   assert.match(readFileSync(join(root, "product.txt"), "utf8"), /resolved-0[\s\S]*resolved-1/);
+});
+
+test("global reconcile accepts a large single-line product hunk within the existing file limit", (t) => {
+  const { root, git, ...input } = parallelDelivery(t, { productConflict: true,
+    memoryConflict: false, beforeFinalReview: true });
+  const local = "local:" + "á".repeat(40000);
+  const upstream = "upstream:" + "b".repeat(40000);
+  writeFileSync(join(root, "product.txt"), JSON.stringify({ local }) + "\n");
+  git("add", "product.txt"); git("commit", "-qm", "fixture: large local artifact");
+  input.expected_head = git("rev-parse", "HEAD");
+  git("checkout", "-q", "--detach", input.base_sha);
+  writeFileSync(join(root, "product.txt"), JSON.stringify({ upstream }) + "\n");
+  git("add", "product.txt"); git("commit", "-qm", "fixture: large upstream artifact");
+  input.base_sha = git("rev-parse", "HEAD");
+  git("checkout", "-q", "--detach", input.expected_head);
+  const statePath = join(root, ".pi/harness/state", SESSION, "gate-state.json");
+  const stateBefore = readFileSync(statePath, "utf8");
+  const preview = memoryCycle.reconcileMemoryDelivery(root, SESSION, input);
+  const entry = preview.conflicts.find((item) => item.path === "product.txt");
+  assert.equal(entry.truncated, true);
+  const content = git("show", `${preview.tree}:product.txt`) + "\n";
+  const old_text = content.match(/^<<<<<<<[^\n]*\n[\s\S]*?^>>>>>>>[^\n]*\n/m)?.[0];
+  assert.ok(old_text);
+  const new_text = JSON.stringify({ local, upstream }) + "\n";
+  assert.ok(Buffer.byteLength(new_text) > 65536);
+  const resolution = { path: entry.path, before_sha256: entry.sha256,
+    patches: [{ old_text, new_text }] };
+  assert.throws(() => memoryCycle.reconcileMemoryDelivery(root, SESSION, { ...input,
+    resolutions: [{ ...resolution, before_sha256: "0".repeat(64) }] }), /stale|invalid/i);
+  assert.equal(git("rev-parse", "HEAD"), input.expected_head);
+  assert.equal(git("status", "--porcelain"), "");
+  const merged = memoryCycle.reconcileMemoryDelivery(root, SESSION, { ...input,
+    resolutions: [resolution] });
+  assert.equal(merged.applied, true);
+  assert.equal(readFileSync(join(root, "product.txt"), "utf8"), new_text);
+  assert.equal(readFileSync(statePath, "utf8"), stateBefore);
+  assert.equal(git("status", "--porcelain"), "");
+  assert.throws(() => checkMemoryShipperReady(root, SESSION), /review|harvest|changed/i);
 });
 
 test("global reconcile lets the parent resolve concurrent product conflicts outside task scopes", (t) => {
