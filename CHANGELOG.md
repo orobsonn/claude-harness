@@ -5,6 +5,13 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [3.7.1](https://github.com/orobsonn/claude-harness/compare/v3.7.0...v3.7.1) (2026-10-05)
+
+
+### Bug Fixes
+
+* **pi:** reduz desperdícios e ajusta limites do Verboo ([#1097](https://github.com/orobsonn/claude-harness/issues/1097)) ([6116fac](https://github.com/orobsonn/claude-harness/commit/6116fac4ec88dffc270353138f99b39a692d7ed9))
+
 ## [3.7.0](https://github.com/orobsonn/claude-harness/compare/v3.6.23...v3.7.0) (2026-10-04)
 
 
