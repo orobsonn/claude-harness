@@ -78,6 +78,17 @@ export async function waitForOrcaTaskTerminalExit({
   return response.result.wait;
 }
 
+/** Orca's local-host migration regenerates instance IDs, not the Git workspace.
+ * Only that documented legacy-to-local transition may refresh a placement pin;
+ * repository, project, setup and canonical path must still match exactly. */
+export function isOrcaLocalHostMigration(previous, current) {
+  return typeof previous?.host_id === "string" && previous.host_id.startsWith("runtime:") &&
+    current?.host_id === "local" && typeof current.instance_id === "string" && !!current.instance_id &&
+    ["worktree_id", "repo_id", "path", "project_id", "project_host_setup_id"].every(
+      (key) => typeof previous[key] === "string" && !!previous[key] && previous[key] === current[key],
+    );
+}
+
 /** Called only for a parent launched inside Orca; a stale inherited pane cannot select another repo. */
 export async function resolveOrcaTaskBackend({ projectRoot, worktreeId, cli = process.env.PI_HARNESS_ORCA_CLI || process.env.ORCA_CLI_COMMAND || "orca" }, injected = {}) {
   if (typeof worktreeId !== "string" || !worktreeId)

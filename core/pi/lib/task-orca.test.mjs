@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
-import { quoteOrcaCommand, resolveOrcaTaskBackend, waitForOrcaTaskTerminalExit } from "./task-orca.mjs";
+import { quoteOrcaCommand, isOrcaLocalHostMigration, resolveOrcaTaskBackend, waitForOrcaTaskTerminalExit } from "./task-orca.mjs";
 
 const git = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 async function fixture(t) {
@@ -201,4 +201,19 @@ test("terminal exit wait uses the public bounded Orca condition and forwards can
     }),
     /invalid structured result/,
   );
+});
+
+
+test("local-host migration preserves workspace ownership and rejects unrelated replacements", () => {
+  const previous = { host_id: "runtime:old", instance_id: "old-instance", worktree_id: "repo::path",
+    repo_id: "repo", path: "/repo/path", project_id: "project", project_host_setup_id: "setup" };
+  const current = { ...previous, host_id: "local", instance_id: "new-instance" };
+  assert.equal(isOrcaLocalHostMigration(previous, current), true);
+  for (const key of ["worktree_id", "repo_id", "path", "project_id", "project_host_setup_id"])
+    assert.equal(isOrcaLocalHostMigration(previous, { ...current, [key]: "foreign" }), false, key);
+  for (const host_id of ["runtime:other", "remote", null])
+    assert.equal(isOrcaLocalHostMigration(previous, { ...current, host_id }), false);
+  assert.equal(isOrcaLocalHostMigration({ ...previous, host_id: "local" }, current), false);
+  assert.equal(isOrcaLocalHostMigration({ ...previous, project_id: null }, { ...current, project_id: null }), false);
+  assert.equal(isOrcaLocalHostMigration(previous, { ...current, instance_id: "" }), false);
 });
