@@ -24,7 +24,7 @@ import { captureTaskContext } from "./task-context.mjs";
 import { readTaskPlanAuthority } from "./task-plan-recovery.mjs";
 import { checkScope } from "../../shared/lib/capture-oracle.mjs";
 import { taskScopeBase, taskMergePreview } from "./task-reconciliation.mjs";
-import { resolveOrcaTaskBackend } from "./task-orca.mjs";
+import { resolveOrcaTaskBackend, isOrcaLocalHostMigration } from "./task-orca.mjs";
 import {
   TASK_PIPELINE_VERSION,
   hashTaskReceipt,
@@ -947,8 +947,12 @@ export async function executeTaskAction(params, context = {}, injected = {}) {
         throw new Error("resume this global parent in its Orca workspace before launching task work");
       deps.orcaBackend = await deps.resolveOrca({ projectRoot: owner.root, ...context.orca });
       if (registry.orca_parent &&
-          hashTaskReceipt(registry.orca_parent) !== hashTaskReceipt(deps.orcaBackend.parent))
-        throw new Error("Orca global workspace identity changed");
+          hashTaskReceipt(registry.orca_parent) !== hashTaskReceipt(deps.orcaBackend.parent)) {
+        if (!isOrcaLocalHostMigration(registry.orca_parent, deps.orcaBackend.parent))
+          throw new Error("Orca global workspace identity changed");
+        registry.orca_parent = deps.orcaBackend.parent;
+        persist();
+      }
       registry.orca_parent ??= deps.orcaBackend.parent;
     }
     const barrierTaskId = registry.correction_barrier?.task_id;

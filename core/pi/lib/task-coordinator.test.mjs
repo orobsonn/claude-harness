@@ -517,6 +517,26 @@ test("Orca parent pins placement and every launch receives the terminal adapter"
   assert.equal(fallback.ok, false);
   assert.match(fallback.reason, /Orca workspace/);
   assert.equal(f.launches(), 1);
+  const pinned = f.registry();
+  const previous = { ...pinned.orca_parent, host_id: "runtime:old", project_id: "project", project_host_setup_id: "setup" };
+  pinned.orca_parent = previous;
+  write(taskRegistryPath(f.dir, "parent"), pinned);
+  const migratedDeps = { ...deps, resolveOrca: async (input) => {
+    const backend = await deps.resolveOrca(input);
+    backend.parent = { ...previous, host_id: "local", instance_id: "new-instance" };
+    return backend;
+  } };
+  const migration = await executeTaskAction({ action: "dispatch", task_ids: ["a"] }, context, migratedDeps);
+  assert.equal(migration.ok, true, migration.reason);
+  assert.equal(f.registry().orca_parent.host_id, "local");
+  assert.equal(f.registry().tasks.a.attempt_id, pinned.tasks.a.attempt_id);
+  assert.equal(f.launches(), 1);
+  const foreign = await executeTaskAction({ action: "dispatch", task_ids: ["a"] }, context, deps);
+  assert.equal(foreign.ok, false);
+  assert.match(foreign.reason, /identity changed/);
+  const restored = f.registry();
+  restored.orca_parent = { worktree_id: "parent-orca", instance_id: "parent-generation", repo_id: "repo", path: f.dir };
+  write(taskRegistryPath(f.dir, "parent"), restored);
   const entry = f.registry().tasks.a;
   write(`${entry.grant_path}.claim`, { session_id: "local-session" });
   const resume = () => executeTaskAction({ action: "resume", task_id: "a", attempt_id: entry.attempt_id }, context, deps);
