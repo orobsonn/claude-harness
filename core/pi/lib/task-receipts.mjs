@@ -1056,16 +1056,20 @@ function validateCurrentIntegrationAuthority(entry, registry, { projectRoot, ses
   if (!captured.ok || captured.snapshot.spec_sha256 !== registry.spec_sha256) {
     return failure("integrated task plan/spec hashes do not match the current canonical artifacts");
   }
+  const approvedSpec = readPiSpecApproval({ projectRoot, sessionId, featureId });
+  const reapproved = entry.grant?.origin?.plan_review_call_id &&
+    approvedSpec.state?.plan_review_evidence?.dispatch_call_id !== entry.grant.origin.plan_review_call_id;
   let recovered;
-  if (captured.snapshot.plan_sha256 !== registry.plan_sha256) {
+  if (captured.snapshot.plan_sha256 !== registry.plan_sha256 || reapproved) {
     try {
       recovered = readTaskPlanAuthority({ projectRoot, sessionId, featureId, planSha256: registry.plan_sha256,
         specSha256: registry.spec_sha256, originCallId: entry.grant?.origin?.plan_review_call_id });
-    } catch (error) { return failure(`integrated task plan/spec hashes do not match the current canonical artifacts: ${error.message}`); }
+    } catch (error) { return failure(`${reapproved && captured.snapshot.plan_sha256 === registry.plan_sha256
+      ? "integrated task is not bound to the current host-owned plan approval"
+      : "integrated task plan/spec hashes do not match the current canonical artifacts"}: ${error.message}`); }
     if (recoveredTaskContractHash(recovered, entry.task_id) !== (entry.result?.recovered_task_contract_sha256 ?? null))
       return failure("task requires correction and revalidation against its reviewed scope; resume the same task");
   }
-  const approvedSpec = readPiSpecApproval({ projectRoot, sessionId, featureId });
   if (!approvedSpec.ok || approvedSpec.sha256 !== registry.spec_sha256) {
     return failure("integrated task spec is not the current approved canonical spec");
   }

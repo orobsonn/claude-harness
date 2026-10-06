@@ -106,9 +106,11 @@ export function readTaskPlanAuthority({ projectRoot, sessionId, featureId, planS
       !approvalValid(state.plan_review_evidence, sessionId, featureId, currentHash, specSha256))
     throw new Error("current host-confirmed plan-reviewer APPROVE required");
   const plan = JSON.parse(text);
-  if (currentHash === planSha256) {
-    if (originCallId && originCallId !== state.plan_review_evidence.dispatch_call_id)
-      throw new Error("task grant does not match the admitted plan approval");
+  // Re-reviewing identical bytes replaces the current approval, not the task's
+  // admission origin. When those calls differ, prove the old origin with the
+  // same host-owned snapshot used for scope recovery instead of rejecting it.
+  if (currentHash === planSha256 &&
+      (!originCallId || originCallId === state.plan_review_evidence.dispatch_call_id)) {
     return { plan, planHash: currentHash, originalPlan: plan, affectedTasks: [], approval: state.plan_review_evidence };
   }
   const registry = read(taskRegistryPath(projectRoot, sessionId));
@@ -121,6 +123,10 @@ export function readTaskPlanAuthority({ projectRoot, sessionId, featureId, planS
       originCallId && snapshot.approval.dispatch_call_id !== originCallId)
     throw new Error("corrected scope requires the original host-owned admission snapshot");
   const originalPlan = JSON.parse(snapshot.text);
+  // Identical bytes cannot add or remove a task obligation. Keep the same
+  // validation behavior as the original exact-plan path, including old plans.
+  if (currentHash === planSha256)
+    return { plan, planHash: currentHash, originalPlan, affectedTasks: [], approval: state.plan_review_evidence };
   const affectedTasks = validateTaskScopeRecovery(originalPlan, plan);
   return { plan, planHash: currentHash, originalPlan, affectedTasks, approval: state.plan_review_evidence };
 }
