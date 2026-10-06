@@ -2797,3 +2797,24 @@ test("dirty pre-implementation task returns its dependency blocker without a rec
   fs.appendFileSync(eventsPath, event("tool_execution_start", { toolCallId: "retry", toolName: "bash", args: { command: "npm ci" } }) + "\n");
   assert.equal(inspectTaskRun(f.entry, f.dependencies).details.task_report, undefined);
 });
+
+test("integrated evidence survives same-plan reapproval only with intact original admission snapshot", () => {
+  const f = integratedFixture();
+  preserveTaskPlanForPlanner({ projectRoot: f.root, sessionId: PARENT, featureId: FEATURE },
+    { readProcess: () => ({ terminal: true }) });
+  const registry = JSON.parse(fs.readFileSync(f.registryPath, "utf8"));
+  const state = JSON.parse(fs.readFileSync(f.statePath, "utf8"));
+  state.plan_review_evidence.dispatch_call_id = "same-plan-reapproved";
+  write(f.statePath, state);
+  const before = fs.readFileSync(f.registryPath, "utf8");
+  const input = { projectRoot: f.root, sessionId: PARENT, featureId: FEATURE, taskId: TASK, headSha: f.base };
+  const checked = readIntegratedTaskEvidence(input);
+  assert.equal(checked.ok, true, checked.reason);
+  assert.equal(fs.readFileSync(f.registryPath, "utf8"), before);
+  assert.deepEqual(JSON.parse(fs.readFileSync(f.statePath)), state);
+  registry.plan_snapshot.approval.dispatch_call_id = "unrelated-original";
+  write(f.registryPath, registry);
+  const forged = readIntegratedTaskEvidence(input);
+  assert.equal(forged.ok, false);
+  assert.match(forged.reason, /current host-owned plan approval/);
+});

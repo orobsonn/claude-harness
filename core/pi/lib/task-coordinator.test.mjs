@@ -1968,3 +1968,40 @@ test("aggregate refresh replays a durable intent after an interrupted merge hook
   assert.equal(resumed.ok, true, resumed.reason);
   assert.equal(f.registry().tasks.a.reconciliations.length, 1);
 });
+
+test("reapproving an unchanged admitted plan preserves original task provenance", async (t) => {
+  const f = fixture(t, [task("a")]);
+  assert.equal((await executeTaskAction({ action: "dispatch", task_ids: ["a"] }, f.context, f.deps)).ok, true);
+  preserveTaskPlanForPlanner({ projectRoot: f.dir, sessionId: "parent", featureId: "feature" },
+    { readProcess: () => ({ terminal: true }) });
+  const registryPath = taskRegistryPath(f.dir, "parent");
+  const originalRegistry = fs.readFileSync(registryPath, "utf8");
+  const registry = f.registry();
+  const originalApproval = registry.plan_snapshot.approval;
+  const statePath = path.join(f.dir, ".pi/harness/state/parent/gate-state.json");
+  const current = { ...f.state, plan_review_evidence: { ...originalApproval, dispatch_call_id: "same-plan-reapproved" } };
+  write(statePath, current);
+  const input = { projectRoot: f.dir, sessionId: "parent", featureId: "feature",
+    planSha256: registry.plan_sha256, specSha256: registry.spec_sha256,
+    originCallId: originalApproval.dispatch_call_id };
+  const authority = readTaskPlanAuthority(input);
+  assert.deepEqual(authority.plan, f.plan);
+  assert.deepEqual(authority.affectedTasks, []);
+  assert.deepEqual(authority.approval, current.plan_review_evidence);
+  assert.equal(fs.readFileSync(registryPath, "utf8"), originalRegistry);
+  assert.deepEqual(JSON.parse(fs.readFileSync(statePath)), current);
+  assert.throws(() => readTaskPlanAuthority({ ...input, originCallId: "unrelated-origin" }), /original host-owned admission snapshot/);
+  for (const mutate of [
+    (r) => { delete r.plan_snapshot; },
+    (r) => { r.plan_snapshot.text += " "; },
+    (r) => { r.plan_snapshot.approval.verdict = "REJECT"; },
+    (r) => { r.plan_snapshot.approval.spec_sha256 = "0".repeat(64); },
+    (r) => { r.parent_session_id = "another-parent"; },
+  ]) {
+    const invalid = structuredClone(registry); mutate(invalid); write(registryPath, invalid);
+    assert.throws(() => readTaskPlanAuthority(input), /original host-owned admission snapshot/);
+  }
+  write(registryPath, registry);
+  write(statePath, { ...current, plan_review_evidence: { ...current.plan_review_evidence, verdict: "REJECT" } });
+  assert.throws(() => readTaskPlanAuthority(input), /current host-confirmed/);
+});
