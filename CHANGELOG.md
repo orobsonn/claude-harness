@@ -5,6 +5,13 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [3.7.5](https://github.com/orobsonn/claude-harness/compare/v3.7.4...v3.7.5) (2026-10-10)
+
+
+### Bug Fixes
+
+* **pi:** use readable names for child task worktrees ([#1105](https://github.com/orobsonn/claude-harness/issues/1105)) ([ac95c30](https://github.com/orobsonn/claude-harness/commit/ac95c306281aee9c41ff07f2f4cbf3f31ac8de50))
+
 ## [3.7.4](https://github.com/orobsonn/claude-harness/compare/v3.7.3...v3.7.4) (2026-10-06)
 
 
