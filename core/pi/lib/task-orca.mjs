@@ -10,6 +10,17 @@ const git = (cwd, ...args) => execFileSync("git", args, {
   cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
 }).trim();
 
+/** Short display/path name; attempt identity remains in the registry and comment. */
+export function taskWorktreeName(task, index) {
+  const slug = (value) => String(value ?? "").normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "").toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "")
+    .split("-").slice(0, 3).join("-").slice(0, 36).replace(/-+$/g, "");
+  const term = slug(task.title || task.description) ||
+    slug(String(task.id ?? "").replace(/^task[-_]?\d*[-_]?/i, "")) || "implementacao";
+  return `task-${index}-${term}`;
+}
+
 export function quoteOrcaCommand(command, args) {
   return "exec " + [command, ...args].map((value) => {
     if (typeof value !== "string" || value.includes("\0"))
@@ -115,7 +126,7 @@ export async function resolveOrcaTaskBackend({ projectRoot, worktreeId, cli = pr
     },
     async prepareWorktree(entry, persist) {
       entry.orca ??= {
-        name: `harness-task-${entry.task_id}-${entry.attempt_id}`,
+        name: entry.worktree_name ?? taskWorktreeName({ id: entry.task_id }, 1),
         comment: `Harness task ${entry.task_id}; attempt ${entry.attempt_id}`,
         parent_worktree_id: parent.id,
         repo_id: parent.repoId,
@@ -138,6 +149,11 @@ export async function resolveOrcaTaskBackend({ projectRoot, worktreeId, cli = pr
         if (!worktree) {
           if (reservation.create_requested)
             throw new Error("Orca worktree creation is unresolved; inspect this attempt before retrying creation");
+          const names = new Set(listed.worktrees.flatMap((item) =>
+            [item.name, item.path && path.basename(item.path)]).filter(Boolean));
+          const baseName = reservation.name;
+          for (let suffix = 2; names.has(reservation.name); suffix++)
+            reservation.name = `${baseName}-${suffix}`;
           reservation.create_requested = true;
           persist();
           const created = await run([

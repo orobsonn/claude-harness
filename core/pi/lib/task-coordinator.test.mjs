@@ -171,6 +171,27 @@ test("task launches use their admitted provider deadline even with a Codex paren
   }
 });
 
+test("child worktrees use plan order and a readable title even when dispatch order differs", async t => {
+  const f = fixture(t, [
+    { ...task("a"), title: "Autenticação usuários" },
+    { ...task("b"), title: "API pagamentos" },
+  ]);
+  const request = { action: "dispatch", task_ids: ["b", "a"] };
+  const result = await executeTaskAction(request, f.context, f.deps);
+  assert.equal(result.ok, true, result.reason);
+  const entries = f.registry().tasks;
+  assert.equal(entries.a.status, "running");
+  assert.equal(entries.b.status, "running");
+  assert.equal(path.basename(entries.a.worktree), "task-1-autenticacao-usuarios");
+  assert.equal(path.basename(entries.b.worktree), "task-2-api-pagamentos");
+  assert.equal(entries.a.worktree_name, path.basename(entries.a.worktree));
+  assert.equal(entries.a.grant.cwd, entries.a.worktree);
+  await executeTaskAction(request, f.context, f.deps);
+  assert.equal(f.registry().tasks.a.worktree, entries.a.worktree);
+  assert.equal(f.registry().tasks.a.attempt_id, entries.a.attempt_id);
+  assert.equal(f.launches(), 2);
+});
+
 test("unchanged-stop diagnosis can resume the owning attempt with a real process, without approval", { timeout: 20000 }, async t => {
   const f = fixture(t, [task("a")]);
   const action = params => executeTaskAction(params, f.context, f.deps);

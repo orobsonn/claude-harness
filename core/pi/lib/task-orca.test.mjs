@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
-import { quoteOrcaCommand, isOrcaLocalHostMigration, resolveOrcaTaskBackend, waitForOrcaTaskTerminalExit } from "./task-orca.mjs";
+import { quoteOrcaCommand, isOrcaLocalHostMigration, resolveOrcaTaskBackend, taskWorktreeName, waitForOrcaTaskTerminalExit } from "./task-orca.mjs";
 
 const git = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 async function fixture(t) {
@@ -54,7 +54,7 @@ async function fixture(t) {
     throw new Error(`unexpected ${action}`);
   };
   const backend = await resolveOrcaTaskBackend({ projectRoot: root, worktreeId: parent.id }, { run });
-  const entry = { task_id: "task-a", attempt_id: "attempt-a", parent_root: root,
+  const entry = { task_id: "task-a", attempt_id: "attempt-a", worktree_name: "task-1-login", parent_root: root,
     base_sha: git(root, "rev-parse", "HEAD"), worktree: path.join(dir, "old-placeholder"), grant: {} };
   return { dir, root, parent, state, run, backend, entry };
 }
@@ -76,6 +76,7 @@ test("Orca receives exact Git base and visual parent, and returned cwd/branch bi
   assert.equal(f.entry.grant.cwd, f.state.children[0].path);
   assert.equal(f.entry.grant.branch, "orca-prefix/task");
   const creation = f.state.calls.find((args) => args[1] === "create");
+  assert.equal(creation[creation.indexOf("--name") + 1], "task-1-login");
   assert.equal(creation[creation.indexOf("--base-branch") + 1], f.entry.base_sha);
   assert.equal(creation[creation.indexOf("--parent-worktree") + 1], `id:${f.parent.id}`);
   assert.equal(creation[creation.indexOf("--setup") + 1], "skip");
@@ -84,6 +85,27 @@ test("Orca receives exact Git base and visual parent, and returned cwd/branch bi
   assert.equal(f.state.calls.filter((args) => args[0] === "worktree" && args[1] === "create").length, 1);
   f.state.children[0].instanceId = "replacement";
   await assert.rejects(f.backend.prepareWorktree(f.entry, () => {}), /replaced or moved/);
+});
+
+test("task worktree names use a short safe term with accents normalized and ID fallback", () => {
+  assert.equal(taskWorktreeName({ id: "task-1", title: "Autenticação de usuários com OAuth" }, 1), "task-1-autenticacao-de-usuarios");
+  assert.equal(taskWorktreeName({ id: "task-2-login" }, 2), "task-2-login");
+  assert.equal(taskWorktreeName({ id: "task-3", description: "API pagamentos" }, 3), "task-3-api-pagamentos");
+  assert.equal(taskWorktreeName({ id: "task-4", title: "../../ 💥" }, 4), "task-4-implementacao");
+  assert.equal(taskWorktreeName({ title: "a".repeat(100) }, 5), `task-5-${"a".repeat(36)}`);
+});
+
+test("Orca task names add a small numeric suffix when another worktree uses the name", async (t) => {
+  const f = await fixture(t);
+  f.state.children.push({ name: "task-1-login", path: path.join(f.dir, "existing") });
+  f.state.children.push({ path: path.join(f.dir, "task-1-login-2") });
+  await f.backend.prepareWorktree(f.entry, () => {});
+  assert.equal(f.entry.orca.name, "task-1-login-3");
+  const creation = f.state.calls.find((args) => args[0] === "worktree" && args[1] === "create");
+  assert.equal(creation[creation.indexOf("--name") + 1], "task-1-login-3");
+  await f.backend.prepareWorktree(f.entry, () => {});
+  assert.equal(f.entry.orca.name, "task-1-login-3");
+  assert.equal(f.state.calls.filter((args) => args[0] === "worktree" && args[1] === "create").length, 1);
 });
 
 test("background UI adoption reveals the same terminal and keeps the official focus receipt", async (t) => {
