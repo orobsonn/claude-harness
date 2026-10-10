@@ -12,7 +12,9 @@ tempo real. Trabalhe de forma autônoma, em fases, provando cada fase com testes
    - para validar vendor e execução real, use diretórios temporários **fora** do repo (`mktemp -d`) ou os fixtures dos testes;
    - altere sempre a fonte em `core/` junto com os testes correspondentes.
 2. **Git:**
-   - trabalhe no branch `feat/claude-parallel-tasks`, criado a partir de `origin/main` atualizado;
+   - trabalhe no branch `feat/claude-parallel-tasks`, criado a partir de `origin/docs/pi-parallel-worktrees-port-map`
+     (que é `main` mais o mapa e este prompt). Se `origin/main` andar, faça rebase sobre ele antes de abrir ou
+     atualizar o PR;
    - use conventional commits em inglês (`feat(claude-code): …`, `test(claude-code): …`, `refactor(shared): …`), um ou mais commits por fase;
    - **nunca** faça push para `main`, merge, tag, release ou `npm publish`;
    - abra **um PR draft** contra `main` assim que a fase 1 estiver verde e vá atualizando o mesmo PR.
