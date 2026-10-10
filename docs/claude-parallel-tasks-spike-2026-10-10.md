@@ -160,8 +160,8 @@ com `rateLimitType:"five_hour"`.
 ## 8. Ajustes à arquitetura do prompt
 
 1. **Foreground forçado por env.** O worker define `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1` na lane. Sem isso o
-   `Agent` é async e a ordem TDD fica não determinística. O hook da lane nega `run_in_background` e também nega
-   qualquer `tool_response` com `isAsync:true`, registrando no ledger como `async_rejected`.
+   `Agent` é async e a ordem TDD fica não determinística. O hook da lane nega `run_in_background`, e a inspeção
+   rejeita qualquer `Agent` cujo resultado (ledger ou stream) tenha `isAsync:true`.
 2. **Isolamento da lane.** `--setting-sources project,local --strict-mcp-config --tools …` mais o allowlist do §1.
    O env da lane recebe só a allowlist (PATH, HOME, LANG, TERM, TMPDIR, USER, SHELL, `CLAUDE_CONFIG_DIR` se
    definido, as próprias vars do harness).
