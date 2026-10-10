@@ -1,13 +1,9 @@
 # Pi: execução paralela em worktrees filhas — mapa completo e plano de port para Claude Code
 
-Data: 2026-10-10. Fonte: leitura de `core/pi/` em `main@22cb5ca` (v3.3.2). Referências `arquivo:linha`
-relativas a `core/pi/` salvo indicação. Nada foi alterado no código.
-
-> **Atenção — base desatualizada.** Mapeado em `22cb5ca` (v3.3.2). `origin/main` está em `986dc5b`
-> (v3.7.5), com ~1700 linhas alteradas na camada de tasks (`task-coordinator`, `task-receipts`, `task-run`,
-> `task-orca`, `task-reconciliation`, `task-plan-recovery`, `harness-task-runtime.md`, `harness-task-pipeline`),
-> incluindo "readable names for child task worktrees" (#1105). Os números de linha e alguns detalhes
-> (ex.: naming de worktree/branch) podem ter mudado; revalidar contra `origin/main` antes de portar.
+Data: 2026-10-10. Fonte: leitura de `core/pi/` em `22cb5ca` (v3.3.2), **revisada contra `986dc5b` (v3.7.5)**.
+Referências `arquivo:linha` relativas a `core/pi/` e tiradas de v3.3.2: os arquivos de tasks cresceram desde
+então, então trate os números de linha como aproximados (procure pelo nome da função). O conteúdo já reflete
+v3.7.5; o que mudou está resumido na §15. Nada foi alterado no código.
 
 Siglas: **CO** `lib/task-coordinator.mjs` · **EXT** `extensions/harness-tasks.ts` · **TP** `lib/task-process.mjs`
 · **W** `bin/pi-task-worker.mjs` · **L** `bin/pi-harness.mjs` · **TR** `lib/task-receipts.mjs` · **TRun**
@@ -59,15 +55,18 @@ host**, nunca de parâmetro (EXT:234-245).
 | Ação | Campos permitidos (lista estrita, CO:679-685) | Efeito |
 |---|---|---|
 | `dispatch` | `task_ids` (1-3), `task_contexts[{task_id,content≤2KiB}]` | cria grant/worktree/job e lança; idempotente para tasks já registradas |
-| `status` | `task_id?` (+ `wait_seconds` 0-30, default 20, só no adaptador) | observa processos, inspeciona, grava `ready`/`blocked` |
-| `wait` | `task_id?` | espera no host até alguma `running` mudar; `settled|changed|aborted` |
+| `status` | `task_id?`, `compact?` (+ `wait_seconds` 0-30, default 20, só no adaptador) | observa processos, inspeciona, grava `ready`/`blocked` |
+| `wait` | `task_id?`, `compact?` | espera no host até alguma `running` mudar; `settled|changed|aborted` |
 | `integrate` | `task_id, attempt_id, expected_head` | merge `--no-ff` verificado + recibo |
-| `resume` | `task_id, attempt_id, instruction?(≤16000)` | relança mesma tentativa/sessão local |
+| `resume` | `task_id, attempt_id, instruction?(≤16000), reconcile_head?` | relança mesma tentativa/sessão local; com `reconcile_head` o host importa antes o HEAD agregado atual na worktree de uma task integrada (§10) |
 | `abandon-resume` | `task_id, attempt_id, expected_head, no_product_obligation:true, reason(≤4000)` | desiste de uma correção pós-integração sem delta, restaurando o recibo |
 
 Retorno: JSON em `content[0].text` + `details`; erro com `isError` e prefixo `[harness-tasks:<action>] [harness_tasks]`.
 `summary(entry)` (CO:201-227): `{task_id, attempt_id, status, worktree, session_id, child_head, orca?,
-context_return? (só ready/integrated), reason?, launches[{run_id,pid,events_path,orca?}], integration?, abandoned_resumes?}`.
+context_return? (só ready/integrated e só sem `compact`), reason?, convergence_attention? (launches ≥6 e
+correções ≥3: pede para inspecionar findings antes de outro resume), launches[{run_id,pid,events_path,orca?}],
+integration?, abandoned_resumes?}`. A skill manda usar `compact:true` em `status`/`wait` depois de consumir um
+`context_return`, para não repetir o corpo a cada consulta.
 `status` também devolve `diagnostics[task_id]` **não persistidos** (task_report, hand_report, review_findings,
 launch_failure, worktree_changes; textos ≤6000).
 
@@ -84,7 +83,7 @@ após admissão, `classify/harness_spec_write/seal_spec_review` bloqueados no pa
 | Path | Conteúdo |
 |---|---|
 | `index.json` (+`.lock`) | registry |
-| `worktrees/<attemptId>/` | worktree da task (backend local) |
+| `worktrees/task-<N>-<slug>/` | worktree da task (backend local). `N` = posição no plano, slug = até 3 palavras/36 chars de `title`/`description` (`taskWorktreeName`, ORCA); attempt fica no registry/branch |
 | `jobs/<attemptId>/<runId>/{job.json,process.json,events.jsonl,stderr.log,result.json}` | um diretório por launch |
 | `runtime/<baseSha>/` | checkout `--detach` do runtime (só no repo-fonte do harness) |
 | `admitted-execution-plan.json` | projeção legível do plano admitido |
@@ -166,7 +165,8 @@ outras tasks são recusadas (exceto resume de ancestral do dono e integrate idem
 ## 5. Worktree e lançamento do filho
 
 ### 5.1 `prepareWorktree` (CO:494-577)
-- Local: `git -C <root> worktree add -b harness/task-<t>-<attempt> <task-runs/worktrees/<attempt>> <base_sha>`;
+- Local: `git -C <root> worktree add -b harness/task-<t>-<attempt> <task-runs/worktrees/task-<N>-<slug>> <base_sha>`
+  (`entry.worktree_name` guarda o nome);
   confere branch e ancestralidade sempre ("reserved task worktree changed identity").
 - Copia `execution-plan.json` + `spec.md`, `node_modules` (`cpSync` com `verbatimSymlinks`, nunca symlink),
   `runtime/{settings,subagents,harness}.json` se ausentes; grava grant se ausente.
@@ -176,7 +176,10 @@ outras tasks são recusadas (exceto resume de ancestral do dono e integrate idem
 
 ### 5.2 `launchTask` (CO:578-662) + `startTaskProcess` (TP:383-480)
 - `runId=uuid`; registro do launch persistido **antes** do spawn; status `running`, `result/integration=null`.
-- `job.json` (0600): launch + `cwd, command=process.execPath, args, runtime, timeoutMs(2h), profile_environment?`
+- `job.json` (0600): launch + `cwd, command=process.execPath, args, runtime, timeoutMs, profile_environment?`.
+  `timeoutMs = providerTaskTimeoutMs(provider)` (`provider-control-config.mjs`): 2h padrão; provider `verboo`
+  lê `~/.config/claude-harness/provider-request-control.json` (`taskTimeoutMs`, padrão 6h). `startTaskProcess`
+  valida inteiro entre 1 ms e 24h.
   (só `PI_HARNESS_MODEL_PROFILE{,_SHA256}` atravessam — nenhum segredo).
 - Linha de comando:
   ```
@@ -191,7 +194,7 @@ outras tasks são recusadas (exceto resume de ancestral do dono e integrate idem
 
 ### 5.3 Árvore de processos (W)
 ```
-supervisor (W, grava process.json, verifica runtime, timeout 2h, SIGTERM/INT/HUP → mata grupo)
+supervisor (W, grava process.json, verifica runtime, timeout por provider, SIGTERM/INT/HUP → mata grupo)
   └─ shim `--child` (detached, process group próprio = process_group)
        └─ node pi-harness.mjs --harness-task …  (cwd = worktree)
             └─ spawnSync pi CLI  (a sessão do PAI LOCAL)
@@ -241,7 +244,7 @@ literais; bash em série; `harness_memory` só read/update; retorna SHAs, IDs, c
   `[HARNESS_FINAL_REVIEW]`; model/thinking iguais à rota.
 - `mark`: só `fidelity, hand-finished, capture-verified, regate-pending, regate-passed` e só para o próprio task_id.
 - `harness_memory`: nega `apply/reconcile/finalize`.
-- bash: nega `git -<flag>` global, `git push|pull|merge|rebase|tag` (exceto `git merge-base …` isolado),
+- bash: nega `git commit --amend` (órfã a evidência do produtor), `git -<flag>` global, `git push|pull|merge|rebase|tag` (exceto `git merge-base …` isolado),
   `gh pr|release|issue create|merge|edit|close`, `npm|pnpm run deploy`, `wrangler deploy|publish`.
 - `checkTaskRepairPreservation` (TRun:479-510): antes de test-author ou `git restore|checkout|reset|clean|stash`,
   o delta de produto no escopo precisa estar commitado.
@@ -258,7 +261,8 @@ olhos (FULL: compliance; adversary se `adversarial.enabled`; security por trigge
 
 | Etapa | Enforcement |
 |---|---|
-| fidelity | `validateTaskFidelityFreeze` (TRun:384-438): último test-author completo; reviewer posterior APPROVE antes de outro writer; `git commit` posterior linear, só frozen paths, blobs iguais em HEAD; 1º stamp exige HEAD==freeze. Payload `fidelity_pass += feat/task@freeze` |
+| fidelity | `validateTaskFidelityFreeze` (TRun:384-438): último test-author completo; reviewer posterior APPROVE antes de outro writer; `git commit` posterior (o **primeiro** após o reviewer;
+SHA tirado preferencialmente do `command_evidence` — HEAD antes ≠ HEAD depois — e só em fallback do stdout) linear, só frozen paths, blobs iguais em HEAD; 1º stamp exige HEAD==freeze. Payload `fidelity_pass += feat/task@freeze` |
 | executor/sniper | `entry-gate.mjs:994-1025`: `fidelity_pass` exato (salvo `no_tests`), dispatch-record criado; `regate_pending` de outra task bloqueia |
 | fim da mão | `recordPiHandFinished` (`entry-gate.mjs:1113-1300`): hand-record `{featureId, taskId, sessionId, producerCallId, producerClaimedAt, freezeCommitSha(=HEAD), outcome, touchedPaths, scopeViolations, frozenViolations, agent, …}`; violação força BLOCKED; FULL arma `regate_pending` |
 | capture-verified | MA:477-539: exige `hand_finished`, record elegível, produtor exato (dispatch-record), SHA **do record** (ignora args), ancestral de HEAD; grava `capturedVerifiedAt`, `capture_origin{…, worktree_clean}` |
@@ -313,8 +317,13 @@ reviewed_head_sha}}, context_return, regate, launches[…]`.
 2. `verifyRuntime`, `taskScopeBase` (sem reconciliação pendente).
 3. **Re-roda `inspectTaskRun`**; `result.child_head === expected_head` (tip de branch nunca substitui).
 4. Pai limpo; `base_sha` ancestral do HEAD do pai.
-5. `git merge-tree --write-tree --name-only -z` — conflito → erro orientando `resume` na mesma task; pai intocado.
-6. `requireFrozen`: frozen blobs desta e de **todas** as já integradas intactos na árvore mergeada.
+5. Se `expected_head` já é ancestral do HEAD do pai (`already_ancestral`), não há merge: tree = tree do pai e
+   o recibo é emitido sobre o HEAD atual. Senão `git merge-tree --write-tree --name-only -z` — conflito → erro
+   orientando `resume` na mesma task; pai intocado.
+6. `requireFrozen(root, tree, parentHead, …)`: frozen blobs desta e de **todas** as já integradas intactos na
+   árvore mergeada. Exceção: um merge de base global pode ter mudado um teste congelado; a task pode carregar a
+   versão do pai **sem alterá-la** (blob mergeado == blob do pai e blob do filho == esperado). Esses blobs vão
+   para o recibo como `frozen_parent{head_sha, blobs, ancestral?}`; a task nunca fornece versão própria.
 7. Journal `integration_intent{task_id, attempt_id, parent_head, child_head, tree, result_sha256}` → persist.
 8. `git merge --no-ff --no-edit -m "Integrate harness task <id> (<attempt>)" <expected_head>` (sempre merge
    commit de 2 pais; nunca ff/cherry-pick).
@@ -334,15 +343,24 @@ reviewed_head_sha}}, context_return, regate, launches[…]`.
 - **Reconciliação de dependente** (CO:404-454): o **host** faz `git merge --no-ff <parentHead>` na worktree do
   dependente (após upstream reintegrado com recibo novo); conflito → `merge --no-commit` deixado aberto para o
   filho resolver via sniper. O prompt nunca manda o filho fazer merge.
+- **Aggregate refresh** (`resume` com `reconcile_head`, `previewAggregateRefresh`/`applyAggregateRefresh`):
+  para corrigir ou regenerar evidência de uma task **já integrada** depois que o agregado andou. Exige
+  `reconcile_head` == HEAD atual do pai, pai limpo, `instruction` concreta, task integrada sem reconciliação
+  pendente, HEAD da worktree == `integration.child_head` e `integrated_head` ancestral do agregado. O host
+  faz o merge `--no-ff` do agregado na worktree (ou deixa conflito aberto para o sniper), recusa se mexer fora do
+  escopo e registra `reconciliation{kind:"aggregate-refresh", source_integration_sha256, …}`, validado em
+  `taskScopeBase` contra `integration_history`/`result_history`.
 - `abandon-resume`: prova que a correção não produziu delta e restaura o recibo; finais continuam invalidados.
+- Com barreira ativa, `mark final-review` agora devolve `final-review blocked: correction barrier active…`.
 
 ---
 
 ## 11. Backend Orca
 
 Ativado por `ORCA_WORKTREE_ID` no pai; **obrigatório** depois do primeiro uso (registry fixa `orca_parent`);
-sem fallback silencioso. CLI `PI_HARNESS_ORCA_CLI||ORCA_CLI_COMMAND||"orca"`, sempre `--json`, timeout 120 s.
-- `orca worktree create --repo id:<r> --name harness-task-<t>-<a> --base-branch <base_sha> --parent-worktree
+sem fallback silencioso. Única troca de pin permitida: migração de host `runtime:*` → `local` do Orca, com
+worktree/repo/path/project/setup idênticos (`isOrcaLocalHostMigration`). CLI `PI_HARNESS_ORCA_CLI||ORCA_CLI_COMMAND||"orca"`, sempre `--json`, timeout 120 s.
+- `orca worktree create --repo id:<r> --name <worktree_name> (sufixo -2, -3… se já existir) --base-branch <base_sha> --parent-worktree
   id:<pai> --setup skip --activate --comment "Harness task <t>; attempt <a>"`; `create_requested` persistido
   antes; recuperação por `comment` único; nunca segundo create.
 - `orca terminal create --worktree id:<id> --title "<task> · implementação" --command "exec 'node' '<worker>' '<job.json>'"`
@@ -410,6 +428,7 @@ ancestral pré-executor não vale; negativo stale bloqueia; hashes recomputados 
 | `--harness-resume` | `claude -p --resume <session_id>` (mesma worktree) | novo |
 | extensão `harness-task-run.ts` (tool_call) | hook PreToolUse lendo `CLAUDE_HARNESS_TASK_RUN` + gate-state `task_run`, revalidando binding por chamada | novo, espelha `decideTaskRunTool` |
 | `events.jsonl` nativo | stream-json do `claude -p` gravado pelo worker **+** ledger host-owned via hooks PreToolUse/PostToolUse/SubagentStop (callId, role, prompt hash, status) | novo; base da inspeção |
+| `command_evidence` (HEAD antes/depois de cada shell) | ledger PostToolUse de Bash com `head_before`/`head_after`/status/exit | novo; é como o Pi identifica o commit de freeze desde v3.7 — não parsear stdout |
 | child-identity | `agent_id`/`agent_type` dos payloads de hook do subagente | adaptar |
 | `harness-task-events` shutdown / continuação | Stop hook com `decision:block` uma vez por chave | novo |
 | `inspectTaskRun`, receipts | `core/claude-code/hooks/lib/task-receipts.mjs` | reescrever leitura de eventos; regras iguais |
@@ -427,6 +446,8 @@ ancestral pré-executor não vale; negativo stale bloqueia; hashes recomputados 
 5. **Trust/permissões em `claude -p` na worktree:** precedente em `kaizen.md:450-455` (trust dialog);
    definir `--permission-mode`/`--allowedTools` e `CLAUDE_CONFIG_DIR` como já faz `spawn-hand.mjs`.
 6. **Orca:** fase 2; fase 1 só backend local.
+7. **Timeout por job configurável** (o Pi já faz por provider, até 24h): na VPS, `claude -p` longo precisa de teto
+   próprio em config do host, não hardcoded em 2h.
 
 ### 14.3 Fases sugeridas
 1. **Compartilhar núcleo puro** (`core/shared/lib`): contract, context, scope/overlap, process, worker, orca —
@@ -434,10 +455,12 @@ ancestral pré-executor não vale; negativo stale bloqueia; hashes recomputados 
 2. **Plano:** usar `core/shared/lib/validate-plan.mjs` no Claude Code (overlap determinístico).
 3. **Launcher da lane + hook PreToolUse da lane** + prompt `core/claude-code/skills/orchestrating-delivery/references/task-runtime.md`
    (port de `harness-task-runtime.md` para nomes de agentes do Claude Code).
-4. **Coordenador + CLI `tasks.mjs`** (dispatch/status/wait/integrate/resume) + inspeção/recibos.
+4. **Coordenador + CLI `tasks.mjs`** (dispatch/status/wait/integrate/resume, já com `compact`) + inspeção/recibos.
+   Nomes legíveis de worktree (`task-<N>-<slug>`) desde o início. Hook da lane já nega `git commit --amend`.
 5. **Skill:** nova seção "Phase 2 paralela" em `orchestrating-delivery` (equivalente a `harness-task-pipeline`),
    gates de entrega exigindo recibos de integração; revisão final no HEAD agregado inalterada.
-6. **Correções/reconciliação/abandon-resume** e **Orca** (`ORCA_WORKTREE_ID`, `--parent-worktree`).
+6. **Correções/reconciliação/abandon-resume/aggregate refresh (`reconcile_head`)**, integração `already_ancestral`
+   e `frozen_parent`, e **Orca** (`ORCA_WORKTREE_ID`, `--parent-worktree`).
 7. Vendor: registrar hooks em `core/claude-code/settings.json`, âncoras em `FRESH_NATIVE_PATHS.claude`, testes
    em `vendor-core.test.mjs`.
 
@@ -447,3 +470,30 @@ ancestral pré-executor não vale; negativo stale bloqueia; hashes recomputados 
 - Payload de hooks em subagentes (`agent_id`, `agent_type`) dentro de `claude -p`.
 - Se `CLAUDE_PROJECT_DIR` aponta para a worktree filha.
 - Limite prático de 3 `claude -p` simultâneos (RAM/rate limit).
+
+---
+
+## 15. O que mudou de v3.3.2 → v3.7.5 e impacto no port
+
+Nenhuma mudança altera a arquitetura (pai global → pai local top-level por worktree → inspeção host-owned →
+merge `--no-ff` verificado). São endurecimentos e casos de recuperação; todos já estão incorporados acima.
+
+| Mudança (PR) | Onde | Impacto no port |
+|---|---|---|
+| Worktree com nome legível `task-<N>-<slug>`; Orca usa o mesmo nome com sufixo `-2…` (#1105) | `taskWorktreeName` (ORCA), CO dispatch | adotar já; branch continua `harness/task-<id>-<attempt>` |
+| Timeout de job por provider (2h padrão; Verboo configurável, padrão 6h, máx 24h) | `provider-control-config.mjs`, TP | timeout configurável no host |
+| `compact` em `status`/`wait`; `convergence_attention` no summary (#1033) | CO `summary`, EXT | incluir no CLI (economia de contexto do pai) |
+| `resume` com `reconcile_head` → aggregate refresh de task integrada (#1093) | CO `previewAggregateRefresh`, `task-reconciliation.mjs` | fase de correções |
+| Integração `already_ancestral` + frozen tests importados do pai (`frozen_parent`) (#1060, #1079, #1085) | CO `requireFrozen`/`reconcileMerge`, TR `frozenBytesAfterReconciliation` | fase de correções; regra: task só carrega bytes do pai, nunca versão própria |
+| Commit de freeze = primeiro após o reviewer, SHA via `command_evidence` (#1051, #1083) | TRun `validateTaskFidelityFreeze`, TR `validateFidelity` | ledger de Bash com HEAD antes/depois |
+| Lane nega `git commit --amend` | TRun `decideTaskRunTool` | regra do hook da lane |
+| Reaprovação do mesmo plano preserva a origem da admissão (#1103) | `task-plan-recovery.mjs` | aceitar re-review de bytes idênticos sem invalidar grants |
+| Claim escrito via fd com rollback por dev/ino (ENOSPC) (#1062) | TRun `admitTaskRun` | copiar o padrão |
+| Header de review de task canonicalizado (inversões corrigidas) e bloqueio com o prefixo exato; binding lido do disco porque o pai local Orca não é subagente nativo (#1024, #1026) | `harness-dispatch.ts`, `pi-review-concurrency.mjs` | o hook da lane valida pelo binding em disco, não pela relação de subagente |
+| Tool `subagent` ganhou campo `complexity` estruturado | `harness-subagents.ts` | no Claude Code o `Agent` não tem esse campo → validar rota pelo `model` e por marcador no prompt |
+| Chamada recusada pelo gate não conta como dispatch nem revoga recibo (#1042); recuperação test-only atravessa writers descartáveis e merge do host (#1048, #1056) | TR | regras da inspeção |
+| Prompt da lane: rodar `locked_tests[].command` sem pipes/filtros; ler `command_evidence` em vez de repetir | `harness-task-runtime.md` | levar para o prompt da lane |
+| Recuperação do pai na etapa pré-spec | `parent-session-recovery.mjs` | fora do escopo de tasks |
+| Migração de host local do Orca (#1101) | ORCA `isOrcaLocalHostMigration` | fase Orca |
+| **Control plane** ("Clovis portfolio operator", #1028): operador acima dos pais globais, com bridge durável (inbox, decisões, eventos) via tool `harness_control_bridge`; nunca despacha tasks, faz merge ou deploy | `core/control-plane/`, `extensions/harness-control-plane.ts` | **relevante para rodar na VPS sem o PC**: é a camada para acompanhar e responder ao pai global de forma assíncrona; avaliar como fase posterior |
+
