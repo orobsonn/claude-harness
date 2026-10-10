@@ -24,7 +24,7 @@ import { captureTaskContext } from "./task-context.mjs";
 import { readTaskPlanAuthority } from "./task-plan-recovery.mjs";
 import { checkScope } from "../../shared/lib/capture-oracle.mjs";
 import { taskScopeBase, taskMergePreview } from "./task-reconciliation.mjs";
-import { resolveOrcaTaskBackend, isOrcaLocalHostMigration } from "./task-orca.mjs";
+import { resolveOrcaTaskBackend, isOrcaLocalHostMigration, taskWorktreeName } from "./task-orca.mjs";
 import {
   TASK_PIPELINE_VERSION,
   hashTaskReceipt,
@@ -1056,10 +1056,11 @@ export async function executeTaskAction(params, context = {}, injected = {}) {
       }
       for (const task of fresh) {
         const attemptId = randomUUID();
+        const worktreeName = taskWorktreeName(task, artifacts.plan.tasks.indexOf(task) + 1);
         const worktree = path.join(
           path.dirname(registryPath),
           "worktrees",
-          attemptId,
+          worktreeName,
         );
         const branch = `harness/task-${task.id}-${attemptId}`;
         const grant = {
@@ -1101,6 +1102,7 @@ export async function executeTaskAction(params, context = {}, injected = {}) {
           spec_sha256: artifacts.spec_sha256,
           base_sha: base,
           runtime_base_sha: registry.runtime_base_sha,
+          worktree_name: worktreeName,
           worktree,
           branch,
           grant_path: taskAdmissionPath(worktree, attemptId),
