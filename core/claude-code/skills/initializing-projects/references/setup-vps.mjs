@@ -31,6 +31,7 @@
  * Every side-effecting seam is injectable for hermetic testing. Node builtins only, zero deps.
  */
 import { join, basename } from "node:path";
+import { defaultQueuePrompt } from "../../../../shared/lib/orca-queue-prompt.mjs";
 
 export const CRON_FENCE_PREFIX = "harness-orca";
 
@@ -359,10 +360,7 @@ export async function runSetupVps(deps) {
     project, owner, repo, orcaRepoId, clonePath, baseBranch, agent, globalMaxWorking,
     setup,
     titleIncludes,
-    prompt:
-      "Rode em MODO AUTÔNOMO (headless). A issue é a spec. Siga a entry-policy do .claude/ deste " +
-      "repo: triaging -> orchestrating-delivery headless. Entregue PR (Closes #N) com memória + " +
-      "kaizen + testes. NUNCA AskUserQuestion nem plan-mode.",
+    prompt: defaultQueuePrompt(agent),
   });
 
   const configDir = join(homeDir, ".config", "claude-harness", "projects");

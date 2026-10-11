@@ -70,6 +70,16 @@ Um arquivo por projeto, tipicamente em `~/.config/claude-harness/projects/<slug>
 | `titleIncludes` | não (`null`) | filtro de título, case-insensitive — o **modo canário** |
 | `prompt` | não | gatilho entregue ao agente |
 
+Para `agent: "pi"`, a fila cria a worktree e abre um terminal com o launcher
+vendorizado `.pi/harness/pi-harness.mjs --approve -- <prompt>`. A autorização
+da fila já cobre iniciar Pi naquele projeto: a confirmação inicial de confiança
+não é repetida a cada worktree. Isso é padrão do selector, sem configuração extra.
+O `setup-vps` também gera um prompt próprio de Pi quando esse agente é escolhido.
+`--approve` vale só para aquela execução; testes, revisões e autorização de
+merge/deploy continuam seguindo o pedido e o harness. Se a criação da worktree
+for confirmada mas o lançamento ficar sem confirmação, a issue permanece
+`harness:in-progress` e o log aponta `pi-launch-unresolved`, evitando duplicar a entrega.
+
 `globalMaxWorking` é uma propriedade **da máquina, não do projeto**: o selector conta os worktrees
 `working` de *toda* a VPS via `orca worktree ps --json`, então todos os JSONs precisam carregar o
 **mesmo** valor. Validado em **4 agentes Claude simultâneos numa VPS de 2 vCPU / 8 GB**.

@@ -27,6 +27,20 @@ import { normalizeConfig } from "../../../../orca/select-and-dispatch.mjs";
 // Order matches runSetupVps's prompts.
 const INFER = ["", "", "", "", "", "repo_abc123", "/clones/myproject", "", "", "", "[canary]", "", "", ""];
 
+test("setup-vps choosing Pi installs its native autonomous brief without extra trust configuration", async () => {
+  const answers = [...INFER];
+  answers[8] = "pi";
+  const h = harness({ answers });
+  await runSetupVps(h.deps);
+  const config = normalizeConfig(h.jsonWrites[0].json);
+  assert.equal(config.agent, "pi");
+  assert.match(config.prompt, /harness Pi vendorizado em \.pi\//);
+  assert.match(config.prompt, /harness_tasks/);
+  assert.match(config.prompt, /não uma spec já aprovada/);
+  assert.doesNotMatch(config.prompt, /\.claude\//);
+  assert.match(h.crontabWrites[0], /select-and-dispatch\.mjs/);
+});
+
 function harness(opts = {}) {
   const {
     answers = INFER,

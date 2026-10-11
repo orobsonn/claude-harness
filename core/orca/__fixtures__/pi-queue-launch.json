@@ -1,0 +1,22 @@
+{
+  "worktreeCreate": {
+    "ok": true,
+    "result": {
+      "worktree": {
+        "id": "repo_pi::/workspaces/pi-trust-launch-smoke",
+        "path": "/workspaces/pi-trust-launch-smoke",
+        "repoId": "repo_pi"
+      }
+    }
+  },
+  "terminalCreate": {
+    "ok": true,
+    "result": {
+      "terminal": {
+        "handle": "term_smoke",
+        "worktreeId": "repo_pi::/workspaces/pi-trust-launch-smoke",
+        "surface": "background"
+      }
+    }
+  }
+}
