@@ -127,7 +127,7 @@ test("SessionStart startup wires version-check.mjs but compact does NOT (no re-n
   );
 });
 
-test("NO Skill matcher in PreToolUse and exactly 9 hooks total", () => {
+test("NO Skill matcher in PreToolUse and exactly 11 hooks total", () => {
   const content = readFileSync(settingsPath, "utf8");
   const settings = JSON.parse(content);
 
@@ -150,7 +150,20 @@ test("NO Skill matcher in PreToolUse and exactly 9 hooks total", () => {
     totalHooks += settings.hooks.SessionStart.length;
   }
 
-  strictEqual(totalHooks, 9, "exactly 9 hooks should be wired (Agent + Bash + ScheduleWakeup + Write|Edit for PreToolUse, Bash + Agent + Write for PostToolUse, compact + startup for SessionStart)");
+  strictEqual(totalHooks, 11, "exactly 11 hooks should be wired (Agent + Bash + ScheduleWakeup + Write|Edit + * (task lanes) for PreToolUse, Bash + Agent + Write + * (task ledger) for PostToolUse, compact + startup for SessionStart)");
+});
+
+test("task-lane hooks: the * matchers wire task-gate and task-ledger, plus failure and subagent-stop ledgering", () => {
+  const settings = JSON.parse(readFileSync(settingsPath, "utf8"));
+  const commands = (event) => (settings.hooks[event] ?? []).filter((h) => (h.matcher ?? "*") === "*").flatMap((h) => h.hooks.map((x) => x.command));
+  ok(commands("PreToolUse").some((c) => c.endsWith("/.claude/hooks/task-gate.mjs")), "PreToolUse * → task-gate.mjs");
+  ok(commands("PreToolUse").some((c) => c.endsWith("/.claude/hooks/task-ledger.mjs")), "PreToolUse * → task-ledger.mjs");
+  for (const event of ["PostToolUse", "PostToolUseFailure", "SubagentStop"]) {
+    ok(commands(event).some((c) => c.endsWith("/.claude/hooks/task-ledger.mjs")), `${event} → task-ledger.mjs`);
+  }
+  const agent = (event) => settings.hooks[event].find((h) => h.matcher === "Agent").hooks.map((x) => x.command);
+  ok(agent("PreToolUse").some((c) => c.endsWith("/.claude/hooks/task-plan-review.mjs")), "PreToolUse Agent → task-plan-review.mjs");
+  ok(agent("PostToolUse").some((c) => c.endsWith("/.claude/hooks/task-plan-review.mjs")), "PostToolUse Agent → task-plan-review.mjs");
 });
 
 // #ac-1.3 — settings.json wires a ScheduleWakeup PreToolUse matcher → entry-gate.mjs, so the

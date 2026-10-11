@@ -1465,3 +1465,19 @@ test("lt-forged-still-no-stamp", () => {
     assert.equal(after.capture_verified, undefined);
   });
 });
+
+test("inside a task lane capture-verified is left to the host ledger (no run-record nudge)", () => {
+  const payload = {
+    session_id: "lane-session",
+    tool_name: "Bash",
+    tool_input: { command: "node .claude/hooks/mark.mjs capture-verified --feature-id demo --task-id task-a" },
+    tool_response: { stdout: JSON.stringify({ marker: "capture-verified", feature_id: "demo", task_id: "task-a" }) },
+  };
+  assert.equal(decide(payload).action, "capture-verified");
+  process.env.CLAUDE_HARNESS_TASK_RUN = JSON.stringify({ cwd: "/x", sessionId: "lane-session" });
+  try {
+    assert.deepEqual(decide(payload), { action: "none" });
+  } finally {
+    delete process.env.CLAUDE_HARNESS_TASK_RUN;
+  }
+});
