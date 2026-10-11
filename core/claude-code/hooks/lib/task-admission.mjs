@@ -15,6 +15,7 @@ import { TASK_PIPELINE_VERSION, hashTaskReceipt, stableTaskJson } from "../../..
 import { validateTaskContextHandoff } from "../../../shared/lib/task-context.mjs";
 import { validateExecutionPlan } from "../../skills/creating-plans/references/validate-plan.mjs";
 import { readPlanApproval } from "../task-plan-review.mjs";
+import { readTaskPlanAuthority, recoveredTaskContractHash } from "./task-plan-recovery.mjs";
 import { laneDispatchRoutes, laneFrozenPaths, laneTaskScope } from "./task-lane-contract.mjs";
 import {
   gateStateFile,
@@ -177,14 +178,27 @@ export function inspectGrant(grantPath, cwd, { allowHistoricalDeps = false } = {
     const context = validateTaskContextHandoff(grant.context_handoff, { parentSessionId: grant.parent_session_id, taskId: grant.task_id });
     if (!context.ok) throw new Error(context.reason);
   }
+  // The current reviewed plan is the scope authority; the grant keeps its admission hash. A
+  // reviewed append-only correction (task-plan-recovery.mjs) is accepted only with the host-owned
+  // admission snapshot; the lane sees it after `resume` copies the corrected plan in.
+  const authority = readTaskPlanAuthority({
+    projectRoot: parentRoot, sessionId: grant.parent_session_id, featureId: grant.feature_id,
+    planSha256: grant.plan_sha256, specSha256: grant.spec_sha256, originCallId: grant.origin.plan_review_call_id,
+  });
   const artifacts = planAndSpec(root, grant.feature_id);
-  if (artifacts.planSha256 !== grant.plan_sha256 || artifacts.specSha256 !== grant.spec_sha256) throw new Error("plan/spec hash mismatch");
-  const plan = requireParallelPlan(artifacts.plan, grant.feature_id);
+  if (![grant.plan_sha256, authority.planHash].includes(artifacts.planSha256) || artifacts.specSha256 !== grant.spec_sha256) {
+    throw new Error("plan/spec hash mismatch");
+  }
+  const plan = requireParallelPlan(authority.plan, grant.feature_id);
   const task = plan.tasks.find((candidate) => candidate.id === grant.task_id);
   if (!task) throw new Error("task missing from canonical plan");
   laneTaskScope(task);
+  const worktreeTask = requireParallelPlan(artifacts.plan, grant.feature_id).tasks.find((candidate) => candidate.id === grant.task_id);
+  if (stableTaskJson(worktreeTask) !== stableTaskJson(task)) {
+    throw new Error("task scope changed in the reviewed plan; resume the same task to load its corrected scope");
+  }
   const parentArtifacts = planAndSpec(parentRoot, grant.feature_id);
-  if (parentArtifacts.planSha256 !== grant.plan_sha256 || parentArtifacts.specSha256 !== grant.spec_sha256) {
+  if (parentArtifacts.planSha256 !== authority.planHash || parentArtifacts.specSha256 !== grant.spec_sha256) {
     throw new Error("parent canonical plan/spec changed after grant");
   }
   const parent = readParentAuthority({ root: parentRoot, sessionId: grant.parent_session_id });
@@ -199,6 +213,7 @@ export function inspectGrant(grantPath, cwd, { allowHistoricalDeps = false } = {
     parentRoot,
     plan,
     task,
+    recovered_task_contract_sha256: recoveredTaskContractHash(authority, grant.task_id),
     planPath: artifacts.planPath,
     specPath: artifacts.specPath,
     grantPath: absoluteGrant,

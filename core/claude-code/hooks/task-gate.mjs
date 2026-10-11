@@ -10,8 +10,9 @@
  * PARENT mode (no env): `tasks.mjs` may only run as a single pure command
  * (`node .claude/hooks/tasks.mjs <action> [--json '<json>' | --json-file <path>]`) so its identity
  * is the host session env, never a command prefix. Once the session's task registry admits any
- * task: hands, planner and plan-reviewer dispatches, classify and spec/plan edits are denied (the
- * plan is frozen; work happens in lanes), and delivery (`git push`, `gh pr create|merge`,
+ * task: hands, classify and spec edits are denied (work happens in lanes); planner and
+ * plan-reviewer run only as a deliberate append-only scope correction over a host-owned snapshot of
+ * the admitted plan (lib/task-plan-recovery.mjs), and delivery (`git push`, `gh pr create|merge`,
  * Agent(shipper)) requires every plan task integrated with a host receipt in current HEAD
  * ancestry. Without a registry the parent is untouched.
  */
@@ -25,6 +26,7 @@ import { isDeliveryCommand } from "./entry-gate.mjs";
 import { hashTaskReceipt } from "../../shared/lib/task-contract.mjs";
 import { readTaskRunBinding } from "./lib/task-admission.mjs";
 import { readAllIntegratedTaskEvidence } from "./lib/task-receipts.mjs";
+import { planRecoveryBlock, preserveTaskPlanForPlanner } from "./lib/task-plan-recovery.mjs";
 import {
   HAND_ROLES,
   LANE_ROLES,
@@ -285,7 +287,22 @@ export function decideParent(payload, { root = process.cwd() } = {}) {
       return deny(`[harness-tasks] admitted tasks run their hands inside their lanes; correct a task with \`tasks.mjs resume\` instead of dispatching ${role} here`);
     }
     if (role === "planner" || role === "plan-reviewer") {
-      return deny("[harness-tasks] the plan is frozen after task admission; a real plan change needs a new session");
+      // Deliberate scope correction (task-plan-recovery.mjs): snapshot the admitted plan and its
+      // APPROVE before the planner or a re-review can replace them; the planner must read the
+      // admitted copy and may only append scope.
+      let recovery;
+      try {
+        recovery = preserveTaskPlanForPlanner({ projectRoot: realRoot, sessionId, featureId: registry.feature_id });
+      } catch (error) {
+        return deny(`[harness-tasks] ${error instanceof Error ? error.message : String(error)}`);
+      }
+      if (role === "planner" && recovery) {
+        const block = planRecoveryBlock(recovery);
+        if (!String(input.prompt ?? "").includes(block)) {
+          return deny(`[harness-tasks] tasks are admitted: a planner dispatch is only an append-only scope correction of the existing plan. Put this block verbatim in the planner prompt, with the exact scope_paths/allowed_writes (and, only if the new path needs its own proof, the minimum new locked_tests) to append; then get a fresh plan-reviewer APPROVE and resume the same task.\n${block}`);
+        }
+      }
+      return allow();
     }
     if (role === "shipper") {
       const blockers = integrationBlockers(realRoot, registry);
@@ -305,8 +322,9 @@ export function decideParent(payload, { root = process.cwd() } = {}) {
     const target = path.resolve(realRoot, String(input.file_path ?? input.notebook_path ?? ""));
     const runs = path.dirname(taskRegistryPath(realRoot, sessionId));
     if (target === runs || target.startsWith(runs + path.sep)) return deny("[harness-tasks] task state is host-owned; never edit task-runs/ directly");
-    if ([planFile(realRoot, registry.feature_id), specFile(realRoot, registry.feature_id)].includes(target)) {
-      return deny("[harness-tasks] spec and plan are frozen after task admission");
+    if (target === specFile(realRoot, registry.feature_id)) return deny("[harness-tasks] the spec is frozen after task admission");
+    if (target === planFile(realRoot, registry.feature_id) && !(isSubagent && bareRole(payload.agent_type) === "planner")) {
+      return deny("[harness-tasks] after task admission only a dispatched planner corrects the plan (append-only scope correction)");
     }
   }
   return allow();

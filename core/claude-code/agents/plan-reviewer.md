@@ -22,6 +22,14 @@ The operator is a non-technical product manager. He approves the **spec** (produ
 
 ---
 
+## Scope correction after task admission
+
+When the plan is a correction of admitted parallel tasks, review only the appended scope against the existing task
+and the spec. The accepted decomposition and frozen contracts stay: do not restart planning for work that remains
+valid, and never ask to remove or reorder an admitted locked test.
+
+---
+
 ## What to audit
 
 ### 1. Decomposition soundness

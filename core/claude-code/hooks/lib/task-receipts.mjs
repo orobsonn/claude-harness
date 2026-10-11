@@ -39,6 +39,7 @@ import {
   pathInScope,
   routeAllows,
 } from "./task-lane-contract.mjs";
+import { readTaskPlanAuthority, recoveredTaskContractHash } from "./task-plan-recovery.mjs";
 import { taskReconciliationDigest, taskScopeBase } from "./task-reconciliation.mjs";
 import {
   SHARED_CONTEXT_MAX_BYTES,
@@ -356,6 +357,8 @@ export function inspectTaskRun(entry, dependencies = {}) {
         mode: grant.mode,
         plan_sha256: entry.plan_sha256,
         spec_sha256: entry.spec_sha256,
+        // Contract hash of a task whose scope a reviewed correction appended to (task-plan-recovery).
+        ...(binding.recovered_task_contract_sha256 ? { recovered_task_contract_sha256: binding.recovered_task_contract_sha256 } : {}),
         base_sha: entry.base_sha,
         scope_base_sha: scopeBase,
         reconciliation_sha256: taskReconciliationDigest(entry),
@@ -433,8 +436,19 @@ export function readIntegratedTaskEvidence({ projectRoot, sessionId, featureId, 
     if (barrier && !reconciliationRead) return failure(`correction barrier active for task ${barrier.task_id}; integrate that exact attempt first`);
     if (entry.status !== "integrated") return failure("current integrated task registry entry required");
     const parent = readParentAuthority({ root, sessionId });
-    if (parent.featureId !== featureId || parent.approval.plan_sha256 !== registry.plan_sha256 || parent.approval.spec_sha256 !== registry.spec_sha256) {
+    if (parent.featureId !== featureId || parent.approval.spec_sha256 !== registry.spec_sha256) {
       return failure("integrated task is not bound to the current host-owned plan approval");
+    }
+    // After a reviewed scope correction the current APPROVE is for the corrected plan: the
+    // admission snapshot proves the origin, and a task whose contract the correction changed
+    // needs a fresh inspection that carries the corrected contract hash.
+    const origin = entry.grant?.origin?.plan_review_call_id;
+    if (parent.approval.plan_sha256 !== registry.plan_sha256 || (origin && parent.approval.dispatch_call_id !== origin)) {
+      const recovered = readTaskPlanAuthority({ projectRoot: root, sessionId, featureId,
+        planSha256: registry.plan_sha256, specSha256: registry.spec_sha256, originCallId: origin });
+      if (recoveredTaskContractHash(recovered, taskId) !== (entry.result?.recovered_task_contract_sha256 ?? null)) {
+        return failure("task requires correction and revalidation against its reviewed scope; resume the same task");
+      }
     }
     const result = object(entry.result);
     const integration = object(entry.integration);
