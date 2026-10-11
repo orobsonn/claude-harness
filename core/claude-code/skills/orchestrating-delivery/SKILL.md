@@ -59,7 +59,7 @@ Model per role. **This table is authoritative** — when a role's model is named
 | harvester | sonnet | |
 | shipper | sonnet | |
 
-**Cost note:** Fable 5 (the former premium tier) has been **retired** — opus is now the ceiling. The two boundary gates run **opus**, the strongest available tier, which is also their frontmatter default (no override needed). The net economy of this routing comes from two levers: the **sonnet orchestrator default** (high-volume) and the **per-task adversary flexing to sonnet** on non-grave tasks (over a long FULL delivery the per-task adversary was the dominant opus consumer). **Instrument `usage` per eye** (not only per role) to verify the saving holds — the per-task adversary's opus:sonnet ratio is the number to watch. **No eye role ever falls below the sonnet floor** (never haiku), and never to a non-Claude tier — the trivial-end saving is realized by *skipping* the per-task adversary on a trivial non-grave task (`adversarial.enabled=false`), never by a sub-sonnet rubber-stamp eye.
+**Cost note:** Fable 5 is **retired** — opus is the ceiling and the boundary gates' frontmatter default. The economy comes from the **sonnet orchestrator default** (high-volume) and the **per-task adversary flexing to sonnet** on non-grave tasks (the dominant opus consumer over a long FULL run) — instrument `usage` per eye and watch its opus:sonnet ratio. **No eye ever drops below the sonnet floor** (never haiku) or to a non-Claude tier; the trivial-end saving is *skipping* the per-task adversary (`adversarial.enabled=false`), never a sub-sonnet rubber-stamp eye.
 
 **The hand family (operator toggle)** — `.claude/hand-config/hands.json`, read at **plan-write time only**; a frozen plan keeps the ladder it was authored with. The family decides the **dispatch path**, not just the model: `ollama` = a `spawn-hand.mjs` child (token, frozen-test gate, independent capture); `claude` (default) = an **ordinary `Agent` subagent** — `Agent(executor, model: hand_tiers[tier])`, or `Agent(executor-high)` for the high rung — with no descriptor, no token, no spawn. Switch with `node .claude/shared/lib/hand-model-ladder.mjs use <family>` (never a Write to `.claude/hand-config/`; the gate denies it); it applies to the NEXT plan. **Ladders, what the Agent path gives up, escalation, failure messages → `references/hand-family.md`.**
 
@@ -82,7 +82,7 @@ second family is always read-only — an EYE, never a hand; cross-family adds a 
 not a cheap hand. **Full per-checkpoint mechanism (driver flags, `pendingClaudeRefutation` handling, nudge
 idempotence, plan-reviewer merge) → load `references/cross-family-eyes.md` on demand.**
 
-**Orchestrator = sonnet (committed default):** the orchestrator is the highest-volume token consumer, so a cheap model here is the harness's real economy — this is the whole point of the design. The residual risk is curation quality: context curation is judgment, and weak curation poisons every downstream agent. The harness mitigates this by **moving the critical decisions off the orchestrator's judgment onto deterministic rails** — planner dispatch is enforced by the entry-gate hook + the `<PLANNER-ONLY>` guard (the orchestrator *cannot* generate the plan inline and must dispatch the opus `planner`), the sensitive-path override is a glob check, and per-role model routing is this fixed table. The cheaper the orchestrator, the more these rails carry the judgment. Residual curation risk stays instrumented — watch `usage` per role and whether downstream agents got the right scope. The operator may still override the model via `/model` for a given session.
+**Orchestrator = sonnet (committed default):** the highest-volume token consumer, so a cheap model here is the harness's real economy. The residual risk is curation quality, mitigated by **moving critical decisions onto deterministic rails** — planner dispatch is enforced by the entry-gate hook + the `<PLANNER-ONLY>` guard (no inline plan; the opus `planner` must be dispatched), the sensitive-path override is a glob check, and per-role routing is this fixed table. Watch `usage` per role; the operator may override the model via `/model`.
 
 ---
 
@@ -397,6 +397,12 @@ guards: <state-entity-name>[, <state-entity-name>...]
 **GPU-time guard (Ollama non-zero / timeout exit):** A non-zero or timeout exit from the external hand (e.g., Ollama GPU-time cap hit mid-task) is treated as an **ESCALATION** — identical in protocol to a K=1 implementation failure. Before re-dispatch: discard the partial attempt using the per-task-commit stash mechanism (`git stash push --include-untracked` + `git stash drop`). Do **NOT** update `shared_context` for the incomplete task — the hand did not finish, so no learnings are carried forward for an incomplete task. A timeout is an **escalation, NOT a code-quality failure** — it does **not** burn the fix/tier budget the way a real test failure (failed locked_test) does. The escalation tier step-up applies (same K=1 → next-tier logic); if the next-tier hand also times out, it counts as a second escalation failure and triggers the same critical-exception path.
 
 Move to the next task only when its gates are green.
+
+---
+
+## Phase 2 — parallel task lanes (opt-in)
+
+When the approved plan carries `"execution": {"parallel": true}`, independent tasks run in parallel **task lanes** — one git worktree + one top-level `claude -p` per task, each running steps 1a–6 above for its own task — instead of the serial loop. Coordinate them ONLY through `node .claude/hooks/tasks.mjs dispatch|wait|status|integrate|resume|abandon-resume` (≤3 per batch, dependencies integrated first; `wait` blocks on the host — never poll `status`). The host derives `ready` and merges `--no-ff`; you never read a lane's transcript. Final review + CI suite run on the aggregate HEAD; delivery needs every integration receipt. **Full protocol → load `references/parallel-tasks.md`.**
 
 ---
 
