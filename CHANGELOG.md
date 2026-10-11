@@ -5,6 +5,13 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [3.7.6](https://github.com/orobsonn/claude-harness/compare/v3.7.5...v3.7.6) (2026-10-11)
+
+
+### Bug Fixes
+
+* **control-plane:** approve project trust for queued parent runs ([#1108](https://github.com/orobsonn/claude-harness/issues/1108)) ([459bba2](https://github.com/orobsonn/claude-harness/commit/459bba28f652d1f56ab836dbb67591a983d1a7e6))
+
 ## [3.7.5](https://github.com/orobsonn/claude-harness/compare/v3.7.4...v3.7.5) (2026-10-10)
 
 
