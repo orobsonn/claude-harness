@@ -199,12 +199,23 @@ function approvedPlan(owner) {
   }
   return { plan, directory, ...captured.snapshot, receipt };
 }
-function summary(entry, { compact = false } = {}) {
+function installedTaskRuntime(entry) {
+  return entry.launches.length > 0 &&
+    path.relative(entry.parent_root, TASK_LAUNCHER) === ".pi/harness/bin/pi-harness.mjs";
+}
+function runtimeRecovery(entry, reason) {
+  if (!installedTaskRuntime(entry) ||
+      !reason?.endsWith("managed assets changed since task admission")) return null;
+  return { action: "resume", task_id: entry.task_id, attempt_id: entry.attempt_id,
+    instruction: "The installed parent harness changed. Resume this same session to adopt its current runtime and inspect existing capture/reviews. Preserve historic launch receipts; do not dispatch a new writer merely for runtime freshness." };
+}
+function summary(entry, { compact = false, currentEvidence } = {}) {
   const exposesResultContext = ["ready", "integrated"].includes(entry.status);
   return {
     task_id: entry.task_id,
     attempt_id: entry.attempt_id,
     status: entry.status,
+    ...(currentEvidence ? { current_evidence: currentEvidence } : {}),
     worktree: entry.worktree,
     session_id: entry.result?.session_id,
     child_head: entry.result?.child_head,
@@ -664,8 +675,7 @@ async function prepareWorktree(entry, artifacts, deps, persist) {
   // Each historic launch retains its own runtime receipt. A host merge may have
   // updated the old child copy; validate the installed runtime we will actually
   // execute instead. Source-development checkouts remain pinned and verified.
-  const installedResume = entry.launches.length &&
-    path.relative(entry.parent_root, TASK_LAUNCHER) === ".pi/harness/bin/pi-harness.mjs";
+  const installedResume = installedTaskRuntime(entry);
   if (!installedResume) {
     const checkedRuntime = deps.verifyRuntime(entry.runtime);
     if (!checkedRuntime.ok) throw new Error(checkedRuntime.reason);
@@ -867,8 +877,24 @@ export async function executeTaskAction(params, context = {}, injected = {}) {
         : Object.values(registry.tasks);
       if (entries.some((entry) => !entry)) throw new Error("unknown task");
       const diagnostics = {};
+      const currentEvidence = {};
+      const aggregateHead = git(owner.root, "rev-parse", "HEAD");
       for (const entry of entries) {
-        if (entry.status === "integrated") continue;
+        if (entry.status === "integrated") {
+          const checked = await deps.readIntegrated({ projectRoot: owner.root, sessionId: owner.sessionId,
+            featureId: owner.featureId, taskId: entry.task_id, headSha: aggregateHead });
+          currentEvidence[entry.task_id] = { ok: checked.ok === true, head_sha: aggregateHead,
+            ...(!checked.ok ? { reason: checked.reason } : {}) };
+          if (!checked.ok) diagnostics[entry.task_id] = {
+            integrated_evidence: currentEvidence[entry.task_id],
+            ...(!registry.correction_barrier && checked.reason?.startsWith("integrated frozen file changed:")
+              ? { recovery: { action: "resume", task_id: entry.task_id, attempt_id: entry.attempt_id,
+                reconcile_head: aggregateHead,
+                instruction: `${checked.reason}. Reconcile the inherited frozen test against this delivery aggregate, then refresh capture and affected reviews in the same task. Preserve existing product and unaffected evidence.` } }
+              : {}),
+          };
+          continue;
+        }
         if (entry.reconciliation_intent?.conflicts?.length && entry.launches.every((launch) => deps.readProcess(launch).terminal)) {
           entry.status = "blocked";
           entry.reason = `merge conflicts require resolution in the same task; use resume: ${entry.reconciliation_intent.conflicts.join(", ")}`;
@@ -888,6 +914,14 @@ export async function executeTaskAction(params, context = {}, injected = {}) {
         if (lifecycle.some((state) => !state.terminal)) {
           entry.status = "running";
           entry.reason = lifecycle.find((state) => !state.ok)?.reason;
+          continue;
+        }
+        const runtime = deps.verifyRuntime(entry.runtime);
+        if (!runtime.ok) {
+          entry.status = "blocked";
+          entry.reason = runtime.reason;
+          const recovery = runtimeRecovery(entry, runtime.reason);
+          if (recovery) diagnostics[entry.task_id] = { recovery };
           continue;
         }
         const inspected = await deps.inspectRun(entry);
@@ -915,7 +949,8 @@ export async function executeTaskAction(params, context = {}, injected = {}) {
       persist();
       return {
         ok: true,
-        tasks: entries.map((entry) => summary(entry, { compact: params.compact === true })),
+        tasks: entries.map((entry) => summary(entry, { compact: params.compact === true,
+          currentEvidence: currentEvidence[entry.task_id] })),
         ...(Object.keys(diagnostics).length > 0 ? { diagnostics } : {}),
         max_parallel_tasks: MAX_PARALLEL_TASKS,
       };
@@ -1269,7 +1304,10 @@ export async function executeTaskAction(params, context = {}, injected = {}) {
       return { ok: true, tasks: [summary(entry)] };
     }
     const checkedRuntime = deps.verifyRuntime(entry.runtime);
-    if (!checkedRuntime.ok) throw new Error(checkedRuntime.reason);
+    if (!checkedRuntime.ok) {
+      const recovery = runtimeRecovery(entry, checkedRuntime.reason);
+      return { ...fail(checkedRuntime.reason), ...(recovery ? { recovery } : {}) };
+    }
     taskScopeBase(entry, entry.worktree, params.expected_head);
     const inspected = await deps.inspectRun(entry);
     if (!inspected.ok) throw new Error(inspected.reason);

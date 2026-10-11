@@ -1632,10 +1632,71 @@ test("vendored parent resumes existing task with installed harness and retains p
   assert.equal(updated.launches.at(-1).runtime.sha256, "b".repeat(64));
   assert.deepEqual(updated.grant, original.grant);
   installedDigest = "c".repeat(64);
-  const second = await action({ action: "resume", task_id: "a", attempt_id: original.attempt_id });
+  const beforeRecovery = structuredClone(f.registry().tasks.a);
+  const rejected = await action({ action: "integrate", task_id: "a", attempt_id: original.attempt_id,
+    expected_head: git(updated.worktree, "rev-parse", "HEAD") });
+  assert.equal(rejected.ok, false);
+  assert.equal(rejected.recovery.action, "resume");
+  assert.equal(rejected.recovery.attempt_id, original.attempt_id);
+  assert.deepEqual(f.registry().tasks.a, beforeRecovery, "runtime rejection does not rewrite admitted receipts");
+  const observed = await action({ action: "status", compact: true });
+  assert.equal(observed.tasks[0].status, "blocked", "stale runtime cannot be advertised as ready to integrate");
+  assert.deepEqual(observed.diagnostics.a.recovery, rejected.recovery);
+  const second = await action(observed.diagnostics.a.recovery);
   assert.equal(second.ok, true, second.reason);
   assert.equal(f.registry().tasks.a.runtime.sha256, installedDigest);
   assert.deepEqual(f.registry().tasks.a.launches.slice(0, 2), updated.launches);
+});
+
+test("status checks integrated evidence at the current aggregate and returns bounded native recovery", async t => {
+  const f = fixture(t, [task("a")]);
+  const action = params => executeTaskAction(params, f.context, f.deps);
+  assert.equal((await action({ action: "dispatch", task_ids: ["a"] })).ok, true);
+  const entry = f.registry().tasks.a;
+  const integrated = await action({ action: "integrate", task_id: "a", attempt_id: entry.attempt_id,
+    expected_head: git(entry.worktree, "rev-parse", "HEAD") });
+  assert.equal(integrated.ok, true, integrated.reason);
+  const historical = structuredClone(f.registry().tasks.a);
+  fs.writeFileSync(path.join(f.dir, "base.txt"), "updated delivery base");
+  git(f.dir, "add", "base.txt");
+  git(f.dir, "commit", "-qm", "import updated base");
+  const head = git(f.dir, "rev-parse", "HEAD");
+  let reason = "integrated frozen file changed: tests/a.test.mjs";
+  f.deps.readIntegrated = input => {
+    assert.deepEqual(input, { projectRoot: f.dir, sessionId: "parent", featureId: "feature", taskId: "a", headSha: head });
+    return reason ? { ok: false, reason } : { ok: true };
+  };
+  const observed = await action({ action: "status", compact: true });
+  assert.equal(observed.tasks[0].status, "integrated", "historical integration remains intact");
+  assert.deepEqual(observed.tasks[0].current_evidence, { ok: false, head_sha: head, reason });
+  assert.deepEqual(observed.diagnostics.a.recovery, { action: "resume", task_id: "a", attempt_id: entry.attempt_id,
+    reconcile_head: head, instruction: `${reason}. Reconcile the inherited frozen test against this delivery aggregate, then refresh capture and affected reviews in the same task. Preserve existing product and unaffected evidence.` });
+  assert.deepEqual(f.registry().tasks.a, historical);
+  assert.equal(f.launches(), 1, "observation never launches a correction");
+  reason = "integrated evidence hash is invalid";
+  const invalid = await action({ action: "status" });
+  assert.equal(invalid.tasks[0].current_evidence.ok, false);
+  assert.equal(invalid.diagnostics.a.recovery, undefined, "corrupt provenance is not a frozen-test refresh");
+  reason = null;
+  const current = await action({ action: "status", compact: true });
+  assert.deepEqual(current.tasks[0].current_evidence, { ok: true, head_sha: head });
+  assert.equal(current.diagnostics, undefined, "status does not persist obsolete diagnosis");
+});
+
+test("source runtime drift remains blocked without consumer upgrade recovery", async t => {
+  const f = fixture(t, [task("a")]);
+  const action = params => executeTaskAction(params, f.context, f.deps);
+  assert.equal((await action({ action: "dispatch", task_ids: ["a"] })).ok, true);
+  const entry = f.registry().tasks.a;
+  f.deps.verifyRuntime = () => ({ ok: false, reason: "task runtime assets: managed assets changed since task admission" });
+  const status = await action({ action: "status" });
+  assert.equal(status.tasks[0].status, "blocked");
+  assert.equal(status.diagnostics, undefined);
+  const rejected = await action({ action: "integrate", task_id: "a", attempt_id: entry.attempt_id,
+    expected_head: git(entry.worktree, "rev-parse", "HEAD") });
+  assert.equal(rejected.ok, false);
+  assert.equal(rejected.recovery, undefined);
+  assert.equal(f.launches(), 1);
 });
 
 
