@@ -160,10 +160,16 @@ export function inspectGrant(grantPath, cwd, { allowHistoricalDeps = false } = {
     throw new Error("exact parent, attempt, feature and task required");
   }
   if (grant.cwd !== root || absoluteGrant !== taskAdmissionPath(root, grant.attempt_id)) throw new Error("grant worktree/path mismatch");
-  // The lane's run buffers sit beside its worktree, outside Git and outside any .claude/ path.
-  if (typeof grant.run_dir !== "string" || grant.run_dir !== path.join(path.dirname(root), "run") ||
-      !fs.lstatSync(grant.run_dir).isDirectory() || fs.realpathSync(grant.run_dir) !== grant.run_dir) {
-    throw new Error("grant run_dir must be the canonical run/ directory beside the worktree");
+  // The lane's run buffers live in the host-owned lane root (beside a local worktree; for an Orca
+  // worktree, which Orca places itself, in the same out-of-repo lane root), outside Git and outside
+  // any .claude/ path. The grant is host-written and immutable, so its run_dir is the binding.
+  const inside = (child, parent) => child === parent || child.startsWith(parent + path.sep);
+  if (typeof grant.run_dir !== "string" || !path.isAbsolute(grant.run_dir) || path.basename(grant.run_dir) !== "run" ||
+      !fs.lstatSync(grant.run_dir).isDirectory() || fs.realpathSync(grant.run_dir) !== grant.run_dir ||
+      inside(grant.run_dir, root) || inside(root, grant.run_dir) ||
+      (typeof grant.parent_root === "string" && inside(grant.run_dir, grant.parent_root)) ||
+      grant.run_dir.split(path.sep).includes(".claude")) {
+    throw new Error("grant run_dir must be the canonical run/ directory of the host lane root, outside the worktree and the repository");
   }
   if (!HEX_40.test(grant.base_sha ?? "") || !HEX_64.test(grant.plan_sha256 ?? "") || !HEX_64.test(grant.spec_sha256 ?? "")) {
     throw new Error("exact artifact hashes required");

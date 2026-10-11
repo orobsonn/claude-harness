@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
 
-import { executeTaskAction, waitForTasks } from "./task-coordinator.mjs";
+import { executeTaskAction, gitControlDigest, waitForTasks } from "./task-coordinator.mjs";
 import { hashTaskReceipt } from "../../../shared/lib/task-contract.mjs";
 import { createTaskProject, defaultTasks, git, planTask } from "./__fixtures__/task-fixture.mjs";
 
@@ -548,4 +548,17 @@ test("abandon-resume needs the explicit declaration and the exact unchanged HEAD
   assert.equal(entry.abandoned_resumes[0].written_by, "host-task-resume-abandonment");
   assert.equal(f.registry().correction_barrier, undefined);
   assert.equal(entry.launches.length, 2, "no launch is removed");
+});
+
+test("the Git control digest ignores branch metadata but not code-running config", (t) => {
+  const f = fixture(t);
+  const before = gitControlDigest(f.project.root);
+  git(f.project.root, "config", "branch.orca/task-a.description", "created by Orca");
+  assert.equal(gitControlDigest(f.project.root), before, "branch.* runs no code");
+  for (const [key, value] of [["core.fsmonitor", "/tmp/x.sh"], ["alias.st", "!sh -c x"], ["filter.x.clean", "sh"], ["include.path", "/tmp/evil"]]) {
+    git(f.project.root, "config", key, value);
+    assert.notEqual(gitControlDigest(f.project.root), before, key);
+    git(f.project.root, "config", "--unset", key);
+  }
+  assert.equal(gitControlDigest(f.project.root), before);
 });

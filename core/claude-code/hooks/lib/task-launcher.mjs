@@ -13,6 +13,7 @@
  * supervisor records as events.jsonl. A spawn failure rolls back only a pristine fresh admission.
  */
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
@@ -73,7 +74,31 @@ export function parseLauncherArgs(argv) {
  * through a 0600 file and the user prompt through stdin, so neither is visible in /proc/<pid>/cmdline.
  * Only the project settings load: a lane-written settings.local.json can never switch hooks off.
  */
-export function claudeLaneArgs({ sessionId, resume, model, systemPromptFile, runDir }) {
+/**
+ * Orca's agent-status hooks, copied from the user's settings, for a lane running in an Orca terminal
+ * (the worker keeps `ORCA_*` only there). A lane loads project settings only, so without this Orca
+ * would not see the lane as an agent. Only entries whose every command is Orca's own status hook
+ * (gated on ORCA_AGENT_HOOK_PORT, spooling to ~/.orca/agent-hooks) are kept; they print `{}` and
+ * never decide. `--settings` hooks load beside the project ones (spike §14). Null when absent.
+ */
+export function orcaStatusHooks(env = process.env) {
+  if (!env.ORCA_AGENT_HOOK_PORT || !env.ORCA_PANE_KEY) return null;
+  const base = env.CLAUDE_CONFIG_DIR && path.isAbsolute(env.CLAUDE_CONFIG_DIR) ? env.CLAUDE_CONFIG_DIR : path.join(env.HOME || os.homedir(), ".claude");
+  let settings;
+  try { settings = JSON.parse(fs.readFileSync(path.join(base, "settings.json"), "utf8")); } catch { return null; }
+  const isOrcaHook = (hook) => hook?.type === "command" && typeof hook.command === "string" &&
+    hook.command.includes("ORCA_AGENT_HOOK_PORT") && hook.command.includes("agent-hooks/claude-hook.sh");
+  const hooks = {};
+  for (const [event, groups] of Object.entries(settings?.hooks ?? {})) {
+    if (!Array.isArray(groups)) continue;
+    const kept = groups.filter((group) => Array.isArray(group?.hooks) && group.hooks.length > 0 && group.hooks.every(isOrcaHook))
+      .map((group) => ({ ...(group.matcher === undefined ? {} : { matcher: group.matcher }), hooks: group.hooks.map(({ type, command, timeout }) => ({ type, command, ...(timeout ? { timeout } : {}) })) }));
+    if (kept.length) hooks[event] = kept;
+  }
+  return Object.keys(hooks).length ? { hooks } : null;
+}
+
+export function claudeLaneArgs({ sessionId, resume, model, systemPromptFile, runDir, settingsFile }) {
   return [
     "-p",
     ...(resume ? ["--resume", sessionId] : ["--session-id", sessionId]),
@@ -87,6 +112,7 @@ export function claudeLaneArgs({ sessionId, resume, model, systemPromptFile, run
     "--setting-sources", "project",
     "--strict-mcp-config",
     "--append-system-prompt-file", systemPromptFile,
+    ...(settingsFile ? ["--settings", settingsFile] : []),
   ];
 }
 
@@ -119,6 +145,7 @@ async function main() {
   }
   let argv;
   let systemPromptFile;
+  let settingsFile;
   try {
     const systemPrompt = taskRunPrompt(fs.readFileSync(RUNTIME_PROMPT, "utf8"), admission, { resumed: resume });
     if (Buffer.byteLength(systemPrompt, "utf8") > MAX_SYSTEM_PROMPT_BYTES) throw new Error("lane system prompt is too large");
@@ -128,7 +155,13 @@ async function main() {
     systemPromptFile = path.join(promptsDir, `${sessionId}.md`);
     fs.rmSync(systemPromptFile, { force: true });
     fs.writeFileSync(systemPromptFile, systemPrompt, { flag: "wx", mode: 0o600 });
-    argv = claudeLaneArgs({ sessionId, resume, model: args.model, systemPromptFile, runDir: admission.grant.run_dir });
+    const orca = orcaStatusHooks(process.env);
+    if (orca) {
+      settingsFile = path.join(promptsDir, `${sessionId}.orca-settings.json`);
+      fs.rmSync(settingsFile, { force: true });
+      fs.writeFileSync(settingsFile, JSON.stringify(orca), { flag: "wx", mode: 0o600 });
+    }
+    argv = claudeLaneArgs({ sessionId, resume, model: args.model, systemPromptFile, runDir: admission.grant.run_dir, settingsFile });
   } catch (error) {
     if (!resume) rollbackTaskAdmission(admission);
     release();
@@ -150,7 +183,10 @@ async function main() {
     if (!spawned) {
       if (!resume) {
         rollbackTaskAdmission(admission);
-        try { fs.rmSync(systemPromptFile, { force: true }); fs.rmdirSync(path.dirname(systemPromptFile)); } catch { /* other prompts remain */ }
+        try {
+          for (const file of [systemPromptFile, settingsFile].filter(Boolean)) fs.rmSync(file, { force: true });
+          fs.rmdirSync(path.dirname(systemPromptFile));
+        } catch { /* other prompts remain */ }
       }
       release();
       process.stderr.write(`[task-launcher] could not start claude: ${error.message}\n`);

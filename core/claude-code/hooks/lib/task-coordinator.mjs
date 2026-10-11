@@ -7,8 +7,12 @@
  * and the parallel limit, then launches each lane detached. Nothing is ever cleaned up: worktrees,
  * branches and jobs are retained for resume and audit.
  *
- * Extension points (Orca is out of scope here): `deps.prepareWorktree` replaces the local
- * `git worktree add` backend and `deps.startProcess` replaces the local detached launch.
+ * Backends: local (`git worktree add` under the out-of-repo lane root, detached supervisor) or Orca
+ * (port of Pi's): when the global parent runs inside an Orca workspace (`ORCA_WORKTREE_ID`), each
+ * lane is an Orca child worktree of that workspace and runs in an Orca terminal, so the operator sees
+ * every lane in the ADE. Orca owns placement; the host keeps execution, evidence and integration.
+ * Once a registry is pinned to an Orca parent there is no silent local fallback. Test seams:
+ * `deps.prepareWorktree`, `deps.startProcess`, `deps.resolveOrca`.
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -22,6 +26,7 @@ import { buildTaskContextHandoff } from "../../../shared/lib/task-context.mjs";
 import { availableTaskWorktreeName, hashTaskReceipt, taskScopesOverlap, taskWorktreeName } from "../../../shared/lib/task-contract.mjs";
 import { requireCleanTaskWorktree, taskMergePreview } from "../../../shared/lib/task-git.mjs";
 import { readTaskProcess, startTaskProcess, taskProcessIdentity, writeTaskJson } from "../../../shared/lib/task-process.mjs";
+import { isOrcaLocalHostMigration, resolveOrcaTaskBackend } from "../../../shared/lib/task-orca.mjs";
 import { planAndSpec, readParentAuthority, requireParallelPlan } from "./task-admission.mjs";
 import { claudeTaskScopeShape, laneTaskScope, pathInScope } from "./task-lane-contract.mjs";
 import { inspectTaskRun, readIntegratedTaskEvidence } from "./task-receipts.mjs";
@@ -109,7 +114,8 @@ function summary(entry, { compact = false } = {}) {
         guidance: "Repeated correction cycle: inspect current findings and applicability before another resume; use the existing exact-attempt recovery only when its host checks pass.",
       } }
       : {}),
-    launches: entry.launches.map((launch) => ({ run_id: launch.run_id, pid: launch.pid, events_path: launch.events_path })),
+    ...(entry.orca ? { orca: entry.orca } : {}),
+    launches: entry.launches.map((launch) => ({ run_id: launch.run_id, pid: launch.pid, events_path: launch.events_path, ...(launch.orca ? { orca: launch.orca } : {}) })),
     ...(entry.integration ? { integration: entry.integration } : {}),
     ...(entry.abandoned_resumes?.length ? { abandoned_resumes: entry.abandoned_resumes.map((record) => ({
       reason: record.reason, abandoned_at: record.abandoned_at,
@@ -436,6 +442,11 @@ async function prepareWorktree(entry, artifacts, deps) {
   fs.mkdirSync(entry.run_dir, { recursive: true, mode: 0o700 });
   if (deps.prepareWorktree) {
     await deps.prepareWorktree(entry, artifacts);
+  } else if (deps.orcaBackend) {
+    // Orca creates (or re-finds by its attempt comment) the child worktree and rebinds the
+    // entry and grant to it; the run dir stays in the host-owned lane root.
+    await deps.orcaBackend.prepareWorktree(entry, deps.persist);
+    if (!fs.existsSync(entry.worktree)) throw new Error("reserved Orca worktree is missing");
   } else if (!fs.existsSync(entry.worktree)) {
     git(entry.parent_root, "worktree", "add", "-b", entry.branch, entry.worktree, entry.base_sha);
   }
@@ -486,8 +497,23 @@ export function gitControlDigest(root) {
     }
     hash.update(`${label}\0${info.mode & 0o111 ? "x" : "-"}${info.isSymbolicLink() ? `link:${fs.readlinkSync(file)}` : createHash("sha256").update(fs.readFileSync(file)).digest("hex")}\n`);
   };
-  add("config", path.join(common, "config"));
-  add("config.worktree", path.join(common, "config.worktree"));
+  // Config by entry, without `branch.*`: creating a task branch (locally or by Orca) may record
+  // branch metadata, which runs no code. Everything else (core, filter, diff, merge, alias, include,
+  // url, credential…) stays in the digest. An unparsable config is hashed by its bytes.
+  const addConfig = (label, file) => {
+    if (!fs.existsSync(file)) { hash.update(`${label}\0absent\n`); return; }
+    let entries;
+    try {
+      entries = execFileSync("git", ["config", "--file", file, "--null", "--list"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] })
+        .split("\0").filter((entry) => entry && !/^branch\./i.test(entry));
+    } catch {
+      add(label, file);
+      return;
+    }
+    hash.update(`${label}\0${JSON.stringify(entries)}\n`);
+  };
+  addConfig("config", path.join(common, "config"));
+  addConfig("config.worktree", path.join(common, "config.worktree"));
   add("info/attributes", path.join(common, "info", "attributes"));
   add("hooks", path.join(common, "hooks"));
   return hash.digest("hex");
@@ -524,6 +550,8 @@ function requireRealPath(worktree, target) {
     }
   }
 }
+
+const orcaCli = () => process.env.CLAUDE_HARNESS_ORCA_CLI || process.env.ORCA_CLI_COMMAND || "orca";
 
 const DEFAULT_PROMPT = "Execute the admitted task with the task pipeline: native TDD, the applicable task reviewers and a current capture. Return only after the task is ready for host integration.";
 
@@ -606,6 +634,12 @@ async function launchTask(entry, persist, deps, instruction) {
       timeoutMs: deps.limits.timeoutMs,
       trackDescendants: true,
       env: laneEnvironment(process.env),
+      ...(deps.orcaBackend && entry.orca?.worktree_id ? {
+        title: `${entry.task_id} · ${localSession ? "retomada" : "implementação"}`,
+        launchTerminal: (input) => deps.orcaBackend.launchTerminal({ ...input, worktreeId: entry.orca.worktree_id, instanceId: entry.orca.instance_id }),
+        // An Orca terminal runs the worker in Orca's shell env: only this non-secret pointer crosses.
+        jobFields: () => (process.env.CLAUDE_CONFIG_DIR ? { profile_environment: { CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR } } : {}),
+      } : {}),
     });
     Object.assign(launch, handle);
     persist();
@@ -677,6 +711,8 @@ export async function executeTaskAction(params, context = {}, injected = {}) {
       readIntegrated: (input) => readIntegratedTaskEvidence(input),
       inspectAbandonment: inspectTaskResumeAbandonment,
       limits: hostTaskLimits(),
+      resolveOrca: (input) => resolveOrcaTaskBackend({ ...input, cli: input.cli ?? orcaCli(), admissionPath: taskAdmissionPath }),
+      persist,
       ...injected,
     };
     if (registry) requireGitControl(owner, registry, persist, deps.env ?? process.env);
@@ -774,6 +810,16 @@ export async function executeTaskAction(params, context = {}, injected = {}) {
       registry.tasks[params.task_id]?.integration?.child_head === params.expected_head;
     if (registry.correction_barrier && (params.action === "dispatch" || (params.task_id !== barrierTaskId && !nestedOwnerRecovery && !idempotentIntegratedRetry))) {
       throw new Error(`Correction of ${registry.correction_barrier.task_id} owns the aggregate correction barrier and must be integrated before another task can mutate or resume. Use status/wait for read-only observation; then integrate that exact attempt first.`);
+    }
+    if ((params.action === "dispatch" || params.action === "resume") && (context.orca || registry.orca_parent)) {
+      if (!context.orca?.worktreeId) throw new Error("resume this global parent in its Orca workspace before launching task work");
+      deps.orcaBackend = await deps.resolveOrca({ projectRoot: owner.root, ...context.orca });
+      if (registry.orca_parent && hashTaskReceipt(registry.orca_parent) !== hashTaskReceipt(deps.orcaBackend.parent)) {
+        if (!isOrcaLocalHostMigration(registry.orca_parent, deps.orcaBackend.parent)) throw new Error("Orca global workspace identity changed");
+        registry.orca_parent = deps.orcaBackend.parent;
+        persist();
+      }
+      registry.orca_parent ??= deps.orcaBackend.parent;
     }
     if (params.action === "dispatch") {
       const limit = deps.limits.maxParallel;
@@ -949,6 +995,9 @@ export async function executeTaskAction(params, context = {}, injected = {}) {
         throw new Error("resume instruction must contain at most 16000 characters");
       }
       if (entry.launches.some((launch) => !deps.readProcess(launch).terminal)) throw new Error("task is still running; use status or wait to observe it before resume");
+      // Never placed (an Orca create whose outcome is unknown): placement comes first. It is
+      // idempotent: Orca re-finds the worktree by the attempt comment or refuses a blind retry.
+      if (!fs.existsSync(entry.worktree)) await prepareWorktree(entry, artifacts, deps);
       const task = artifacts.plan.tasks.find((item) => item.id === entry.task_id);
       const aggregateRefresh = previewAggregateRefresh(entry, task, owner, params);
       const affected = descendants(artifacts.plan, entry.task_id).filter((id) => registry.tasks[id]);

@@ -212,6 +212,16 @@ O que você precisa saber:
   de 350 MB de RAM no pico, com os subagentes. O limite prático é a quota da conta. Medida LIVE
   (2026-10-11): 3 lanes LIGHT triviais em 50 s, ~1 GB somado, US$ 1,16.
 
+- **Orca:** se a sessão do pai roda dentro de um workspace do Orca (`ORCA_WORKTREE_ID`), cada lane vira
+  uma worktree filha desse workspace, criada pelo Orca na base exata, e roda num terminal do Orca com
+  o progresso legível da lane. Os hooks de status do Orca entram na lane, então ela aparece como agente
+  no ADE. O host continua decidindo `ready`, integrando e gravando os recibos. Depois que o registro
+  fixa o workspace do Orca, `resume` e `dispatch` só rodam de dentro dele: não há fallback local
+  silencioso. A lane no terminal usa as credenciais do shell do Orca; só o `CLAUDE_CONFIG_DIR` do pai
+  atravessa, sem segredo no job. `CLAUDE_HARNESS_ORCA_CLI` aponta outro binário do `orca`.
+- **Correção de escopo:** se uma task precisa de um arquivo fora de `scope_paths`, o pai despacha o
+  planner com o bloco `[HARNESS_PLAN_RECOVERY]` que o gate entrega e só acrescenta escopo. Depois vem
+  um APPROVE novo do plan-reviewer e o `resume` da mesma task. Não precisa de sessão nova.
 - **Config do Git mudou?** Se `.git/config`, `.git/hooks` ou `.git/info/attributes` mudarem com
   lanes ativas, o host para e não age (uma lane pode ter plantado código que roda no pai). Revise as
   mudanças e, se forem suas, rode o comando de novo do **seu** terminal (`! CLAUDE_HARNESS_ACCEPT_GIT_CONTROL_CHANGE=1 node .claude/hooks/tasks.mjs status`).
