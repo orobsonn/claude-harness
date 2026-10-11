@@ -209,7 +209,8 @@ O que você precisa saber:
 - **VPS:** rode o pai dentro de `tmux`. As lanes são processos destacados e sobrevivem à queda da
   sessão. `CLAUDE_HARNESS_MAX_PARALLEL_TASKS` (1–3), `CLAUDE_HARNESS_TASK_TIMEOUT_MS`,
   `CLAUDE_HARNESS_LANE_MODEL` e `CLAUDE_HARNESS_CLAUDE_BIN` ajustam o host. Cada lane usa cerca
-  de 270 MB de RAM, e o limite prático é a quota da conta.
+  de 350 MB de RAM no pico, com os subagentes. O limite prático é a quota da conta. Medida LIVE
+  (2026-10-11): 3 lanes LIGHT triviais em 50 s, ~1 GB somado, US$ 1,16.
 
 - **Config do Git mudou?** Se `.git/config`, `.git/hooks` ou `.git/info/attributes` mudarem com
   lanes ativas, o host para e não age (uma lane pode ter plantado código que roda no pai). Revise as

@@ -91,9 +91,12 @@ export function readLaneEvents(launches) {
           if (block?.type !== "tool_result" || !byId.has(block.tool_use_id)) continue;
           const call = byId.get(block.tool_use_id);
           const structured = event.tool_use_result && typeof event.tool_use_result === "object" ? event.tool_use_result : null;
+          // An Agent's tool_result wraps the report in a "[Subagent hand-back]" frame and indents every
+          // line (live run 2026-10-11); the raw report is the structured result's content.
+          const agentText = call.tool === "Agent" || call.tool === "Task" ? structuredText(structured) : "";
           call.end = {
             isError: block.is_error === true,
-            text: resultText(block) || structuredText(structured),
+            text: agentText || resultText(block) || structuredText(structured),
             structured,
           };
         }

@@ -3,7 +3,9 @@
  * Runs only when `claude` is on PATH and CLAUDE_HARNESS_LIVE_TASKS=1. Three trivial LIGHT tasks run
  * in three simultaneous real lanes inside a temp consumer with the harness vendored by vendor-core;
  * the host must reach `ready` for each and integrate them. Peak RSS of the lanes, wall time, tokens
- * and cost are printed (and written to $CLAUDE_HARNESS_LIVE_REPORT when set).
+ * and cost are printed (and written to $CLAUDE_HARNESS_LIVE_REPORT when set). With
+ * $CLAUDE_HARNESS_LIVE_ARTIFACTS (absolute dir) the native streams and lane hook state are copied there
+ * before the temp project is removed, to diagnose a blocked lane.
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -46,7 +48,7 @@ test("LIVE: three real claude -p lanes reach ready and integrate", { skip: skipR
   const dispatched = await tasksCliAsync(project, "dispatch", { task_ids: tasks.map((task) => task.id) });
   assert.equal(dispatched.ok, true, dispatched.reason);
   let peakRss = 0;
-  const sampler = setInterval(() => { peakRss = Math.max(peakRss, laneRss(project.root)); }, 2000);
+  const sampler = setInterval(() => { peakRss = Math.max(peakRss, laneRss(project.lanes)); }, 2000);
   let status;
   try {
     for (let round = 0; round < 12; round += 1) {
@@ -77,6 +79,15 @@ test("LIVE: three real claude -p lanes reach ready and integrate", { skip: skipR
     tasks: status.tasks.map((task) => ({ task_id: task.task_id, status: task.status, reason: task.reason ?? null, launches: task.launches.length })),
     diagnostics: status.diagnostics ?? null,
   };
+  const keep = process.env.CLAUDE_HARNESS_LIVE_ARTIFACTS;
+  if (keep && path.isAbsolute(keep)) {
+    for (const task of status.tasks) {
+      const dest = path.join(keep, task.task_id);
+      fs.mkdirSync(dest, { recursive: true });
+      task.launches.forEach((launch, index) => { try { fs.copyFileSync(launch.events_path, path.join(dest, `events.${index}.jsonl`)); } catch { /* never started */ } });
+      try { fs.cpSync(path.join(task.worktree, ".claude", "plans", ".state"), path.join(dest, "lane-state"), { recursive: true }); } catch { /* no lane state */ }
+    }
+  }
   if (process.env.CLAUDE_HARNESS_LIVE_REPORT) fs.writeFileSync(process.env.CLAUDE_HARNESS_LIVE_REPORT, JSON.stringify(report, null, 2));
   t.diagnostic(JSON.stringify(report));
   for (const task of status.tasks) assert.equal(task.status, "ready", `${task.task_id}: ${task.reason}`);
