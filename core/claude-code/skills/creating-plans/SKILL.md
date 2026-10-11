@@ -297,10 +297,12 @@ The `hand_tiers` shape requires all 7 fixed eye roles (planner, plan-reviewer, c
 - `type`: `"smoke"` for API/CLI features; `"playwright"` for complex UI; `"markdown"` for batch/cron
 - `scenarios_from_refs`: non-empty `#uj-...` journey references that the demo must exercise (at least one). Preserve the spec's anchors, including descriptive suffixes such as `#uj-1-shorten-and-redirect`. When it supplies an outcome without a journey identifier, derive a stable reference from that outcome; do not ask for an identifier alone. Keep `#ac-...` in task `criterion_refs`. Check that each journey reference names an approved outcome the demo will exercise while drafting; the structural validator does not check this format or semantic connection.
 
-**Step 8b — parallel execution (opt-in, only when the orchestrator asks for it):** add
-`"execution": { "parallel": true }` when the orchestrator will run independent tasks in parallel
-worktrees (orchestrating-delivery, "Phase 2 — parallel"). It turns non-overlap from a self-review
-habit into validator rules:
+**Step 8b — parallel execution (the default):** every plan sets `"execution"`. Write
+`{ "parallel": true }` so independent tasks run in parallel worktrees (orchestrating-delivery, "Phase 2
+— parallel"); this is the default delivery. Write `{ "parallel": false, "serial_reason": "<why>" }` only
+when lanes cannot fit — the ollama hand family, scopes that cannot be split without `depends_on` turning
+the whole plan into one chain (a single task still runs in a lane). Parallel turns non-overlap from a self-review habit
+into validator rules:
 - every task declares `depends_on` (`[]` for none);
 - tasks with no `depends_on` ancestry between them must have **disjoint literal scopes**: `scope_paths`,
   each locked `test_path` and every `fixture_paths` entry all count, compared by whole path
@@ -311,7 +313,7 @@ habit into validator rules:
 - `model_strategy.hand_tiers` is the **claude** family ladder (lanes dispatch hands as Agents);
 - a task with no executable test may declare `"no_tests": true` with `"locked_tests": []` — valid only
   in a parallel plan.
-Plans without `execution` are validated exactly as before.
+Plans without `execution` (legacy) are validated as before and run serially.
 
 ---
 

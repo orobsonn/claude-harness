@@ -29,7 +29,11 @@ function orcaEnvironment(t, project) {
     FAKE_ORCA_PARENT: project.root,
     FAKE_ORCA_REPO_ID: REPO_ID,
     FAKE_ORCA_WORKSPACES: path.join(dir, "workspaces"),
+    // The TUI lane's trust and transcript live in a private config dir, never the operator's.
+    CLAUDE_CONFIG_DIR: path.join(dir, "claude-config"),
   };
+  fs.mkdirSync(env.CLAUDE_CONFIG_DIR);
+  fs.writeFileSync(path.join(env.CLAUDE_CONFIG_DIR, ".claude.json"), JSON.stringify({ numStartups: 3, projects: { "/elsewhere": { hasTrustDialogAccepted: true } } }));
   return { env, dir, state: () => JSON.parse(fs.readFileSync(env.FAKE_ORCA_STATE, "utf8")) };
 }
 
@@ -67,6 +71,8 @@ test("e2e (Orca): lanes are Orca child worktrees and terminals; the host still d
 
   const settled = settle();
   assert.equal(settled.ok, true, settled?.reason);
+  assert.ok(orca.state().calls.some((call) => call[0] === "terminal" && call[1] === "wait" && call.includes("--for") && call.includes("exit")),
+    "the parent's wait used Orca's native terminal wait");
   const status = cli("status");
   const byId = Object.fromEntries(status.tasks.map((task) => [task.task_id, task]));
   for (const id of ["task-a", "task-b"]) {
@@ -78,13 +84,20 @@ test("e2e (Orca): lanes are Orca child worktrees and terminals; the host still d
     assert.ok(task.run_dir.startsWith(fs.realpathSync(project.lanes)), "the run dir stays in the host lane root");
     assert.match(task.launches[0].orca.terminal_handle, /^term_/);
     assert.equal(task.launches[0].pid, null, "an Orca terminal launch has no host-spawned pid");
-    // The terminal shows a readable, sanitized progress feed of the lane.
-    const terminal = orca.state().terminals.find((item) => item.handle === task.launches[0].orca.terminal_handle);
-    const feed = fs.readFileSync(path.join(orca.dir, terminal.log), "utf8");
-    assert.match(feed, /▶ lane /);
-    assert.match(feed, /• Agent executor · haiku/);
-    assert.match(feed, /■ success/);
+    // A new Orca attempt is an interactive TUI: the evidence came from the transcript and the
+    // lane's own Stop hook ended it (exit 143 accepted only with the end-of-turn record).
+    assert.equal(task.launches[0].presentation, "tui");
+    const events = fs.readFileSync(task.launches[0].events_path, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+    assert.equal(events[0].type, "system");
+    assert.equal(events[0].presentation, "tui");
+    assert.equal(events.at(-1).written_by, "lane-stop-hook");
+    assert.ok(events.some((event) => event.type === "user" && event.tool_use_result?.status === "completed"), "Agent results come from the transcript");
+    const result = JSON.parse(fs.readFileSync(path.join(path.dirname(task.launches[0].events_path), "result.json"), "utf8"));
+    assert.equal(result.exitCode, 143, "the TUI ended by the lane's SIGTERM");
   }
+  const config = JSON.parse(fs.readFileSync(path.join(orca.env.CLAUDE_CONFIG_DIR, ".claude.json"), "utf8"));
+  assert.equal(config.projects[project.root].hasTrustDialogAccepted, true, "the parent repository is trusted by default");
+  assert.equal(config.numStartups, 3, "the rest of the config is preserved");
   const registry = JSON.parse(fs.readFileSync(path.join(project.root, ".claude/plans/.state", project.sessionId, "task-runs/index.json"), "utf8"));
   assert.deepEqual(registry.orca_parent, { worktree_id: `${REPO_ID}::${project.root}`, instance_id: "inst-parent", repo_id: REPO_ID, path: project.root, host_id: "local", project_id: null, project_host_setup_id: null });
 
@@ -125,4 +138,47 @@ test("e2e (Orca): an unresolved Orca create is never retried blindly", { timeout
   assert.match(retry.reason, /Orca worktree creation is unresolved; inspect this attempt/);
   const creates = orca.state().calls.filter((call) => call[0] === "worktree" && call[1] === "create");
   assert.equal(creates.length, 1, "no second create while the first is uncertain");
+});
+
+test("e2e (Orca TUI): a lane that stops before its capture is continued once per state, then ends by itself", { timeout: 600_000 }, async (t) => {
+  const tasks = defaultTasks().slice(0, 1);
+  const [a] = tasks;
+  const project = createVendoredTaskProject(t, { tasks });
+  const orca = orcaEnvironment(t, project);
+  const full = laneSteps({ task: a });
+  const executorAt = full.findIndex((step) => /active-scope/.test(step.bash ?? ""));
+  const { bin, scenarioFile } = writeFakeClaude(project, { tasks: {
+    // The model stops after the freeze; the continuation brings it back to finish the task.
+    "task-a": { launches: [{ steps: [...full.slice(0, executorAt), { text: "Testes congelados; paro aqui." }], continuations: [full.slice(executorAt)] }] },
+  } });
+  const cli = (action, params) => tasksCli(project, action, params, { claudeBin: bin, env: orca.env });
+  assert.equal(cli("dispatch", { task_ids: ["task-a"] }).ok, true);
+  let status;
+  for (let index = 0; index < 10; index += 1) {
+    status = cli("wait", { timeout_seconds: 120 });
+    if (!status.tasks.some((task) => task.status === "running")) break;
+  }
+  const task = cli("status").tasks[0];
+  assert.equal(task.status, "ready", task.reason);
+  const stops = fs.readFileSync(`${scenarioFile}.task-a.stops`, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+  assert.match(stops[0].blocked, /Continue this same task through the remaining implementation/);
+  assert.equal(stops.at(-1).blocked, null, "once the capture and review exist the lane is released");
+  assert.equal(stops.length, 2);
+});
+
+test("e2e (Orca TUI): a SIGTERM exit without the lane's end-of-turn record is never success", { timeout: 600_000 }, async (t) => {
+  const tasks = defaultTasks().slice(0, 1);
+  const project = createVendoredTaskProject(t, { tasks });
+  const orca = orcaEnvironment(t, project);
+  const { bin } = writeFakeClaude(project, { tasks: {
+    "task-a": { launches: [{ steps: laneSteps({ task: tasks[0] }), skip_stop_hooks: true, idle_ms: 200, idle_exit: 143 }] },
+  } });
+  const cli = (action, params) => tasksCli(project, action, params, { claudeBin: bin, env: orca.env });
+  assert.equal(cli("dispatch", { task_ids: ["task-a"] }).ok, true);
+  for (let index = 0; index < 10; index += 1) {
+    if (!cli("wait", { timeout_seconds: 120 }).tasks.some((task) => task.status === "running")) break;
+  }
+  const status = cli("status");
+  assert.equal(status.tasks[0].status, "blocked");
+  assert.match(status.tasks[0].reason, /latest task launch did not exit successfully|did not finish successfully/);
 });

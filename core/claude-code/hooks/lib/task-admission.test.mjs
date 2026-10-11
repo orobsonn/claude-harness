@@ -112,7 +112,15 @@ test("admission refuses a dirty worktree, a moved HEAD, a non-parallel plan and 
   fs.writeFileSync(planFile, JSON.stringify(plan));
   approvePlan(serialProject.root, { toolUseId: "toolu_serial" });
   const serialLane = reserveLane(serialProject, "task-a");
-  assert.match(inspectTaskAdmission(serialLane.grantPath, { cwd: serialLane.worktree, sessionId: LANE_SESSION }).reason, /opt into parallel/);
+  assert.match(inspectTaskAdmission(serialLane.grantPath, { cwd: serialLane.worktree, sessionId: LANE_SESSION }).reason, /the approved plan is serial; parallel lanes need/);
+  const reasoned = createTaskProject(t);
+  const reasonedPlanFile = path.join(reasoned.root, ".claude/plans", reasoned.featureId, "execution-plan.json");
+  const reasonedPlan = JSON.parse(fs.readFileSync(reasonedPlanFile, "utf8"));
+  reasonedPlan.execution = { parallel: false, serial_reason: "one module" };
+  fs.writeFileSync(reasonedPlanFile, JSON.stringify(reasonedPlan));
+  approvePlan(reasoned.root, { toolUseId: "toolu_serial_reason" });
+  const reasonedLane = reserveLane(reasoned, "task-a");
+  assert.match(inspectTaskAdmission(reasonedLane.grantPath, { cwd: reasonedLane.worktree, sessionId: LANE_SESSION }).reason, /plan is serial \(serial_reason: one module\)/);
 });
 
 test("the lane prompt replaces the global runtime with the task runtime and an exact envelope", (t) => {

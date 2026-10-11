@@ -241,6 +241,14 @@
             "command": "node ${CLAUDE_PROJECT_DIR}/.claude/hooks/version-check.mjs"
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ${CLAUDE_PROJECT_DIR}/.claude/hooks/task-ledger.mjs"
+          }
+        ]
       }
     ],
     "PostToolUseFailure": [
@@ -260,6 +268,26 @@
           {
             "type": "command",
             "command": "node ${CLAUDE_PROJECT_DIR}/.claude/hooks/task-ledger.mjs"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ${CLAUDE_PROJECT_DIR}/.claude/hooks/task-continuation.mjs"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ${CLAUDE_PROJECT_DIR}/.claude/hooks/task-continuation.mjs"
           }
         ]
       }

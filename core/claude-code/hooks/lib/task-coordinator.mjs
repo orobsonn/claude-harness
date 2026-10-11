@@ -15,6 +15,7 @@
  * `deps.prepareWorktree`, `deps.startProcess`, `deps.resolveOrca`.
  */
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
@@ -26,7 +27,7 @@ import { buildTaskContextHandoff } from "../../../shared/lib/task-context.mjs";
 import { availableTaskWorktreeName, hashTaskReceipt, taskScopesOverlap, taskWorktreeName } from "../../../shared/lib/task-contract.mjs";
 import { requireCleanTaskWorktree, taskMergePreview } from "../../../shared/lib/task-git.mjs";
 import { readTaskProcess, startTaskProcess, taskProcessIdentity, writeTaskJson } from "../../../shared/lib/task-process.mjs";
-import { isOrcaLocalHostMigration, resolveOrcaTaskBackend } from "../../../shared/lib/task-orca.mjs";
+import { isOrcaLocalHostMigration, resolveOrcaTaskBackend, waitForOrcaTaskTerminalExit } from "../../../shared/lib/task-orca.mjs";
 import { planAndSpec, readParentAuthority, requireParallelPlan } from "./task-admission.mjs";
 import { claudeTaskScopeShape, laneTaskScope, pathInScope } from "./task-lane-contract.mjs";
 import { inspectTaskRun, readIntegratedTaskEvidence } from "./task-receipts.mjs";
@@ -115,7 +116,8 @@ function summary(entry, { compact = false } = {}) {
       } }
       : {}),
     ...(entry.orca ? { orca: entry.orca } : {}),
-    launches: entry.launches.map((launch) => ({ run_id: launch.run_id, pid: launch.pid, events_path: launch.events_path, ...(launch.orca ? { orca: launch.orca } : {}) })),
+    launches: entry.launches.map((launch) => ({ run_id: launch.run_id, pid: launch.pid, events_path: launch.events_path,
+      ...(launch.presentation ? { presentation: launch.presentation } : {}), ...(launch.orca ? { orca: launch.orca } : {}) })),
     ...(entry.integration ? { integration: entry.integration } : {}),
     ...(entry.abandoned_resumes?.length ? { abandoned_resumes: entry.abandoned_resumes.map((record) => ({
       reason: record.reason, abandoned_at: record.abandoned_at,
@@ -551,6 +553,39 @@ function requireRealPath(worktree, target) {
   }
 }
 
+/**
+ * Claude Code shows "Do you trust this folder?" before an interactive session in an untrusted
+ * project, and a TUI lane would wait on it forever. Worktrees inherit the trust of their main
+ * repository (spike §15), so the host records it for the parent's main repository root — the
+ * operator already runs Claude there; this only makes it explicit. Read-modify-write with an atomic
+ * rename, re-read to confirm (a concurrent Claude Code write can race; it is retried).
+ */
+export function ensureClaudeTrust(parentRoot, env = process.env) {
+  const common = git(parentRoot, "rev-parse", "--path-format=absolute", "--git-common-dir");
+  const mainRoot = path.basename(common) === ".git" ? path.dirname(common) : parentRoot;
+  const file = env.CLAUDE_CONFIG_DIR && path.isAbsolute(env.CLAUDE_CONFIG_DIR)
+    ? path.join(env.CLAUDE_CONFIG_DIR, ".claude.json")
+    : path.join(env.HOME || os.homedir(), ".claude.json");
+  const trusted = (config) => [mainRoot, parentRoot].some((key) => config?.projects?.[key]?.hasTrustDialogAccepted === true);
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    let config = {};
+    let mode = 0o600;
+    if (fs.existsSync(file)) {
+      config = JSON.parse(fs.readFileSync(file, "utf8"));
+      mode = fs.statSync(file).mode & 0o777;
+    }
+    if (trusted(config)) return { file, root: mainRoot, changed: attempt > 0 };
+    config.projects ??= {};
+    config.projects[mainRoot] = { ...(config.projects[mainRoot] ?? {}), hasTrustDialogAccepted: true };
+    const temporary = `${file}.harness-${process.pid}.tmp`;
+    fs.writeFileSync(temporary, JSON.stringify(config, null, 2), { mode });
+    fs.renameSync(temporary, file);
+  }
+  const final = JSON.parse(fs.readFileSync(file, "utf8"));
+  if (!trusted(final)) throw new Error(`could not record Claude Code project trust for ${mainRoot} in ${file}; open Claude Code there once and accept the trust prompt`);
+  return { file, root: mainRoot, changed: true };
+}
+
 const orcaCli = () => process.env.CLAUDE_HARNESS_ORCA_CLI || process.env.ORCA_CLI_COMMAND || "orca";
 
 const DEFAULT_PROMPT = "Execute the admitted task with the task pipeline: native TDD, the applicable task reviewers and a current capture. Return only after the task is ready for host integration.";
@@ -604,6 +639,11 @@ async function launchTask(entry, persist, deps, instruction) {
   if (localSession !== undefined && !isSafeSessionId(localSession)) throw new Error("task session claim is invalid");
   const laneModel = deps.laneModel ?? process.env.CLAUDE_HARNESS_LANE_MODEL ?? "sonnet";
   if (!LANE_MODELS.has(laneModel)) throw new Error("CLAUDE_HARNESS_LANE_MODEL must be haiku, sonnet or opus");
+  // An admitted attempt keeps its transport (as in Pi): a new Orca attempt is an interactive TUI in
+  // its terminal; local lanes and attempts admitted as stream-json stay stream-json.
+  const terminal = Boolean(deps.orcaBackend && entry.orca?.worktree_id);
+  const presentation = terminal ? (entry.launches[0]?.presentation ?? (entry.launches.length ? "json" : "tui")) : "json";
+  if (presentation === "tui") deps.ensureTrust(entry.parent_root);
   // The prompt travels through a private file, never argv (visible in /proc to other users).
   fs.mkdirSync(jobDir, { recursive: true, mode: 0o700 });
   const promptFile = path.join(jobDir, "prompt.md");
@@ -615,6 +655,7 @@ async function launchTask(entry, persist, deps, instruction) {
     "--claude", resolveClaudeBin(deps),
     "--model", laneModel,
     "--prompt-file", promptFile,
+    ...(presentation === "tui" ? ["--presentation", "tui"] : []),
   ];
   entry.launches.push(launch);
   entry.status = "running";
@@ -634,7 +675,8 @@ async function launchTask(entry, persist, deps, instruction) {
       timeoutMs: deps.limits.timeoutMs,
       trackDescendants: true,
       env: laneEnvironment(process.env),
-      ...(deps.orcaBackend && entry.orca?.worktree_id ? {
+      presentation,
+      ...(terminal ? {
         title: `${entry.task_id} · ${localSession ? "retomada" : "implementação"}`,
         launchTerminal: (input) => deps.orcaBackend.launchTerminal({ ...input, worktreeId: entry.orca.worktree_id, instanceId: entry.orca.instance_id }),
         // An Orca terminal runs the worker in Orca's shell env: only this non-secret pointer crosses.
@@ -711,6 +753,7 @@ export async function executeTaskAction(params, context = {}, injected = {}) {
       readIntegrated: (input) => readIntegratedTaskEvidence(input),
       inspectAbandonment: inspectTaskResumeAbandonment,
       limits: hostTaskLimits(),
+      ensureTrust: (root) => ensureClaudeTrust(root),
       resolveOrca: (input) => resolveOrcaTaskBackend({ ...input, cli: input.cli ?? orcaCli(), admissionPath: taskAdmissionPath }),
       persist,
       ...injected,
@@ -1137,6 +1180,36 @@ const pause = (ms, signal) => new Promise((resolve) => {
  * Block on the host (no model calls) until a running task changes, nothing runs, the window
  * expires or the caller aborts. Never kills a task. Returns `settled|changed|timeout|aborted`.
  */
+const ORCA_WAIT_WINDOW_MS = 300_000;
+
+/**
+ * Race Orca's native `terminal wait --for exit` on every running lane terminal (port of Pi's
+ * waitForFirstOrcaExit), plus a local tick when some running lane has no usable handle. An exit is
+ * only a wake: the caller re-reads status. A stale handle or an Orca restart retires that source.
+ */
+async function waitForFirstOrcaExit(handles, projectRoot, { signal, waitOrca, timeoutMs, localWake }) {
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  signal?.addEventListener("abort", abort, { once: true });
+  const attempts = handles.map(async (handle) => {
+    try {
+      const wait = await waitOrca({ projectRoot, terminalHandle: handle, timeoutMs, signal: controller.signal });
+      return { handle, wait };
+    } catch (error) {
+      if (controller.signal.aborted) return { handle, wait: { satisfied: false }, aborted: true };
+      return { handle, wait: { satisfied: false }, unavailable: true, error };
+    }
+  });
+  if (localWake) attempts.push(localWake(controller.signal).then(() => ({ wait: { satisfied: false }, local: true })));
+  try {
+    return await Promise.race(attempts);
+  } finally {
+    controller.abort();
+    signal?.removeEventListener("abort", abort);
+    await Promise.allSettled(attempts);
+  }
+}
+
 export async function waitForTasks(params, context = {}, injected = {}) {
   try {
     validateParams(params);
@@ -1154,10 +1227,24 @@ export async function waitForTasks(params, context = {}, injected = {}) {
     if (!first.tasks.some((task) => task.status === "running")) return { ...first, wait: "settled" };
     const before = fingerprint(first);
     let latest = first;
+    const waitOrca = injected.waitOrca ?? ((input) => waitForOrcaTaskTerminalExit({ ...input, cli: orcaCli() }));
+    const retired = new Set();
     while (true) {
       if (signal?.aborted) return { ...latest, wait: "aborted" };
       if (now() >= deadline) return { ...latest, wait: "timeout" };
-      await pause(Math.min(pollMs, Math.max(1, deadline - now())), signal);
+      const remaining = Math.max(1, deadline - now());
+      const terminals = latest.tasks.filter((task) => task.status === "running").map((task) => task.launches.at(-1)?.orca?.terminal_handle);
+      const handles = [...new Set(terminals.filter((handle) => typeof handle === "string" && !retired.has(handle)))];
+      if (handles.length) {
+        const needsLocal = terminals.some((handle) => typeof handle !== "string" || retired.has(handle));
+        const wake = await waitForFirstOrcaExit(handles, context.projectRoot, {
+          signal, waitOrca, timeoutMs: Math.min(ORCA_WAIT_WINDOW_MS, remaining),
+          localWake: needsLocal ? (waitSignal) => pause(Math.min(pollMs, remaining), waitSignal) : undefined,
+        });
+        if (wake.handle && (wake.wait.satisfied || wake.unavailable)) retired.add(wake.handle);
+      } else {
+        await pause(Math.min(pollMs, remaining), signal);
+      }
       if (signal?.aborted) return { ...latest, wait: "aborted" };
       const current = await executeTaskAction(statusParams, context, injected);
       if (!current.ok) {

@@ -257,3 +257,35 @@ injetado por host. Diferenças do Claude:
 O CLI do Orca 1.4.220 não tem `repo rm`. Um smoke vivo registraria um repositório temporário no Orca do
 operador para sempre, então a prova automatizada usa um `orca` falso que faz `git worktree add` de verdade
 e roda o comando do terminal destacado.
+
+## 15. Lane em TUI (Claude Code interativo num terminal)
+
+Rodadas de 2026-10-11, com `claude` interativo num pty (`script -qec`), `--settings` com hooks `SessionStart` e
+`Stop`, e prompt posicional:
+
+1. **Confiança na pasta.** Num `git init` novo, o TUI para no aviso "Is this a project you trust?" e nada roda.
+   Numa worktree ligada de um repositório já confiável, não aparece aviso: a confiança do repositório principal
+   vale para as worktrees dele. **Decisão:** antes de abrir uma lane em TUI, o host garante
+   `hasTrustDialogAccepted` para a raiz do repositório principal. Na prática essa raiz já é confiável, porque o
+   operador roda o Claude nela.
+2. **Fim do turno.** O TUI não sai sozinho: `CLAUDE_CODE_EXIT_AFTER_STOP_DELAY` não encerra o modo interativo.
+   Um hook `Stop` que manda `SIGTERM` ao `claude` (o pai do shell do hook) encerra a sessão em segundos, com
+   exit 143. **Decisão:** igual ao `agent_end` do Pi, o `Stop` da lane primeiro verifica a continuação e, se
+   não houver, registra o fim e encerra o `claude`. O host aceita exit 143 só com esse registro.
+3. **Evidência.** Sem stream-json, a fonte nativa é o transcript (`transcript_path` vem em todo payload de
+   hook). As entradas `assistant` têm os `tool_use` do loop principal, e as `user` têm `tool_result` com
+   `toolUseResult`, no mesmo formato do `tool_use_result` do stream-json. Um `Agent` em foreground traz
+   `status: "completed"` e `content`. Os subagentes ficam em arquivos próprios. **Decisão:** os hooks da lane
+   copiam o transcript para o `events.jsonl` do job (pré-criado em 0600 pelo worker), no formato que a inspeção
+   já lê, a partir do offset gravado no `SessionStart` de cada launch.
+4. **Retomada.** `--resume <id>` interativo anexa no mesmo transcript (31 → 47 linhas) e dispara `SessionStart`
+   com `source: "resume"`.
+5. A sessão que herda `CLAUDE_CODE_CHILD_SESSION` não grava transcript ("Transcript saving is off"). A allowlist
+   do env da lane já remove essa variável.
+6. **LIVE (2026-10-11).** Primeira rodada: as duas lanes fizeram o fluxo inteiro, mas nenhuma fechou. No
+   `SessionStart` o Claude real ainda não criou a pasta do transcript (ela aparece com a primeira entrada).
+   A validação do caminho fazia `realpath` dessa pasta, falhava, e o hook fail-open não marcava o início do
+   launch. **Correção:** o que existe é resolvido por `realpath` e o resto é validado lexicalmente. O `claude`
+   falso agora cria a pasta só na primeira entrada, e o e2e falha sem a correção. Segunda rodada: 2 lanes TUI
+   reais num pty, `ready` pela evidência do transcript, encerradas pelo próprio hook `Stop`, `wait` do pai
+   pelo `orca terminal wait`, integradas em 48 s.

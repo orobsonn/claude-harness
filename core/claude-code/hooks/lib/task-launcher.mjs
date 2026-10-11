@@ -4,6 +4,7 @@
  *
  *   node task-launcher.mjs --grant <grant.json> [--resume <laneSession>] --claude <bin>
  *        --model <haiku|sonnet|opus> --prompt-file <0600 file written by the host>
+ *        [--presentation json|tui]
  *
  * Fresh launch: read-only preflight + `wx` claim + seeded lane state (admitTaskRun), then a NEW
  * top-level `claude -p --session-id <uuid>`. Resume: revalidate the existing binding and
@@ -11,6 +12,11 @@
  * runtime (never the global runtime) plus the `[HARNESS_TASK_RUN]` envelope. Flags follow the
  * spike (docs/claude-parallel-tasks-spike-2026-10-10.md §1). stdout is the native stream-json the
  * supervisor records as events.jsonl. A spawn failure rolls back only a pristine fresh admission.
+ *
+ * `--presentation tui` (an Orca terminal, as Pi's TUI lanes): an interactive `claude` on the
+ * terminal instead of `-p` stream-json. The host instruction joins the system prompt file and the
+ * positional prompt is a fixed line, so no task text reaches argv; the lane hooks record the native
+ * evidence from the transcript and end the session at the end of the turn (spike §15).
  */
 import fs from "node:fs";
 import os from "node:os";
@@ -53,7 +59,7 @@ export function parseLauncherArgs(argv) {
   for (let index = 0; index < argv.length; index += 2) {
     const flag = argv[index];
     const value = argv[index + 1];
-    if (!["--grant", "--resume", "--claude", "--model", "--prompt-file"].includes(flag) || value === undefined || Object.hasOwn(args, flag.slice(2))) {
+    if (!["--grant", "--resume", "--claude", "--model", "--prompt-file", "--presentation"].includes(flag) || value === undefined || Object.hasOwn(args, flag.slice(2))) {
       throw new Error(`unexpected launcher argument ${JSON.stringify(flag)}`);
     }
     args[flag.slice(2)] = value;
@@ -64,6 +70,8 @@ export function parseLauncherArgs(argv) {
   }
   args.prompt = fs.readFileSync(args["prompt-file"], "utf8");
   if (!args.prompt.trim()) throw new Error("the launch prompt is empty");
+  args.presentation ??= "json";
+  if (!["json", "tui"].includes(args.presentation)) throw new Error("--presentation must be json or tui");
   args.model ??= "sonnet";
   if (!LANE_MODELS.has(args.model)) throw new Error("--model must be haiku, sonnet or opus");
   return args;
@@ -98,12 +106,14 @@ export function orcaStatusHooks(env = process.env) {
   return Object.keys(hooks).length ? { hooks } : null;
 }
 
-export function claudeLaneArgs({ sessionId, resume, model, systemPromptFile, runDir, settingsFile }) {
+export const TUI_START_PROMPT = "Execute a task admitida conforme o envelope [HARNESS_TASK_RUN] e a instrução do host no system prompt.";
+
+export function claudeLaneArgs({ sessionId, resume, model, systemPromptFile, runDir, settingsFile, presentation = "json" }) {
+  const tui = presentation === "tui";
   return [
-    "-p",
+    ...(tui ? [] : ["-p"]),
     ...(resume ? ["--resume", sessionId] : ["--session-id", sessionId]),
-    "--output-format", "stream-json",
-    "--verbose",
+    ...(tui ? [] : ["--output-format", "stream-json", "--verbose"]),
     "--model", model,
     "--permission-mode", "acceptEdits",
     "--allowedTools", LANE_TOOLS,
@@ -113,6 +123,7 @@ export function claudeLaneArgs({ sessionId, resume, model, systemPromptFile, run
     "--strict-mcp-config",
     "--append-system-prompt-file", systemPromptFile,
     ...(settingsFile ? ["--settings", settingsFile] : []),
+    ...(tui ? [TUI_START_PROMPT] : []),
   ];
 }
 
@@ -147,7 +158,9 @@ async function main() {
   let systemPromptFile;
   let settingsFile;
   try {
-    const systemPrompt = taskRunPrompt(fs.readFileSync(RUNTIME_PROMPT, "utf8"), admission, { resumed: resume });
+    const lanePrompt = taskRunPrompt(fs.readFileSync(RUNTIME_PROMPT, "utf8"), admission, { resumed: resume });
+    // A TUI has no stdin prompt: the host instruction travels in the private system prompt file.
+    const systemPrompt = args.presentation === "tui" ? `${lanePrompt}\n\n[HARNESS_HOST_INSTRUCTION]\n${args.prompt.trim()}\n[/HARNESS_HOST_INSTRUCTION]` : lanePrompt;
     if (Buffer.byteLength(systemPrompt, "utf8") > MAX_SYSTEM_PROMPT_BYTES) throw new Error("lane system prompt is too large");
     // Host-owned file outside the session state dir (rollback inspects that dir), rewritten per launch.
     const promptsDir = path.join(stateRoot(cwd), "lane-prompts");
@@ -161,7 +174,7 @@ async function main() {
       fs.rmSync(settingsFile, { force: true });
       fs.writeFileSync(settingsFile, JSON.stringify(orca), { flag: "wx", mode: 0o600 });
     }
-    argv = claudeLaneArgs({ sessionId, resume, model: args.model, systemPromptFile, runDir: admission.grant.run_dir, settingsFile });
+    argv = claudeLaneArgs({ sessionId, resume, model: args.model, systemPromptFile, runDir: admission.grant.run_dir, settingsFile, presentation: args.presentation });
   } catch (error) {
     if (!resume) rollbackTaskAdmission(admission);
     release();
@@ -171,10 +184,12 @@ async function main() {
   const child = spawn(args.claude, argv, {
     cwd,
     env: { ...process.env, ...LANE_GIT_ENV, [TASK_RUN_ENV]: JSON.stringify({ cwd, sessionId }), CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1" },
-    stdio: ["pipe", "inherit", "inherit"],
+    stdio: args.presentation === "tui" ? "inherit" : ["pipe", "inherit", "inherit"],
   });
-  child.stdin.on("error", () => { /* a dead child is reported by close */ });
-  child.stdin.end(args.prompt);
+  if (child.stdin) {
+    child.stdin.on("error", () => { /* a dead child is reported by close */ });
+    child.stdin.end(args.prompt);
+  }
   let spawned = false;
   const forward = (signal) => { try { child.kill(signal); } catch { /* already gone */ } };
   for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"]) process.on(signal, () => forward(signal));

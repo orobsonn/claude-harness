@@ -136,5 +136,9 @@ test("execution is a strict object", () => {
   assert.match(messages(validateExecutionPlan(plan([task("a", ["src/a"])], { execution: { parallel: "yes" } }))), /execution\.parallel\] must be a boolean/);
   assert.match(messages(validateExecutionPlan(plan([task("a", ["src/a"])], { execution: { parallel: true, max: 3 } }))), /execution\.max\] unknown key/);
   assert.match(messages(validateExecutionPlan(plan([task("a", ["src/a"])], { execution: [] }))), /\[execution\] must be an object/);
-  assert.equal(validateExecutionPlan(plan([task("a", ["src/a"]), task("b", ["src/a"])], { execution: { parallel: false } })).ok, true);
+  // Parallel is the default: a serial plan must say why.
+  assert.match(messages(validateExecutionPlan(plan([task("a", ["src/a"]), task("b", ["src/a"])], { execution: { parallel: false } }))), /execution\.serial_reason\] a serial plan must say why/);
+  assert.equal(validateExecutionPlan(plan([task("a", ["src/a"]), task("b", ["src/a"])], { execution: { parallel: false, serial_reason: "a and b rewrite the same module" } })).ok, true);
+  assert.match(messages(validateExecutionPlan(plan([task("a", ["src/a"])], { execution: { parallel: true, serial_reason: "x" } }))), /serial_reason\] is only valid when parallel is false/);
+  assert.equal(validateExecutionPlan(plan([task("a", ["src/a"]), task("b", ["src/a"])], { execution: undefined })).ok, true, "a legacy plan without execution stays valid (serial)");
 });
