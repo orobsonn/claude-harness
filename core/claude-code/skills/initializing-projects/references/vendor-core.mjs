@@ -188,6 +188,13 @@ export const FRESH_NATIVE_PATHS = {
     ".claude/skills/creating-issues/SKILL.md",
     ".claude/rules/creating-issues.md",
     ".github/ISSUE_TEMPLATE/harness-task.yml",
+    // Parallel task lanes: the host CLI, the lane gate/ledger, the launcher and the lane prompt.
+    ".claude/hooks/tasks.mjs",
+    ".claude/hooks/task-gate.mjs",
+    ".claude/hooks/task-ledger.mjs",
+    ".claude/hooks/lib/task-launcher.mjs",
+    ".claude/shared/lib/task-worker.mjs",
+    ".claude/skills/orchestrating-delivery/references/task-runtime.md",
   ],
   codex: [
     ".codex/agents/planner.toml",
