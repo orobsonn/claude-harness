@@ -441,6 +441,16 @@ function onlyRecoveryChanges(entry, root, baseline, head, task, plan) {
   return onlyFrozenChanges(root, cursor, head, paths);
 }
 
+function recoveryReconciliationMatches(proof, integration) {
+  // Aggregate refresh imports the delivery parent's product rather than an
+  // upstream task. Its sealed source must be this exact previous integration;
+  // taskScopeBase independently verifies the registry, merge parents and tree.
+  return proof?.kind === "aggregate-refresh"
+    ? proof.upstreams?.length === 0 && object(integration) &&
+      proof.source_integration_sha256 === hashTaskReceipt(integration)
+    : proof?.kind !== "integration-conflict" && Boolean(proof?.upstreams?.length);
+}
+
 function integratedRecoveryOrigin(entry, { sessionId, task, events, implementationIndex, producerIndex, hand, head }) {
   // A failed immediate pair must not revive an older integration or event capture.
   const integration = entry.integration_history.at(-1);
@@ -761,14 +771,14 @@ export function inspectTaskRun(entry, dependencies = {}) {
           if (recoveryOrigin) break;
         }
       }
-      // A dependency correction can import reviewed upstream product through a
+      // A dependency correction or aggregate refresh can import product through a
       // host-owned merge while this task only repairs its frozen test. The merge
       // is the product baseline in that case: require its exact validated Git
       // HEAD, the immediately previous integration and a test-only delta. A
       // completed but non-writing implementation call cannot replace this proof.
       if ((!recoveryOrigin || !onlyRecoveryChanges(entry, worktree, recoveryOrigin.head_sha, head, binding.task, binding.plan)) &&
-          !captureAttemptedBeforeAuthor && reconciliation?.kind !== "integration-conflict" &&
-          reconciliation?.upstreams?.length && hand.freezeCommitSha === reconciliation.merged_head &&
+          !captureAttemptedBeforeAuthor && recoveryReconciliationMatches(reconciliation, entry.integration_history?.at(-1)) &&
+          hand.freezeCommitSha === reconciliation.merged_head &&
           native.events[producerIndex].launchIndex >= reconciliation.launch_count &&
           onlyRecoveryChanges(entry, worktree, reconciliation.merged_head, head, binding.task, binding.plan)) {
         const historicalIntegration = entry.integration_history?.at(-1);
@@ -982,7 +992,7 @@ function validateIntegration(entry, integration, { projectRoot, sessionId, featu
     const priorResult = object(entry.result_history)?.[priorIntegration?.result_sha256];
     const priorHand = priorResult?.hand_capture;
     const priorOrigin = priorHand?.agent === "harness-test-author" ? priorHand.recovery_origin : priorHand;
-    if (!reconciliation?.upstreams?.length || reconciliation.kind === "integration-conflict" ||
+    if (!recoveryReconciliationMatches(reconciliation, priorIntegration) ||
         reconciliation.merged_head !== recoveryOrigin.head_sha ||
         recoveryOrigin.reconciliation_sha256 !== taskReconciliationDigest(entry) ||
         !priorResult || hashTaskReceipt(priorResult) !== priorIntegration.result_sha256 ||

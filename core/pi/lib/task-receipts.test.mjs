@@ -732,7 +732,7 @@ test("legacy missing-capture recovery rejects absent commit proof, BLOCKED imple
   assert.match(inspectTaskRun(expanded.entry, expanded.dependencies).reason, /clean captured implementation/);
 });
 
-function reconciledTestRecovery({ productDelta = false, memoryDelta = false, childProductDelta = false } = {}) {
+function reconciledTestRecovery({ productDelta = false, memoryDelta = false, childProductDelta = false, aggregateRefresh = false } = {}) {
   const f = inspectionFixture();
   bindPinnedRuntime(f);
   appendImplementationReviews(f);
@@ -742,6 +742,11 @@ function reconciledTestRecovery({ productDelta = false, memoryDelta = false, chi
   binding.task.depends_on = [upstreamTask.id];
   binding.plan.tasks.unshift(upstreamTask);
   f.dependencies.readTaskRunBindingFn = () => binding;
+  if (aggregateRefresh) {
+    const specPath = path.join(f.root, ".pi/harness/plans", FEATURE, "spec.md");
+    write(specPath, "Approved aggregate spec\n");
+    f.entry.spec_sha256 = binding.grant.spec_sha256 = crypto.createHash("sha256").update(fs.readFileSync(specPath)).digest("hex");
+  }
   const planPath = path.join(f.root, ".pi/harness/plans", FEATURE, "execution-plan.json");
   write(planPath, { ...binding.plan, feature_id: FEATURE });
   f.entry.plan_sha256 = binding.grant.plan_sha256 = crypto.createHash("sha256").update(fs.readFileSync(planPath)).digest("hex");
@@ -753,7 +758,7 @@ function reconciledTestRecovery({ productDelta = false, memoryDelta = false, chi
   binding.grant.dependencies = [{ task_id: "upstream", child_head: f.base, integrated_head: f.base,
     receipt: previous, receipt_sha256: hashTaskReceipt(previous) }];
   archiveInspectedIntegration(f);
-  run(f.root, "git", "checkout", "-b", "upstream-correction", f.base);
+  run(f.root, "git", "checkout", "-b", "upstream-correction", aggregateRefresh ? f.head : f.base);
   write(path.join(f.root, "upstream.spec.mjs"), "export const oracle = 'corrected';\n");
   if (productDelta) write(path.join(f.root, "upstream.mjs"), "export const behavior = 'changed';\n");
   if (memoryDelta) write(path.join(f.root, "MEMORY.md"), "Host-harvested lesson.\n");
@@ -774,6 +779,12 @@ function reconciledTestRecovery({ productDelta = false, memoryDelta = false, chi
     scope_base_sha: f.base, pre_child_head: f.head, parent_head: parent, merged_head: merged,
     tree: run(f.root, "git", "rev-parse", "HEAD^{tree}"), launch_count: f.entry.launches.length - 1,
     upstreams: [{ task_id: "upstream", attempt_id: "upstream-attempt", previous_receipt_sha256: hashTaskReceipt(previous), receipt }] }];
+  if (aggregateRefresh) {
+    Object.assign(f.entry.reconciliations[0], { kind: "aggregate-refresh", upstreams: [],
+      source_integration_sha256: hashTaskReceipt(f.entry.integration_history.at(-1)) });
+    registry.tasks[TASK] = f.entry;
+    write(path.join(f.root, ".pi/harness/state", PARENT, "task-runs/index.json"), registry);
+  }
   return testOnlyRecovery({ fixture: { ...f, head: merged }, capturedImplementation: false,
     productDelta: childProductDelta });
 }
@@ -815,6 +826,72 @@ test("host reconciliation never excuses child product writes after the test-only
   const inspected = inspectTaskRun(f.entry, f.dependencies);
   assert.equal(inspected.ok, false);
   assert.match(inspected.reason, /cannot change product|clean captured implementation/);
+});
+
+function persistRecoveryIntegration(f, { result, integration }) {
+  const registryPath = path.join(f.root, ".pi/harness/state", PARENT, "task-runs/index.json");
+  const registry = JSON.parse(fs.readFileSync(registryPath));
+  registry.tasks[TASK] = { ...f.entry, status: "integrated", result, integration,
+    launches: f.entry.launches.slice(0, result.launches.length),
+    grant: { ...f.dependencies.readTaskRunBindingFn().grant, version: 1, kind: "task-run",
+      origin: { kind: "parent-approved-plan", plan_review_call_id: "plan-current" } } };
+  write(registryPath, registry);
+  write(path.join(f.root, ".pi/harness/state", PARENT, "gate-state.json"), {
+    session_id: PARENT, feature_id: FEATURE, mode: "FULL", spec_status: "adversary-reviewed",
+    reviewed_spec_sha256: f.entry.spec_sha256, adversary_fired: true, adversary_spec_sha256: f.entry.spec_sha256,
+    plan_review_evidence: { written_by: "host-subagent-completion", parent_session_id: PARENT,
+      feature_id: FEATURE, role: "harness-plan-reviewer", status: "completed", verdict: "APPROVE",
+      dispatch_call_id: "plan-current", child_session_id: "plan-child", agent_id: "plan-agent",
+      plan_sha256: f.entry.plan_sha256, spec_sha256: f.entry.spec_sha256 },
+  });
+}
+
+test("aggregate refresh with imported product admits a reviewed test-only repair and subsequent resumes", () => {
+  let f = reconciledTestRecovery({ productDelta: true, memoryDelta: true, aggregateRefresh: true });
+  const inspected = inspectTaskRun(f.entry, f.dependencies);
+  assert.equal(inspected.ok, true, inspected.reason);
+  assert.equal(inspected.result.hand_capture.recovery_origin.derived_from, "host-reconciliation");
+  assert.equal(inspected.result.hand_capture.recovery_origin.head_sha, f.entry.reconciliations[0].merged_head);
+  const { result, integration } = archiveInspectedIntegration(f);
+  persistRecoveryIntegration(f, { result, integration });
+  const input = { projectRoot: f.root, sessionId: PARENT, featureId: FEATURE, taskId: TASK, headSha: f.head };
+  const firstEvidence = readIntegratedTaskEvidence(input);
+  assert.equal(firstEvidence.ok, true, firstEvidence.reason);
+  for (let index = 0; index < 2; index++) {
+    f = testOnlyRecovery({ fixture: f, capturedImplementation: false, suffix: `-aggregate-reopen-${index}` });
+    const resumed = inspectTaskRun(f.entry, f.dependencies);
+    assert.equal(resumed.ok, true, resumed.reason);
+    const next = archiveInspectedIntegration(f);
+    persistRecoveryIntegration(f, next);
+    const evidence = readIntegratedTaskEvidence({ ...input, headSha: f.head });
+    assert.equal(evidence.ok, true, evidence.reason);
+  }
+});
+
+test("aggregate test-only recovery rejects child product drift and invalid source or merge proofs", () => {
+  const drift = reconciledTestRecovery({ productDelta: true, childProductDelta: true, aggregateRefresh: true });
+  assert.equal(inspectTaskRun(drift.entry, drift.dependencies).ok, false);
+  for (const variant of ["source", "tree", "pre-head", "historical-result", "integration-origin"]) {
+    const f = reconciledTestRecovery({ productDelta: true, aggregateRefresh: true });
+    const inspected = inspectTaskRun(f.entry, f.dependencies);
+    assert.equal(inspected.ok, true, inspected.reason);
+    const proof = f.entry.reconciliations[0];
+    if (variant === "source") proof.source_integration_sha256 = "0".repeat(64);
+    if (variant === "tree") proof.tree = f.base;
+    if (variant === "pre-head") proof.pre_child_head = f.base;
+    if (variant === "historical-result") f.entry.result_history[f.entry.integration_history.at(-1).result_sha256].child_head = f.base;
+    if (variant === "integration-origin") {
+      const { result, integration } = archiveInspectedIntegration(f);
+      result.hand_capture.recovery_origin.producer_call_id = "unrelated-writer";
+      integration.result_sha256 = hashTaskReceipt(result);
+      persistRecoveryIntegration(f, { result, integration });
+      const evidence = readIntegratedTaskEvidence({ projectRoot: f.root, sessionId: PARENT, featureId: FEATURE, taskId: TASK, headSha: f.head });
+      assert.equal(evidence.ok, false);
+      assert.match(evidence.reason, /host-reconciled test-only origin/);
+      continue;
+    }
+    assert.equal(inspectTaskRun(f.entry, f.dependencies).ok, false, variant);
+  }
 });
 
 test("test-only reconciliation does not excuse child memory edits or a forged historical proof", () => {
