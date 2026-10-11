@@ -78,6 +78,31 @@ function readJsonIn(file, root) {
   return JSON.parse(readArtifact(file, root));
 }
 
+/**
+ * A TUI lane never exits by itself: its Stop hook records the end of the turn and SIGTERMs the
+ * launcher (exit 143). That exit counts as success only when the launch's last native event is
+ * exactly that record (task-tui-events.mjs); a timeout or any other end stays a failure.
+ */
+function tuiFinalized(launch, lifecycle) {
+  if (launch?.presentation !== "tui" || lifecycle.timedOut || !(lifecycle.exitCode === 143 || lifecycle.signal === "SIGTERM")) return false;
+  try {
+    const info = fs.lstatSync(launch.events_path);
+    if (!info.isFile() || info.isSymbolicLink()) return false;
+    const fd = fs.openSync(launch.events_path, "r");
+    try {
+      const length = Math.min(info.size, 256 * 1024);
+      const buffer = Buffer.alloc(length);
+      fs.readSync(fd, buffer, 0, length, info.size - length);
+      const last = JSON.parse(buffer.toString("utf8").trim().split("\n").at(-1));
+      return last?.type === "result" && last.subtype === "success" && last.is_error === false && last.written_by === "lane-stop-hook";
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    return false;
+  }
+}
+
 function validateLaunches(entry, readTaskProcessFn) {
   if (!Array.isArray(entry.launches) || entry.launches.length === 0) return failure("task run has no launches");
   const lifecycles = [];
@@ -91,7 +116,7 @@ function validateLaunches(entry, readTaskProcessFn) {
       continue;
     }
     if (!observed.ok) return failure(`latest launch completion is unavailable: ${observed.reason}`);
-    lifecycles.push(observed.result);
+    lifecycles.push(tuiFinalized(launch, observed.result) ? { ...observed.result, exitCode: 0, signal: null, tui_finalized: true } : observed.result);
   }
   const last = lifecycles.at(-1);
   if (last.exitCode !== 0 || last.timedOut || last.signal !== null) {

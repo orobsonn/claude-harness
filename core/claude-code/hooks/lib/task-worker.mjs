@@ -19,9 +19,10 @@ import { fileURLToPath } from "node:url";
 
 import { runTaskWorker } from "../../../shared/lib/task-worker.mjs";
 import { verifyTaskRuntime } from "./task-runtime.mjs";
+import { TUI_JOB_ENV } from "./task-tui-events.mjs";
 
 const ALLOWED = new Set([
-  "PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "LANGUAGE", "TERM", "TMPDIR", "TZ",
+  "PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "LANGUAGE", "TERM", "COLORTERM", "TMPDIR", "TZ",
   "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_RUNTIME_DIR",
   "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy",
   "NODE_EXTRA_CA_CERTS", "SSL_CERT_FILE", "SSL_CERT_DIR",
@@ -40,9 +41,11 @@ export function laneEnvironment(processEnvironment, { orca = false } = {}) {
 }
 
 /** Child env for one job: Orca terminals keep their pane identity and the parent's config dir. */
-export function laneJobEnvironment(processEnvironment, job) {
+export function laneJobEnvironment(processEnvironment, job, descriptorPath) {
   const terminal = job?.terminal_mode === true;
   const env = laneEnvironment(processEnvironment, { orca: terminal });
+  // A TUI job's hooks record the native evidence into this job (lib/task-tui-events.mjs).
+  if (terminal && job.presentation === "tui" && typeof descriptorPath === "string" && path.isAbsolute(descriptorPath)) env[TUI_JOB_ENV] = descriptorPath;
   const configDir = job?.profile_environment?.CLAUDE_CONFIG_DIR;
   if (terminal && typeof configDir === "string" && path.isAbsolute(configDir) && !configDir.includes("\0")) env.CLAUDE_CONFIG_DIR = configDir;
   return env;
@@ -96,7 +99,7 @@ function isDirectCli() {
 
 if (isDirectCli()) {
   runTaskWorker({
-    childEnvironment: (processEnvironment, job) => laneJobEnvironment(processEnvironment, job),
+    childEnvironment: (processEnvironment, job, descriptorPath) => laneJobEnvironment(processEnvironment, job, descriptorPath),
     renderEventLine: renderLaneEvent,
     verifyRuntime: verifyTaskRuntime,
     killGraceMs: 10_000,

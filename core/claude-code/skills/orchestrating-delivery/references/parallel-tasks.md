@@ -1,8 +1,10 @@
 # Phase 2 — parallel task lanes (global parent protocol)
 
-Load this file when the approved plan carries `"execution": {"parallel": true}`. Each task runs in its
-own **lane**: a git worktree on branch `harness/task-<id>-<attempt>` plus one top-level `claude -p`
-session that runs Phase 2 steps 1a–6 for that task alone (`references/task-runtime.md` is the lane's
+Parallel lanes are the default delivery: load this file when the approved plan carries
+`"execution": {"parallel": true}` (a serial plan states its `serial_reason`). Each task runs in its own
+**lane**: a git worktree on branch `harness/task-<id>-<attempt>` plus one top-level `claude` session (a
+`-p` stream-json run locally; an interactive TUI in its Orca terminal) that runs Phase 2 steps 1a–6 for
+that task alone (`references/task-runtime.md` is the lane's
 prompt). The host, not the lane, decides when a task is ready: it inspects the lane's native event
 stream, the hook ledger and Git, and merges with `--no-ff`. You coordinate. You never implement here,
 and you never read a lane's transcript.
@@ -76,7 +78,8 @@ When the JSON contains a single quote, use `--json-file .claude/plans/<feature>/
    reintegrate it. A real behavior change still needs a new session.
 
 **Orca.** When this session runs inside an Orca workspace, every lane is an Orca child worktree of it
-and runs in its own Orca terminal (`status` shows `orca` with the worktree and terminal handle). If a
+and runs as an interactive Claude Code TUI in its own Orca terminal (`status` shows `orca` with the
+worktree and terminal handle). `wait` blocks on Orca's native terminal wait. If a
 launch reports `warning` (terminal not confirmed visible), reveal that existing handle; never dispatch
 again to get a new one. A registry pinned to an Orca workspace launches work only from inside that
 workspace.

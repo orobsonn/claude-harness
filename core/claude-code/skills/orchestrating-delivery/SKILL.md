@@ -400,9 +400,9 @@ Move to the next task only when its gates are green.
 
 ---
 
-## Phase 2 — parallel task lanes (opt-in)
+## Phase 2 — parallel task lanes (default)
 
-When the approved plan carries `"execution": {"parallel": true}`, independent tasks run in parallel **task lanes** — one git worktree + one top-level `claude -p` per task, each running steps 1a–6 above for its own task — instead of the serial loop. Coordinate them ONLY through `node .claude/hooks/tasks.mjs dispatch|wait|status|integrate|resume|abandon-resume` (≤3 per batch, dependencies integrated first; `wait` blocks on the host — never poll `status`). The host derives `ready` and merges `--no-ff`; you never read a lane's transcript. Final review + CI suite run on the aggregate HEAD; delivery needs every integration receipt. **Full protocol → load `references/parallel-tasks.md`.**
+The default plan carries `"execution": {"parallel": true}`: independent tasks run in **task lanes** — one git worktree + one top-level `claude` per task, each running steps 1a–6 for its own task — not the serial loop (only for `serial_reason`). Coordinate them ONLY through `node .claude/hooks/tasks.mjs dispatch|wait|status|integrate|resume|abandon-resume` (≤3 per batch, dependencies integrated first; `wait` blocks on the host — never poll `status`). The host derives `ready` and merges `--no-ff`; you never read a lane's transcript. Final review + CI suite run on the aggregate HEAD; delivery needs every integration receipt. **Full protocol → load `references/parallel-tasks.md`.**
 
 ---
 

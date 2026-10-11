@@ -20,6 +20,8 @@ function runtimeTree(t) {
     PreToolUse: [{ matcher: "*", hooks: [hook("task-gate.mjs"), hook("task-ledger.mjs")] }],
     PostToolUse: [{ matcher: "*", hooks: [hook("task-ledger.mjs")] }],
     PostToolUseFailure: [{ matcher: "*", hooks: [hook("task-ledger.mjs")] }],
+    SessionStart: [{ hooks: [hook("task-ledger.mjs")] }],
+    Stop: [{ hooks: [hook("task-continuation.mjs")] }],
   } }));
   return root;
 }
@@ -52,5 +54,5 @@ test("a worktree without the vendored harness cannot host a lane", (t) => {
 test("a worktree whose settings do not wire the lane gate and ledger cannot host a lane", (t) => {
   const root = runtimeTree(t);
   fs.writeFileSync(path.join(root, ".claude/settings.json"), JSON.stringify({ hooks: { PreToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command: "node custom.mjs" }] }] } }));
-  assert.throws(() => captureTaskRuntime(root), /does not wire the task lane hooks \(PreToolUse:task-gate\.mjs, PreToolUse:task-ledger\.mjs, PostToolUse:task-ledger\.mjs, PostToolUseFailure:task-ledger\.mjs\)/);
+  assert.throws(() => captureTaskRuntime(root), /does not wire the task lane hooks \(PreToolUse:task-gate\.mjs, PreToolUse:task-ledger\.mjs, PostToolUse:task-ledger\.mjs, PostToolUseFailure:task-ledger\.mjs, SessionStart:task-ledger\.mjs, Stop:task-continuation\.mjs\)/);
 });

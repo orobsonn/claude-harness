@@ -9,6 +9,10 @@
  * native id/async flag. The host inspection pairs these with the native stream-json by
  * `tool_use_id`; the freeze commit is the call whose HEAD moved, never a SHA parsed from stdout.
  *
+ * In a TUI lane (an Orca terminal, `CLAUDE_HARNESS_TUI_JOB_FILE`) it is also the native evidence
+ * sink: SessionStart marks where this launch begins in Claude Code's transcript, and every later
+ * event copies the new transcript entries into the job's events.jsonl (lib/task-tui-events.mjs).
+ *
  * Fail-open by design (exit 0, no output): a missing ledger line makes the host inspection block
  * the task, which is the safe direction.
  */
@@ -19,6 +23,7 @@ import { fileURLToPath } from "node:url";
 
 import { parseTaskRunEnv } from "./task-gate.mjs";
 import { TASK_RUN_ENV, isVolatileHarnessPath, laneLedgerFile, sessionStateDir } from "./lib/task-paths.mjs";
+import { syncTuiEvents } from "./lib/task-tui-events.mjs";
 
 const LEDGER_TOOLS = new Set(["Bash", "Agent", "Task"]);
 const MAX_DIRTY = 200;
@@ -102,9 +107,17 @@ export function handle(payload, { env = process.env, cwd = process.cwd(), now } 
   } catch {
     return null;
   }
+  if (payload.hook_event_name === "SessionStart") {
+    syncTuiEvents(payload, { env, cwd: root, start: true });
+    return null;
+  }
   const record = ledgerRecord(payload, payload.hook_event_name === "SubagentStop" ? {} : gitFacts(root), now);
-  if (!record) return null;
-  fs.appendFileSync(laneLedgerFile(root, binding.sessionId), `${JSON.stringify(record)}\n`, { mode: 0o600 });
+  if (record) fs.appendFileSync(laneLedgerFile(root, binding.sessionId), `${JSON.stringify(record)}\n`, { mode: 0o600 });
+  try {
+    syncTuiEvents(payload, { env, cwd: root });
+  } catch (error) {
+    process.stderr.write(`[task-ledger] TUI evidence: ${error instanceof Error ? error.message : String(error)}\n`);
+  }
   return record;
 }
 

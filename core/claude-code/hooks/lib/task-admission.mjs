@@ -73,7 +73,8 @@ export function requireParallelPlan(plan, featureId) {
   if (!valid.ok) throw new Error(`invalid canonical plan: ${valid.errors.map((e) => `[${e.path}] ${e.message}`).join("; ")}`);
   if (plan.feature_id !== featureId) throw new Error("plan feature_id does not match the parent feature");
   if (plan.execution?.parallel !== true) {
-    throw new Error('the approved plan does not opt into parallel tasks; it needs "execution": {"parallel": true} (re-plan and re-review)');
+    const reason = typeof plan.execution?.serial_reason === "string" ? ` (serial_reason: ${plan.execution.serial_reason.slice(0, 200)})` : "";
+    throw new Error(`the approved plan is serial${reason}; parallel lanes need "execution": {"parallel": true} — deliver it with the serial loop, or re-plan and re-review`);
   }
   return plan;
 }

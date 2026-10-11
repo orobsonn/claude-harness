@@ -10,6 +10,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 
@@ -59,6 +60,11 @@ test("LIVE: three real claude -p lanes reach ready and integrate", { skip: skipR
     clearInterval(sampler);
   }
   status = await tasksCliAsync(project, "status");
+  // Only this run's lane transcript folders (one per lane worktree path), never anything else.
+  t.after(() => {
+    const projects = path.join(os.homedir(), ".claude", "projects");
+    for (const task of status.tasks) fs.rmSync(path.join(projects, task.worktree.replace(/[^A-Za-z0-9]/g, "-")), { recursive: true, force: true });
+  });
   const usage = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, cost_usd: 0 };
   for (const task of status.tasks) {
     for (const launch of task.launches) {

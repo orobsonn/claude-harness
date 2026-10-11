@@ -562,3 +562,35 @@ test("the Git control digest ignores branch metadata but not code-running config
   }
   assert.equal(gitControlDigest(f.project.root), before);
 });
+
+test("wait races Orca's native terminal exit; a stale handle retires to local observation", async (t) => {
+  const f = fixture(t);
+  // Launches report an Orca terminal handle, as the Orca backend's startProcess does.
+  const startProcess = async (options) => ({ ...(await f.deps.startProcess(options)), orca: { terminal_handle: `term_${options.runId.slice(0, 6)}` } });
+  await f.run({ action: "dispatch", task_ids: ["task-a", "task-b"] }, { startProcess });
+  const [a, b] = ["task-a", "task-b"].map((id) => f.registry().tasks[id].launches[0]);
+  f.state.running.add(a.run_id);
+  f.state.running.add(b.run_id);
+  await f.run({ action: "status" });
+  const calls = [];
+  const waitOrca = async ({ terminalHandle, timeoutMs, signal, projectRoot }) => {
+    calls.push({ terminalHandle, timeoutMs, projectRoot });
+    if (terminalHandle === a.orca.terminal_handle) {
+      f.state.running.delete(a.run_id);
+      return { satisfied: true, condition: "exit" };
+    }
+    await new Promise((resolve) => signal.addEventListener("abort", resolve, { once: true }));
+    return { satisfied: false };
+  };
+  const changed = await waitForTasks({ action: "wait" }, f.context, { ...f.deps, pollMs: 60_000, waitOrca });
+  assert.equal(changed.wait, "changed", "the exit of a's terminal woke a fresh status read");
+  assert.deepEqual(new Set(calls.map((call) => call.terminalHandle)), new Set([a.orca.terminal_handle, b.orca.terminal_handle]));
+  assert.ok(calls.every((call) => call.timeoutMs <= 300_000 && call.projectRoot === f.project.root));
+
+  // b's handle is stale: it retires and the host falls back to its local cadence.
+  let staleCalls = 0;
+  setTimeout(() => f.state.running.delete(b.run_id), 150);
+  const fallback = await waitForTasks({ action: "wait" }, f.context, { ...f.deps, pollMs: 20, waitOrca: async () => { staleCalls += 1; throw new Error("terminal_handle_stale"); } });
+  assert.equal(fallback.wait, "changed");
+  assert.equal(staleCalls, 1, "a retired handle is never awaited again");
+});

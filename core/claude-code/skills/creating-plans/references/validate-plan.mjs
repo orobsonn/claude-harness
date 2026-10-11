@@ -13,7 +13,8 @@
  * Importable: `validateExecutionPlan(plan)` returns { ok, errors: [{ path, message }] } with the
  * exact rules the CLI applies.
  *
- * Parallel execution (opt-in, `"execution": { "parallel": true }`): tasks that can run together
+ * Parallel execution (the default plan shape, `"execution": { "parallel": true }`; a serial plan says
+ * why with `{ "parallel": false, "serial_reason": "<why>" }`): tasks that can run together
  * (no depends_on ancestry between them) must have disjoint literal scopes — scope_paths, every
  * locked test_path and fixture_paths — with no globs, no '..', no absolute paths; every task
  * declares depends_on; hands use the claude family ladder (lanes dispatch hands as Agents); a
@@ -477,11 +478,16 @@ function validateExecution(plan, errors) {
     return false;
   }
   for (const key of Object.keys(plan.execution)) {
-    if (key !== "parallel") errors.add(`execution.${key}`, "unknown key");
+    if (key !== "parallel" && key !== "serial_reason") errors.add(`execution.${key}`, "unknown key");
   }
   if (!isBoolean(plan.execution.parallel)) {
     errors.add("execution.parallel", "must be a boolean");
     return false;
+  }
+  const reason = plan.execution.serial_reason;
+  if (plan.execution.parallel === true && reason !== undefined) errors.add("execution.serial_reason", "is only valid when parallel is false");
+  if (plan.execution.parallel === false && (typeof reason !== "string" || !reason.trim() || reason.length > 500)) {
+    errors.add("execution.serial_reason", "a serial plan must say why parallel lanes do not fit (non-empty, at most 500 characters)");
   }
   return plan.execution.parallel === true;
 }

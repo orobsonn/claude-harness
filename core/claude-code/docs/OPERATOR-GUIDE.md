@@ -174,9 +174,11 @@ triaging-requests
 > **`brainstorming` não é vendored no Claude Code.** A sessão usa `superpowers:brainstorming` **se o plugin do marketplace estiver instalado**; se não estiver, brainstorma inline com você. De qualquer forma o `planner` só é liberado depois do carimbo de brainstorm — o portão não depende do plugin.
 
 
-### 5.1 Tasks paralelas em worktrees (opt-in)
+### 5.1 Tasks paralelas em worktrees (padrão)
 
-Quando o plano aprovado traz `"execution": {"parallel": true}`, tasks independentes rodam em paralelo,
+A entrega paralela é o padrão: o planner gera `"execution": {"parallel": true}` sempre que o plano
+cabe em lanes, e só gera um plano serial com `serial_reason` (família ollama ou escopos inseparáveis; uma task só
+também roda em lane). Com o plano paralelo, tasks independentes rodam em paralelo,
 cada uma numa **lane**: uma worktree git própria (`harness/task-<id>-<attempt>`) com uma sessão
 `claude -p` de topo que roda o laço por task só daquela task. O pai global coordena pelo CLI do host:
 
@@ -213,8 +215,9 @@ O que você precisa saber:
   (2026-10-11): 3 lanes LIGHT triviais em 50 s, ~1 GB somado, US$ 1,16.
 
 - **Orca:** se a sessão do pai roda dentro de um workspace do Orca (`ORCA_WORKTREE_ID`), cada lane vira
-  uma worktree filha desse workspace, criada pelo Orca na base exata, e roda num terminal do Orca com
-  o progresso legível da lane. Os hooks de status do Orca entram na lane, então ela aparece como agente
+  uma worktree filha desse workspace, criada pelo Orca na base exata, e abre o Claude Code interativo
+  (TUI) num terminal do Orca. O `wait` do pai usa a espera nativa do Orca (`orca terminal wait`) e só
+  cai para a observação local quando falta handle. A pasta é marcada como confiável por padrão. Os hooks de status do Orca entram na lane, então ela aparece como agente
   no ADE. O host continua decidindo `ready`, integrando e gravando os recibos. Depois que o registro
   fixa o workspace do Orca, `resume` e `dispatch` só rodam de dentro dele: não há fallback local
   silencioso. A lane no terminal usa as credenciais do shell do Orca; só o `CLAUDE_CONFIG_DIR` do pai

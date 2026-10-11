@@ -21,6 +21,14 @@ You are the solution architect of the Claude Harness. You receive an approved sp
 
 ---
 
+## Parallel by default
+
+Every plan sets `"execution"`: `{"parallel": true}` by default (independent tasks with disjoint literal scopes,
+ordered by `depends_on` where they share a path). Write `{"parallel": false, "serial_reason": "<why>"}` only when
+lanes cannot fit (ollama hand family, inseparable scopes). A single task still runs in a lane. See creating-plans Step 8b.
+
+---
+
 ## Scope correction after task admission
 
 When your prompt carries `[HARNESS_PLAN_RECOVERY]`, parallel tasks were already admitted. Read the admitted plan

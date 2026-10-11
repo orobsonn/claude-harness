@@ -41,6 +41,8 @@ const REQUIRED_LANE_HOOKS = [
   ["PreToolUse", "task-ledger.mjs"],
   ["PostToolUse", "task-ledger.mjs"],
   ["PostToolUseFailure", "task-ledger.mjs"],
+  ["SessionStart", "task-ledger.mjs"],
+  ["Stop", "task-continuation.mjs"],
 ];
 
 /**
@@ -72,7 +74,7 @@ export function captureTaskRuntime(worktree) {
   }
   const missing = missingLaneHooks(root);
   if (missing.length) {
-    throw new Error(`the vendored .claude/settings.json does not wire the task lane hooks (${missing.join(", ")}); a customized hooks array was kept by vendor-core — add matcher "*" entries for .claude/hooks/task-gate.mjs and .claude/hooks/task-ledger.mjs, commit, and dispatch again`);
+    throw new Error(`the vendored .claude/settings.json does not wire the task lane hooks (${missing.join(", ")}); a customized hooks array was kept by vendor-core — wire them as in the harness settings.json (matcher "*": task-gate + task-ledger on PreToolUse, task-ledger on PostToolUse/PostToolUseFailure/SessionStart, task-continuation on Stop), commit, and dispatch again`);
   }
   const hash = createHash("sha256");
   for (const relative of files.sort()) {
