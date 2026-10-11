@@ -297,6 +297,22 @@ The `hand_tiers` shape requires all 7 fixed eye roles (planner, plan-reviewer, c
 - `type`: `"smoke"` for API/CLI features; `"playwright"` for complex UI; `"markdown"` for batch/cron
 - `scenarios_from_refs`: the `#uj-N` anchors that the demo must exercise (at least one)
 
+**Step 8b — parallel execution (opt-in, only when the orchestrator asks for it):** add
+`"execution": { "parallel": true }` when the orchestrator will run independent tasks in parallel
+worktrees (orchestrating-delivery, "Phase 2 — parallel"). It turns non-overlap from a self-review
+habit into validator rules:
+- every task declares `depends_on` (`[]` for none);
+- tasks with no `depends_on` ancestry between them must have **disjoint literal scopes**: `scope_paths`,
+  each locked `test_path` and every `fixture_paths` entry all count, compared by whole path
+  component (`src/a` and `src/ab` are disjoint; `src/a` and `src/a/x.ts` overlap; `.` overlaps
+  everything). Share a path only by ordering the tasks with `depends_on`;
+- no globs (`*`, `?`, `{a,b}`, `{1..3}`), no `..`, no absolute paths, no `\` — literals such as
+  `app/[slug]/page.tsx` are fine;
+- `model_strategy.hand_tiers` is the **claude** family ladder (lanes dispatch hands as Agents);
+- a task with no executable test may declare `"no_tests": true` with `"locked_tests": []` — valid only
+  in a parallel plan.
+Plans without `execution` are validated exactly as before.
+
 ---
 
 ## Step 9 — Self-review the plan
@@ -322,7 +338,7 @@ node .claude/skills/creating-plans/references/validate-plan.mjs <path-to-plan.js
 # Exit 0 = OK. Exit 1 = schema errors — fix and re-run.
 ```
 
-The validator is dependency-free (Node builtins only — no install, no node_modules). It checks: required fields, type and enum constraints, `model_strategy` (`hand_tiers` map + 7 fixed roles incl. `plan-reviewer`, no executor/sniper; legacy `tiers` rejected), `criterion_refs` regex (`#ac-`), `resolved_judgments` scalar values, `locked_tests` as objects `{test_path, assertion}`, `adversarial.focus` when enabled, `final_review.security` (optional boolean), `depends_on` no-dangling-refs, and cycle detection.
+The validator needs no install (Node builtins plus the vendored `.claude/shared/lib/` helpers — no node_modules). It checks: required fields, type and enum constraints, `model_strategy` (`hand_tiers` map + 7 fixed roles incl. `plan-reviewer`, no executor/sniper; legacy `tiers` rejected), `criterion_refs` regex (`#ac-`), `resolved_judgments` scalar values, `locked_tests` as objects `{test_path, assertion}`, `adversarial.focus` when enabled, `final_review.security` (optional boolean), `depends_on` no-dangling-refs, cycle detection, and — only with `execution.parallel` — the Step 8b rules.
 
 ---
 

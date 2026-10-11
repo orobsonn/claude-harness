@@ -520,6 +520,12 @@ export function decide(payload) {
   // Exactly-one marker scan: count JSON objects with marker==='capture-verified' BEFORE
   // id validation. Zero → none; one → validate then proceed; two+ → marker-ambiguous.
   if (command.includes("mark.mjs") && command.includes("capture-verified")) {
+    // Inside a parallel task lane the host ledger (task-ledger.mjs) records the capture with the
+    // HEAD and tree state at that call; the lane has no spawn-hand run-record to stamp, so the
+    // run-record precondition below would only emit a misleading nudge.
+    if (Object.prototype.hasOwnProperty.call(process.env, "CLAUDE_HARNESS_TASK_RUN")) {
+      return { action: "none" };
+    }
     const responseStr = unwrapStdout(payload);
     const { count, sole } = countMarkerObjectsByName(responseStr, "capture-verified");
     if (count === 0) {

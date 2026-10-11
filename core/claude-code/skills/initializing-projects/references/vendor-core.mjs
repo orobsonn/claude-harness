@@ -188,6 +188,13 @@ export const FRESH_NATIVE_PATHS = {
     ".claude/skills/creating-issues/SKILL.md",
     ".claude/rules/creating-issues.md",
     ".github/ISSUE_TEMPLATE/harness-task.yml",
+    // Parallel task lanes: the host CLI, the lane gate/ledger, the launcher and the lane prompt.
+    ".claude/hooks/tasks.mjs",
+    ".claude/hooks/task-gate.mjs",
+    ".claude/hooks/task-ledger.mjs",
+    ".claude/hooks/lib/task-launcher.mjs",
+    ".claude/shared/lib/task-worker.mjs",
+    ".claude/skills/orchestrating-delivery/references/task-runtime.md",
   ],
   codex: [
     ".codex/agents/planner.toml",
@@ -1084,6 +1091,7 @@ function collectDestinationTree(src, destination, entries) {
     if (name.startsWith("._")) continue;
     const child = join(src, name);
     if (statSync(child).isFile() && name.endsWith(".test.mjs")) continue;
+    if (name === "__fixtures__" && statSync(child).isDirectory()) continue;
     collectDestinationTree(child, join(destination, name), entries);
   }
 }
@@ -2261,14 +2269,14 @@ function readVersion(repoDir) {
 /**
  * @description Pure predicate for the framework-owned copy filter.
  * Returns true when the given source path should be included in the vendor copy,
- * false when it should be excluded. Only `.test.mjs` files are excluded — all other
- * files (including `settings.json` in hand-config/) survive the filter and reach
- * consumer projects.
+ * false when it should be excluded. Test artifacts are excluded — `.test.mjs` files and
+ * anything under a `__fixtures__/` directory (e.g. the parallel-task e2e fakes); all other
+ * files (including `settings.json` in hand-config/) survive the filter and reach consumer projects.
  * @param {string} src - Absolute or relative source file path.
  * @returns {boolean} True = include, false = exclude.
  */
 export function isFrameworkCopyIncluded(src) {
-  return !src.endsWith(".test.mjs");
+  return !src.endsWith(".test.mjs") && !String(src).split(/[\\/]/).includes("__fixtures__");
 }
 
 /** @description Copies framework-owned dirs/files into .claude/, overwriting. */

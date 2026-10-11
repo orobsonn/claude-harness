@@ -46,6 +46,7 @@ import {
   writeSettings,
   installRepoFiles,
   assertFreshNativeInstall,
+  findMissingFreshNativePaths,
   OC_RETIRED_FILES,
   pruneOcRetiredFiles,
   preflightCodexVendor,
@@ -1522,6 +1523,13 @@ test("vendor-core: no *.test.mjs files are copied to hooks", async (t) => {
 });
 
 // locked_test — hand-config filter predicate (AC v2.3)
+test("isFrameworkCopyIncluded: test fixtures under __fixtures__ are EXCLUDED", () => {
+  assert.equal(isFrameworkCopyIncluded("/core/claude-code/hooks/lib/__fixtures__/fake-claude.mjs"), false);
+  assert.equal(isFrameworkCopyIncluded("/core/claude-code/hooks/lib/__fixtures__"), false);
+  assert.equal(isFrameworkCopyIncluded("/core/claude-code/hooks/lib/task-launcher.mjs"), true);
+  assert.equal(isFrameworkCopyIncluded("/core/claude-code/hooks/lib/fixtures-helper.mjs"), true);
+});
+
 test("isFrameworkCopyIncluded: settings.json in hand-config is INCLUDED (returns true)", () => {
   const src =
     "skills/orchestrating-delivery/references/hand-config/settings.json";
@@ -3240,5 +3248,58 @@ test("writeSettings: a malformed manifest.owned degrades gracefully and never bl
     assert.equal(readFileSync(join(claudeDir, "settings.json"), "utf8"), originalConfig);
   } finally {
     rmSync(claudeDir, { recursive: true, force: true });
+  }
+});
+
+test("vendor-core: parallel task lanes are vendored whole, wired and import-clean, without test fixtures", () => {
+  const target = mkdtempSync(join(tmpdir(), "vendor-task-lanes-"));
+  try {
+    mkdirSync(join(target, ".claude"), { recursive: true });
+    // A consumer with its own settings (no customized hook arrays): its keys survive, ours are merged in.
+    writeFileSync(join(target, ".claude", "settings.json"), JSON.stringify({ env: { CONSUMER_FLAG: "1" } }, null, 2));
+    const harnessStatus = () => spawnSync("git", ["status", "--porcelain", "--untracked-files=all", "--", ".", ":(exclude)node_modules"], { cwd: harnessRoot, encoding: "utf8" }).stdout;
+    const before = harnessStatus();
+    const result = spawnSync(process.execPath, [vendorCoreScript, "--source", harnessRoot, "--target", target, "--runtime", "claude"], { encoding: "utf8" });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    assert.match(result.stdout, /vendored imports resolved/);
+    assert.deepEqual(findMissingFreshNativePaths(target, "claude"), []);
+    for (const rel of [
+      ".claude/hooks/tasks.mjs", ".claude/hooks/task-gate.mjs", ".claude/hooks/task-ledger.mjs", ".claude/hooks/task-plan-review.mjs",
+      ".claude/hooks/lib/task-admission.mjs", ".claude/hooks/lib/task-coordinator.mjs", ".claude/hooks/lib/task-events.mjs",
+      ".claude/hooks/lib/task-lane-contract.mjs", ".claude/hooks/lib/task-launcher.mjs", ".claude/hooks/lib/task-paths.mjs",
+      ".claude/hooks/lib/task-receipts.mjs", ".claude/hooks/lib/task-reconciliation.mjs", ".claude/hooks/lib/task-runtime.mjs",
+      ".claude/hooks/lib/task-worker.mjs", ".claude/shared/lib/task-contract.mjs", ".claude/shared/lib/task-context.mjs",
+      ".claude/shared/lib/task-git.mjs", ".claude/shared/lib/task-process.mjs", ".claude/shared/lib/task-worker.mjs",
+      ".claude/shared/lib/file-lock.mjs", ".claude/skills/orchestrating-delivery/references/task-runtime.md",
+      ".claude/skills/orchestrating-delivery/references/parallel-tasks.md",
+    ]) {
+      assert.ok(existsSync(join(target, rel)), `${rel} vendored`);
+    }
+    assert.equal(existsSync(join(target, ".claude/hooks/lib/__fixtures__")), false, "test fixtures are never vendored");
+    assert.equal(existsSync(join(target, ".claude/hooks/task-e2e.test.mjs")), false);
+    const settings = JSON.parse(readFileSync(join(target, ".claude", "settings.json"), "utf8"));
+    const commands = (event, matcher) => (settings.hooks[event] ?? []).filter((group) => (group.matcher ?? "*") === matcher).flatMap((group) => group.hooks.map((hook) => hook.command));
+    assert.equal(settings.env.CONSUMER_FLAG, "1", "the consumer's own settings survive the merge");
+    assert.ok(commands("PreToolUse", "*").some((command) => command.endsWith("/.claude/hooks/task-gate.mjs")));
+    assert.ok(commands("PreToolUse", "*").some((command) => command.endsWith("/.claude/hooks/task-ledger.mjs")));
+    for (const event of ["PostToolUse", "PostToolUseFailure", "SubagentStop"]) {
+      assert.ok(commands(event, "*").some((command) => command.endsWith("/.claude/hooks/task-ledger.mjs")), `${event} ledger`);
+    }
+    assert.ok(commands("PostToolUse", "Agent").some((command) => command.endsWith("/.claude/hooks/task-plan-review.mjs")));
+    // Lane state lives under .claude/plans/ (task-runs/, worktrees, jobs), which the vendored ignore covers.
+    assert.match(readFileSync(join(target, ".claude", ".gitignore"), "utf8"), /^plans\/$/m);
+    // The vendored CLI and launcher load in the consumer layout.
+    for (const entry of [".claude/hooks/tasks.mjs", ".claude/hooks/lib/task-launcher.mjs", ".claude/hooks/lib/task-worker.mjs", ".claude/hooks/task-gate.mjs"]) {
+      const loaded = spawnSync(process.execPath, ["--input-type=module", "-e", `await import(${JSON.stringify(join(target, entry))});`], { encoding: "utf8" });
+      assert.equal(loaded.status, 0, `${entry}: ${loaded.stderr}`);
+    }
+    assert.equal(harnessStatus(), before, "vendoring never writes into the harness repository");
+    // AGENTS.md: the harness is never vendored at the repository root (test state under a
+    // gitignored .claude/plans/ may exist there; vendored artifacts may not).
+    for (const forbidden of [".claude/hooks", ".claude/settings.json", ".claude/shared", ".codex/hooks.json", ".opencode/plugin", ".pi/harness"]) {
+      assert.equal(existsSync(join(harnessRoot, forbidden)), false, `${forbidden} at the repo root`);
+    }
+  } finally {
+    rmSync(target, { recursive: true, force: true });
   }
 });
