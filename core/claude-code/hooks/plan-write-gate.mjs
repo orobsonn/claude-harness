@@ -94,9 +94,24 @@ function checkScopeRail(payload, readGateStateFn) {
   const filePath = payload?.tool_input?.file_path;
   if (typeof filePath !== "string" || filePath.length === 0) return null; // fail-open
 
-  const normPathLower = path.posix.normalize(filePath.replace(/\\/g, "/")).toLowerCase();
-  const inScope = scopePaths.some((s) => scopeContains(normPathLower, s));
-  const inAllowed = allowedWrites.some((s) => scopeContains(normPathLower, s));
+  // Claude Code's file tools always send an ABSOLUTE file_path; scope entries are repo-relative.
+  // Compare relative to the project root, so an in-scope absolute write is allowed and a write
+  // outside the project is never "in scope".
+  let relativePath = filePath;
+  if (path.isAbsolute(filePath)) {
+    const root = process.env.CLAUDE_PROJECT_DIR || payload.cwd || process.cwd();
+    let realRoot = root;
+    try { realRoot = fs.realpathSync(root); } catch { /* keep the given root */ }
+    let target = path.resolve(filePath);
+    try { target = path.join(fs.realpathSync(path.dirname(target)), path.basename(target)); } catch { /* new dir */ }
+    const fromRoot = path.relative(realRoot, target);
+    relativePath = fromRoot.startsWith("..") || path.isAbsolute(fromRoot) ? null : fromRoot;
+  }
+  const normPathLower = relativePath === null
+    ? null
+    : path.posix.normalize(relativePath.replace(/\\/g, "/")).toLowerCase();
+  const inScope = normPathLower !== null && scopePaths.some((s) => scopeContains(normPathLower, s));
+  const inAllowed = normPathLower !== null && allowedWrites.some((s) => scopeContains(normPathLower, s));
   if (inScope || inAllowed) return null; // inside scope/allowed → allow
 
   return {
