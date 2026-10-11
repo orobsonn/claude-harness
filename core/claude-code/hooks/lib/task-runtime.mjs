@@ -35,6 +35,31 @@ function collect(root, relative, out) {
   }
 }
 
+/** Hook wiring a lane cannot run without (event → script, all on the "*" matcher). */
+const REQUIRED_LANE_HOOKS = [
+  ["PreToolUse", "task-gate.mjs"],
+  ["PreToolUse", "task-ledger.mjs"],
+  ["PostToolUse", "task-ledger.mjs"],
+  ["PostToolUseFailure", "task-ledger.mjs"],
+];
+
+/**
+ * The lane is only safe when its settings wire the lane gate and ledger. vendor-core keeps a
+ * consumer's customized hook arrays verbatim, which can leave them out — refuse instead of running
+ * an ungated lane.
+ */
+export function missingLaneHooks(root) {
+  let settings;
+  try {
+    settings = JSON.parse(fs.readFileSync(path.join(root, ".claude", "settings.json"), "utf8"));
+  } catch {
+    return REQUIRED_LANE_HOOKS.map(([event, script]) => `${event}:${script}`);
+  }
+  return REQUIRED_LANE_HOOKS.filter(([event, script]) => !(settings?.hooks?.[event] ?? []).some((group) =>
+    (group?.matcher ?? "*") === "*" && (group.hooks ?? []).some((hook) => typeof hook?.command === "string" && hook.command.endsWith(`/.claude/hooks/${script}`))))
+    .map(([event, script]) => `${event}:${script}`);
+}
+
 /** Hash the lane runtime of a worktree. Throws when an asset is missing or unsafe. */
 export function captureTaskRuntime(worktree) {
   const root = fs.realpathSync(worktree);
@@ -44,6 +69,10 @@ export function captureTaskRuntime(worktree) {
       throw new Error(`lane runtime asset missing: ${entry}. Commit the vendored .claude/ harness (claude-harness init) before dispatching parallel tasks.`);
     }
     collect(root, entry, files);
+  }
+  const missing = missingLaneHooks(root);
+  if (missing.length) {
+    throw new Error(`the vendored .claude/settings.json does not wire the task lane hooks (${missing.join(", ")}); a customized hooks array was kept by vendor-core — add matcher "*" entries for .claude/hooks/task-gate.mjs and .claude/hooks/task-ledger.mjs, commit, and dispatch again`);
   }
   const hash = createHash("sha256");
   for (const relative of files.sort()) {

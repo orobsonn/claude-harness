@@ -10,11 +10,17 @@ function runtimeTree(t) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "lane-runtime-")));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   for (const file of [".claude/hooks/task-gate.mjs", ".claude/hooks/lib/task-launcher.mjs", ".claude/shared/lib/x.mjs", ".claude/agents/executor.md",
-    ".claude/settings.json", ".claude/skills/orchestrating-delivery/references/task-runtime.md",
+    ".claude/skills/orchestrating-delivery/references/task-runtime.md",
     ".claude/skills/orchestrating-delivery/references/eye-tier.mjs", ".claude/skills/creating-plans/references/validate-plan.mjs"]) {
     fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
     fs.writeFileSync(path.join(root, file), file);
   }
+  const hook = (script) => ({ type: "command", command: `node \${CLAUDE_PROJECT_DIR}/.claude/hooks/${script}` });
+  fs.writeFileSync(path.join(root, ".claude/settings.json"), JSON.stringify({ hooks: {
+    PreToolUse: [{ matcher: "*", hooks: [hook("task-gate.mjs"), hook("task-ledger.mjs")] }],
+    PostToolUse: [{ matcher: "*", hooks: [hook("task-ledger.mjs")] }],
+    PostToolUseFailure: [{ matcher: "*", hooks: [hook("task-ledger.mjs")] }],
+  } }));
   return root;
 }
 
@@ -41,4 +47,10 @@ test("a worktree without the vendored harness cannot host a lane", (t) => {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "lane-runtime-empty-")));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   assert.throws(() => captureTaskRuntime(root), /Commit the vendored \.claude\/ harness/);
+});
+
+test("a worktree whose settings do not wire the lane gate and ledger cannot host a lane", (t) => {
+  const root = runtimeTree(t);
+  fs.writeFileSync(path.join(root, ".claude/settings.json"), JSON.stringify({ hooks: { PreToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command: "node custom.mjs" }] }] } }));
+  assert.throws(() => captureTaskRuntime(root), /does not wire the task lane hooks \(PreToolUse:task-gate\.mjs, PreToolUse:task-ledger\.mjs, PostToolUse:task-ledger\.mjs, PostToolUseFailure:task-ledger\.mjs\)/);
 });
