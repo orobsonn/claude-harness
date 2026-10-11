@@ -5,6 +5,13 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [3.7.7](https://github.com/orobsonn/claude-harness/compare/v3.7.6...v3.7.7) (2026-10-11)
+
+
+### Bug Fixes
+
+* **pi:** unblock aggregate recovery and expose native next actions ([#1110](https://github.com/orobsonn/claude-harness/issues/1110)) ([1ea1c49](https://github.com/orobsonn/claude-harness/commit/1ea1c49537649319d3739368e1f3a471f6fd8f1a))
+
 ## [3.7.6](https://github.com/orobsonn/claude-harness/compare/v3.7.5...v3.7.6) (2026-10-11)
 
 
