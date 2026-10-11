@@ -101,15 +101,6 @@ test("launcher disables discovered project resources and loads only the harness 
   assert.equal(invocation.env[PI_AUTH_PATH_ENV], "/operator/.pi/agent/auth.json");
 });
 
-test("only admitted tasks receive session-local project trust and operator denial wins", () => {
-  const options = { root: "/package", argv: [], env: {}, dependencyPaths: DEPENDENCIES };
-  assert.equal(buildPiHarnessInvocation(options).args.includes("--approve"), false);
-  const task = buildPiHarnessInvocation({ ...options, admittedTask: true, argv: ["--no-approve"] });
-  assert.ok(task.args.includes("--approve"));
-  assert.ok(task.args.indexOf("--approve") < task.args.indexOf("--no-approve"));
-  assert.equal(buildPiHarnessInvocation({ ...options, env: { PI_HARNESS_TASK_RUN: "forged" } }).args.includes("--approve"), false);
-});
-
 test("an Orca terminal loads only the marked official Pi status extension", () => {
   const source = mkdtempSync(join(tmpdir(), "pi-orca-status-"));
   const extension = join(source, "extensions/orca-agent-status.ts");

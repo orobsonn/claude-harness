@@ -264,7 +264,7 @@ export function resolveOrcaStatusExtension(env) {
 /**
  * @param {{root: string, argv: string[], env: NodeJS.ProcessEnv, runtimePrompt?: string, dependencyPaths?: ReturnType<typeof resolvePiDependencyPaths>, userHome?: string, sessionId?: string, resumeSessionFile?: string}} options
  */
-export function buildPiHarnessInvocation({ root, argv, env, runtimePrompt = "", dependencyPaths = resolvePiDependencyPaths(root), userHome = homedir(), sessionId = randomUUID(), resumeSessionFile, admittedTask = false }) {
+export function buildPiHarnessInvocation({ root, argv, env, runtimePrompt = "", dependencyPaths = resolvePiDependencyPaths(root), userHome = homedir(), sessionId = randomUUID(), resumeSessionFile }) {
   const runtimeDir = resolve(process.cwd(), ".pi/harness/runtime");
   const sessionDir = resolve(process.cwd(), ".pi/harness/sessions");
   const authPath = join(resolve(userHome), ".pi", "agent", "auth.json");
@@ -284,9 +284,6 @@ export function buildPiHarnessInvocation({ root, argv, env, runtimePrompt = "", 
       "--no-extensions",
       "--no-skills",
       "--no-context-files",
-      // A validated task grant already authorizes this worktree. Keep trust
-      // session-local; explicit operator flags later in argv retain precedence.
-      ...(admittedTask ? ["--approve"] : []),
       ...extensionArgs,
       ...[...new Set([join(root, "core/codex/skills"), join(root, "core/pi/skills")])].flatMap((dir) => ["--skill", dir]),
       "--append-system-prompt",
@@ -720,7 +717,6 @@ export function runPiHarnessCli(argv, options = {}) {
       runtimePrompt,
       resumeSessionFile,
       sessionId,
-      admittedTask: parentKind === "local",
     });
     materializeRuntimeFn(packageRoot, invocation.env.PI_CODING_AGENT_DIR, undefined, admittedProfile);
     if (admittedProfile.provider.id === "verboo") {
