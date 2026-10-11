@@ -3303,3 +3303,35 @@ test("vendor-core: parallel task lanes are vendored whole, wired and import-clea
     rmSync(target, { recursive: true, force: true });
   }
 });
+
+test("vendor-core: a consumer with customized hook arrays still receives the parallel-lane wiring, once", async () => {
+  const target = mkdtempSync(join(tmpdir(), "vendor-hook-union-"));
+  try {
+    mkdirSync(join(target, ".claude"), { recursive: true });
+    // An older harness generation's wiring plus one operator hook, with no manifest (an update in place).
+    const custom = { type: "command", command: "node scripts/my-audit.mjs" };
+    writeFileSync(join(target, ".claude", "settings.json"), JSON.stringify({ hooks: {
+      PreToolUse: [
+        { matcher: "Bash", hooks: [{ type: "command", command: "node ${CLAUDE_PROJECT_DIR}/.claude/hooks/entry-gate.mjs" }, custom] },
+        { matcher: "Write|Edit", hooks: [{ type: "command", command: "node ${CLAUDE_PROJECT_DIR}/.claude/hooks/plan-write-gate.mjs" }] },
+      ],
+      PostToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command: "node ${CLAUDE_PROJECT_DIR}/.claude/hooks/stamp-triage.mjs" }] }],
+      SessionStart: [{ matcher: "startup", hooks: [{ type: "command", command: "node ${CLAUDE_PROJECT_DIR}/.claude/hooks/reinject-state.mjs" }] }],
+    } }, null, 2));
+    const vendor = () => spawnSync(process.execPath, [vendorCoreScript, "--source", harnessRoot, "--target", target, "--runtime", "claude"], { encoding: "utf8" });
+    const first = vendor();
+    assert.equal(first.status, 0, first.stderr || first.stdout);
+    const { missingLaneHooks } = await import(pathToFileURL(join(target, ".claude/hooks/lib/task-runtime.mjs")).href);
+    assert.deepEqual(missingLaneHooks(target), [], "the host would run lanes in this consumer");
+    const settings = () => JSON.parse(readFileSync(join(target, ".claude", "settings.json"), "utf8"));
+    const bash = settings().hooks.PreToolUse.find((group) => group.matcher === "Bash").hooks.map((hook) => hook.command);
+    assert.ok(bash.includes(custom.command), "the operator's own hook survives");
+    const afterFirst = JSON.stringify(settings());
+    assert.equal(vendor().status, 0);
+    assert.equal(JSON.stringify(settings()), afterFirst, "a second vendor adds nothing (no duplicate hooks)");
+    const all = settings().hooks.PreToolUse.flatMap((group) => group.hooks.map((hook) => `${group.matcher}|${hook.command}`));
+    assert.equal(new Set(all).size, all.length);
+  } finally {
+    rmSync(target, { recursive: true, force: true });
+  }
+});
