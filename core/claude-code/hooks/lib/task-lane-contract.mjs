@@ -153,11 +153,28 @@ export function isDiscardCommand(command) {
 }
 
 /**
+ * Shell quoting and escapes removed (`"git" push`, `git "push"`, `task""s.mjs`, `g\it`) so the
+ * word policies below see the command the shell will run. This is hardening, not a boundary: a
+ * shell can still build words dynamically; the OS sandbox and the host inspection are the controls.
+ */
+export function normalizeForPolicy(command) {
+  return String(command).replace(/["'\\]/g, "");
+}
+
+/** Deploy CLIs a lane must never run. */
+export const DEPLOY_COMMANDS = /\b(?:(?:(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?deploy|wrangler\s+(?:deploy|publish|pages\s+deploy)|netlify\s+deploy|fly(?:ctl)?\s+deploy|firebase\s+deploy|railway\s+up|serverless\s+deploy|sls\s+deploy|cdk\s+deploy|terraform\s+apply|pulumi\s+up|kubectl\s+apply|helm\s+(?:install|upgrade)|gcloud\s+\S+\s+deploy|aws\s+\S+\s+deploy|docker\s+push)\b|(?:vercel|heroku)(?![\w./-]))/;
+
+/**
  * Decide a lane Bash command. `identity` = { featureId, taskId, parentRoot }.
  * @returns {null | string} a deny reason, or null to allow.
  */
-export function laneBashDenyReason(command, identity) {
-  if (typeof command !== "string") return "command must be a string";
+export function laneBashDenyReason(rawCommand, identity) {
+  if (typeof rawCommand !== "string") return "command must be a string";
+  const command = rawCommand;
+  const normalized = normalizeForPolicy(rawCommand);
+  if (normalized !== rawCommand && laneBashDenyReason(normalized, identity) !== null && !parseMarkCommand(rawCommand)) {
+    return laneBashDenyReason(normalized, identity);
+  }
   const mark = /mark\.mjs/.test(command) ? parseMarkCommand(command) : null;
   if (/mark\.mjs/.test(command)) {
     if (!mark) return "run each mark.mjs marker alone: `node .claude/hooks/mark.mjs <action> --feature-id <feature> --task-id <task>`, no chaining or redirection";
@@ -188,6 +205,11 @@ export function laneBashDenyReason(command, identity) {
     return "Do not amend task commits: this can orphan producer evidence. Create a selective follow-up commit instead.";
   }
   if (/(?:^|[^\w.-])git\s+-/.test(command)) return "git global options (-C, -c, --git-dir, …) are not allowed in a lane";
+  // The worktree shares the repository's .git (config, hooks) with the global parent: anything
+  // written there runs in the parent (core.fsmonitor, hooks, filters, merge drivers).
+  if (/(?:^|[^\w-])git\s+config\b/.test(command) || /git-common-dir|\bGIT_(?:DIR|WORK_TREE|COMMON_DIR|CONFIG)\w*|(?:^|[\s'"=:/])\.git(?:\/|\s|$|['"])|\bcore\.(?:hooksPath|fsmonitor)\b/.test(command)) {
+    return "the repository's Git configuration and hooks are shared with the global parent and are off limits to a lane";
+  }
   if (!isIsolatedMergeBase(command) &&
       /(?:^|[^\w-])git\s+(?:push|pull|fetch|merge|rebase|tag|cherry-pick|worktree|switch)\b/.test(command)) {
     return "task lanes cannot integrate, deliver, change branch or move other worktrees; the host owns merges (only a standalone `git merge-base A B` is allowed)";
@@ -198,25 +220,27 @@ export function laneBashDenyReason(command, identity) {
   if (/\bgh\s+(?:pr|release|issue)\s+(?:create|merge|edit|close|reopen|comment)\b/.test(command) || /\bgh\s+api\b/.test(command)) {
     return "task lanes cannot open, merge or edit PRs, releases or issues";
   }
-  if (/\b(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?deploy\b/.test(command) || /\bwrangler\s+(?:deploy|publish)\b/.test(command)) {
-    return "task lanes cannot deploy";
-  }
+  if (DEPLOY_COMMANDS.test(command)) return "task lanes cannot deploy";
   return null;
 }
 
-/** Write/Edit target policy. `role` = bare agent_type for subagent writes, null for the lane main loop. */
-export function laneWriteDenyReason(relativePath, { role, task, featureId }) {
-  if (relativePath === null) return "write target must be inside the task worktree";
+/**
+ * Write/Edit target policy for paths inside the task worktree. `role` = bare agent_type for
+ * subagent writes, null for the lane main loop (which writes only in contract.run_dir, decided by
+ * the caller before this). `exists` tells whether the target file already exists.
+ */
+export function laneWriteDenyReason(relativePath, { role, task, exists = false }) {
+  if (relativePath === null) return "write target must be inside the task worktree (or, for the orchestrator, contract.run_dir)";
   const normalized = path.posix.normalize(relativePath.replace(/\\/g, "/"));
-  const runDir = `.claude/plans/${featureId}/run`;
   if (role === null) {
-    if (normalized === runDir || normalized.startsWith(`${runDir}/`)) return null;
-    return `the lane orchestrator writes only its run buffers under ${runDir}/; product and tests are written by the dispatched hands`;
+    return "the lane orchestrator writes only its run buffers in contract.run_dir; product and tests are written by the dispatched hands";
   }
-  if (normalized.startsWith(".claude/")) return "hands never write the vendored harness or its state";
+  if (normalized.startsWith(".claude/") || normalized === ".git" || normalized.startsWith(".git/")) return "hands never write the vendored harness, its state or Git internals";
   if (role === "test-author") {
-    return pathInScope(normalized, laneFrozenPaths(task)) ? null
-      : "test-author writes only this task's locked test paths and fixtures";
+    if (pathInScope(normalized, laneFrozenPaths(task))) return null;
+    // The throwing scaffold stub (orchestrating-delivery 1c): only a NEW file inside the task scope.
+    if (!exists && pathInScope(normalized, laneTaskScope(task))) return null;
+    return "test-author writes only this task's locked test paths and fixtures, plus NEW scaffold files inside the task scope";
   }
   if (PRODUCER_ROLES.includes(role)) {
     return pathInScope(normalized, laneTaskScope(task)) ? null

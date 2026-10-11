@@ -37,6 +37,7 @@ import {
   parseHandStatus,
   parseMarkCommand,
   pathInScope,
+  routeAllows,
 } from "./task-lane-contract.mjs";
 import { taskReconciliationDigest, taskScopeBase } from "./task-reconciliation.mjs";
 import {
@@ -44,7 +45,6 @@ import {
   gateStateFile,
   isVolatileHarnessPath,
   laneLedgerFile,
-  sharedContextFile,
   taskRegistryPath,
 } from "./task-paths.mjs";
 
@@ -121,11 +121,11 @@ function validateDependencies(grant, task, entry) {
   return { ok: true };
 }
 
-/** Diary at exactly `head` (bounded), as a validated context return, or null when absent. */
-function readContextReturn(worktree, featureId, sessionId, taskId, head) {
-  const file = sharedContextFile(worktree, featureId);
+/** Lane diary (run_dir/shared_context.md, bounded) at exactly `head`, or null when absent. */
+function readContextReturn(worktree, runDir, sessionId, taskId, head) {
+  const file = path.join(runDir, "shared_context.md");
   if (!fs.existsSync(file)) return null;
-  const content = readArtifact(file, worktree);
+  const content = readArtifact(file, runDir);
   if (Buffer.byteLength(content, "utf8") > SHARED_CONTEXT_MAX_BYTES) throw new Error(`task diary exceeds ${SHARED_CONTEXT_MAX_BYTES} bytes`);
   if (gitText(worktree, "rev-parse", "HEAD") !== head) throw new Error("task HEAD changed while reading the diary");
   return buildTaskContextReturn({ sessionId, taskId, headSha: head, content, maxBytes: SHARED_CONTEXT_MAX_BYTES });
@@ -256,8 +256,15 @@ export function inspectTaskRun(entry, dependencies = {}) {
     if (!lastResult || lastResult.subtype !== "success" || lastResult.is_error) return failure("the latest lane session did not finish successfully");
     const calls = attachLedger(native.calls, readLaneLedger(laneLedgerFile(worktree, sessionId)));
     if (calls.some((call) => call.tool === "Agent" && call.ok && call.isAsync)) return failure("an asynchronous agent ran in the lane; lane agents must complete in the foreground");
+    // Re-check from the native stream what the lane gate enforced live: every dispatch that ran
+    // carried this task's marker, no final-review marker, and an admitted role/model route.
+    let routes;
+    try { routes = laneDispatchRoutes(plan, task); } catch (error) { return failure(error.message); }
+    const stray = calls.find((call) => (call.tool === "Agent" || call.tool === "Task") && call.ok &&
+      (call.marker?.ok !== true || call.marker.taskId !== entry.task_id || call.marker.finalReview || !routeAllows(routes, call.role, call.model)));
+    if (stray) return failure(`lane dispatch ${stray.id} (${stray.role ?? "unknown role"}, ${stray.model ?? "no model"}) ran outside this task's marker or admitted routes`);
 
-    const contextReturn = readContextReturn(worktree, entry.feature_id, sessionId, entry.task_id, head);
+    const contextReturn = readContextReturn(worktree, grant.run_dir, sessionId, entry.task_id, head);
     const diagnostics = {
       ...(contextReturn ? { context_return: contextReturn } : {}),
       ...(native.finalText.trim() ? { task_report: { session_id: sessionId, run_id: entry.launches.at(-1).run_id, head_sha: head, ...clip(native.finalText) } } : {}),
@@ -306,8 +313,6 @@ export function inspectTaskRun(entry, dependencies = {}) {
     }
     if (calls.some((call) => call.seq > capture.seq && committedBy(call))) return failure("a commit followed the last capture-verified; capture the final HEAD again", diagnostics);
 
-    let routes;
-    try { routes = laneDispatchRoutes(plan, task); } catch (error) { return failure(error.message); }
     const full = grant.mode === "FULL";
     const eyeCalls = calls.filter((call) => call.tool === "Agent" && call.ok && EYE_ROLES.includes(call.role) &&
       call.agentStatus === "completed" && call.marker?.fidelity !== true);

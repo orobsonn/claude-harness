@@ -159,6 +159,11 @@ export function inspectGrant(grantPath, cwd, { allowHistoricalDeps = false } = {
     throw new Error("exact parent, attempt, feature and task required");
   }
   if (grant.cwd !== root || absoluteGrant !== taskAdmissionPath(root, grant.attempt_id)) throw new Error("grant worktree/path mismatch");
+  // The lane's run buffers sit beside its worktree, outside Git and outside any .claude/ path.
+  if (typeof grant.run_dir !== "string" || grant.run_dir !== path.join(path.dirname(root), "run") ||
+      !fs.lstatSync(grant.run_dir).isDirectory() || fs.realpathSync(grant.run_dir) !== grant.run_dir) {
+    throw new Error("grant run_dir must be the canonical run/ directory beside the worktree");
+  }
   if (!HEX_40.test(grant.base_sha ?? "") || !HEX_64.test(grant.plan_sha256 ?? "") || !HEX_64.test(grant.spec_sha256 ?? "")) {
     throw new Error("exact artifact hashes required");
   }
@@ -360,6 +365,7 @@ export function taskRunPrompt(taskRuntime, admission, { resumed = false } = {}) 
     spec_path: path.relative(admission.root, admission.specPath),
     base_sha: admission.grant.base_sha,
     branch: admission.grant.branch,
+    run_dir: admission.grant.run_dir,
     binding: admission.binding,
     dispatch_routes: laneDispatchRoutes(admission.plan, admission.task),
     ...(admission.grant.context_handoff === undefined ? {} : { context_handoff: admission.grant.context_handoff }),

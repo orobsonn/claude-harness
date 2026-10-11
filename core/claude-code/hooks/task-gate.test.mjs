@@ -138,12 +138,20 @@ test("lane Agent: roles, exact marker, foreground and the literal model route", 
 test("lane writes: orchestrator only run buffers; hands only their authorized paths", (t) => {
   const { run, payload, lane } = admittedLane(t);
   const write = (file, extra) => run(payload("Write", { file_path: path.join(lane.worktree, file), content: "x" }, extra));
-  assert.equal(write(".claude/plans/demo-feature/run/shared_context.md").deny, false);
+  const runWrite = (extra) => run(payload("Write", { file_path: path.join(lane.runDir, "shared_context.md"), content: "x" }, extra));
+  assert.equal(runWrite().deny, false, "the orchestrator writes its run buffers outside Git");
+  assert.equal(runWrite({ agent_id: "a1", agent_type: "executor" }).deny, true, "hands never write the run buffers");
+  assert.equal(write(".claude/plans/demo-feature/run/shared_context.md").deny, true, "nothing under .claude/ in the worktree");
+  assert.equal(run(payload("Write", { file_path: path.join(lane.runDir, "..", "worktree", "src/a/x.mjs"), content: "x" })).deny, true, "no escape from the run dir");
   assert.equal(write("src/a/x.mjs").deny, true, "the orchestrator never writes product");
   assert.equal(write("src/a/x.mjs", { agent_id: "a1", agent_type: "executor" }).deny, false);
   assert.equal(write("src/b/x.mjs", { agent_id: "a1", agent_type: "executor" }).deny, true);
   assert.equal(write("test/task-a.test.mjs", { agent_id: "a1", agent_type: "test-author" }).deny, false);
-  assert.equal(write("src/a/x.mjs", { agent_id: "a1", agent_type: "test-author" }).deny, true);
+  assert.equal(write("src/a/x.mjs", { agent_id: "a1", agent_type: "test-author" }).deny, false, "a NEW scaffold stub inside the scope");
+  fs.mkdirSync(path.join(lane.worktree, "src/a"), { recursive: true });
+  fs.writeFileSync(path.join(lane.worktree, "src/a/x.mjs"), "export const x = 1;\n");
+  assert.equal(write("src/a/x.mjs", { agent_id: "a1", agent_type: "test-author" }).deny, true, "never an existing product file");
+  assert.equal(write("src/b/y.mjs", { agent_id: "a1", agent_type: "test-author" }).deny, true, "never outside the scope");
   assert.equal(run(payload("Write", { file_path: "/etc/passwd", content: "x" }, { agent_id: "a1", agent_type: "executor" })).deny, true);
   assert.equal(run(payload("Edit", { file_path: path.join(lane.worktree, ".claude/hooks/task-gate.mjs") }, { agent_id: "a", agent_type: "sniper" })).deny, true);
 });
@@ -231,10 +239,36 @@ test("parent with admitted tasks: no hands, frozen plan/spec/classify, delivery 
       plan_sha256: planSha, spec_sha256: planSha, child_head: head, integrated_head: head, result_sha256: hashTaskReceipt(result) } };
   }
   writeRegistry(project, tasks);
-  assert.equal(parent("Bash", { command: "git push" }).deny, false);
+  // Registry-shaped receipts alone never open delivery: the gate runs the full integrated-evidence
+  // check (inspection receipt, two-parent merge, changed paths, frozen blobs). The positive path with
+  // real host receipts is covered end to end in task-e2e.test.mjs.
+  assert.match(parent("Bash", { command: "git push" }).reason, /integrated evidence missing for demo-feature\/task-a/);
   tasks["task-b"].integration.result_sha256 = hashTaskReceipt({ forged: true });
   writeRegistry(project, tasks);
   assert.match(parent("Bash", { command: "gh pr create --fill" }).reason, /task-b has no valid integration receipt/);
   fs.writeFileSync(path.join(project.root, ".claude/plans/.state", project.sessionId, "task-runs/index.json"), "{corrupt");
   assert.match(parent("Bash", { command: "git push" }).reason, /cannot be read safely/);
+});
+
+test("parent gate: the Git-control acknowledgement is the operator's alone; an internal error fails closed for delivery", (t) => {
+  const project = createTaskProject(t);
+  writeRegistry(project, { "task-a": { task_id: "task-a", attempt_id: "x", status: "running" } });
+  const parent = (tool_name, tool_input, deps = {}) => decide({ session_id: project.sessionId, tool_name, tool_input }, { env: {}, root: project.root, ...deps });
+  for (const command of [
+    "CLAUDE_HARNESS_ACCEPT_GIT_CONTROL_CHANGE=1 node .claude/hooks/tasks.mjs status --json '{}'",
+    "export CLAUDE_HARNESS_ACCEPT_GIT_CONTROL_CHANGE=1",
+  ]) assert.match(parent("Bash", { command }).reason, /only the operator sets it/, command);
+  const runs = path.join(project.root, ".claude/plans/.state", project.sessionId, "task-runs");
+  for (const command of [
+    `echo '{}' > ${runs}/index.json`,
+    "sed -i s/blocked/integrated/ .claude/plans/.state/x/task-runs/index.json",
+    "python3 -c 'open(\".claude/plans/.state/x/task-runs/index.json\",\"w\")'",
+  ]) assert.match(parent("Bash", { command }).reason, /host-owned/, command);
+  assert.match(parent("Write", { file_path: path.join(runs, "index.json"), content: "{}" }).reason, /host-owned/);
+  assert.equal(parent("Bash", { command: "node .claude/hooks/tasks.mjs status --json '{}'" }).deny, false, "the CLI is the way in");
+  // A payload whose fields throw on access reaches the gate's error path.
+  const boom = (field) => ({ get [field]() { throw new Error("boom"); } });
+  assert.equal(parent("Agent", boom("subagent_type")).deny, true);
+  assert.equal(parent("Bash", boom("command")).deny, true);
+  assert.equal(parent("Read", boom("file_path")).deny, false, "reads stay usable");
 });

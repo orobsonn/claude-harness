@@ -120,7 +120,7 @@ export function compareAndDeleteLock(lockPath, token) {
  */
 function tryCreateLock(lockPath, body) {
   try {
-    fs.writeFileSync(lockPath, JSON.stringify(body), { flag: "wx" });
+    fs.writeFileSync(lockPath, JSON.stringify(body), { flag: "wx", mode: 0o600 });
     return true;
   } catch (err) {
     if (err && /** @type {NodeJS.ErrnoException} */ (err).code === "EEXIST") {

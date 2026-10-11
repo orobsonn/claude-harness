@@ -5,14 +5,21 @@
  *
  * Parent (global) state:  <root>/.claude/plans/.state/<parentSession>/task-runs/
  *   index.json (+ .lock)          registry
- *   worktrees/task-<N>-<slug>/    lane worktrees
  *   jobs/<attemptId>/<runId>/     job.json, process.json, events.jsonl, stderr.log, result.json
+ * Lane roots, OUTSIDE the repository:
+ *   $CLAUDE_HARNESS_TASK_WORKTREES_DIR | $XDG_STATE_HOME/claude-harness/task-worktrees (default
+ *   ~/.local/state/…) / <repo>-<hash8>/<parentSession>/task-<N>-<slug>/{worktree,run}
+ *   Claude Code treats every path under a `.claude/` directory as a sensitive file and refuses
+ *   headless writes there (spike §11), so a lane worktree can never live inside `.claude/`; and
+ *   `run/` (the lane's own buffers: diary, notes) sits beside the worktree, outside Git.
  * Lane (worktree) state:   <worktree>/.claude/plans/.state/
  *   task-admission/<attemptId>.json (+ .claim)   immutable grant and its claim
  *   <laneSession>/gate-state.json, triage.json  seeded lane state (task_run binding)
  *   <laneSession>/task-ledger.jsonl             host-owned hook ledger
  */
+import os from "node:os";
 import path from "node:path";
+import { createHash } from "node:crypto";
 
 export const TASK_RUN_ENV = "CLAUDE_HARNESS_TASK_RUN";
 export const MAX_PARALLEL_TASKS = 3;
@@ -33,6 +40,28 @@ export const taskRunsDir = (root, sessionId) => path.join(sessionStateDir(root, 
 export const taskRegistryPath = (root, sessionId) => path.join(taskRunsDir(root, sessionId), "index.json");
 export const taskAdmissionPath = (worktree, attemptId) => path.join(stateRoot(worktree), "task-admission", `${attemptId}.json`);
 export const laneLedgerFile = (worktree, laneSession) => path.join(sessionStateDir(worktree, laneSession), "task-ledger.jsonl");
+export const TASK_WORKTREES_ENV = "CLAUDE_HARNESS_TASK_WORKTREES_DIR";
+/** Operator acknowledgement (own terminal only) of a shared Git config/hooks change during a run. */
+export const ACCEPT_GIT_CONTROL_ENV = "CLAUDE_HARNESS_ACCEPT_GIT_CONTROL_CHANGE";
+
+/** Base directory for lane roots (host env or XDG state), always absolute and outside any repo. */
+export function laneRootsBase(env = process.env) {
+  const configured = env[TASK_WORKTREES_ENV];
+  if (configured !== undefined) {
+    if (!path.isAbsolute(configured)) throw new Error(`${TASK_WORKTREES_ENV} must be an absolute path`);
+    return configured;
+  }
+  const state = env.XDG_STATE_HOME && path.isAbsolute(env.XDG_STATE_HOME) ? env.XDG_STATE_HOME : path.join(os.homedir(), ".local", "state");
+  return path.join(state, "claude-harness", "task-worktrees");
+}
+
+/** Lane root for one task attempt: <base>/<repo>-<hash8(root)>/<session>/<name>. */
+export function laneRoot(root, sessionId, name, env = process.env) {
+  const digest = createHash("sha256").update(root).digest("hex").slice(0, 8);
+  const repo = path.basename(root).replace(/[^A-Za-z0-9._-]/g, "-").slice(0, 40) || "repo";
+  return path.join(laneRootsBase(env), `${repo}-${digest}`, sessionId, name);
+}
+
 export const featureDir = (root, featureId) => path.join(root, ".claude", "plans", featureId);
 export const planFile = (root, featureId) => path.join(featureDir(root, featureId), "execution-plan.json");
 export const specFile = (root, featureId) => path.join(featureDir(root, featureId), "spec.md");

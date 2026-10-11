@@ -85,9 +85,12 @@ export function approvePlan(root, { sessionId = PARENT_SESSION, toolUseId = "too
  */
 export function createTaskProject(t, { tasks = defaultTasks(), mode = "full", triageMode = "FULL", approve = true } = {}) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "cc-task-parent-")));
+  // In-process coordinator calls resolve lane roots from this env; keep them in a temp dir per test.
+  const lanes = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "cc-task-lanes-")));
+  process.env.CLAUDE_HARNESS_TASK_WORKTREES_DIR = lanes;
   t.after(() => {
-    try { git(root, "worktree", "prune"); } catch { /* best effort */ }
     fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(lanes, { recursive: true, force: true });
   });
   git(root, "init", "-q", "-b", "main");
   git(root, "config", "user.email", "t@example.com");
@@ -107,7 +110,7 @@ export function createTaskProject(t, { tasks = defaultTasks(), mode = "full", tr
   fs.writeFileSync(path.join(stateDir, "triage.json"), JSON.stringify({ session_id: PARENT_SESSION, mode: triageMode, feature_id: FEATURE }));
   fs.writeFileSync(path.join(stateDir, "gate-state.json"), JSON.stringify({ feature_id: FEATURE }));
   if (approve) approvePlan(root);
-  return { root, sessionId: PARENT_SESSION, featureId: FEATURE, plan: parallelPlan(tasks, mode) };
+  return { root, lanes, sessionId: PARENT_SESSION, featureId: FEATURE, plan: parallelPlan(tasks, mode) };
 }
 
 /**
@@ -117,7 +120,10 @@ export function createTaskProject(t, { tasks = defaultTasks(), mode = "full", tr
 export function reserveLane(project, taskId, { attemptId = "22222222-2222-4222-8222-222222222222", dependencies = [] } = {}) {
   const { root, sessionId, featureId } = project;
   const base = git(root, "rev-parse", "HEAD");
-  const worktree = path.join(root, ".claude/plans/.state", sessionId, "task-runs/worktrees", `lane-${taskId}`);
+  const laneDir = path.join(project.lanes, `lane-${taskId}`);
+  const worktree = path.join(laneDir, "worktree");
+  const runDir = path.join(laneDir, "run");
+  fs.mkdirSync(runDir, { recursive: true });
   const branch = `harness/task-${taskId}-${attemptId}`;
   git(root, "worktree", "add", "-q", "-b", branch, worktree, base);
   const realWorktree = fs.realpathSync(worktree);
@@ -138,6 +144,7 @@ export function reserveLane(project, taskId, { attemptId = "22222222-2222-4222-8
     feature_id: featureId,
     task_id: taskId,
     cwd: realWorktree,
+    run_dir: fs.realpathSync(runDir),
     branch,
     base_sha: base,
     mode: plan.mode.toUpperCase(),
@@ -149,5 +156,5 @@ export function reserveLane(project, taskId, { attemptId = "22222222-2222-4222-8
   const grantPath = path.join(realWorktree, ".claude/plans/.state/task-admission", `${attemptId}.json`);
   fs.mkdirSync(path.dirname(grantPath), { recursive: true });
   fs.writeFileSync(grantPath, `${JSON.stringify(grant, null, 2)}\n`, { mode: 0o600 });
-  return { worktree: realWorktree, grant, grantPath, branch, base };
+  return { worktree: realWorktree, runDir: fs.realpathSync(runDir), grant, grantPath, branch, base };
 }

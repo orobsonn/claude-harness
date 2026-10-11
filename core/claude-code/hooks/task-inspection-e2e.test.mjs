@@ -96,6 +96,12 @@ test("inspection matrix: the host derives ready/blocked from native evidence", {
     return steps;
   })();
 
+  // P7 — dispatches that slipped past the lane gate (wrong model, foreign marker, final-review marker).
+  const ungated = (agent) => laneSteps({ task: a, extraAfter: [{ agent: { report: "## Veredito: pass", ...agent, ungated: true } }] });
+  const wrongRoute = ungated({ subagent_type: "compliance", model: "haiku", prompt: `${marker("task-a")}\nReview.` });
+  const foreignMarker = ungated({ subagent_type: "compliance", model: "sonnet", prompt: `${marker("task-b")}\nReview.` });
+  const finalReview = ungated({ subagent_type: "compliance", model: "sonnet", prompt: `[HARNESS_FINAL_REVIEW]\n${marker("task-a")}\nReview.` });
+
   const runs = await Promise.all([
     runScenarioProject(t, { tasks, lanes: { "task-a": [{ steps: laneSteps({ task: a }) }], "task-b": [{ steps: executorBeforeFreeze }], "task-d": [{ steps: authorAfterFidelity }] } }),
     runScenarioProject(t, { tasks, lanes: { "task-a": [{ steps: outOfScope }], "task-b": [{ steps: dirty }], "task-d": [{ steps: laneSteps({ task: d }), exit: 1 }] } }),
@@ -109,6 +115,9 @@ test("inspection matrix: the host derives ready/blocked from native evidence", {
       git(project.root, "commit", "-qm", "existing product");
     } }),
   ]);
+  const p7 = await Promise.all([wrongRoute, foreignMarker, finalReview].map((steps) =>
+    runScenarioProject(t, { tasks: [a], lanes: { "task-a": [{ steps }] } })));
+  runs.push(...p7);
   const [p1, p2, p3, p4, p5, p6] = runs;
   const expectStatus = (run, taskId, status, pattern) => {
     const task = run.byId[taskId];
@@ -140,6 +149,8 @@ test("inspection matrix: the host derives ready/blocked from native evidence", {
   assert.equal(fs.readFileSync(path.join(p5.byId["task-a"].worktree, "src/a/index.mjs"), "utf8").includes("task-a-ok"), true, "the executor's write really landed");
   expectStatus(p5, "task-b", "blocked", /no committed product change/);
   expectStatus(p6, "task-a", "blocked", /freeze commit may only add the locked tests/);
+
+  for (const run of p7) expectStatus(run, "task-a", "blocked", /ran outside this task's marker or admitted routes/);
 
   // The parent never moved: inspection is read-only.
   for (const run of runs) assert.equal(git(run.project.root, "status", "--porcelain", "--untracked-files=no"), "");

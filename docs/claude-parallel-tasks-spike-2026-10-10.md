@@ -162,7 +162,8 @@ com `rateLimitType:"five_hour"`.
 1. **Foreground forçado por env.** O worker define `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1` na lane. Sem isso o
    `Agent` é async e a ordem TDD fica não determinística. O hook da lane nega `run_in_background`, e a inspeção
    rejeita qualquer `Agent` cujo resultado (ledger ou stream) tenha `isAsync:true`.
-2. **Isolamento da lane.** `--setting-sources project,local --strict-mcp-config --tools …` mais o allowlist do §1.
+2. **Isolamento da lane.** `--setting-sources project --strict-mcp-config --tools …` mais o allowlist do §1
+   (a implementação tirou o `local`: um `settings.local.json` escrito pela lane nunca carrega; ver §11).
    O env da lane recebe só a allowlist (PATH, HOME, LANG, TERM, TMPDIR, USER, SHELL, `CLAUDE_CONFIG_DIR` se
    definido, as próprias vars do harness).
 3. **cwd verificado.** A inspeção exige `system/init.cwd === realpath(worktree)` e um único `session_id` em todos
@@ -188,3 +189,39 @@ igual ao nome do transcript em `~/.claude/projects/<proj>/<id>.jsonl`. **Decisã
 `node .claude/hooks/tasks.mjs …` como comando único, sem atribuição de env, `cd`, `env` ou separadores. Assim
 o modelo não troca a identidade pelo prefixo do comando. O mesmo env também traz `CLAUDE_CODE_MESSAGING_TOKEN`,
 `CLAUDE_PID` e outros: o worker remove tudo que é `CLAUDE*` antes de lançar a lane.
+
+## 11. Escritas headless sob `.claude/` e a raiz das lanes
+
+Rodada LIVE (2026-10-11, 3 lanes reais): com a worktree da lane em `.claude/plans/.state/<sessão>/task-runs/worktrees/`,
+toda escrita das mãos foi recusada pelo próprio Claude Code como "sensitive file": o CLI trata qualquer caminho
+que passe por um diretório `.claude/` como sensível, mesmo dentro da worktree e com `acceptEdits`. **Decisão:** a raiz
+das lanes fica **fora do repositório**: `$CLAUDE_HARNESS_TASK_WORKTREES_DIR` ou
+`$XDG_STATE_HOME/claude-harness/task-worktrees` (padrão `~/.local/state/…`), em
+`<repo>-<hash8>/<sessão>/task-<N>-<slug>/{worktree,run}`. O `run/` guarda os buffers do orquestrador da lane
+(diário `shared_context.md`), fora do Git, e entra na sessão por `--add-dir`. Prompts vão por arquivo 0600
+(`--append-system-prompt-file`) e stdin, nunca por argv (visível em `/proc/<pid>/cmdline`).
+
+## 12. Sandbox nativo do Claude Code nesta VPS (resultado negativo)
+
+Os revisores pediram isolamento de SO para o Bash da lane. O binário 2.1.296 aceita `sandbox.enabled`,
+`sandbox.failIfUnavailable`, `sandbox.allowUnsandboxedCommands`, `sandbox.filesystem.allowWrite/denyWrite` e
+`sandbox.network.allowedDomains` via `--settings`. Rodada com `claude -p --model haiku --setting-sources project
+--settings <sandbox.json> --tools Bash` numa worktree temporária fora do repo:
+
+```text
+apply-seccomp: write /proc/self/setgroups (nested userns is capability-restricted; caller must provide CAP_SYS_ADMIN): Permission denied
+```
+
+O mesmo com `enableWeakerNestedSandbox: true`. O Ubuntu desta VPS tem `kernel.apparmor_restrict_unprivileged_userns=1`:
+o `bwrap` do sistema roda (tem perfil AppArmor), mas o helper de seccomp do Claude Code não consegue o userns
+aninhado. Com `failIfUnavailable: true` o Bash falha fechado, sem rodar sem confinamento, o que está certo. Mas aqui
+nenhum Bash roda. Mudar o sysctl do host é decisão do operador, não da implementação.
+
+**Decisão:** o port não liga o sandbox (não dá para provar aqui), e a paridade com o Pi continua: os trilhos são
+gates do harness, não sandbox de SO. O que entrou no lugar, tudo testado: lanes fora do repo; digest de
+`.git/config`, `.git/hooks` e `.git/info/attributes`, com o host recusando agir quando mudam
+(`CLAUDE_HARNESS_ACCEPT_GIT_CONTROL_CHANGE=1` só do terminal do operador); `protocol.allow=never` no Git da lane;
+env da lane e do supervisor por allowlist; a inspeção recheca marcador e rota de todo despacho a partir do stream
+nativo; a entrega exige a evidência integrada completa. **Risco residual (antes do merge):** o Bash da lane roda
+como o mesmo usuário. Uma lane hostil ainda consegue escrever fora da worktree e regravar o próprio ledger.
+O host detecta parte disso (Git, stream nativo, digest de controle), mas não tudo.

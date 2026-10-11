@@ -64,6 +64,11 @@ function isDirectCli() {
 }
 
 if (isDirectCli()) {
+  // Host git calls never execute a (possibly lane-planted) fsmonitor command.
+  const count = Number(process.env.GIT_CONFIG_COUNT) || 0;
+  process.env[`GIT_CONFIG_KEY_${count}`] = "core.fsmonitor";
+  process.env[`GIT_CONFIG_VALUE_${count}`] = "false";
+  process.env.GIT_CONFIG_COUNT = String(count + 1);
   const controller = new AbortController();
   for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) process.on(signal, () => controller.abort());
   runTasksCli(process.argv.slice(2), { signal: controller.signal })

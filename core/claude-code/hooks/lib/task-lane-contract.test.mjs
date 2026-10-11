@@ -104,6 +104,18 @@ test("lane Bash denies coordination, delivery, integration, amend and harness ac
     "npm run deploy",
     "pnpm deploy",
     "npx wrangler deploy",
+    "vercel --prod",
+    "npx vercel deploy",
+    "cd web && vercel",
+    "heroku container:push web",
+    "fly deploy",
+    "docker push registry/app",
+    "\"git\" push",
+    "g\\it push origin HEAD",
+    "node .claude/hooks/task\"\"s.mjs status",
+    "git config core.fsmonitor /tmp/x.sh",
+    "git config --global alias.x '!sh'",
+    "echo '#!/bin/sh' > .git/hooks/pre-commit",
     "node .claude/skills/orchestrating-delivery/references/spawn-hand.mjs --descriptor d.json",
     "cat .claude/plans/.state/x/gate-state.json",
     "rm .claude/plans/.state/task-admission/a.json.claim",
@@ -129,6 +141,8 @@ test("lane Bash allows ordinary work, isolated merge-base and own markers only",
     "node --test test/a.test.mjs",
     "git diff > .claude/plans/demo/run/diff.txt",
     "npm test",
+    "cat vercel.json",
+    "git commit -m \"it's fine\"",
     "node .claude/hooks/mark.mjs fidelity-pass --feature-id demo --task-id task-a",
     "node .claude/hooks/mark.mjs capture-verified --feature-id demo --task-id task-a",
     "node .claude/hooks/mark.mjs active-scope --feature-id demo --task-id task-a --role executor --scope-paths src/a",
@@ -144,13 +158,17 @@ test("lane Bash allows ordinary work, isolated merge-base and own markers only",
 });
 
 test("write policy: orchestrator only run buffers, hands only their authorized paths", () => {
-  const ctx = (role) => ({ role, task, featureId: "demo" });
-  assert.equal(laneWriteDenyReason(".claude/plans/demo/run/shared_context.md", ctx(null)), null);
+  const ctx = (role, exists = false) => ({ role, task, exists });
+  // The orchestrator's run buffers live outside the worktree (decided by the gate before this).
+  assert.ok(laneWriteDenyReason(".claude/plans/demo/run/shared_context.md", ctx(null)), "nothing in the worktree for the orchestrator");
   assert.ok(laneWriteDenyReason("src/a/x.mjs", ctx(null)));
   assert.ok(laneWriteDenyReason(".claude/plans/demo/execution-plan.json", ctx(null)));
   assert.equal(laneWriteDenyReason("test/a.test.mjs", ctx("test-author")), null);
   assert.equal(laneWriteDenyReason("test/fx/a.json", ctx("test-author")), null);
-  assert.ok(laneWriteDenyReason("src/a/x.mjs", ctx("test-author")));
+  assert.equal(laneWriteDenyReason("src/a/x.mjs", ctx("test-author")), null, "a NEW scaffold stub inside the scope");
+  assert.ok(laneWriteDenyReason("src/a/x.mjs", ctx("test-author", true)), "never an existing product file");
+  assert.ok(laneWriteDenyReason("src/b/x.mjs", ctx("test-author")), "never outside the scope");
+  assert.ok(laneWriteDenyReason(".git/hooks/pre-commit", ctx("executor")), "never Git internals");
   assert.equal(laneWriteDenyReason("src/a/x.mjs", ctx("executor")), null);
   assert.ok(laneWriteDenyReason("src/b/x.mjs", ctx("sniper-high")));
   assert.ok(laneWriteDenyReason(".claude/hooks/mark.mjs", ctx("executor")));

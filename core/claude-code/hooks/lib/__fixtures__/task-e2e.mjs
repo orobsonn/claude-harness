@@ -24,7 +24,11 @@ export const marker = (taskId) => `[HARNESS_TASK_CONTEXT]{"task_id":"${taskId}"}
 /** Consumer project with the vendored harness committed and a classified, plan-approved parent. */
 export function createVendoredTaskProject(t, { tasks, mode = "full", triageMode = "FULL" } = {}) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "cc-task-e2e-")));
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const lanes = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "cc-task-lanes-")));
+  t.after(() => {
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(lanes, { recursive: true, force: true });
+  });
   git(root, "init", "-q", "-b", "main");
   git(root, "config", "user.email", "e2e@example.com");
   git(root, "config", "user.name", "e2e");
@@ -47,7 +51,7 @@ export function createVendoredTaskProject(t, { tasks, mode = "full", triageMode 
   fs.writeFileSync(path.join(stateDir, "triage.json"), JSON.stringify({ session_id: PARENT_SESSION, mode: triageMode, feature_id: FEATURE }));
   fs.writeFileSync(path.join(stateDir, "gate-state.json"), JSON.stringify({ feature_id: FEATURE }));
   approvePlan(root);
-  return { root, sessionId: PARENT_SESSION, featureId: FEATURE, plan };
+  return { root, lanes, sessionId: PARENT_SESSION, featureId: FEATURE, plan };
 }
 
 /** An executable `claude` that runs the fake with `scenario` (keyed by task id). */
@@ -96,7 +100,7 @@ export function laneSteps({ task, featureId = FEATURE, mode = "FULL", value = `$
     steps.push({ agent: { subagent_type: "compliance", model: routes.compliance, prompt: `${marker(task.id)}\nReview the diff against the ACs.`, report: "Tudo certo.\n## Veredito: pass" } });
   }
   steps.push(...extraAfter);
-  if (diary !== null) steps.push({ write: { path: `.claude/plans/${featureId}/run/shared_context.md`, content: diary } });
+  if (diary !== null) steps.push({ write: { path: "$RUN_DIR/shared_context.md", content: diary } });
   steps.push({ text: `Task ${task.id} ready.` });
   return steps;
 }
@@ -110,7 +114,7 @@ export function tasksCli(project, action, params, { claudeBin, env = {}, timeout
     env: {
       PATH: process.env.PATH,
       HOME: process.env.HOME,
-      CLAUDE_CODE_SESSION_ID: project.sessionId,
+      CLAUDE_CODE_SESSION_ID: project.sessionId, CLAUDE_HARNESS_TASK_WORKTREES_DIR: project.lanes,
       ...(claudeBin ? { CLAUDE_HARNESS_CLAUDE_BIN: claudeBin } : {}),
       CLAUDE_HARNESS_TASK_WAIT_POLL_MS: "200",
       ...env,
@@ -129,7 +133,7 @@ export function tasksCli(project, action, params, { claudeBin, env = {}, timeout
 export function tasksCliChild(project, action, params, env = {}) {
   return spawn(process.execPath, [path.join(project.root, ".claude/hooks/tasks.mjs"), action, ...(params ? ["--json", JSON.stringify(params)] : [])], {
     cwd: project.root,
-    env: { PATH: process.env.PATH, HOME: process.env.HOME, CLAUDE_CODE_SESSION_ID: project.sessionId, CLAUDE_HARNESS_TASK_WAIT_POLL_MS: "200", ...env },
+    env: { PATH: process.env.PATH, HOME: process.env.HOME, CLAUDE_CODE_SESSION_ID: project.sessionId, CLAUDE_HARNESS_TASK_WORKTREES_DIR: project.lanes, CLAUDE_HARNESS_TASK_WAIT_POLL_MS: "200", ...env },
     stdio: ["ignore", "pipe", "pipe"],
   });
 }

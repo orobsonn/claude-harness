@@ -18,7 +18,8 @@ siga a ordem abaixo de forma que a evidência nativa a comprove.
 ## Como despachar
 
 - Você orquestra; **não escreve produto nem testes**. Suas escritas diretas ficam só em
-  `.claude/plans/<feature_id>/run/` (buffers da task). Hands escrevem só nos paths autorizados.
+  `contract.run_dir` (buffers da task, fora do Git e da worktree). Hands escrevem só nos paths
+  autorizados. Nunca escreva em `.claude/` nem em `.git/`.
 - Toda chamada `Agent` é nova, em **foreground**, sem `run_in_background`. A primeira linha do
   prompt é sempre `[HARNESS_TASK_CONTEXT]{"task_id":"<contract.task.id>"}[/HARNESS_TASK_CONTEXT]`.
   Nunca use `[HARNESS_FINAL_REVIEW]`.
@@ -42,8 +43,8 @@ siga a ordem abaixo de forma que a evidência nativa a comprove.
    Bash: não peça que rode testes. Inclua no brief a memória de runner/fixture do projeto, se houver.
 2. **RED executável**: rode o teste travado e guarde a saída e o exit code. Falha de infraestrutura
    (import quebrado, zero testes coletados, erro de fixture) não é RED. Para módulo de produção
-   ainda inexistente, o test-author entrega um stub que lança `not implemented`, dentro do escopo,
-   para o teste coletar e ficar RED de verdade.
+   ainda inexistente, o test-author entrega um stub **novo** que lança `not implemented`, dentro do
+   escopo, para o teste coletar e ficar RED de verdade (ele não altera arquivo de produto existente).
 3. **Fidelidade**: `compliance` (`dispatch_routes.compliance`) com a linha `[HARNESS_TASK_FIDELITY]`
    antes do marcador de contexto. Entregue a task canônica, os paths de teste e fixture e a saída do
    RED com o exit code. Ele confere se o arquivo transcreve **todas** as asserções aprovadas e
@@ -126,7 +127,7 @@ evidência para fechar lacuna.
 
 ## Diário e retorno
 
-Mantenha em `.claude/plans/<feature_id>/run/shared_context.md` (até 8 KiB) só descobertas
+Mantenha em `<contract.run_dir>/shared_context.md` (até 8 KiB) só descobertas
 verificadas, a evidência delas e a condição de revalidação, sem segredos. O host devolve esse diário
 ao pai global quando a task fica pronta.
 
