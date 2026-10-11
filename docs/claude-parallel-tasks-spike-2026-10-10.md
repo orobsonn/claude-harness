@@ -177,3 +177,14 @@ Nenhum item inviabiliza a arquitetura: o stream expõe `tool_use` de subagente c
 Os streams e logs brutos ficaram fora do repo, em `~/claude-parallel-port-spike/` (`stream{1..4}.jsonl`,
 `hooks{1..4}.log`, `sp{1,2,3}.jsonl`, `timep{1,2,3}.txt`, `sigterm.mjs`). Os fixtures dos testes da lane e do
 `claude` falso usam esses formatos com caminhos sanitizados.
+
+## 10. Identidade do pai global no CLI `tasks.mjs`
+
+Rodada 12: dentro de `claude -p --session-id 11111111-2222-4333-8444-555555555555`, um `Bash` com
+`env | grep ^CLAUDE` mostrou `CLAUDE_CODE_SESSION_ID=11111111-2222-4333-8444-555555555555`, o mesmo
+`session_id` dos payloads de hook. Na sessão interativa que rodou o spike, `CLAUDE_CODE_SESSION_ID` também é
+igual ao nome do transcript em `~/.claude/projects/<proj>/<id>.jsonl`. **Decisão:** o `tasks.mjs` usa
+`CLAUDE_CODE_SESSION_ID` + `process.cwd()` como identidade. O `PreToolUse(Bash)` do pai só deixa passar
+`node .claude/hooks/tasks.mjs …` como comando único, sem atribuição de env, `cd`, `env` ou separadores. Assim
+o modelo não troca a identidade pelo prefixo do comando. O mesmo env também traz `CLAUDE_CODE_MESSAGING_TOKEN`,
+`CLAUDE_PID` e outros: o worker remove tudo que é `CLAUDE*` antes de lançar a lane.
