@@ -173,6 +173,45 @@ triaging-requests
 
 > **`brainstorming` não é vendored no Claude Code.** A sessão usa `superpowers:brainstorming` **se o plugin do marketplace estiver instalado**; se não estiver, brainstorma inline com você. De qualquer forma o `planner` só é liberado depois do carimbo de brainstorm — o portão não depende do plugin.
 
+
+### 5.1 Tasks paralelas em worktrees (opt-in)
+
+Quando o plano aprovado traz `"execution": {"parallel": true}`, tasks independentes rodam em paralelo,
+cada uma numa **lane**: uma worktree git própria (`harness/task-<id>-<attempt>`) com uma sessão
+`claude -p` de topo que roda o laço por task só daquela task. O pai global coordena pelo CLI do host:
+
+```bash
+node .claude/hooks/tasks.mjs dispatch --json '{"task_ids":["task-1","task-2"]}'
+node .claude/hooks/tasks.mjs wait --json '{"compact":true}'      # espera no host, até 540 s
+node .claude/hooks/tasks.mjs status
+node .claude/hooks/tasks.mjs integrate --json '{"task_id":"task-1","attempt_id":"…","expected_head":"…"}'
+node .claude/hooks/tasks.mjs resume --json '{"task_id":"task-1","attempt_id":"…","instruction":"…"}'
+```
+
+O que você precisa saber:
+
+- **Quem aprova é o host.** A task só fica `ready` quando o host prova, pelo stream nativo da lane,
+  pelo ledger dos hooks e pelo Git, a ordem TDD, o freeze só com testes, a implementação, a captura e
+  os olhos no HEAD final. A integração é sempre `git merge --no-ff`, com recibo. Texto do agente
+  nunca aprova nada.
+- **Pré-requisitos:** a família de mãos `claude` (padrão), o `.claude/` vendorizado commitado e
+  um plan-reviewer com APPROVE gravado pelo hook. Plano, spec e classificação ficam congelados
+  depois da primeira admissão.
+- **Limites:** até 3 tasks por lote e rodando ao mesmo tempo. O prazo é de 2 h por lane, configurável
+  até 24 h. Nada é apagado: worktrees, branches e logs ficam em
+  `.claude/plans/.state/<sessão>/task-runs/`.
+- **Recuperação:** `blocked` traz o motivo e os diagnósticos. Corrija com `resume` na mesma
+  task. Um conflito de merge é aberto pelo host na própria lane, para o sniper resolver. Corrigir uma
+  task já integrada abre uma barreira (entrega e novas tasks esperam) e o host reconcilia os
+  dependentes. A entrega (`git push`, `gh pr create`, shipper) só libera com todos os recibos
+  válidos no HEAD.
+- **VPS:** rode o pai dentro de `tmux`. As lanes são processos destacados e sobrevivem à queda da
+  sessão. `CLAUDE_HARNESS_MAX_PARALLEL_TASKS` (1–3), `CLAUDE_HARNESS_TASK_TIMEOUT_MS`,
+  `CLAUDE_HARNESS_LANE_MODEL` e `CLAUDE_HARNESS_CLAUDE_BIN` ajustam o host. Cada lane usa cerca
+  de 270 MB de RAM, e o limite prático é a quota da conta.
+
+Protocolo completo: `.claude/skills/orchestrating-delivery/references/parallel-tasks.md`.
+
 ---
 
 ## 6. Papéis (agents) — mapa mental
