@@ -38,8 +38,10 @@ function fixture(t, { tasks = defaultTasks(), mode = "full" } = {}) {
     },
   };
   const run = (params, extra = {}) => executeTaskAction(params, context, { ...deps, ...extra });
+  /** The user prompt of a launch: the host writes it to a private file, never argv. */
+  const promptOf = (launch = state.launches.at(-1)) => fs.readFileSync(launch.args[launch.args.indexOf("--prompt-file") + 1], "utf8");
   const registry = () => JSON.parse(fs.readFileSync(path.join(project.root, ".claude/plans/.state", project.sessionId, "task-runs/index.json"), "utf8"));
-  return { project, state, deps, run, registry, context };
+  return { project, state, deps, run, registry, context, promptOf };
 }
 
 /** A minimal inspection receipt for the entry's current worktree HEAD. */
@@ -72,7 +74,7 @@ test("a batch with an unmet dependency fails before any effect", async (t) => {
   assert.match(result.reason, /dependency task-a must be integrated before task-c/);
   assert.equal(f.state.launches.length, 0);
   assert.equal(fs.existsSync(path.join(f.project.root, ".claude/plans/.state", f.project.sessionId, "task-runs/index.json")), false, "no registry");
-  assert.equal(fs.existsSync(path.join(f.project.root, ".claude/plans/.state", f.project.sessionId, "task-runs/worktrees")), false, "no worktree");
+  assert.deepEqual(fs.readdirSync(process.env.CLAUDE_HARNESS_TASK_WORKTREES_DIR), [], "no lane root");
   assert.deepEqual(git(f.project.root, "branch", "--list", "harness/*"), "", "no branch");
 });
 
@@ -83,7 +85,11 @@ test("dispatch reserves readable worktrees and branches, launches once and is id
   assert.equal(f.state.launches.length, 2);
   const registry = f.registry();
   const a = registry.tasks["task-a"];
-  assert.equal(path.basename(a.worktree), "task-1-implementar-modulo-a");
+  assert.equal(path.basename(path.dirname(a.worktree)), "task-1-implementar-modulo-a");
+  assert.equal(path.basename(a.worktree), "worktree");
+  assert.equal(a.run_dir, path.join(path.dirname(a.worktree), "run"));
+  assert.equal(a.grant.run_dir, a.run_dir);
+  assert.ok(!a.worktree.startsWith(f.project.root + path.sep), "lane roots live outside the repository (never under .claude/)");
   assert.match(a.branch, /^harness\/task-task-a-[0-9a-f-]{36}$/);
   assert.equal(git(a.worktree, "branch", "--show-current"), a.branch);
   assert.equal(a.base_sha, registry.tasks["task-b"].base_sha, "one base for the batch");
@@ -247,7 +253,8 @@ test("resume requires terminal processes, keeps the attempt and its claim sessio
   assert.equal(after.result, null, "result is cleared on relaunch");
   const args = f.state.launches.at(-1).args;
   assert.deepEqual(args.slice(args.indexOf("--resume"), args.indexOf("--resume") + 2), ["--resume", "66666666-6666-4666-8666-666666666666"]);
-  assert.equal(args.at(-1), "fix the edge case");
+  assert.match(f.promptOf(), /fix the edge case/);
+  assert.ok(!args.some((arg) => /fix the edge case/.test(arg)), "the instruction never travels in argv");
 });
 
 /** Dispatch one task, commit work in its lane and get it to ready with a scripted inspection. */
@@ -381,17 +388,36 @@ test("a crash between merge and receipt is completed by the next action", async 
   assert.equal(f.registry().integration_intent, undefined);
 });
 
+test("a lane that plants Git config in the shared common dir stops the host until the operator accepts it", async (t) => {
+  const f = fixture(t);
+  const { entry, head } = await readyTask(f, "task-a", { "src/a/index.mjs": "1\n" });
+  git(entry.worktree, "config", "core.fsmonitor", "/tmp/evil.sh");
+  for (const action of [{ action: "status" }, { action: "integrate", task_id: "task-a", attempt_id: entry.attempt_id, expected_head: head }]) {
+    const refused = await f.run(action);
+    assert.equal(refused.ok, false);
+    assert.match(refused.reason, /core\.fsmonitor/);
+  }
+  assert.equal(f.registry().integration_intent, undefined, "no merge ran with the planted config");
+  git(f.project.root, "config", "--unset", "core.fsmonitor");
+  const clean = await f.run({ action: "status" });
+  assert.equal(clean.ok, true, "reverting the change restores the recorded digest");
+});
+
 test("a failing pre-merge-commit hook aborts only the exact journaled merge", async (t) => {
   const f = fixture(t);
   const { entry, head } = await readyTask(f, "task-a", { "src/a/index.mjs": "1\n" });
   const hook = path.join(f.project.root, ".git/hooks/pre-merge-commit");
   fs.writeFileSync(hook, "#!/bin/sh\nexit 1\n", { mode: 0o755 });
   const before = git(f.project.root, "rev-parse", "HEAD");
-  const failed = await f.run({ action: "integrate", task_id: "task-a", attempt_id: entry.attempt_id, expected_head: head });
+  const refused = await f.run({ action: "integrate", task_id: "task-a", attempt_id: entry.attempt_id, expected_head: head });
+  assert.match(refused.reason, /shared Git configuration or hooks[^]*CLAUDE_HARNESS_ACCEPT_GIT_CONTROL_CHANGE=1/, "a new hook is refused until the operator accepts it");
+  assert.equal(f.registry().integration_intent, undefined);
+  const accepted = { env: { CLAUDE_HARNESS_ACCEPT_GIT_CONTROL_CHANGE: "1" } };
+  const failed = await f.run({ action: "integrate", task_id: "task-a", attempt_id: entry.attempt_id, expected_head: head }, accepted);
   assert.equal(failed.ok, false);
   assert.ok(f.registry().integration_intent, "the journal survives the failed merge");
   fs.rmSync(hook);
-  const status = await f.run({ action: "status" });
+  const status = await f.run({ action: "status" }, accepted);
   assert.equal(status.ok, true, status.reason);
   assert.equal(f.registry().integration_intent, undefined);
   assert.equal(git(f.project.root, "rev-parse", "HEAD"), before);
@@ -463,7 +489,7 @@ test("a pending dependent is reconciled by the host after its corrected dependen
   const mergeParents = git(c.worktree, "rev-list", "--parents", "-n", "1", proof.merged_head).split(" ").slice(1);
   assert.deepEqual(mergeParents, [cHead, proof.parent_head]);
   assert.equal(fs.readFileSync(path.join(c.worktree, "src/a/index.mjs"), "utf8"), "2\n", "the corrected dependency is in the dependent worktree");
-  assert.match(f.state.launches.at(-1).args.at(-1), /host merged a dependency correction/);
+  assert.match(f.promptOf(), /host merged a dependency correction/);
 });
 
 test("an integration conflict is opened in the lane by the host and preserved across resumes", async (t) => {
@@ -478,7 +504,7 @@ test("an integration conflict is opened in the lane by the host and preserved ac
   assert.equal(first.ok, true, first.reason);
   const parentHead = git(f.project.root, "rev-parse", "HEAD");
   assert.equal(git(b.worktree, "rev-parse", "MERGE_HEAD"), parentHead, "the host opened the merge in the lane");
-  assert.match(f.state.launches.at(-1).args.at(-1), /already started the task merge[^]*src\/b\/index\.mjs/);
+  assert.match(f.promptOf(), /already started the task merge[^]*src\/b\/index\.mjs/);
   const status = await f.run({ action: "status", task_id: "task-b" });
   assert.match(status.tasks[0].reason, /merge conflicts require resolution in the same task/);
   assert.equal((await f.run({ action: "resume", task_id: "task-b", attempt_id: b.attempt_id })).ok, true);

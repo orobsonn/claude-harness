@@ -24,6 +24,7 @@ import { bareRole, isSafeSessionId } from "./lib/gate-lib.mjs";
 import { isDeliveryCommand } from "./entry-gate.mjs";
 import { hashTaskReceipt } from "../../shared/lib/task-contract.mjs";
 import { readTaskRunBinding } from "./lib/task-admission.mjs";
+import { readAllIntegratedTaskEvidence } from "./lib/task-receipts.mjs";
 import {
   HAND_ROLES,
   LANE_ROLES,
@@ -37,7 +38,7 @@ import {
   pathInScope,
   routeAllows,
 } from "./lib/task-lane-contract.mjs";
-import { TASK_RUN_ENV, gateStateFile, isVolatileHarnessPath, planFile, specFile, taskRegistryPath } from "./lib/task-paths.mjs";
+import { ACCEPT_GIT_CONTROL_ENV, TASK_RUN_ENV, gateStateFile, isVolatileHarnessPath, planFile, specFile, taskRegistryPath } from "./lib/task-paths.mjs";
 
 const WRITE_TOOLS = new Set(["Write", "Edit", "MultiEdit", "NotebookEdit"]);
 const TASKS_CLI = /^\s*node\s+(?:\.\/)?\.claude\/hooks\/tasks\.mjs\s+(?:dispatch|status|wait|integrate|resume|abandon-resume)(?:\s+--json\s+'[^']*'|\s+--json-file\s+[A-Za-z0-9_./-]+)?\s*$/;
@@ -168,11 +169,15 @@ export function decideLane(payload, env, { readBinding = readTaskRunBinding, hoo
   }
 
   if (WRITE_TOOLS.has(tool)) {
-    const relative = relativeInside(root, input.file_path ?? input.notebook_path);
+    const target = input.file_path ?? input.notebook_path;
+    const inRun = typeof target === "string" && target.length > 0 && relativeInside(grant.run_dir, path.resolve(root, target)) !== null;
+    if (!isSubagent && inRun) return allow();
+    if (isSubagent && inRun) return deny("[task-run] the run buffers belong to the lane orchestrator");
+    const relative = relativeInside(root, target);
     const reason = laneWriteDenyReason(relative, {
       role: isSubagent ? bareRole(payload.agent_type) : null,
       task,
-      featureId: grant.feature_id,
+      exists: relative !== null && fs.existsSync(path.join(root, relative)),
     });
     return reason ? deny(`[task-run] ${reason}`) : allow();
   }
@@ -232,7 +237,14 @@ export function integrationBlockers(root, registry) {
       blockers.push(`${task.id} has no valid integration receipt in HEAD ancestry`);
     }
   }
-  return blockers;
+  if (blockers.length) return blockers;
+  // The same full evidence check the delivery receipts use: inspection + integration receipts,
+  // reconciliation proofs, two-parent merges, changed paths and frozen blobs, all against HEAD.
+  const evidence = readAllIntegratedTaskEvidence({
+    projectRoot: root, sessionId: registry.parent_session_id, featureId: registry.feature_id,
+    headSha: execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim(), tasks: plan.tasks,
+  });
+  return evidence.ok ? [] : [evidence.reason];
 }
 
 /** Parent-mode decision for one PreToolUse payload. */
@@ -240,6 +252,13 @@ export function decideParent(payload, { root = process.cwd() } = {}) {
   const tool = payload.tool_name;
   const input = payload.tool_input ?? {};
   const command = tool === "Bash" ? String(input.command ?? "") : "";
+  if (tool === "Bash" && command.includes(ACCEPT_GIT_CONTROL_ENV)) {
+    return deny(`[harness-tasks] ${ACCEPT_GIT_CONTROL_ENV} is the operator's acknowledgement of a Git config/hooks change; only the operator sets it, from their own terminal (\`! <command>\`)`);
+  }
+  // The registry, journals and receipts are host-owned: the parent reads them through the CLI.
+  if (tool === "Bash" && /task-runs\/|task-admission|task-ledger/.test(command) && !TASKS_CLI.test(command)) {
+    return deny("[harness-tasks] task state (task-runs/, admissions, ledgers) is host-owned; read it with `node .claude/hooks/tasks.mjs status --json '{}'`");
+  }
   if (tool === "Bash" && /\btasks\.mjs\b/.test(command) && !TASKS_CLI.test(command)) {
     return deny("[harness-tasks] run the task CLI alone, exactly `node .claude/hooks/tasks.mjs <action> --json '<json>'` (or --json-file <path>): no env prefix, cd, chaining or redirection — its identity is this session");
   }
@@ -284,6 +303,8 @@ export function decideParent(payload, { root = process.cwd() } = {}) {
   }
   if (WRITE_TOOLS.has(tool)) {
     const target = path.resolve(realRoot, String(input.file_path ?? input.notebook_path ?? ""));
+    const runs = path.dirname(taskRegistryPath(realRoot, sessionId));
+    if (target === runs || target.startsWith(runs + path.sep)) return deny("[harness-tasks] task state is host-owned; never edit task-runs/ directly");
     if ([planFile(realRoot, registry.feature_id), specFile(realRoot, registry.feature_id)].includes(target)) {
       return deny("[harness-tasks] spec and plan are frozen after task admission");
     }
@@ -307,8 +328,15 @@ export function decide(payload, { env = process.env, ...deps } = {}) {
   }
   try {
     return decideParent(payload, deps);
-  } catch {
-    return allow();
+  } catch (error) {
+    // Fail closed only where the parent gate protects something: delivery, classification and
+    // subagent dispatch. Ordinary reads and edits stay usable while the operator repairs state.
+    const tool = payload.tool_name;
+    let command = null;
+    try { command = tool === "Bash" ? String(payload.tool_input?.command ?? "") : ""; } catch { /* unreadable: restricted */ }
+    const restricted = tool === "Agent" || tool === "Task" ||
+      (tool === "Bash" && (command === null || isDeliveryCommand(command) || /\bclassify\.mjs\b/.test(command)));
+    return restricted ? deny(`[harness-tasks] task gate error (${error instanceof Error ? error.message : String(error)}); repair the task state before delivery or new work`) : allow();
   }
 }
 

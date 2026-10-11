@@ -3,7 +3,7 @@
  * @description Lane launcher — the command the task supervisor runs inside the lane worktree.
  *
  *   node task-launcher.mjs --grant <grant.json> [--resume <laneSession>] --claude <bin>
- *        --model <haiku|sonnet|opus> --prompt <text>
+ *        --model <haiku|sonnet|opus> --prompt-file <0600 file written by the host>
  *
  * Fresh launch: read-only preflight + `wx` claim + seeded lane state (admitTaskRun), then a NEW
  * top-level `claude -p --session-id <uuid>`. Resume: revalidate the existing binding and
@@ -27,14 +27,24 @@ export const LANE_TOOLS = "Bash,Read,Write,Edit,Glob,Grep,Agent";
 const LANE_MODELS = new Set(["haiku", "sonnet", "opus"]);
 const MAX_SYSTEM_PROMPT_BYTES = 120 * 1024;
 /**
- * Defense in depth below the lane gate's Bash policy (which a shell can obfuscate): an empty
- * `pushInsteadOf` rewrites EVERY push URL to an unsupported transport, so a push that slips past
- * the gate still fails inside Git. Fetch and local commits are unaffected.
+ * Git hygiene for the lane (NOT a security boundary — a same-user shell can unset env): every
+ * remote transport is refused (`protocol.allow=never`, which a per-remote pushurl cannot bypass,
+ * unlike pushInsteadOf), credentials and prompts are disabled. Local commits and the file
+ * protocol are unaffected. The lane gate's Bash policy and the host inspection stay the controls.
  */
 export const LANE_GIT_ENV = Object.freeze({
-  GIT_CONFIG_COUNT: "1",
-  GIT_CONFIG_KEY_0: "url.harness-lane-push-disabled://.pushInsteadOf",
-  GIT_CONFIG_VALUE_0: "",
+  GIT_CONFIG_COUNT: "4",
+  GIT_CONFIG_KEY_0: "protocol.allow",
+  GIT_CONFIG_VALUE_0: "never",
+  GIT_CONFIG_KEY_1: "protocol.file.allow",
+  GIT_CONFIG_VALUE_1: "always",
+  GIT_CONFIG_KEY_2: "credential.helper",
+  GIT_CONFIG_VALUE_2: "",
+  GIT_CONFIG_KEY_3: "core.fsmonitor",
+  GIT_CONFIG_VALUE_3: "false",
+  GIT_TERMINAL_PROMPT: "0",
+  GIT_ASKPASS: "/bin/false",
+  GIT_SSH_COMMAND: "/bin/false",
 });
 
 export function parseLauncherArgs(argv) {
@@ -42,21 +52,28 @@ export function parseLauncherArgs(argv) {
   for (let index = 0; index < argv.length; index += 2) {
     const flag = argv[index];
     const value = argv[index + 1];
-    if (!["--grant", "--resume", "--claude", "--model", "--prompt"].includes(flag) || value === undefined || Object.hasOwn(args, flag.slice(2))) {
+    if (!["--grant", "--resume", "--claude", "--model", "--prompt-file"].includes(flag) || value === undefined || Object.hasOwn(args, flag.slice(2))) {
       throw new Error(`unexpected launcher argument ${JSON.stringify(flag)}`);
     }
     args[flag.slice(2)] = value;
   }
-  if (!args.grant || !args.claude || !args.prompt) throw new Error("--grant, --claude and --prompt are required");
-  if (!path.isAbsolute(args.grant) || !path.isAbsolute(args.claude)) throw new Error("--grant and --claude must be absolute paths");
+  if (!args.grant || !args.claude || !args["prompt-file"]) throw new Error("--grant, --claude and --prompt-file are required");
+  if (!path.isAbsolute(args.grant) || !path.isAbsolute(args.claude) || !path.isAbsolute(args["prompt-file"])) {
+    throw new Error("--grant, --claude and --prompt-file must be absolute paths");
+  }
+  args.prompt = fs.readFileSync(args["prompt-file"], "utf8");
+  if (!args.prompt.trim()) throw new Error("the launch prompt is empty");
   args.model ??= "sonnet";
   if (!LANE_MODELS.has(args.model)) throw new Error("--model must be haiku, sonnet or opus");
   return args;
 }
 
-/** argv for the lane's `claude -p`, exactly the combination proven in the spike. */
-export function claudeLaneArgs({ sessionId, resume, model, systemPrompt, prompt }) {
-  if (Buffer.byteLength(systemPrompt, "utf8") > MAX_SYSTEM_PROMPT_BYTES) throw new Error("lane system prompt is too large");
+/**
+ * argv for the lane's `claude -p` (the combination proven in the spike). The system prompt goes
+ * through a 0600 file and the user prompt through stdin, so neither is visible in /proc/<pid>/cmdline.
+ * Only the project settings load: a lane-written settings.local.json can never switch hooks off.
+ */
+export function claudeLaneArgs({ sessionId, resume, model, systemPromptFile, runDir }) {
   return [
     "-p",
     ...(resume ? ["--resume", sessionId] : ["--session-id", sessionId]),
@@ -66,10 +83,10 @@ export function claudeLaneArgs({ sessionId, resume, model, systemPrompt, prompt 
     "--permission-mode", "acceptEdits",
     "--allowedTools", LANE_TOOLS,
     "--tools", LANE_TOOLS,
-    "--setting-sources", "project,local",
+    ...(runDir ? ["--add-dir", runDir] : []),
+    "--setting-sources", "project",
     "--strict-mcp-config",
-    "--append-system-prompt", systemPrompt,
-    prompt,
+    "--append-system-prompt-file", systemPromptFile,
   ];
 }
 
@@ -101,14 +118,17 @@ async function main() {
     process.exit(78);
   }
   let argv;
+  let systemPromptFile;
   try {
-    argv = claudeLaneArgs({
-      sessionId,
-      resume,
-      model: args.model,
-      systemPrompt: taskRunPrompt(fs.readFileSync(RUNTIME_PROMPT, "utf8"), admission, { resumed: resume }),
-      prompt: args.prompt,
-    });
+    const systemPrompt = taskRunPrompt(fs.readFileSync(RUNTIME_PROMPT, "utf8"), admission, { resumed: resume });
+    if (Buffer.byteLength(systemPrompt, "utf8") > MAX_SYSTEM_PROMPT_BYTES) throw new Error("lane system prompt is too large");
+    // Host-owned file outside the session state dir (rollback inspects that dir), rewritten per launch.
+    const promptsDir = path.join(stateRoot(cwd), "lane-prompts");
+    fs.mkdirSync(promptsDir, { recursive: true, mode: 0o700 });
+    systemPromptFile = path.join(promptsDir, `${sessionId}.md`);
+    fs.rmSync(systemPromptFile, { force: true });
+    fs.writeFileSync(systemPromptFile, systemPrompt, { flag: "wx", mode: 0o600 });
+    argv = claudeLaneArgs({ sessionId, resume, model: args.model, systemPromptFile, runDir: admission.grant.run_dir });
   } catch (error) {
     if (!resume) rollbackTaskAdmission(admission);
     release();
@@ -118,15 +138,20 @@ async function main() {
   const child = spawn(args.claude, argv, {
     cwd,
     env: { ...process.env, ...LANE_GIT_ENV, [TASK_RUN_ENV]: JSON.stringify({ cwd, sessionId }), CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1" },
-    stdio: ["ignore", "inherit", "inherit"],
+    stdio: ["pipe", "inherit", "inherit"],
   });
+  child.stdin.on("error", () => { /* a dead child is reported by close */ });
+  child.stdin.end(args.prompt);
   let spawned = false;
   const forward = (signal) => { try { child.kill(signal); } catch { /* already gone */ } };
   for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"]) process.on(signal, () => forward(signal));
   child.on("spawn", () => { spawned = true; });
   child.on("error", (error) => {
     if (!spawned) {
-      if (!resume) rollbackTaskAdmission(admission);
+      if (!resume) {
+        rollbackTaskAdmission(admission);
+        try { fs.rmSync(systemPromptFile, { force: true }); fs.rmdirSync(path.dirname(systemPromptFile)); } catch { /* other prompts remain */ }
+      }
       release();
       process.stderr.write(`[task-launcher] could not start claude: ${error.message}\n`);
       process.exit(127);

@@ -198,8 +198,9 @@ O que você precisa saber:
   um plan-reviewer com APPROVE gravado pelo hook. Plano, spec e classificação ficam congelados
   depois da primeira admissão.
 - **Limites:** até 3 tasks por lote e rodando ao mesmo tempo. O prazo é de 2 h por lane, configurável
-  até 24 h. Nada é apagado: worktrees, branches e logs ficam em
-  `.claude/plans/.state/<sessão>/task-runs/`.
+  até 24 h. Nada é apagado. Registro e logs ficam em `.claude/plans/.state/<sessão>/task-runs/`. As
+  worktrees ficam **fora do repo**, em `~/.local/state/claude-harness/task-worktrees/` (ou em
+  `CLAUDE_HARNESS_TASK_WORKTREES_DIR`), porque o Claude Code recusa escrita headless sob `.claude/`.
 - **Recuperação:** `blocked` traz o motivo e os diagnósticos. Corrija com `resume` na mesma
   task. Um conflito de merge é aberto pelo host na própria lane, para o sniper resolver. Corrigir uma
   task já integrada abre uma barreira (entrega e novas tasks esperam) e o host reconcilia os
@@ -209,6 +210,14 @@ O que você precisa saber:
   sessão. `CLAUDE_HARNESS_MAX_PARALLEL_TASKS` (1–3), `CLAUDE_HARNESS_TASK_TIMEOUT_MS`,
   `CLAUDE_HARNESS_LANE_MODEL` e `CLAUDE_HARNESS_CLAUDE_BIN` ajustam o host. Cada lane usa cerca
   de 270 MB de RAM, e o limite prático é a quota da conta.
+
+- **Config do Git mudou?** Se `.git/config`, `.git/hooks` ou `.git/info/attributes` mudarem com
+  lanes ativas, o host para e não age (uma lane pode ter plantado código que roda no pai). Revise as
+  mudanças e, se forem suas, rode o comando de novo do **seu** terminal (`! CLAUDE_HARNESS_ACCEPT_GIT_CONTROL_CHANGE=1 node .claude/hooks/tasks.mjs status`).
+  O modelo não consegue setar essa variável.
+- **Limite honesto:** os gates não são sandbox de SO. O Bash da lane roda como o seu usuário. O sandbox
+  nativo do Claude Code não roda em hosts com `kernel.apparmor_restrict_unprivileged_userns=1` (Ubuntu
+  24.04 padrão). Use tasks paralelas só com código e planos em que você confia.
 
 Protocolo completo: `.claude/skills/orchestrating-delivery/references/parallel-tasks.md`.
 

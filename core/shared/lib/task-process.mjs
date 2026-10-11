@@ -6,13 +6,15 @@
 import fs from "node:fs";
 import path from "node:path";
 import { spawn, execFileSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 
-/** Atomic private JSON write: tmp `0600` + rename. */
+/** Atomic private JSON write: unpredictable tmp created exclusively (`wx`, 0600) + rename. */
 export function writeTaskJson(file, value) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  const temporary = `${file}.${process.pid}.tmp`;
+  const temporary = `${file}.${process.pid}.${randomUUID()}.tmp`;
   fs.writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, {
     mode: 0o600,
+    flag: "wx",
   });
   fs.renameSync(temporary, file);
 }
@@ -426,6 +428,7 @@ export async function startTaskProcess({
   presentation = "json",
   trackDescendants = false,
   jobFields,
+  env,
 }) {
   let launch;
   let worker;
@@ -490,6 +493,9 @@ export async function startTaskProcess({
       cwd,
       detached: true,
       stdio: "ignore",
+      // A host may hand the supervisor an already-filtered env: its /proc/<pid>/environ is
+      // readable by the task's own processes (same user).
+      ...(env ? { env } : {}),
     });
     await new Promise((resolve, reject) => {
       worker.once("spawn", resolve);

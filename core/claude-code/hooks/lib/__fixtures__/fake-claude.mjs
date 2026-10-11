@@ -26,7 +26,7 @@ const flag = (name) => {
   return index >= 0 ? argv[index + 1] : undefined;
 };
 const scenarioPath = flag("--scenario");
-for (const required of ["-p", "--output-format", "--verbose", "--model", "--permission-mode", "--tools", "--allowedTools", "--setting-sources", "--strict-mcp-config", "--append-system-prompt"]) {
+for (const required of ["-p", "--output-format", "--verbose", "--model", "--permission-mode", "--tools", "--allowedTools", "--setting-sources", "--strict-mcp-config", "--add-dir", "--append-system-prompt-file"]) {
   if (!argv.includes(required)) {
     process.stderr.write(`fake-claude: missing ${required}\n`);
     process.exit(2);
@@ -36,15 +36,17 @@ if (flag("--output-format") !== "stream-json") process.exit(2);
 const sessionId = flag("--session-id") ?? flag("--resume");
 if (!sessionId) process.exit(2);
 const cwd = process.cwd();
-const system = flag("--append-system-prompt");
+const system = fs.readFileSync(flag("--append-system-prompt-file"), "utf8");
+const userPrompt = fs.readFileSync(0, "utf8");
+if (!userPrompt.trim()) process.exit(2);
 const envelope = JSON.parse(system.slice(system.lastIndexOf("[HARNESS_TASK_RUN]\n") + "[HARNESS_TASK_RUN]".length, system.lastIndexOf("[/HARNESS_TASK_RUN]")));
 const taskId = envelope.contract.task.id;
 const counterFile = `${scenarioPath}.${taskId}.count`;
 const invocation = fs.existsSync(counterFile) ? Number(fs.readFileSync(counterFile, "utf8")) : 0;
 fs.writeFileSync(counterFile, String(invocation + 1));
 const scenario = JSON.parse(fs.readFileSync(scenarioPath, "utf8"));
-const launch = scenario.tasks?.[taskId]?.launches?.[invocation] ?? { steps: [], exit: 0 };
-fs.writeFileSync(`${scenarioPath}.${taskId}.argv.${invocation}.json`, JSON.stringify({ argv, sessionId, cwd, resumed: envelope.resumed, env: { CLAUDE_HARNESS_TASK_RUN: process.env.CLAUDE_HARNESS_TASK_RUN } }));
+const launch = JSON.parse(JSON.stringify(scenario.tasks?.[taskId]?.launches?.[invocation] ?? { steps: [], exit: 0 }).replaceAll("$RUN_DIR", envelope.contract.run_dir));
+fs.writeFileSync(`${scenarioPath}.${taskId}.argv.${invocation}.json`, JSON.stringify({ argv, sessionId, cwd, resumed: envelope.resumed, prompt: userPrompt, env: { CLAUDE_HARNESS_TASK_RUN: process.env.CLAUDE_HARNESS_TASK_RUN } }));
 
 const emit = (event) => process.stdout.write(`${JSON.stringify({ ...event, session_id: sessionId, uuid: randomUUID() })}\n`);
 const settings = (() => {
@@ -80,11 +82,12 @@ function denied(outputs) {
   return null;
 }
 
-function toolCall(name, input, perform, { agentId = null, agentType = null, parentToolUseId = null } = {}) {
+/** `ungated` simulates a hook that never ran (a bypassed gate): only the host's inspection is left. */
+function toolCall(name, input, perform, { agentId = null, agentType = null, parentToolUseId = null, ungated = false } = {}) {
   const id = `toolu_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
   const identity = agentId ? { agent_id: agentId, agent_type: agentType } : {};
   emit({ type: "assistant", parent_tool_use_id: parentToolUseId, message: { role: "assistant", content: [{ type: "tool_use", id, name, input }] } });
-  const reason = denied(runHooks("PreToolUse", name, { tool_name: name, tool_input: input, tool_use_id: id, ...identity }));
+  const reason = ungated ? null : denied(runHooks("PreToolUse", name, { tool_name: name, tool_input: input, tool_use_id: id, ...identity }));
   if (reason) {
     const text = `PreToolUse:${name} hook error: ${reason}`;
     emit({ type: "user", parent_tool_use_id: parentToolUseId, message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, is_error: true, content: text }] }, tool_use_result: `Error: ${text}` });
@@ -132,7 +135,7 @@ function agent(spec) {
       : { status: spec.status ?? "completed", prompt: spec.prompt, agentId, agentType: spec.subagent_type, content: [{ type: "text", text: spec.report ?? "" }], resolvedModel: `claude-${spec.model ?? "sonnet"}` };
     emit({ type: "system", subtype: "task_notification", task_id: agentId, tool_use_id: id, status: response.status });
     return { text: spec.report ?? "", response };
-  });
+  }, { ungated: spec.ungated === true });
 }
 
 emit({ type: "system", subtype: "init", cwd, model: flag("--model"), permissionMode: flag("--permission-mode"), tools: flag("--tools").split(","), mcp_servers: [], claude_code_version: "fake" });
