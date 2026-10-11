@@ -62,7 +62,7 @@ test("a plan edited while the reviewer ran is not approved", (t) => {
   assert.equal(readPlanApproval({ root, sessionId: SESSION, featureId: FEATURE }).ok, false);
 });
 
-test("a later REVISE, a non-canonical report or an async launch replace an older APPROVE", (t) => {
+test("a later REVISE or a non-canonical report replaces an older APPROVE", (t) => {
   const root = project(t);
   handle(pre(), { root });
   handle(post(report("APPROVE")), { root });
@@ -71,7 +71,6 @@ test("a later REVISE, a non-canonical report or an async launch replace an older
     ["revise", post(report("REVISE"), {}, { tool_use_id: "toolu_2" })],
     ["two reports", post(report("APPROVE") + report("APPROVE"), {}, { tool_use_id: "toolu_3" })],
     ["plaintext", post("APPROVE", {}, { tool_use_id: "toolu_4" })],
-    ["async", post(report("APPROVE"), { status: "async_launched", isAsync: true }, { tool_use_id: "toolu_5" })],
   ]) {
     handle(pre({ tool_use_id: payload.tool_use_id }), { root });
     handle(payload, { root });
@@ -106,4 +105,35 @@ test("the CLI is fail-open and records evidence from stdin", (t) => {
   assert.equal(done.status, 0);
   assert.equal(done.stdout, "");
   assert.equal(readPlanApproval({ root, sessionId: SESSION, featureId: FEATURE }).ok, true);
+});
+
+test("an interactive session's background plan-reviewer is recorded from its SubagentStop", (t) => {
+  const root = project(t);
+  const planPath = path.join(root, ".claude/plans", FEATURE, "execution-plan.json");
+  const launch = (id, agentId) => {
+    handle(pre({ tool_use_id: id }), { root });
+    return handle(post("", { status: "async_launched", isAsync: true, agentId }, { tool_use_id: id }), { root });
+  };
+  const stop = (agentId, text, role = "plan-reviewer") => handle({ session_id: SESSION, hook_event_name: "SubagentStop", agent_id: agentId, agent_type: role, last_assistant_message: text }, { root });
+  assert.equal(launch("toolu_async_1", "a_async1").action, "pending", "an async launch is pending, never invalid");
+  assert.equal(readPlanApproval({ root, sessionId: SESSION, featureId: FEATURE }).ok, false);
+  assert.equal(stop("a_other", report("APPROVE")).action, "none", "only the pending launch's own agent counts");
+  assert.equal(stop("a_async1", report("APPROVE"), "compliance").action, "none", "only a plan-reviewer");
+  const done = stop("a_async1", `Plano ok.\n${report("APPROVE")}`);
+  assert.equal(done.evidence.verdict, "APPROVE");
+  assert.equal(done.evidence.dispatch_call_id, "toolu_async_1");
+  assert.equal(done.evidence.agent_id, "a_async1");
+  assert.equal(readPlanApproval({ root, sessionId: SESSION, featureId: FEATURE }).ok, true);
+  assert.equal(stop("a_async1", report("APPROVE")).action, "none", "a pending launch is consumed once");
+  // A background re-review keeps the older APPROVE until its own report lands; a REVISE replaces it.
+  launch("toolu_async_2", "a_async2");
+  assert.equal(readPlanApproval({ root, sessionId: SESSION, featureId: FEATURE }).ok, true);
+  assert.equal(stop("a_async2", report("REVISE")).evidence.verdict, "REVISE");
+  assert.equal(readPlanApproval({ root, sessionId: SESSION, featureId: FEATURE }).ok, false);
+  // A plan edited while the background reviewer ran never becomes an approval.
+  launch("toolu_async_3", "a_async3");
+  fs.appendFileSync(planPath, "\n");
+  const stale = stop("a_async3", report("APPROVE"));
+  assert.equal(stale.evidence.verdict, "INVALID");
+  assert.match(stale.evidence.reason, /changed while the plan-reviewer ran/);
 });

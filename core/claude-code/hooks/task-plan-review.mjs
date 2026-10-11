@@ -1,5 +1,5 @@
 /**
- * @description PreToolUse(Agent) + PostToolUse(Agent) hook — host-owned plan approval evidence.
+ * @description PreToolUse(Agent) + PostToolUse(Agent) + SubagentStop hook — host-owned plan approval evidence.
  *
  * The `plan-reviewed` mark is the orchestrator's own echo, so it can never authorize anything.
  * This hook records what the HOST observed instead: when a main-loop `Agent(plan-reviewer)` is
@@ -11,6 +11,11 @@
  *   {version:1, written_by:"host-subagent-completion", role:"plan-reviewer", status:"completed",
  *    verdict:"APPROVE"|"REVISE", feature_id, parent_session_id, dispatch_call_id, agent_id,
  *    plan_sha256, spec_sha256, findings_count, recorded_at}
+ *
+ * An interactive Claude Code session runs every Agent in the background (2.1.296: only
+ * CLAUDE_CODE_DISABLE_BACKGROUND_TASKS forces the foreground), so the PostToolUse of an async
+ * launch only records the pending call with its native agentId; the reviewer's final report then
+ * arrives on its SubagentStop (same agent_id, `last_assistant_message`) and is recorded the same way.
  *
  * Evidence is written only when the plan and spec bytes are unchanged between dispatch and
  * completion. A REVISE (or an unparseable report) replaces an older APPROVE, so a stale approval
@@ -102,7 +107,66 @@ const inputsPath = (root, sessionId, toolUseId) =>
  * @param {{ root?: string, now?: () => string }} [options]
  * @returns {{ action: string, evidence?: object }}
  */
+function recordEvidence({ root, sessionId, featureId, toolUseId, agentId, input, digests, completed, text, now }) {
+  const report = parsePlanReviewReport(text);
+  const unchanged = input?.feature_id === featureId && input.dispatch_call_id === toolUseId &&
+    input.plan_sha256 === digests.plan_sha256 && input.spec_sha256 === digests.spec_sha256 &&
+    digests.plan_sha256 !== null && digests.spec_sha256 !== null;
+  const ok = completed && report && unchanged;
+  const evidence = {
+    version: 1,
+    written_by: "host-subagent-completion",
+    role: "plan-reviewer",
+    status: ok ? "completed" : "invalid",
+    verdict: ok ? report.verdict : "INVALID",
+    feature_id: featureId,
+    parent_session_id: sessionId,
+    dispatch_call_id: toolUseId,
+    agent_id: agentId,
+    ...digests,
+    findings_count: report ? report.findings.length : null,
+    reason: !completed ? "plan-reviewer did not complete"
+      : !report ? "plan-reviewer must return exactly one JSON report with verdict APPROVE|REVISE and findings[]"
+        : !unchanged ? "plan or spec changed while the plan-reviewer ran (or was missing)" : null,
+    recorded_at: now(),
+  };
+  writeTaskJson(planReviewEvidenceFile(root, sessionId), evidence);
+  return { action: "recorded", evidence };
+}
+
+/** The reviewer's final report on its SubagentStop, matched to the pending async launch by agent_id. */
+function handleSubagentStop(payload, { root, now }) {
+  if (bareRole(payload.agent_type) !== "plan-reviewer" || typeof payload.agent_id !== "string" || !payload.agent_id) return { action: "none" };
+  const sessionId = payload.session_id;
+  if (!isSafeSessionId(sessionId)) return { action: "none" };
+  const featureId = featureFor(root, sessionId);
+  if (!featureId) return { action: "none" };
+  let pending = null;
+  let pendingFile = null;
+  try {
+    const dir = planReviewInputsDir(root, sessionId);
+    for (const name of fs.readdirSync(dir)) {
+      const candidate = readJson(path.join(dir, name));
+      if (candidate?.async_agent_id === payload.agent_id) {
+        pending = candidate;
+        pendingFile = path.join(dir, name);
+        break;
+      }
+    }
+  } catch {
+    return { action: "none" };
+  }
+  if (!pending) return { action: "none" };
+  try { fs.rmSync(pendingFile, { force: true }); } catch { /* best effort */ }
+  const digests = { plan_sha256: fileDigest(planFile(root, featureId)), spec_sha256: fileDigest(specFile(root, featureId)) };
+  return recordEvidence({
+    root, sessionId, featureId, toolUseId: pending.dispatch_call_id, agentId: payload.agent_id, input: pending, digests,
+    completed: typeof payload.last_assistant_message === "string", text: payload.last_assistant_message, now,
+  });
+}
+
 export function handle(payload, { root = process.cwd(), now = () => new Date().toISOString() } = {}) {
+  if (payload && typeof payload === "object" && payload.hook_event_name === "SubagentStop") return handleSubagentStop(payload, { root, now });
   if (!payload || typeof payload !== "object" || payload.tool_name !== "Agent") return { action: "none" };
   if (Object.hasOwn(payload, "agent_id")) return { action: "none" };
   if (bareRole(payload.tool_input?.subagent_type) !== "plan-reviewer") return { action: "none" };
@@ -124,33 +188,19 @@ export function handle(payload, { root = process.cwd(), now = () => new Date().t
   if (payload.hook_event_name !== "PostToolUse") return { action: "none" };
   const inputFile = inputsPath(root, sessionId, toolUseId);
   const input = readJson(inputFile);
-  try { fs.rmSync(inputFile, { force: true }); } catch { /* best effort */ }
   const response = payload.tool_response;
-  const report = parsePlanReviewReport(agentResponseText(response));
-  const unchanged = input?.feature_id === featureId && input.dispatch_call_id === toolUseId &&
-    input.plan_sha256 === digests.plan_sha256 && input.spec_sha256 === digests.spec_sha256 &&
-    digests.plan_sha256 !== null && digests.spec_sha256 !== null;
-  const completed = response?.status === "completed" && response?.isAsync !== true &&
-    typeof response?.agentId === "string" && response.agentId.length > 0;
-  const evidence = {
-    version: 1,
-    written_by: "host-subagent-completion",
-    role: "plan-reviewer",
-    status: completed && report && unchanged ? "completed" : "invalid",
-    verdict: completed && report && unchanged ? report.verdict : "INVALID",
-    feature_id: featureId,
-    parent_session_id: sessionId,
-    dispatch_call_id: toolUseId,
-    agent_id: typeof response?.agentId === "string" ? response.agentId : null,
-    ...digests,
-    findings_count: report ? report.findings.length : null,
-    reason: !completed ? "plan-reviewer did not complete in the foreground"
-      : !report ? "plan-reviewer must return exactly one JSON report with verdict APPROVE|REVISE and findings[]"
-        : !unchanged ? "plan or spec changed while the plan-reviewer ran (or was missing)" : null,
-    recorded_at: now(),
-  };
-  writeTaskJson(planReviewEvidenceFile(root, sessionId), evidence);
-  return { action: "recorded", evidence };
+  const agentId = typeof response?.agentId === "string" && response.agentId.length > 0 ? response.agentId : null;
+  if ((response?.isAsync === true || response?.status === "async_launched") && agentId && input) {
+    // Background launch (interactive session): the report comes on this agent's SubagentStop.
+    writeTaskJson(inputFile, { ...input, async_agent_id: agentId });
+    return { action: "pending", agent_id: agentId };
+  }
+  try { fs.rmSync(inputFile, { force: true }); } catch { /* best effort */ }
+  return recordEvidence({
+    root, sessionId, featureId, toolUseId, agentId, input, digests,
+    completed: response?.status === "completed" && response?.isAsync !== true && agentId !== null,
+    text: agentResponseText(response), now,
+  });
 }
 
 /**
