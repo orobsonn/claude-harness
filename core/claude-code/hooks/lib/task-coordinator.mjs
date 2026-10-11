@@ -27,6 +27,7 @@ import { buildTaskContextHandoff } from "../../../shared/lib/task-context.mjs";
 import { availableTaskWorktreeName, hashTaskReceipt, taskScopesOverlap, taskWorktreeName } from "../../../shared/lib/task-contract.mjs";
 import { requireCleanTaskWorktree, taskMergePreview } from "../../../shared/lib/task-git.mjs";
 import { readTaskProcess, startTaskProcess, taskProcessIdentity, writeTaskJson } from "../../../shared/lib/task-process.mjs";
+import { ensureClaudeTrust } from "../../../shared/lib/claude-trust.mjs";
 import { isOrcaLocalHostMigration, resolveOrcaTaskBackend, waitForOrcaTaskTerminalExit } from "../../../shared/lib/task-orca.mjs";
 import { planAndSpec, readParentAuthority, requireParallelPlan } from "./task-admission.mjs";
 import { claudeTaskScopeShape, laneTaskScope, pathInScope } from "./task-lane-contract.mjs";
@@ -551,39 +552,6 @@ function requireRealPath(worktree, target) {
       throw error;
     }
   }
-}
-
-/**
- * Claude Code shows "Do you trust this folder?" before an interactive session in an untrusted
- * project, and a TUI lane would wait on it forever. Worktrees inherit the trust of their main
- * repository (spike §15), so the host records it for the parent's main repository root — the
- * operator already runs Claude there; this only makes it explicit. Read-modify-write with an atomic
- * rename, re-read to confirm (a concurrent Claude Code write can race; it is retried).
- */
-export function ensureClaudeTrust(parentRoot, env = process.env) {
-  const common = git(parentRoot, "rev-parse", "--path-format=absolute", "--git-common-dir");
-  const mainRoot = path.basename(common) === ".git" ? path.dirname(common) : parentRoot;
-  const file = env.CLAUDE_CONFIG_DIR && path.isAbsolute(env.CLAUDE_CONFIG_DIR)
-    ? path.join(env.CLAUDE_CONFIG_DIR, ".claude.json")
-    : path.join(env.HOME || os.homedir(), ".claude.json");
-  const trusted = (config) => [mainRoot, parentRoot].some((key) => config?.projects?.[key]?.hasTrustDialogAccepted === true);
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    let config = {};
-    let mode = 0o600;
-    if (fs.existsSync(file)) {
-      config = JSON.parse(fs.readFileSync(file, "utf8"));
-      mode = fs.statSync(file).mode & 0o777;
-    }
-    if (trusted(config)) return { file, root: mainRoot, changed: attempt > 0 };
-    config.projects ??= {};
-    config.projects[mainRoot] = { ...(config.projects[mainRoot] ?? {}), hasTrustDialogAccepted: true };
-    const temporary = `${file}.harness-${process.pid}.tmp`;
-    fs.writeFileSync(temporary, JSON.stringify(config, null, 2), { mode });
-    fs.renameSync(temporary, file);
-  }
-  const final = JSON.parse(fs.readFileSync(file, "utf8"));
-  if (!trusted(final)) throw new Error(`could not record Claude Code project trust for ${mainRoot} in ${file}; open Claude Code there once and accept the trust prompt`);
-  return { file, root: mainRoot, changed: true };
 }
 
 const orcaCli = () => process.env.CLAUDE_HARNESS_ORCA_CLI || process.env.ORCA_CLI_COMMAND || "orca";
