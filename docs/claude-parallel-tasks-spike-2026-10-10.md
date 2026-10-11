@@ -225,3 +225,13 @@ env da lane e do supervisor por allowlist; a inspeção recheca marcador e rota 
 nativo; a entrega exige a evidência integrada completa. **Risco residual (antes do merge):** o Bash da lane roda
 como o mesmo usuário. Uma lane hostil ainda consegue escrever fora da worktree e regravar o próprio ledger.
 O host detecta parte disso (Git, stream nativo, digest de controle), mas não tudo.
+
+## 13. Formato real do resultado de `Agent` (LIVE)
+
+Nas duas primeiras rodadas LIVE com 3 lanes, as lanes fizeram o fluxo inteiro (test-author, RED, fidelidade,
+freeze, executor, GREEN, capture), mas o host bloqueou todas com "no successful executor". No 2.1.296 o
+`tool_result` de um `Agent` traz um preâmbulo `[Subagent hand-back] …`, indenta cada linha do relatório
+(`  ## Status: DONE`) e termina com `agentId:` e `<usage>`. O relatório cru fica em `tool_use_result.content`.
+**Decisão:** para `Agent`, a inspeção lê o texto estruturado. O `claude` falso passou a emitir o mesmo embrulho,
+e a matriz de inspeção falha sem a correção. Terceira rodada: as 3 lanes ficaram `ready` e foram integradas em
+50 s, com pico de ~1 GB de RSS somado e US$ 1,16 (7,1 mil tokens de saída e 1,26 M de cache-read).
