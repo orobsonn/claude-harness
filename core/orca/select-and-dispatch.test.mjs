@@ -16,6 +16,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 
 import {
   parseWorktreePs,
@@ -102,6 +103,74 @@ const issue = (number, over = {}) => ({
   blockedBy: { nodes: [], totalCount: 0 },
   labels: [],
   ...over,
+});
+
+// Captured from Orca worktree/terminal create on 2026-10-11. Only identifying values
+// are redacted; the receipt projection preserves the observed boundary fields.
+const PI_LAUNCH = JSON.parse(readFileSync(new URL("./__fixtures__/pi-queue-launch.json", import.meta.url), "utf8"));
+
+test("a Pi queue starts the vendored harness with per-run trust and a literal prompt by default", () => {
+  const prompt = "Execute a issue d'água.\n`echo injected` $(echo injected); fim";
+  const config = normalizeConfig({ ...CONFIG, agent: "pi", orcaRepoId: "repo_pi", prompt });
+  const h = harness({ config, issues: [issue(2)] });
+  const original = h.deps.orca;
+  h.deps.orca = (args) => {
+    original(args);
+    if (args[0] === "worktree" && args[1] === "create") return PI_LAUNCH.worktreeCreate;
+    if (args[0] === "terminal" && args[1] === "create") return PI_LAUNCH.terminalCreate;
+    return [];
+  };
+
+  assert.deepEqual(runTick(h.deps), { ok: true, dispatched: true, issue: 2 });
+  const creates = h.orcaCalls.filter((args) => args[1] === "create");
+  assert.deepEqual(creates[0], [
+    "worktree", "create", "--repo", "id:repo_pi", "--name", "harness-2",
+    "--issue", "2", "--base-branch", "origin/main", "--no-parent", "--json",
+  ]);
+  const terminal = creates[1];
+  assert.deepEqual(terminal.slice(0, 6), [
+    "terminal", "create", "--worktree", "id:repo_pi::/workspaces/pi-trust-launch-smoke", "--title", "π - harness-2",
+  ]);
+  const command = terminal[terminal.indexOf("--command") + 1];
+  // Execute the shell quoting through a harmless argv printer rather than assuming
+  // a regex proves that quotes, substitutions and newlines survived literally.
+  const printArgv = `'${process.execPath}' -e 'process.stdout.write(JSON.stringify(process.argv.slice(1)))' --`;
+  const argumentsOnly = command.slice(command.indexOf(" ") + 1);
+  const args = JSON.parse(execFileSync("/bin/sh", ["-c", `${printArgv} ${argumentsOnly}`], { encoding: "utf8" }));
+  assert.deepEqual(args, [".pi/harness/pi-harness.mjs", "--approve", "--", prompt]);
+  assert.match(h.logs.join("\n"), /term_smoke \(background\)/);
+});
+
+test("a Pi terminal failure after worktree creation keeps the issue claimed instead of duplicating delivery", () => {
+  const h = harness({ config: normalizeConfig({ ...CONFIG, agent: "pi", orcaRepoId: "repo_pi" }), issues: [issue(2)] });
+  const original = h.deps.orca;
+  h.deps.orca = (args) => {
+    original(args);
+    if (args[0] === "worktree" && args[1] === "create") return PI_LAUNCH.worktreeCreate;
+    if (args[0] === "terminal" && args[1] === "create") throw new Error("terminal response lost");
+    return [];
+  };
+  assert.deepEqual(runTick(h.deps), { ok: false, dispatched: false, reason: "pi-launch-unresolved", issue: 2 });
+  assert.equal(h.ghCalls.filter((args) => args[1] === "edit").length, 1);
+  assert.match(h.logs.join("\n"), /terminal response lost.*keeping in-progress/);
+});
+
+test("a Pi worktree creation failure returns the issue to the queue before any terminal request", () => {
+  const h = harness({ config: normalizeConfig({ ...CONFIG, agent: "pi" }), issues: [issue(2)], createThrows: true });
+  assert.deepEqual(runTick(h.deps), { ok: false, dispatched: false, reason: "dispatch-failed", issue: 2 });
+  assert.equal(h.orcaCalls.filter((args) => args[0] === "terminal").length, 0);
+  assert.equal(h.ghCalls.filter((args) => args[1] === "edit").length, 2);
+});
+
+test("a Pi queue does not confirm delivery from a terminal in another worktree", () => {
+  const h = harness({ config: normalizeConfig({ ...CONFIG, agent: "pi", orcaRepoId: "repo_pi" }), issues: [issue(2)] });
+  h.deps.orca = (args) => {
+    if (args[1] === "ps") return [];
+    if (args[0] === "worktree") return PI_LAUNCH.worktreeCreate;
+    return { ok: true, result: { terminal: { ...PI_LAUNCH.terminalCreate.result.terminal, worktreeId: "another-worktree" } } };
+  };
+  assert.deepEqual(runTick(h.deps), { ok: false, dispatched: false, reason: "pi-launch-unresolved", issue: 2 });
+  assert.equal(h.ghCalls.filter((args) => args[1] === "edit").length, 1);
 });
 
 // The one shape that actually comes out of the CLI. Captured from a live headless AppImage and

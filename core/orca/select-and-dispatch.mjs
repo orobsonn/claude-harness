@@ -62,9 +62,15 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import { inspectIssueDependencies, nativeBlockersClosed } from "../shared/lib/harness-deps.mjs";
+import { defaultQueuePrompt } from "../shared/lib/orca-queue-prompt.mjs";
 
 export const LABEL_READY = "harness:ready";
 export const LABEL_IN_PROGRESS = "harness:in-progress";
+
+/** @description Shell-quotes one literal argument for Orca's terminal startup command. */
+function shellQuote(value) {
+  return `'${String(value).replaceAll("'", "'\\''")}'`;
+}
 
 /**
  * @description Thrown when the Orca CLI answers with `ok: false`. This is a REPORTED FAILURE, which
@@ -224,6 +230,7 @@ export function normalizeConfig(raw) {
   //     `globalMaxWorking`: an opinion we cannot honor is refused loudly, never guessed at.
   const SETUP_VALUES = ["run", "skip", "inherit"];
   const rawSetup = cfg.setup;
+  const agent = typeof cfg.agent === "string" && cfg.agent.trim() !== "" ? cfg.agent.trim() : "claude";
   let setup = null;
   if (!(rawSetup === undefined || rawSetup === null || (typeof rawSetup === "string" && rawSetup.trim() === ""))) {
     setup = typeof rawSetup === "string" ? rawSetup.trim() : rawSetup;
@@ -240,7 +247,7 @@ export function normalizeConfig(raw) {
     // never advances. Defaulting this field would restore exactly the silent bug it exists to kill.
     clonePath: required("clonePath"),
     baseBranch: typeof cfg.baseBranch === "string" && cfg.baseBranch.trim() !== "" ? cfg.baseBranch.trim() : "main",
-    agent: typeof cfg.agent === "string" && cfg.agent.trim() !== "" ? cfg.agent.trim() : "claude",
+    agent,
     globalMaxWorking: ceiling,
     setup,
     titleIncludes:
@@ -248,7 +255,7 @@ export function normalizeConfig(raw) {
     prompt:
       typeof cfg.prompt === "string" && cfg.prompt.trim() !== ""
         ? cfg.prompt.trim()
-        : "Rode em MODO AUTÔNOMO (headless). Siga a entry-policy do .claude/ deste repo.",
+        : defaultQueuePrompt(agent),
   };
 }
 
@@ -357,9 +364,11 @@ export function runTick(deps) {
     return { ok: false, dispatched: false, reason: "lock-failed", issue: picked.number };
   }
 
-  // 5) Dispatch. On failure the issue goes straight back to the queue — never left stuck.
+  // 5) Pi queues explicitly launch the consumer harness with per-run project trust.
+  // Orca's --agent path cannot carry launcher arguments. Other agents keep their native path.
+  let piWorktreeCreated = false;
   try {
-    orca([
+    const created = orca([
       "worktree", "create",
       "--repo", `id:${config.orcaRepoId}`,
       // `--name` is load-bearing, not cosmetic: the PR-review automation selects the PRs it may
@@ -367,7 +376,7 @@ export function runTick(deps) {
       // nothing ever matches — the delivery half runs and the review half silently never picks it up.
       "--name", `harness-${picked.number}`,
       "--issue", String(picked.number),
-      "--agent", config.agent,
+      ...(config.agent === "pi" ? [] : ["--agent", config.agent]),
       "--base-branch", baseRef,
       // Explicit: without it Orca infers lineage from the calling context, and a cron has none.
       "--no-parent",
@@ -376,9 +385,31 @@ export function runTick(deps) {
       // dependencies installed instead of burning the first minutes of every run — and a global
       // ceiling means that slot was occupied installing rather than delivering.
       ...(config.setup ? ["--setup", config.setup] : []),
-      "--prompt", config.prompt,
+      ...(config.agent === "pi" ? ["--json"] : ["--prompt", config.prompt]),
     ]);
+    if (config.agent === "pi") {
+      // Do not requeue after creation: a lost terminal response may hide a running parent.
+      piWorktreeCreated = true;
+      const worktree = unwrapOrca(created)?.worktree;
+      if (!worktree?.id || !worktree.path || worktree.repoId !== config.orcaRepoId) {
+        throw new Error("Orca did not return the created Pi worktree identity");
+      }
+      const command = [process.execPath, ".pi/harness/pi-harness.mjs", "--approve", "--", config.prompt]
+        .map(shellQuote).join(" ");
+      const launched = unwrapOrca(orca([
+        "terminal", "create", "--worktree", `id:${worktree.id}`,
+        "--title", `π - harness-${picked.number}`, "--command", command, "--json",
+      ]));
+      if (!launched?.terminal?.handle || launched.terminal.worktreeId !== worktree.id) {
+        throw new Error("Orca did not confirm the Pi terminal in the created worktree");
+      }
+      log(`[${config.project}] Pi terminal ${launched.terminal.handle} (${launched.terminal.surface ?? "unspecified"})`);
+    }
   } catch (err) {
+    if (piWorktreeCreated) {
+      log(`[${config.project}] STUCK: #${picked.number} Pi launch unresolved after worktree creation — ${err?.message ?? err}; keeping in-progress to avoid duplicate delivery`);
+      return { ok: false, dispatched: false, reason: "pi-launch-unresolved", issue: picked.number };
+    }
     log(`[${config.project}] worktree create failed for #${picked.number}: ${err?.message ?? err}`);
     try {
       gh([
