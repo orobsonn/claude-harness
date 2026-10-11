@@ -623,6 +623,7 @@ test("exact resume preserves task state and restores the stable task runtime", (
   assert.equal(result.exitCode, 0);
   assert.deepEqual(materializedProfile, legacyProfile);
   assert.equal(JSON.parse(invocation.env.PI_HARNESS_TASK_RUN).sessionId, "task-parent");
+  assert.equal(invocation.admittedTask, true);
   assert.match(invocation.runtimePrompt, /stable task runtime/);
   assert.match(invocation.runtimePrompt, /"resumed": true/);
   assert.doesNotMatch(invocation.runtimePrompt, /global runtime/);
@@ -646,6 +647,7 @@ test("fresh task launcher admits the CLI grant and replaces inherited task autho
   });
   assert.equal(result.exitCode, 0);
   assert.deepEqual(invocation.argv, ["--mode", "json", "-p", "run task"]);
+  assert.equal(invocation.admittedTask, true);
   assert.deepEqual(JSON.parse(invocation.env.PI_HARNESS_TASK_RUN), { cwd: f.root, sessionId: "fresh-task-parent" });
   assert.match(invocation.runtimePrompt, /"resumed": false/);
   assert.doesNotMatch(invocation.runtimePrompt, /global runtime/);
