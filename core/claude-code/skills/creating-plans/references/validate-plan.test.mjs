@@ -62,7 +62,7 @@ function basePlan(modelStrategy) {
       },
     ],
     final_review: { compliance: true, adversary: true },
-    demo: { type: "markdown", scenarios_from_refs: ["#ac-1.1"] },
+    demo: { type: "markdown", scenarios_from_refs: ["#uj-1"] },
   };
 }
 

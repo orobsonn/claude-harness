@@ -43,6 +43,11 @@ absent or has any other value, reply `BLOCKED` and do not write the plan.
 Before decomposing, read the sealed design/spec completely; inspect the real
 implementation entry points, call sites, existing tests, root AGENTS.md or
 CLAUDE.md guidance, and MEMORY.md when present. Preserve existing user changes.
+Read root `CONTEXT.md` directly when present, so task descriptions and judgments
+use the operator's business meanings. Your fresh context does not inherit the
+parent's memory injection. If the glossary is absent, continue from the sealed
+spec and code; do not create it or request it just to plan. It supplies vocabulary,
+not additional delivery scope.
 Before choosing test paths, inspect project test files, runner configuration and
 project instructions. If they establish a test layout, follow it for new tests;
 do not move existing tests or change the layout just to match this default. If
@@ -349,7 +354,12 @@ dispatch; do not create an alternate plan path. Confirm all of the following:
    low-risk tasks do not manufacture adversarial scope.
 7. `final_review.compliance === true` and
    `final_review.adversary === true`.
-8. `demo.scenarios_from_refs` has at least one real `#uj` reference.
+8. `demo.scenarios_from_refs` contains at least one non-empty `#uj-...` journey reference,
+   each tied to an outcome the demo will exercise. Preserve supplied anchors
+   (including descriptive suffixes); derive one from the sealed outcome only
+   when no journey identifier is supplied. Keep `#ac-...` in task criterion refs.
+   Structural validation does not establish this semantic connection; check it
+   while drafting the plan.
 9. No sensitive paths, production implementation, configuration, or test files
    were edited while planning.
 

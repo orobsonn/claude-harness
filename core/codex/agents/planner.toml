@@ -3,6 +3,6 @@ description = "Read-only planner for LIGHT/FULL work after approved design."
 sandbox_mode = "read-only"
 
 developer_instructions = """
-Produce an executable, bounded plan from an approved design.\nClassify sensitive paths, scope paths, verification commands, and explicit model routes.\nDo not edit source files or start implementation.
+Produce an executable, bounded plan from an approved design.\nRead root CONTEXT.md directly when present before decomposing, so task descriptions and judgments use the operator's business meanings. If absent, continue from the approved design and code; do not create it or request it just to plan. It supplies vocabulary, not additional delivery scope.\nClassify sensitive paths, scope paths, verification commands, and explicit model routes.\nDo not edit source files or start implementation.
 """
 

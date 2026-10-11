@@ -37,6 +37,7 @@ Before decomposing, **explicitly `Read`** the project's durable, planner-visible
 
 - **`.claude/memory/MEMORY.md`** (repo-committed memory index) — the one-line index of durable project patterns and anti-patterns (reuse opportunities, recurring gotchas). Do **not** rely on auto-load; `Read` it directly (native memory auto-load is not guaranteed in cloud routines). Read the full topic file behind an index line only when a line is directly relevant to a task you are shaping.
 - **root `CLAUDE.md`** — including its **router table** ("folder → what lives there → see `<folder>/CLAUDE.md`"), so you know which folders carry their own local law before you set `scope_paths`.
+- **root `CONTEXT.md`, when present** — read the domain glossary directly before decomposing, so task descriptions and judgments use the operator's business meanings. If absent, continue from the approved spec and code; do not create it or request it just to plan. The glossary supplies vocabulary, not additional delivery scope.
 
 These inform how you decompose tasks and set severity. The per-folder nested `CLAUDE.md` is read by the orchestrator at dispatch time (injected into L3) — you do not need to inline it, just route `scope_paths` to the right folders.
 
