@@ -80,8 +80,13 @@ export function requireParallelPlan(plan, featureId) {
 /** Host-owned parent authority: classified LIGHT/FULL parent, no task_run, current plan APPROVE. */
 export function readParentAuthority({ root, sessionId }) {
   if (!isSafeSessionId(sessionId)) throw new Error("safe parent session required");
-  const triage = JSON.parse(readArtifact(triageFile(root, sessionId), root));
-  if (triage.session_id !== sessionId || !["LIGHT", "FULL"].includes(triage.mode) || !isSafeFeatureId(triage.feature_id)) {
+  let triage;
+  try {
+    triage = JSON.parse(readArtifact(triageFile(root, sessionId), root));
+  } catch {
+    triage = null;
+  }
+  if (!triage || triage.session_id !== sessionId || !["LIGHT", "FULL"].includes(triage.mode) || !isSafeFeatureId(triage.feature_id)) {
     throw new Error("a LIGHT/FULL classified global parent is required (run triaging-requests first)");
   }
   let state = {};
