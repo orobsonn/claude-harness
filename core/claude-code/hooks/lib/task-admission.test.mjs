@@ -74,7 +74,7 @@ test("binding fails closed when the grant, claim, lane triage, plan or parent ap
     ["grant", lane.grantPath, () => fs.appendFileSync(lane.grantPath, " "), /grant changed/],
     ["claim", `${lane.grantPath}.claim`, () => fs.writeFileSync(`${lane.grantPath}.claim`, JSON.stringify({ session_id: "other", grant_sha256: "x" })), /claim mismatch/],
     ["triage", triage, () => fs.writeFileSync(triage, JSON.stringify({ session_id: LANE_SESSION, mode: "LIGHT", feature_id: project.featureId })), /triage changed/],
-    ["parent plan", parentPlan, () => fs.appendFileSync(parentPlan, "\n"), /parent canonical plan\/spec changed/],
+    ["parent plan", parentPlan, () => fs.appendFileSync(parentPlan, "\n"), /plan-reviewer APPROVE required/],
     ["parent spec", parentSpec, () => fs.appendFileSync(parentSpec, "x"), /parent canonical plan\/spec changed/],
     ["lane plan", lanePlan, () => fs.appendFileSync(lanePlan, "\n"), /plan\/spec hash mismatch/],
   ]) {

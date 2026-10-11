@@ -26,6 +26,7 @@ import { planAndSpec, readParentAuthority, requireParallelPlan } from "./task-ad
 import { claudeTaskScopeShape, laneTaskScope, pathInScope } from "./task-lane-contract.mjs";
 import { inspectTaskRun, readIntegratedTaskEvidence } from "./task-receipts.mjs";
 import { taskReconciliationDigest, taskScopeBase } from "./task-reconciliation.mjs";
+import { readTaskPlanAuthority } from "./task-plan-recovery.mjs";
 import { captureTaskRuntime, verifyTaskRuntime } from "./task-runtime.mjs";
 import { laneEnvironment } from "./task-worker.mjs";
 import {
@@ -374,7 +375,7 @@ function prepareIntegrationConflict(entry, task, owner, persist) {
   const scopes = scopeOf(task);
   const base = taskScopeBase(entry, entry.worktree, head, scopes);
   const changed = git(entry.worktree, "diff", "--name-only", "-z", parentHead, preview.tree).split("\0").filter(Boolean);
-  if (checkScope([...preview.conflicts, ...changed], scopes).length) throw new Error("task merge conflicts outside canonical scope; correct the reviewed plan in a new session");
+  if (checkScope([...preview.conflicts, ...changed], scopes).length) throw new Error("task merge conflicts outside canonical scope; fold the path into the plan deliberately (planner append-only scope correction, fresh plan-reviewer APPROVE) and resume this task");
   entry.reconciliation_intent = {
     written_by: "host-task-reconciliation", kind: "integration-conflict",
     task_id: entry.task_id, attempt_id: entry.attempt_id, scope_base_sha: base,
@@ -755,8 +756,16 @@ export async function executeTaskAction(params, context = {}, injected = {}) {
         plan_sha256: artifacts.plan_sha256, spec_sha256: artifacts.spec_sha256,
         git_control_sha256: gitControlDigest(owner.root), tasks: {} };
     }
-    if (registry.plan_sha256 !== artifacts.plan_sha256 || registry.spec_sha256 !== artifacts.spec_sha256) {
-      throw new Error("canonical plan/spec changed after task admission; a real plan change needs a new session");
+    if (registry.spec_sha256 !== artifacts.spec_sha256) {
+      throw new Error("the canonical spec changed after task admission; a real behavior change needs a new session");
+    }
+    if (registry.plan_sha256 !== artifacts.plan_sha256) {
+      // A reviewed append-only scope correction (task-plan-recovery.mjs): the current plan drives
+      // scope, while every grant keeps the admission hash and its original APPROVE as origin.
+      readTaskPlanAuthority({ projectRoot: owner.root, sessionId: owner.sessionId, featureId: owner.featureId,
+        planSha256: registry.plan_sha256, specSha256: registry.spec_sha256 });
+      artifacts.plan_sha256 = registry.plan_sha256;
+      artifacts.receipt = registry.plan_snapshot.approval;
     }
     const barrierTaskId = registry.correction_barrier?.task_id;
     const nestedOwnerRecovery = barrierTaskId && params.action === "resume" && params.task_id !== barrierTaskId &&

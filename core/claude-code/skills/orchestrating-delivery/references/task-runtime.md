@@ -108,6 +108,9 @@ não autoriza esse caminho; só o contrato canônico autoriza.
   defeito de produto, com commit e captura. Nunca remova produto para fabricar RED.
 - Se a correção exigir arquivo de outra task, retorne `BLOCKED` com finding, arquivo, task dona,
   HEAD e evidência. O pai global corrige a dona e retoma esta task.
+- Se a correção exigir um arquivo fora de `scope_paths` que não é de outra task, retorne `BLOCKED`
+  com o path exato, o motivo e a evidência. Nunca escreva fora do escopo. O pai global corrige o plano
+  e retoma esta mesma tentativa já com o escopo novo.
 
 ## Merges feitos pelo host
 

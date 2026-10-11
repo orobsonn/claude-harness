@@ -17,9 +17,9 @@ and you never read a lane's transcript.
   not count.
 - The vendored `.claude/` harness is committed, because each lane runs the copy in its worktree.
 
-Once a task is admitted, spec, plan and classification are frozen: the plan cannot change and the
-planner and plan-reviewer can no longer be dispatched. Hands (`test-author`, `executor*`, `sniper*`)
-are dispatched only inside lanes.
+Once a task is admitted, spec and classification are frozen, and the plan changes only through the
+append-only scope correction in step 7. Hands (`test-author`, `executor*`, `sniper*`) are dispatched
+only inside lanes.
 
 ## The commands
 
@@ -63,8 +63,22 @@ When the JSON contains a single quote, use `--json-file .claude/plans/<feature>/
    `Agent(shipper)` are refused until every plan task has a valid integration receipt in HEAD
    ancestry and no correction is open.
 
-Nothing is cleaned up automatically: worktrees, branches and job logs under
-`.claude/plans/.state/<session>/task-runs/` are kept for audit and resume.
+7. **Scope correction** (a task needs a file outside its `scope_paths`): fold the path into the plan
+   deliberately, as in serial delivery; never widen scope in a brief. Wait until no lane runs, then
+   dispatch the planner. The gate snapshots the admitted plan and its APPROVE, and denies the
+   dispatch with an exact `[HARNESS_PLAN_RECOVERY]` block: copy that block verbatim into the planner
+   prompt, plus only the paths to append. The planner may only append to `scope_paths` and
+   `allowed_writes` and, when the new path needs its own proof, the minimum new `locked_tests`.
+   Existing entries, task IDs, dependencies, behavior and the spec never change. Then a fresh
+   `Agent(plan-reviewer)` APPROVE, then `resume` the **same** task and attempt with an instruction
+   naming the new path. Grants and receipts keep the admission plan; unaffected tasks keep their
+   evidence. An already integrated task whose scope grew loses its evidence until you `resume` and
+   reintegrate it. A real behavior change still needs a new session.
+
+Nothing is cleaned up automatically. The registry and job logs under
+`.claude/plans/.state/<session>/task-runs/`, and the lane worktrees and branches (outside the repo, in
+`~/.local/state/claude-harness/task-worktrees/` or `$CLAUDE_HARNESS_TASK_WORKTREES_DIR`), are kept for
+audit and resume.
 
 ## Host configuration (operator env, never set per command)
 

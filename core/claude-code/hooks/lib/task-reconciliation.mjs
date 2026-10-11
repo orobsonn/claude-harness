@@ -23,6 +23,7 @@ function scoped(root, base, head, scopes) {
 
 export { taskMergePreview } from "../../../shared/lib/task-git.mjs";
 import { taskMergePreview } from "../../../shared/lib/task-git.mjs";
+import { readTaskPlanAuthority } from "./task-plan-recovery.mjs";
 
 export function taskReconciliationDigest(entry) {
   return entry.reconciliations?.length ? hashTaskReceipt(entry.reconciliations) : null;
@@ -33,13 +34,16 @@ function reconciliationAuthority(entry) {
     throw new Error("invalid reconciliation owner");
   const registry = JSON.parse(fs.readFileSync(taskRegistryPath(entry.parent_root, entry.parent_session_id), "utf8"));
   const bytes = fs.readFileSync(planFile(entry.parent_root, entry.feature_id));
-  const plan = JSON.parse(bytes);
+  let plan = JSON.parse(bytes);
   if (registry.version !== 1 || registry.parent_session_id !== entry.parent_session_id ||
       registry.feature_id !== entry.feature_id || registry.plan_sha256 !== entry.plan_sha256 ||
       registry.spec_sha256 !== entry.spec_sha256)
     throw new Error("reconciliation owner plan or registry changed");
-  if (createHash("sha256").update(bytes).digest("hex") !== entry.plan_sha256)
-    throw new Error("reconciliation owner plan changed after admission");
+  // A reviewed append-only scope correction keeps depends_on; anything else throws here.
+  if (createHash("sha256").update(bytes).digest("hex") !== entry.plan_sha256) {
+    plan = readTaskPlanAuthority({ projectRoot: entry.parent_root, sessionId: entry.parent_session_id, featureId: entry.feature_id,
+      planSha256: entry.plan_sha256, specSha256: entry.spec_sha256, originCallId: entry.grant?.origin?.plan_review_call_id }).plan;
+  }
   const tasks = new Map(plan.tasks.map((task) => [task.id, task]));
   const ancestors = new Set();
   const pending = [...(tasks.get(entry.task_id)?.depends_on ?? [])];
