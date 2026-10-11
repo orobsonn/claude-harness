@@ -962,6 +962,8 @@ export function decide(payload, deps = {}) {
     listHandRecordsForFeatureFn = () => [],
     // Inert for direct unit callers. processInput injects the one real GH read below.
     readMergeCheckRollupFn = () => null,
+    // True inside a host-launched parallel task lane (CLAUDE_HARNESS_TASK_RUN set by the launcher).
+    isTaskLaneFn = () => Object.prototype.hasOwnProperty.call(process.env, "CLAUDE_HARNESS_TASK_RUN"),
   } = deps;
 
   // Non-object payload → infra error → fail-open
@@ -1307,6 +1309,12 @@ export function decide(payload, deps = {}) {
       // allowed here — they must never be blocked by the fidelity rail they serve. Only the
       // executor consumer is gated: it must not run before the test-author has produced a red test.
       if (bareRole(role) !== "executor" && bareRole(role) !== "executor-high") {
+        return { allow: true };
+      }
+      // Inside a parallel task lane the lane gate (task-gate.mjs) owns this precondition: it knows
+      // the admitted task contract (including a no_tests task, which has no fidelity to stamp) and
+      // requires this task's own fidelity_pass entry, not merely one for the feature.
+      if (isTaskLaneFn()) {
         return { allow: true };
       }
       // The executor on the Agent path: additionally requires at least one fidelity_pass entry for the current
