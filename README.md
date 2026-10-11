@@ -367,6 +367,8 @@ Isso permite paralelizar sem colocar três agentes editando o mesmo diretório. 
 
 Dentro de cada task, a ordem continua intencionalmente sequencial: test-author → test-reviewer → freeze → executor → captura → olhos → sniper, se necessário. O paralelismo acontece **entre tasks independentes**. As revisões de implementação e finais de compliance, adversary e security também podem usar até três olhos em paralelo.
 
+O shell **Claude Code** tem o mesmo modelo como opt-in: com `"execution": {"parallel": true}` no plano, cada task roda numa worktree com uma sessão `claude -p` própria, e o pai global coordena por `node .claude/hooks/tasks.mjs dispatch|wait|status|integrate|resume`. Inspeção, recibos e merge `--no-ff` continuam host-owned. Veja o guia do operador (seção 5.1) e `docs/claude-parallel-tasks-spike-2026-10-10.md`.
+
 ### O pai global não acredita no relatório da task
 
 Quando uma task termina, o pai não integra “a branch mais recente” nem confia apenas no texto do agente. Ele exige:
