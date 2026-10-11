@@ -235,3 +235,25 @@ freeze, executor, GREEN, capture), mas o host bloqueou todas com "no successful 
 **Decisão:** para `Agent`, a inspeção lê o texto estruturado. O `claude` falso passou a emitir o mesmo embrulho,
 e a matriz de inspeção falha sem a correção. Terceira rodada: as 3 lanes ficaram `ready` e foram integradas em
 50 s, com pico de ~1 GB de RSS somado e US$ 1,16 (7,1 mil tokens de saída e 1,26 M de cache-read).
+
+## 14. Hooks por `--settings` e o backend do Orca
+
+Rodada (2026-10-11): `claude -p --setting-sources project --settings <flag.json>` com `SessionStart` e
+`PreToolUse` no JSON. Os dois hooks dispararam (`flag-sessionstart`, `flag-pretool`). Hooks passados por
+`--settings` carregam ao lado dos do projeto, mesmo sem os settings de usuário. **Decisão:** numa lane rodando
+em terminal do Orca, o launcher copia dos settings do usuário só os grupos cujos comandos são o hook de status
+do próprio Orca (com gate em `ORCA_AGENT_HOOK_PORT`, spool em `~/.orca/agent-hooks`, saída `{}`), e o
+worker mantém `ORCA_*` só nesse modo. Os outros hooks, permissões e modos do usuário continuam fora.
+
+O backend do Orca é o do Pi, movido para `core/shared/lib/task-orca.mjs`, com o caminho de admissão
+injetado por host. Diferenças do Claude:
+- a lane roda `claude -p` em stream-json, sem TUI. O terminal mostra uma linha de progresso por evento
+  nativo, sem caracteres de controle (texto de modelo não reescreve o terminal);
+- o `run_dir` fica na raiz de lane do host, fora do repo, porque o Orca põe a worktree onde quer;
+- o digest de controle do Git ignora as chaves `branch.*` (metadados de branch não executam código);
+- o `wait` do pai continua em polling de 5 s. O `orca terminal wait` do Pi seria só um aviso de wake e
+  não entrou.
+
+O CLI do Orca 1.4.220 não tem `repo rm`. Um smoke vivo registraria um repositório temporário no Orca do
+operador para sempre, então a prova automatizada usa um `orca` falso que faz `git worktree add` de verdade
+e roda o comando do terminal destacado.

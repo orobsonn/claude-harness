@@ -75,6 +75,12 @@ When the JSON contains a single quote, use `--json-file .claude/plans/<feature>/
    evidence. An already integrated task whose scope grew loses its evidence until you `resume` and
    reintegrate it. A real behavior change still needs a new session.
 
+**Orca.** When this session runs inside an Orca workspace, every lane is an Orca child worktree of it
+and runs in its own Orca terminal (`status` shows `orca` with the worktree and terminal handle). If a
+launch reports `warning` (terminal not confirmed visible), reveal that existing handle; never dispatch
+again to get a new one. A registry pinned to an Orca workspace launches work only from inside that
+workspace.
+
 Nothing is cleaned up automatically. The registry and job logs under
 `.claude/plans/.state/<session>/task-runs/`, and the lane worktrees and branches (outside the repo, in
 `~/.local/state/claude-harness/task-worktrees/` or `$CLAUDE_HARNESS_TASK_WORKTREES_DIR`), are kept for

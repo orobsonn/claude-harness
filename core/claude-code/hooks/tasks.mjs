@@ -45,7 +45,9 @@ export async function runTasksCli(argv, { env = process.env, cwd = process.cwd()
   } catch (error) {
     return { ok: false, reason: `[harness-tasks] ${error.message}` };
   }
-  const context = { projectRoot: cwd, sessionId: env.CLAUDE_CODE_SESSION_ID, isLane: Object.hasOwn(env, TASK_RUN_ENV) };
+  // Inside an Orca workspace the lanes become Orca child worktrees and terminals (task-orca.mjs).
+  const context = { projectRoot: cwd, sessionId: env.CLAUDE_CODE_SESSION_ID, isLane: Object.hasOwn(env, TASK_RUN_ENV),
+    ...(env.ORCA_WORKTREE_ID ? { orca: { worktreeId: env.ORCA_WORKTREE_ID } } : {}) };
   if (params.action === "wait") {
     const poll = Number(env.CLAUDE_HARNESS_TASK_WAIT_POLL_MS);
     const pollMs = Number.isInteger(poll) ? Math.min(5000, Math.max(50, poll)) : 5000;
