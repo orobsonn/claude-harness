@@ -99,6 +99,17 @@ enquanto mãos e fidelity continuam sequenciais. Timeout, erro ou retorno incomp
 preservam a tentativa para retomada; não redespache automaticamente implementação já
 pronta sem causa. Integre somente o SHA exato validado pelo coordenador.
 
+Antes dos olhos finais, consulte `harness_tasks status` com `compact=true` e confira
+`current_evidence.ok` de cada tarefa integrada no HEAD agregado atual. `integrated`
+preserva a integração histórica; não atesta que seu teste congelado continua válido
+após incorporar outra base. Se houver `diagnostics[task_id].recovery`, use essa ação
+exata após conferir a causa e os processos, sem pedir intervenção do operador para
+uma recuperação suportada. O `resume` com `reconcile_head` importa o agregado pelo
+host e revalida somente as obrigações afetadas; não peça writer de produto só por
+renovação de evidência. Depois de atualizar o harness instalado, uma recusa de runtime
+pode devolver `recovery` no próprio `integrate`: retome a mesma tentativa por esse
+caminho, preservando os recibos históricos. Não edite state nem relaxe a validação.
+
 Correção de dependência pertence ao host: integre a correção da tarefa dona e use
 `harness_tasks resume` na tentativa dependente quando for necessário revalidá-la,
 inclusive se ela já estiver integrada. O host incorpora o upstream e registra a
