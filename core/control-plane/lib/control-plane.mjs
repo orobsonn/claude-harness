@@ -1487,6 +1487,9 @@ export class ControlPlane {
         const command = terminalCommand("env", [
           `HARNESS_CONTROL_BINDING=${this.deliveryDir(record.delivery_id)}`,
           process.execPath, ".pi/harness/pi-harness.mjs",
+          // Starting this delivery already authorizes its parent worktree.
+          // Pi's override applies only to this run, including exact resume.
+          "--approve",
           ...(record.session_id ? ["--harness-resume", record.session_id] : []),
           "--", brief,
         ]);

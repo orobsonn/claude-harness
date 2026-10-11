@@ -552,6 +552,7 @@ test("Given an exact recommendation, start binds one issue, worktree, terminal a
   assert.deepEqual(worktreeCreate.slice(worktreeCreate.indexOf("--name"), worktreeCreate.indexOf("--name") + 2), ["--name", `harness-${recommendation.issue.number}`]);
   const command = terminalCreate[terminalCreate.indexOf("--command") + 1];
   assert.match(command, /\.pi\/harness\/pi-harness\.mjs/);
+  assert.match(command, /pi-harness\.mjs' '--approve' '--'/);
   assert.doesNotMatch(command, /(?:^|\s)pi(?:\s|$)/);
 });
 
@@ -664,6 +665,7 @@ test("An interrupted delivery is reported and resumes the exact session without 
   assert.equal(external.calls.filter((call) => call[0] === "orca" && call[1] === "terminal" && call[2] === "create").length, 2);
   const lastCreate = external.calls.filter((call) => call[0] === "orca" && call[1] === "terminal" && call[2] === "create").at(-1);
   assert.match(lastCreate[lastCreate.indexOf("--command") + 1], /--harness-resume/);
+  assert.match(lastCreate[lastCreate.indexOf("--command") + 1], /pi-harness\.mjs' '--approve' '--harness-resume'/);
   assert.match(lastCreate[lastCreate.indexOf("--command") + 1], /session-real/);
 });
 
