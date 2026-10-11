@@ -11,15 +11,8 @@ const git = (cwd, ...args) => execFileSync("git", args, {
 }).trim();
 
 /** Short display/path name; attempt identity remains in the registry and comment. */
-export function taskWorktreeName(task, index) {
-  const slug = (value) => String(value ?? "").normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "").toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "")
-    .split("-").slice(0, 3).join("-").slice(0, 36).replace(/-+$/g, "");
-  const term = slug(task.title || task.description) ||
-    slug(String(task.id ?? "").replace(/^task[-_]?\d*[-_]?/i, "")) || "implementacao";
-  return `task-${index}-${term}`;
-}
+export { taskWorktreeName } from "../../shared/lib/task-contract.mjs";
+import { taskWorktreeName } from "../../shared/lib/task-contract.mjs";
 
 export function quoteOrcaCommand(command, args) {
   return "exec " + [command, ...args].map((value) => {

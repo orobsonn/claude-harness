@@ -1,5 +1,5 @@
 /** Verify host merges separately from a task's immutable admission base. */
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
@@ -18,18 +18,8 @@ function scoped(root, base, head, scopes) {
   if (checkScope(changed, scopes).length) throw new Error("task changed paths outside canonical scope");
 }
 
-/** Git exit 1 is a usable conflict preview, not an execution failure. */
-export function taskMergePreview(root, before, after) {
-  const result = spawnSync("git", ["merge-tree", "--write-tree", "--name-only", "-z", before, after],
-    { cwd: root, encoding: "utf8", maxBuffer: 8 * 1024 * 1024 });
-  if (result.error || ![0, 1].includes(result.status))
-    throw new Error(`task merge-tree failed: ${result.error?.message ?? result.stderr}`);
-  const [tree, ...fields] = result.stdout.split("\0");
-  const conflicts = result.status === 1 ? fields.slice(0, fields.indexOf("")) : [];
-  if (!sha.test(tree) || (result.status === 1 && !conflicts.length))
-    throw new Error("task merge-tree returned an invalid preview");
-  return { tree, conflicts: [...new Set(conflicts)].sort() };
-}
+export { taskMergePreview } from "../../shared/lib/task-git.mjs";
+import { taskMergePreview } from "../../shared/lib/task-git.mjs";
 
 export function taskReconciliationDigest(entry) {
   return entry.reconciliations?.length ? hashTaskReceipt(entry.reconciliations) : null;
