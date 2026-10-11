@@ -10,13 +10,26 @@
  * Usage:
  *   node validate-plan.mjs <path-to-plan.json>
  *
+ * Importable: `validateExecutionPlan(plan)` returns { ok, errors: [{ path, message }] } with the
+ * exact rules the CLI applies.
+ *
+ * Parallel execution (opt-in, `"execution": { "parallel": true }`): tasks that can run together
+ * (no depends_on ancestry between them) must have disjoint literal scopes — scope_paths, every
+ * locked test_path and fixture_paths — with no globs, no '..', no absolute paths; every task
+ * declares depends_on; hands use the claude family ladder (lanes dispatch hands as Agents); a
+ * task may declare `"no_tests": true` with `"locked_tests": []` only in a parallel plan. Plans
+ * without `execution` are validated exactly as before.
+ *
  * Exit codes:
  *   0 — plan is valid (prints "OK")
  *   1 — usage error, unreadable/invalid JSON, or one+ validation errors
  *       (prints each error with its field path)
  */
 
-import { readFileSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { taskScopeOf, taskScopesOverlap } from "../../../../shared/lib/task-contract.mjs";
+import { HAND_LADDERS } from "../../../../shared/lib/hand-model-ladder.mjs";
 
 // ---------- Allowed enum values (mirror the documented contract) ----------
 
@@ -111,9 +124,13 @@ function checkStringArrayMin1(value, path, errors) {
  * observable), and an OPTIONAL `fixture_paths` (the enumerated fixture files the test-author
  * may also write, captured in the manifest so the frozen-manifest gate covers them too).
  */
-function validateLockedTests(value, path, errors) {
+function validateLockedTests(value, path, errors, { noTests = false } = {}) {
   if (!Array.isArray(value)) {
     errors.add(path, "must be an array");
+    return;
+  }
+  if (noTests) {
+    if (value.length !== 0) errors.add(path, "must be [] when no_tests is true");
     return;
   }
   if (value.length < 1) {
@@ -270,7 +287,7 @@ function validateAdversarial(adv, path, errors) {
 
 // ---------- task ----------
 
-function validateTask(task, index, errors) {
+function validateTask(task, index, errors, { parallel = false } = {}) {
   const base = `tasks[${index}]`;
   if (!isObject(task)) {
     errors.add(base, "must be an object");
@@ -326,7 +343,16 @@ function validateTask(task, index, errors) {
     });
   }
 
-  validateLockedTests(task.locked_tests, `${base}.locked_tests`, errors);
+  if (task.no_tests !== undefined) {
+    if (!parallel) {
+      errors.add(`${base}.no_tests`, 'is only valid in a parallel plan ("execution": {"parallel": true})');
+    } else if (task.no_tests !== true) {
+      errors.add(`${base}.no_tests`, "must be true when present");
+    }
+  }
+  validateLockedTests(task.locked_tests, `${base}.locked_tests`, errors, {
+    noTests: parallel && task.no_tests === true,
+  });
 
   validateAdversarial(task.adversarial, `${base}.adversarial`, errors);
 
@@ -408,6 +434,97 @@ function validateDependsOnGraph(tasks, errors) {
   }
 }
 
+// ---------- parallel execution (opt-in) ----------
+
+/** @description Claude plan task → the shared literal scope (locked_tests use `test_path`). */
+export function claudeTaskScopeShape(task) {
+  return {
+    scope_paths: Array.isArray(task?.scope_paths) ? task.scope_paths : [],
+    allowed_writes: Array.isArray(task?.allowed_writes) ? task.allowed_writes : [],
+    locked_tests: (Array.isArray(task?.locked_tests) ? task.locked_tests : []).map((lt) => ({
+      path: lt?.test_path,
+      ...(Array.isArray(lt?.fixture_paths) ? { fixture_paths: lt.fixture_paths } : {}),
+    })),
+  };
+}
+
+/** @description Transitive depends_on ancestors of every task id (malformed edges ignored). */
+function ancestorSets(tasks) {
+  const deps = new Map(tasks.filter((t) => isObject(t) && isString(t.id))
+    .map((t) => [t.id, Array.isArray(t.depends_on) ? t.depends_on.filter(isString) : []]));
+  const memo = new Map();
+  const visit = (id, stack = new Set()) => {
+    if (memo.has(id)) return memo.get(id);
+    const out = new Set();
+    if (stack.has(id)) return out;
+    stack.add(id);
+    for (const dep of deps.get(id) ?? []) {
+      out.add(dep);
+      for (const deeper of visit(dep, stack)) out.add(deeper);
+    }
+    stack.delete(id);
+    memo.set(id, out);
+    return out;
+  };
+  for (const id of deps.keys()) visit(id);
+  return memo;
+}
+
+function validateExecution(plan, errors) {
+  if (plan.execution === undefined) return false;
+  if (!isObject(plan.execution)) {
+    errors.add("execution", "must be an object");
+    return false;
+  }
+  for (const key of Object.keys(plan.execution)) {
+    if (key !== "parallel") errors.add(`execution.${key}`, "unknown key");
+  }
+  if (!isBoolean(plan.execution.parallel)) {
+    errors.add("execution.parallel", "must be a boolean");
+    return false;
+  }
+  return plan.execution.parallel === true;
+}
+
+function validateParallelPlan(plan, errors) {
+  const handTiers = plan.model_strategy?.hand_tiers;
+  const claude = HAND_LADDERS.claude;
+  if (isObject(handTiers) && Object.keys(claude).some((tier) => handTiers[tier] !== claude[tier])) {
+    errors.add(
+      "model_strategy.hand_tiers",
+      `parallel task lanes dispatch hands as Agents and require the claude hand family ladder (${JSON.stringify(claude)}); switch with hand-model-ladder.mjs use claude and re-plan`,
+    );
+  }
+  if (!Array.isArray(plan.tasks)) return;
+  const scopes = new Map();
+  plan.tasks.forEach((task, index) => {
+    if (!isObject(task)) return;
+    if (!Array.isArray(task.depends_on)) {
+      errors.add(`tasks[${index}].depends_on`, "is required in a parallel plan (use [] for none)");
+    }
+    try {
+      taskScopeOf(claudeTaskScopeShape(task));
+      if (isString(task.id)) scopes.set(task.id, claudeTaskScopeShape(task));
+    } catch (error) {
+      errors.add(`tasks[${index}].scope_paths`, error.message);
+    }
+  });
+  const ancestors = ancestorSets(plan.tasks);
+  const ids = [...scopes.keys()];
+  for (let i = 0; i < ids.length; i += 1) {
+    for (let j = i + 1; j < ids.length; j += 1) {
+      const [a, b] = [ids[i], ids[j]];
+      if (ancestors.get(a)?.has(b) || ancestors.get(b)?.has(a)) continue;
+      if (taskScopesOverlap(scopes.get(a), scopes.get(b))) {
+        errors.add(
+          "tasks",
+          `tasks "${a}" and "${b}" can run in parallel but their scopes overlap (scope_paths, locked test_path or fixture_paths); make them disjoint or order them with depends_on`,
+        );
+      }
+    }
+  }
+}
+
 // ---------- final_review / demo ----------
 
 function validateFinalReview(fr, errors) {
@@ -447,6 +564,7 @@ function validatePlan(plan, errors) {
     errors.add("(root)", "plan must be a JSON object");
     return;
   }
+  const parallel = validateExecution(plan, errors);
 
   if (plan.version !== "1.0") {
     errors.add("version", 'must be the literal "1.0"');
@@ -473,50 +591,73 @@ function validatePlan(plan, errors) {
   } else if (plan.tasks.length < 1) {
     errors.add("tasks", "must have at least 1 task");
   } else {
-    plan.tasks.forEach((task, i) => validateTask(task, i, errors));
+    plan.tasks.forEach((task, i) => validateTask(task, i, errors, { parallel }));
     validateDependsOnGraph(plan.tasks, errors);
   }
+  if (parallel) validateParallelPlan(plan, errors);
 
   validateFinalReview(plan.final_review, errors);
   validateDemo(plan.demo, errors);
 }
 
+/**
+ * @description Validates a parsed execution plan with the exact rules of the CLI.
+ * @param {unknown} plan
+ * @returns {{ ok: boolean, errors: Array<{ path: string, message: string }> }}
+ */
+export function validateExecutionPlan(plan) {
+  const errors = new Errors();
+  validatePlan(plan, errors);
+  return { ok: errors.empty, errors: errors.list };
+}
+
 // ---------- main ----------
 
-const planPath = process.argv[2];
-if (!planPath) {
-  process.stderr.write("Usage: node validate-plan.mjs <path-to-plan.json>\n");
-  process.exit(1);
-}
-
-let raw;
-try {
-  raw = readFileSync(planPath, "utf8");
-} catch (err) {
-  process.stderr.write(
-    `[validate-plan] Cannot read file: ${planPath}\n${err.message}\n`
-  );
-  process.exit(1);
-}
-
-let data;
-try {
-  data = JSON.parse(raw);
-} catch (err) {
-  process.stderr.write(`[validate-plan] Invalid JSON: ${err.message}\n`);
-  process.exit(1);
-}
-
-const errors = new Errors();
-validatePlan(data, errors);
-
-if (errors.empty) {
-  process.stdout.write("OK\n");
-  process.exit(0);
-} else {
-  process.stderr.write("[validate-plan] INVALID — errors:\n");
-  for (const { path, message } of errors.list) {
-    process.stderr.write(`  [${path}] ${message}\n`);
+function isDirectCli() {
+  if (!process.argv[1]) return false;
+  try {
+    return realpathSync(process.argv[1]) === fileURLToPath(import.meta.url);
+  } catch {
+    return process.argv[1] === fileURLToPath(import.meta.url);
   }
-  process.exit(1);
+}
+
+if (isDirectCli()) {
+  const planPath = process.argv[2];
+  if (!planPath) {
+    process.stderr.write("Usage: node validate-plan.mjs <path-to-plan.json>\n");
+    process.exit(1);
+  }
+
+  let raw;
+  try {
+    raw = readFileSync(planPath, "utf8");
+  } catch (err) {
+    process.stderr.write(
+      `[validate-plan] Cannot read file: ${planPath}\n${err.message}\n`
+    );
+    process.exit(1);
+  }
+
+  let data;
+  try {
+    data = JSON.parse(raw);
+  } catch (err) {
+    process.stderr.write(`[validate-plan] Invalid JSON: ${err.message}\n`);
+    process.exit(1);
+  }
+
+  const errors = new Errors();
+  validatePlan(data, errors);
+
+  if (errors.empty) {
+    process.stdout.write("OK\n");
+    process.exit(0);
+  } else {
+    process.stderr.write("[validate-plan] INVALID — errors:\n");
+    for (const { path, message } of errors.list) {
+      process.stderr.write(`  [${path}] ${message}\n`);
+    }
+    process.exit(1);
+  }
 }
