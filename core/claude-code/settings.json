@@ -150,6 +150,19 @@
             "command": "node ${CLAUDE_PROJECT_DIR}/.claude/hooks/plan-write-gate.mjs"
           }
         ]
+      },
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ${CLAUDE_PROJECT_DIR}/.claude/hooks/task-gate.mjs"
+          },
+          {
+            "type": "command",
+            "command": "node ${CLAUDE_PROJECT_DIR}/.claude/hooks/task-ledger.mjs"
+          }
+        ]
       }
     ],
     "PostToolUse": [
@@ -195,6 +208,15 @@
             "command": "node ${CLAUDE_PROJECT_DIR}/.claude/hooks/obs-plan-write.mjs"
           }
         ]
+      },
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ${CLAUDE_PROJECT_DIR}/.claude/hooks/task-ledger.mjs"
+          }
+        ]
       }
     ],
     "SessionStart": [
@@ -217,6 +239,27 @@
           {
             "type": "command",
             "command": "node ${CLAUDE_PROJECT_DIR}/.claude/hooks/version-check.mjs"
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ${CLAUDE_PROJECT_DIR}/.claude/hooks/task-ledger.mjs"
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ${CLAUDE_PROJECT_DIR}/.claude/hooks/task-ledger.mjs"
           }
         ]
       }
