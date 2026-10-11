@@ -1522,6 +1522,13 @@ test("vendor-core: no *.test.mjs files are copied to hooks", async (t) => {
 });
 
 // locked_test — hand-config filter predicate (AC v2.3)
+test("isFrameworkCopyIncluded: test fixtures under __fixtures__ are EXCLUDED", () => {
+  assert.equal(isFrameworkCopyIncluded("/core/claude-code/hooks/lib/__fixtures__/fake-claude.mjs"), false);
+  assert.equal(isFrameworkCopyIncluded("/core/claude-code/hooks/lib/__fixtures__"), false);
+  assert.equal(isFrameworkCopyIncluded("/core/claude-code/hooks/lib/task-launcher.mjs"), true);
+  assert.equal(isFrameworkCopyIncluded("/core/claude-code/hooks/lib/fixtures-helper.mjs"), true);
+});
+
 test("isFrameworkCopyIncluded: settings.json in hand-config is INCLUDED (returns true)", () => {
   const src =
     "skills/orchestrating-delivery/references/hand-config/settings.json";
