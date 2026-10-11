@@ -633,3 +633,21 @@ test("#ac-2.1 the shipped example and the README table agree with normalizeConfi
   assert.match(readme, /`setup`[\s\S]*`--setup`/, "the prose must tie the field to the Orca flag it forwards");
   assert.ok(readme.includes('"setup": "run"'), "the README's JSON snippet must carry the same example value as project.example.json");
 });
+
+test("runTick records Claude Code trust for the clone before a claude agent is dispatched; a failure mutates nothing", () => {
+  const trusted = [];
+  const ok = harness({ issues: [issue(2)] });
+  assert.deepEqual(runTick({ ...ok.deps, trust: (root) => trusted.push(root) }), { ok: true, dispatched: true, issue: 2 });
+  assert.deepEqual(trusted, ["/clones/oraculo-app"], "an autonomous claude run never waits on the trust prompt");
+
+  const failing = harness({ issues: [issue(2)] });
+  const result = runTick({ ...failing.deps, trust: () => { throw new Error("config locked"); } });
+  assert.deepEqual(result, { ok: false, dispatched: false, reason: "trust-failed" });
+  assert.equal(failing.ghCalls.filter((a) => a[1] === "edit").length, 0, "the issue is never locked");
+  assert.equal(failing.orcaCalls.filter((a) => a[1] === "create").length, 0, "no worktree is created");
+
+  const pi = harness({ issues: [issue(2)], config: normalizeConfig({ project: "p", ghRepo: "o/p", orcaRepoId: "r", clonePath: "/clones/p", globalMaxWorking: 4, agent: "pi" }) });
+  const piTrust = [];
+  runTick({ ...pi.deps, trust: (root) => piTrust.push(root) });
+  assert.deepEqual(piTrust, [], "only a claude agent needs Claude Code trust");
+});
