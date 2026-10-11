@@ -295,7 +295,7 @@ The `hand_tiers` shape requires all 7 fixed eye roles (planner, plan-reviewer, c
 
 **`demo`:** derived from the UJs in the spec, never from the implementation.
 - `type`: `"smoke"` for API/CLI features; `"playwright"` for complex UI; `"markdown"` for batch/cron
-- `scenarios_from_refs`: the `#uj-N` anchors that the demo must exercise (at least one)
+- `scenarios_from_refs`: non-empty `#uj-...` journey references that the demo must exercise (at least one). Preserve the spec's anchors, including descriptive suffixes such as `#uj-1-shorten-and-redirect`. When it supplies an outcome without a journey identifier, derive a stable reference from that outcome; do not ask for an identifier alone. Keep `#ac-...` in task `criterion_refs`. Check that each journey reference names an approved outcome the demo will exercise while drafting; the structural validator does not check this format or semantic connection.
 
 ---
 

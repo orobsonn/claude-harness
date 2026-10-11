@@ -7,6 +7,12 @@ description: Use after a design is approved and before a multi-step implementati
 
 Write a task-by-task TDD plan after the design is approved.
 
+Before decomposing, read root `CONTEXT.md` directly when present to use the
+operator's business meanings in task descriptions and judgments. Read it yourself
+even in a fresh child context; do not assume the parent supplied the glossary.
+If absent, continue from the approved design and code; do not create it or
+request it just to plan. It supplies vocabulary, not additional delivery scope.
+
 - Each task names files, interfaces, failing test, expected failure, minimal code, green test, and verification command.
 - Order steps by dependency and make every handoff independently checkable.
 - Mark sensitive paths, rollback, blast radius, and required model route.

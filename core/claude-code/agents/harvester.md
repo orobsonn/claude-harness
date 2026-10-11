@@ -57,7 +57,7 @@ After findings are recorded, invoke `distilling-learnings`. It crosses the findi
 
 ### 3. Maintain the domain glossary — `CONTEXT.md` (ADD-ONLY)
 
-`CONTEXT.md` at the **project root** (not under `.claude/`) is the shared vocabulary between the operator, the codebase and every agent — seeded by `surveying-codebase`, read verbatim by the `planner`, the `executor` and the pre-implementation skills. Entries are implementation-free (`| termo | significado |`): what the term MEANS in the business, never which file implements it.
+`CONTEXT.md` at the **project root** (not under `.claude/`) is the shared vocabulary between the operator, the codebase and every agent — seeded by `surveying-codebase`. The `planner` is instructed to read it directly when present; this is a reading instruction, not a guarantee of automatic injection into every agent. Entries are implementation-free (`| termo | significado |`): what the term MEANS in the business, never which file implements it.
 
 Your mandate is **ADD-ONLY**:
 

@@ -39,6 +39,7 @@ Then stop. Plans are for LIGHT and FULL deliveries only.
 Before decomposing, read the law that governs the scope so your `scope_paths` and `resolved_judgments` respect per-folder rules:
 
 - Native `MEMORY.md` index (if present) — reusable patterns, prior gotchas, existing helpers to reuse instead of rebuilding.
+- Root `CONTEXT.md` (if present) — read the domain glossary directly so task descriptions and judgments use the operator's business meanings. If absent, continue from the approved spec and code; do not create it or request it just to plan. It supplies vocabulary, not additional delivery scope.
 - Project root `AGENTS.md` / `CLAUDE.md` router table — per-folder conventions and any nested folder law.
 - The approved spec/PRD, fully.
 
@@ -173,7 +174,7 @@ Canonical object shape (shared `validatePlan` source of truth) — **not** a bar
 5. `scope_paths`: tasks at the same DAG level (no dependency between them) do NOT share writable paths.
 6. `adversarial.focus` non-empty whenever `adversarial.enabled` is `true`; `adversarial.enabled` is `false` for config/types/trivial wiring.
 7. `final_review.compliance === true` AND `final_review.adversary === true`.
-8. `demo.scenarios_from_refs` ≥1 `#uj` anchor; `demo.type` matches the feature kind.
+8. `demo.scenarios_from_refs` contains at least one non-empty `#uj-...` journey reference tied to an outcome the demo will exercise; `demo.type` matches the feature kind. Preserve supplied anchors (including descriptive suffixes), deriving one from the approved outcome only when no journey identifier is supplied. Keep `#ac-...` in task criterion refs; structural validation does not establish this semantic connection.
 9. No file scoring `x-high` left un-split.
 
 If any rule fails, fix the plan and re-check. After writing, run `validate-plan` against the exact stable path. A FAIL means revise that same file and validate again; never create a second plan path.
