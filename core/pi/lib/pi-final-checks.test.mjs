@@ -48,7 +48,7 @@ test("final preparation asks only for pending declared checks and keeps task eye
   assert.deepEqual(f.check().commands, ["npm run build"], "changed output cannot substitute for a check");
 });
 
-test("new HEAD, a dirty start and a later failure invalidate successful check evidence", async (t) => {
+test("application changes, a dirty start and a later failure invalidate successful check evidence", async (t) => {
   const f = fixture(t, ["npm test"]);
   await f.record("npm test", { start: false });
   assert.equal(f.check().ok, false, "legacy end-only evidence does not establish the checked tree");
@@ -56,13 +56,41 @@ test("new HEAD, a dirty start and a later failure invalidate successful check ev
   await f.record("npm test", { failure: true }); assert.equal(f.check().ok, false);
   await f.record("npm test");
   f.git("commit", "--allow-empty", "-qm", "new head");
-  assert.equal(f.check().ok, false);
+  assert.equal(f.check().ok, true, "a new commit with identical application inputs retains evidence");
   fs.writeFileSync(path.join(f.root, "product.txt"), "new implementation\n");
   await f.record("npm test", { during: () => { f.git("add", "product.txt"); f.git("commit", "-qm", "during check"); } });
   assert.equal(f.check().ok, false, "a clean result boundary cannot hide dirty execution input");
   await f.record("npm test"); assert.equal(f.check().ok, true);
   assert.equal(checkPiFinalCommands({ ...f.input, sessionId: "other-parent", commands: ["npm test"] }).ok, false);
 });
+
+test("memory, operator documentation and vendored runtime commits retain application evidence", async (t) => {
+  const f = fixture(t, ["npm test", "npm run typecheck"]);
+  await f.record("npm test"); await f.record("npm run typecheck");
+  for (const file of ["MEMORY.md", "CONTEXT.md", "kaizen.md", "AGENTS.md", "README.md", ".pi/harness/lib/runtime.mjs"]) {
+    fs.mkdirSync(path.dirname(path.join(f.root, file)), { recursive: true });
+    fs.writeFileSync(path.join(f.root, file), "operational documentation\n");
+    f.git("add", "-f", "--", file); f.git("commit", "-qm", `update ${file}`);
+    assert.equal(f.check().ok, true, `${file} does not change application inputs`);
+  }
+  assert.equal(checkPiFinalCommands({ ...f.input, commands: ["npm test"], exactHead: true }).ok, false,
+    "harvest structural verification still requires the actual committed memory HEAD");
+  await f.record("npm test", { failure: true });
+  fs.appendFileSync(path.join(f.root, "MEMORY.md"), "correction\n");
+  f.git("add", "MEMORY.md"); f.git("commit", "-qm", "correct memory");
+  assert.deepEqual(f.check().commands, ["npm test"], "a later failure on the same application cannot fall back to older green");
+});
+
+for (const file of ["product.txt", "src/app.ts", "test/app.spec.ts", "package.json", "package-lock.json", "tsconfig.json", "migrations/001.sql", "public/site.css", "docs/app-content.md"]) {
+  test(`application input ${file} invalidates previous evidence`, async (t) => {
+    const f = fixture(t, ["npm test"]);
+    await f.record("npm test");
+    fs.mkdirSync(path.dirname(path.join(f.root, file)), { recursive: true });
+    fs.writeFileSync(path.join(f.root, file), "changed input\n");
+    f.git("add", "--", file); f.git("commit", "-qm", "change application input");
+    assert.equal(f.check().ok, false);
+  });
+}
 
 test("declared custom commands are archived without executing them and malformed declarations fail closed", async (t) => {
   const f = fixture(t, ["make verify"]);
