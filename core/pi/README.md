@@ -17,7 +17,11 @@ depois de `--` vão intactos ao Vitest em uma execução única.
 
 O processo só retorna zero quando todas as partes terminam com sucesso. Qualquer
 falha, timeout ou interrupção cancela os demais shards; cada shard completo usa
-`--bail=1` para encerrar na primeira falha e evitar cascatas. Em POSIX, cancela também
+`--bail=1` e um reporter adicional por IPC para cancelar na primeira falha
+terminal, mesmo quando o pool continua percorrendo hooks. Preserva os reporters
+configurados no projeto e imprime o diagnóstico original antes de cancelar.
+Falhas transitórias durante retries e testes `it.fails` não cancelam a execução.
+Em POSIX, cancela também
 os descendentes de cada processo (incluindo workerd). Os logs completos permanecem
 na saída do comando, capturados pela evidência nativa. A adoção muda infraestrutura
 do consumidor e exige autorização/escopo para `package.json`; não é automática

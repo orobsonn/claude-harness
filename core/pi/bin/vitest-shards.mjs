@@ -31,6 +31,7 @@ export function parseShardOptions(argv, env = process.env) {
 }
 
 export async function runVitestShards({ cwd = process.cwd(), vitest = path.join(cwd, "node_modules/vitest/vitest.mjs"),
+  worker = fileURLToPath(new URL("./vitest-shard-worker.mjs", import.meta.url)),
   shards, timeoutSeconds, args = [], stdout = process.stdout, stderr = process.stderr }) {
   if (!Number.isInteger(shards) || shards < 1 || shards > 32 ||
       !Number.isInteger(timeoutSeconds) || timeoutSeconds < 1 || timeoutSeconds > 86400) {
@@ -63,12 +64,16 @@ export async function runVitestShards({ cwd = process.cwd(), vitest = path.join(
       // Stop at the first failure instead of spending minutes on its cascade.
       const flags = shards > 1 ? [`--bail=1`, `--shard=${index}/${shards}`] : [];
       stdout.write(`[harness-tests] Starting shard ${index}/${shards}\n`);
-      const child = spawn(process.execPath, [vitest, "run", ...args, ...flags], {
-        cwd, detached: process.platform !== "win32", stdio: ["ignore", "pipe", "pipe"],
+      const command = shards > 1 ? [worker, ...args, ...flags] : [vitest, "run", ...args];
+      const child = spawn(process.execPath, command, {
+        cwd, detached: process.platform !== "win32", stdio: ["ignore", "pipe", "pipe", "ipc"],
       });
       if (child.pid) groups.add(child.pid);
       child.stdout.pipe(stdout, { end: false });
       child.stderr.pipe(stderr, { end: false });
+      child.on("message", (message) => {
+        if (message?.type === "harness-vitest-failure") cancel(`Shard ${index}/${shards} reported a failed test`);
+      });
       child.once("error", (error) => {
         stderr.write(`[harness-tests] Shard ${index}/${shards}: ${error.message}\n`);
         cancel("Shard failed to start");

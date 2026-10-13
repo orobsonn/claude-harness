@@ -15,7 +15,7 @@ function fixture(t, body) {
   writeFileSync(path.join(directory, "vitest.mjs"), body);
   let output = "";
   const sink = new Writable({ write(chunk, _encoding, done) { output += chunk; done(); } });
-  return { cwd, stdout: sink, stderr: sink, text: () => output };
+  return { cwd, worker: path.join(directory, "vitest.mjs"), stdout: sink, stderr: sink, text: () => output };
 }
 
 test("all numbered shards start concurrently and success waits for every shard", async (t) => {
@@ -43,6 +43,18 @@ test("a failing shard cancels a hanging sibling and cannot pass", async (t) => {
   assert.match(f.text(), /FAIL/);
 });
 
+test("a failure event cancels shards even while the failing process keeps traversing hooks", async (t) => {
+  const f = fixture(t, `if(process.argv.at(-1).includes('1/2')) {
+      setTimeout(()=>process.send({type:'harness-vitest-failure'}),50);
+    }
+    process.on('SIGTERM',()=>process.exit(0));
+    setInterval(()=>{},1000);`);
+  assert.equal(await runVitestShards({ ...f, shards: 2, timeoutSeconds: 10 }), 1);
+  assert.match(f.text(), /reported a failed test/);
+  assert.match(f.text(), /FAIL: 0\/2 shards passed/);
+  assert.doesNotMatch(f.text(), /Timeout/);
+});
+
 test("timeout fails and terminates a workerd-like descendant", async (t) => {
   const f = fixture(t, `import {spawn} from 'node:child_process'; import fs from 'node:fs';
     const child=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'});
@@ -50,11 +62,16 @@ test("timeout fails and terminates a workerd-like descendant", async (t) => {
   assert.equal(await runVitestShards({ ...f, shards: 1, timeoutSeconds: 1 }), 1);
   const pid = Number(readFileSync(path.join(f.cwd, "descendant.pid")));
   // /proc can briefly retain a killed orphan as a zombie until init reaps it.
-  let alive = false;
-  try { process.kill(pid, 0); alive = true; } catch {}
-  if (alive && process.platform === "linux") {
-    assert.match(readFileSync(`/proc/${pid}/stat`, "utf8"), /\) Z /);
-  } else assert.equal(alive, false);
+  let alive = true;
+  const deadline = Date.now() + 2000;
+  while (alive && Date.now() < deadline) {
+    try {
+      process.kill(pid, 0);
+      if (process.platform === "linux" && /\) Z /.test(readFileSync(`/proc/${pid}/stat`, "utf8"))) alive = false;
+    } catch { alive = false; }
+    if (alive) await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  assert.equal(alive, false, "descendant must terminate after receiving SIGKILL");
   assert.match(f.text(), /Timeout/);
 });
 
