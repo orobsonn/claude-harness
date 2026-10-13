@@ -208,6 +208,10 @@ O que você precisa saber:
   task já integrada abre uma barreira (entrega e novas tasks esperam) e o host reconcilia os
   dependentes. A entrega (`git push`, `gh pr create`, shipper) só libera com todos os recibos
   válidos no HEAD.
+- **Orquestrador em Sonnet:** o `settings.json` do harness define `"model": "sonnet"` para a sessão
+  principal (o orquestrador, pai ou serial). Mãos e olhos seguem as rotas do plano, e a lane usa o próprio
+  `--model` (`CLAUDE_HARNESS_LANE_MODEL`, padrão `sonnet`). Um projeto que já define `model` mantém o seu;
+  numa sessão, `/model` troca.
 - **VPS:** rode o pai dentro de `tmux`. As lanes são processos destacados e sobrevivem à queda da
   sessão. `CLAUDE_HARNESS_MAX_PARALLEL_TASKS` (1–3), `CLAUDE_HARNESS_TASK_TIMEOUT_MS`,
   `CLAUDE_HARNESS_LANE_MODEL` e `CLAUDE_HARNESS_CLAUDE_BIN` ajustam o host. Cada lane usa cerca

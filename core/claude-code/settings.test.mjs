@@ -579,3 +579,8 @@ test("settings.json: git push --force-with-lease resolves allow (deny narrowed w
   );
   strictEqual(resolveClaudeBash(CLAUDE_SETTINGS, "npm run test"), "allow", "routine npm scripts must stay allowed");
 });
+
+test("the harness orchestrator (the main session) defaults to Sonnet; hands and eyes keep their own routes", () => {
+  const settings = JSON.parse(readFileSync(settingsPath, "utf8"));
+  strictEqual(settings.model, "sonnet");
+});
