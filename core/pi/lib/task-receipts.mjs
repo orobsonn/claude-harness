@@ -410,17 +410,29 @@ function onlyFrozenChanges(root, baseline, head, paths) {
     .every((file) => paths.includes(file));
 }
 
-function onlyRecoveryChanges(entry, root, baseline, head, task, plan) {
+function onlyRecoveryChanges(entry, root, baseline, head, task, plan, replayHand = null) {
   const paths = frozenPaths(task);
   // taskScopeBase has already verified these exact host merges. Only their
   // imported frozen tests/durable notes may cross a historical implementation
-  // capture; the child's own deltas remain restricted to its frozen paths.
+  // capture. A replay of the same sealed author may also adopt the exact parent
+  // tree from aggregate refresh; own deltas stay restricted to frozen paths.
   const importedPaths = [...plan.tasks.flatMap(frozenPaths), ...DURABLE_MEMORY_FILES];
   let cursor = baseline;
   for (const proof of entry.reconciliations ?? []) {
     if (ancestor(root, proof.merged_head, baseline)) continue;
+    const source = entry.integration_history?.find((receipt) =>
+      proof.source_integration_sha256 === hashTaskReceipt(receipt));
+    const sourceResult = object(entry.result_history)?.[source?.result_sha256];
+    const sourceHand = sourceResult?.hand_capture;
+    const sameAuthor = sourceHand?.agent === "harness-test-author" && replayHand?.agent === sourceHand.agent &&
+      sourceHand.producer_call_id === replayHand.producer_call_id && sourceHand.freeze_sha === replayHand.freeze_sha &&
+      sourceHand.captured_verified_at === replayHand.captured_verified_at &&
+      sourceHand.recovery_origin?.head_sha === baseline && hashTaskReceipt(sourceResult) === source.result_sha256;
+    const exactParentRefresh = sameAuthor && proof.kind === "aggregate-refresh" &&
+      String(git(root, ["rev-parse", `${proof.merged_head}^{tree}`])).trim() ===
+        String(git(root, ["rev-parse", `${proof.parent_head}^{tree}`])).trim();
     if (!onlyFrozenChanges(root, cursor, proof.pre_child_head, paths) ||
-        !onlyFrozenChanges(root, proof.pre_child_head, proof.merged_head, importedPaths)) return false;
+        (!exactParentRefresh && !onlyFrozenChanges(root, proof.pre_child_head, proof.merged_head, importedPaths))) return false;
     cursor = proof.merged_head;
   }
   return onlyFrozenChanges(root, cursor, head, paths);
@@ -436,7 +448,7 @@ function recoveryReconciliationMatches(proof, integration) {
     : proof?.kind !== "integration-conflict" && Boolean(proof?.upstreams?.length);
 }
 
-function integratedRecoveryOrigin(entry, { sessionId, task, events, implementationIndex, producerIndex, hand, head }) {
+function integratedRecoveryOrigin(entry, { sessionId, task, events, implementationIndex, producerIndex, hand, head, reconciledCapture }) {
   // A failed immediate pair must not revive an older integration or event capture.
   const integration = entry.integration_history.at(-1);
   const result = object(integration) && SHA256.test(integration.result_sha256 ?? "") &&
@@ -464,21 +476,30 @@ function integratedRecoveryOrigin(entry, { sessionId, task, events, implementati
   const historicalProducerIndex = events.findIndex((event) => event.callId === historicalHand.producer_call_id &&
     event.launchIndex === historicalHand.producer_launch_index && event.tool === "subagent" &&
     event.args?.subagent_type === historicalHand.agent && taskFromPrompt(event.args?.prompt) === entry.task_id && eventSucceeded(event));
-  const implementation = events[implementationIndex];
   const origin = historicalHand.agent === "harness-test-author" ? historicalHand.recovery_origin : {
     producer_call_id: historicalHand.producer_call_id, producer_launch_index: historicalHand.producer_launch_index,
   };
-  // A no-write resume can revalidate the same test-author and exact child HEAD
-  // after an integration. Its sealed producer is still the current producer;
-  // a different HEAD or hand must follow the ordinary new-author lineage.
+  // The validated previous receipt binds its implementation, including a legacy
+  // checkpoint preceding an old refused writer. Do not select that refused call
+  // again merely because it was the last implementation-shaped event.
+  const historicalImplementationIndex = events.findIndex((event) =>
+    event.callId === origin.producer_call_id && event.launchIndex === origin.producer_launch_index &&
+    event.tool === "subagent" && ["harness-executor", "harness-sniper"].includes(event.args?.subagent_type) &&
+    taskFromPrompt(event.args?.prompt) === entry.task_id && eventSucceeded(event));
+  // A native capture replay after a sealed aggregate refresh needs no new hand.
+  // Current fidelity, exact parent import and own frozen-only deltas still apply.
+  const refreshedReplay = reconciledCapture && entry.reconciliations?.some((proof) =>
+    proof.kind === "aggregate-refresh" && proof.launch_count >= result.launches.length &&
+    recoveryReconciliationMatches(proof, integration) &&
+    ancestor(entry.worktree, result.child_head, proof.pre_child_head) &&
+    ancestor(entry.worktree, proof.merged_head, head));
   const sameProducerReplay = historicalProducerIndex === producerIndex &&
-    result.child_head === head && hand.producerCallId === historicalHand.producer_call_id &&
+    (result.child_head === head || refreshedReplay) && hand.producerCallId === historicalHand.producer_call_id &&
     hand.freezeCommitSha === historicalHand.freeze_sha &&
     hand.capturedVerifiedAt === historicalHand.captured_verified_at;
-  if (historicalProducerIndex < implementationIndex ||
+  if (historicalImplementationIndex < 0 || historicalProducerIndex < historicalImplementationIndex ||
       (historicalProducerIndex >= producerIndex && !sameProducerReplay) ||
-      historicalHand.producer_launch_index >= result.launches.length || origin.producer_call_id !== implementation.callId ||
-      origin.producer_launch_index !== implementation.launchIndex)
+      historicalHand.producer_launch_index >= result.launches.length)
     return failure("test-only recovery historical producer is not bound to the native implementation lineage");
   return { ok: true, origin: { head_sha: sameProducerReplay ? origin.head_sha : result.child_head,
     producer_call_id: origin.producer_call_id,
@@ -644,6 +665,8 @@ export function inspectTaskRun(entry, dependencies = {}) {
       ["harness-executor", "harness-sniper"].includes(event.args?.subagent_type) &&
       taskFromPrompt(event.args?.prompt) === entry.task_id && eventSucceeded(event);
     const recovery = hand.agent === "harness-test-author";
+    const replayHand = recovery ? { agent: hand.agent, producer_call_id: hand.producerCallId,
+      freeze_sha: hand.freezeCommitSha, captured_verified_at: hand.capturedVerifiedAt } : null;
     const producerIndex = native.events.findIndex((event) => event.callId === hand.producerCallId &&
       event.args?.subagent_type === hand.agent && taskFromPrompt(event.args?.prompt) === entry.task_id &&
       eventSucceeded(event) && (recovery || isImplementationForTask(event)));
@@ -679,7 +702,7 @@ export function inspectTaskRun(entry, dependencies = {}) {
         return failure("test-only recovery requires a resumed task with valid integration history");
       if (entry.integration_history?.length) {
         const previous = integratedRecoveryOrigin(entry, { sessionId: claim.session_id, task: binding.task,
-          events: native.events, implementationIndex, producerIndex, hand, head });
+          events: native.events, implementationIndex, producerIndex, hand, head, reconciledCapture });
         if (!previous.ok) return previous;
         recoveryOrigin = previous.origin;
       }
@@ -735,7 +758,7 @@ export function inspectTaskRun(entry, dependencies = {}) {
       // is the product baseline in that case: require its exact validated Git
       // HEAD, the immediately previous integration and a test-only delta. A
       // completed but non-writing implementation call cannot replace this proof.
-      if ((!recoveryOrigin || !onlyRecoveryChanges(entry, worktree, recoveryOrigin.head_sha, head, binding.task, binding.plan)) &&
+      if ((!recoveryOrigin || !onlyRecoveryChanges(entry, worktree, recoveryOrigin.head_sha, head, binding.task, binding.plan, replayHand)) &&
           !captureAttemptedBeforeAuthor && recoveryReconciliationMatches(reconciliation, entry.integration_history?.at(-1)) &&
           hand.freezeCommitSha === reconciliation.merged_head &&
           native.events[producerIndex].launchIndex >= reconciliation.launch_count &&
@@ -790,7 +813,7 @@ export function inspectTaskRun(entry, dependencies = {}) {
         return failure("test-only recovery requires the latest fidelity author without a later writing hand");
       if (!fidelity.freezeSha || !ancestor(worktree, hand.freezeCommitSha, fidelity.freezeSha) ||
           !ancestor(worktree, recoveryOrigin.head_sha, hand.freezeCommitSha) ||
-          !onlyRecoveryChanges(entry, worktree, recoveryOrigin.head_sha, head, binding.task, binding.plan))
+          !onlyRecoveryChanges(entry, worktree, recoveryOrigin.head_sha, head, binding.task, binding.plan, replayHand))
         return failure("test-only recovery cannot change product after the captured implementation");
     } else if (fidelity.freezeSha !== null) {
       if (!ancestor(worktree, fidelity.freezeSha, hand.freezeCommitSha)) {
@@ -1023,7 +1046,7 @@ function validateIntegration(entry, integration, { projectRoot, sessionId, featu
   if (!ancestor(projectRoot, result.hand_capture.freeze_sha, result.child_head) ||
       (recovery ? !result.freeze_sha || !ancestor(projectRoot, result.hand_capture.freeze_sha, result.freeze_sha) ||
         !ancestor(projectRoot, recoveryOrigin.head_sha, result.hand_capture.freeze_sha) ||
-        !onlyRecoveryChanges(entry, projectRoot, recoveryOrigin.head_sha, result.child_head, canonicalTask, canonical.plan) :
+        !onlyRecoveryChanges(entry, projectRoot, recoveryOrigin.head_sha, result.child_head, canonicalTask, canonical.plan, result.hand_capture) :
         result.freeze_sha !== null && !ancestor(projectRoot, result.freeze_sha, result.hand_capture.freeze_sha))) {
     return failure("task receipt freeze and hand capture are not ancestral to the child HEAD");
   }

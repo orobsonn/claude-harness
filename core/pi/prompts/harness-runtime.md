@@ -380,6 +380,14 @@ antes de abrir/mergear o PR; versão aumentada com notas só em Unreleased é in
 Se isso já foi mergeado, diagnostique o delta documental e o estado remoto antes de
 recuperar a publicação; repetir tasks funcionais ou olhos de produto não corrige o changelog.
 
+Após importar o agregado pelo host, uma task já integrada pode revalidar sua mão
+existente com captura nativa do HEAD reconciliado. O host preserva a origem selada
+da implementação e aceita o replay quando a importação corresponde aos bytes do
+pai e não houve delta próprio de produto. Não despache autor ou executor sem mudança
+só porque o merge mudou o SHA; fidelidade, verificações e olhos atuais continuam
+obrigatórios. Se o status rejeitar o replay, diagnostique a proveniência antes de
+pedir waiver ou fabricar uma nova mão.
+
 Uma emenda de escopo aprovada pode acrescentar novas decisões em `resolved_judgments`
 e seus marcadores de autoria para explicar a recuperação na base atual. Preserve as
 decisões admitidas, dependências e provas congeladas; não apague a prosa nova só para

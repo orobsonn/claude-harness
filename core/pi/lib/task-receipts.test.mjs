@@ -1003,6 +1003,87 @@ test("a no-write resume revalidates the same integrated test author and exact ch
   assert.match(drift.reason, /outside canonical scope|historical producer|cannot change product/);
 });
 
+function replayLegacyAggregate() {
+  const f = testOnlyRecovery({ capturedImplementation: false, extraAuthor: true, interveningWriter: true });
+  bindPinnedRuntime(f);
+  const oldEvents = f.entry.launches[0].events_path;
+  write(oldEvents, fs.readFileSync(oldEvents, "utf8").trimEnd().split("\n").map((line) => {
+    const native = JSON.parse(line);
+    if (native.type === "tool_execution_end" && ["producer", "intervening-sniper"].includes(native.toolCallId))
+      native.result.content = [{ type: "text", text: "Product preserved; fixture repair pending.\nStatus: BLOCKED" }];
+    return JSON.stringify(native);
+  }).join("\n") + "\n");
+  const binding = f.dependencies.readTaskRunBindingFn();
+  const spec = path.join(f.root, ".pi/harness/plans", FEATURE, "spec.md");
+  write(spec, "Approved replay spec\n");
+  f.entry.spec_sha256 = binding.grant.spec_sha256 = crypto.createHash("sha256").update(fs.readFileSync(spec)).digest("hex");
+  appendImplementationReviews(f);
+  const { result, integration } = archiveInspectedIntegration(f);
+  const registry = path.join(f.root, ".pi/harness/state", PARENT, "task-runs/index.json");
+  write(registry, { version: 1, parent_session_id: PARENT, feature_id: FEATURE,
+    plan_sha256: f.entry.plan_sha256, spec_sha256: f.entry.spec_sha256, tasks: {} });
+  persistRecoveryIntegration(f, { result, integration });
+  run(f.root, "git", "checkout", "-b", "replay-parent", f.head);
+  write(path.join(f.root, "upstream.mjs"), "export const imported = true;\n");
+  write(path.join(f.root, "src/task.spec.mjs"), "export const expected = { error: 'parent_fixture' };\n");
+  write(path.join(f.root, "MEMORY.md"), "Reviewed parent note.\n");
+  run(f.root, "git", "add", "src/task.spec.mjs", "upstream.mjs", "MEMORY.md");
+  run(f.root, "git", "commit", "-m", "parent product and fixture");
+  const parent = run(f.root, "git", "rev-parse", "HEAD");
+  run(f.root, "git", "checkout", "-b", "replay-child", f.head);
+  run(f.root, "git", "merge", "--no-ff", "-m", "host aggregate refresh", parent);
+  const head = run(f.root, "git", "rev-parse", "HEAD");
+  f.entry.reconciliations = [{ written_by: "host-task-reconciliation", kind: "aggregate-refresh",
+    task_id: TASK, attempt_id: ATTEMPT, scope_base_sha: f.base, pre_child_head: f.head,
+    parent_head: parent, merged_head: head, tree: run(f.root, "git", "rev-parse", "HEAD^{tree}"),
+    launch_count: result.launches.length, upstreams: [], source_integration_sha256: hashTaskReceipt(integration) }];
+  fs.appendFileSync(f.entry.launches.at(-1).events_path, [
+    event("tool_execution_start", { toolCallId: "replay-capture", toolName: "mark", args: { action: "capture-verified", task_id: TASK } }),
+    event("tool_execution_end", { toolCallId: "replay-capture", toolName: "mark", result: { details: { ok: true,
+      capture_origin: { task_id: TASK, producer_call_id: "correct-author", head_sha: head, worktree_clean: true } } } }), "",
+  ].join("\n"));
+  const state = JSON.parse(fs.readFileSync(f.statePath));
+  const bare = FEATURE + "/" + TASK;
+  for (const receipt of [state.task_adversary_evidence[bare], ...Object.values(state.task_review_evidence[bare])]) receipt.reviewed_head_sha = head;
+  write(f.statePath, state);
+  f.dependencies.captureReviewInputFn = () => ({ ok: true, snapshot: { head_sha: head, input_digest: DIGEST } });
+  return { ...f, head, result, integration };
+}
+
+test("legacy captured product replays after exact parent aggregate import without a new writer or author", () => {
+  const f = replayLegacyAggregate();
+  const inspected = inspectTaskRun(f.entry, f.dependencies);
+  assert.equal(inspected.ok, true, inspected.reason);
+  assert.equal(inspected.result.hand_capture.producer_call_id, "correct-author");
+  assert.equal(inspected.result.hand_capture.recovery_origin.producer_call_id, "producer");
+  assert.equal(inspected.result.hand_capture.recovery_origin.head_sha, f.recoveryBaseline);
+  assert.notEqual(f.head, f.result.child_head);
+  const next = archiveInspectedIntegration(f);
+  persistRecoveryIntegration(f, next);
+  const integrated = readIntegratedTaskEvidence({ projectRoot: f.root, sessionId: PARENT,
+    featureId: FEATURE, taskId: TASK, headSha: f.head });
+  assert.equal(integrated.ok, true, integrated.reason);
+});
+
+test("aggregate replay still rejects missing native capture, forged source and child product drift", () => {
+  for (const variant of ["capture", "source", "product", "hand"]) {
+    const f = replayLegacyAggregate();
+    if (variant === "capture") write(f.entry.launches.at(-1).events_path, event("session", { id: CHILD }) + "\n");
+    if (variant === "source") f.entry.reconciliations[0].source_integration_sha256 = "0".repeat(64);
+    if (variant === "product") {
+      write(path.join(f.root, "src/task.mjs"), "export const actual = 'unverified child';\n");
+      run(f.root, "git", "add", "src/task.mjs");
+      run(f.root, "git", "commit", "-m", "unverified child product");
+    }
+    if (variant === "hand") {
+      const file = path.join(f.root, ".pi/harness/state/hand-records", FEATURE, CHILD, TASK + ".json");
+      const record = JSON.parse(fs.readFileSync(file));
+      write(file, { ...record, capturedVerifiedAt: "2026-09-08T00:00:00.000Z" });
+    }
+    assert.equal(inspectTaskRun(f.entry, f.dependencies).ok, false, variant);
+  }
+});
+
 test("historical recovery revalidates the immediate host pair without older fallback", () => {
   const mutations = {
     hash: (result, integration) => { integration.result_sha256 = "0".repeat(64); },
