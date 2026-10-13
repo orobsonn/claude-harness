@@ -1,5 +1,28 @@
 # Pi Harness
 
+## Suítes Vitest grandes
+
+O runner vendorizado `node .pi/harness/bin/vitest-shards.mjs --` pode ser adotado
+como script `test` do projeto, preservando o `pretest`. `npm test` executa a suíte
+completa em dois processos Vitest separados, usando o sharding nativo por arquivo;
+`npm test -- src/exemplo.spec.ts` mantém o teste focal em um processo. Nenhum teste
+é removido e o runner preserva a configuração de isolamento do projeto.
+Requer Vitest local com suporte a `--shard`; não baixa dependências.
+
+Configure `HARNESS_TEST_SHARDS` (1–32) e `HARNESS_TEST_TIMEOUT_SECONDS` (1–86400,
+default 3600) ou passe `--shards <n>` / `--timeout-seconds <n>` antes do separador
+`--` no script. Comece com dois processos em hosts compartilhados e meça o ganho;
+quatro processos são uma opção para CI com recursos disponíveis. Os filtros
+depois de `--` vão intactos ao Vitest em uma execução única.
+
+O processo só retorna zero quando todas as partes terminam com sucesso. Qualquer
+falha, timeout ou interrupção cancela os demais shards; em POSIX, cancela também
+os descendentes de cada processo (incluindo workerd). Os logs completos permanecem
+na saída do comando, capturados pela evidência nativa. A adoção muda infraestrutura
+do consumidor e exige autorização/escopo para `package.json`; não é automática
+durante uma task. O gate final continua exigindo o comando completo declarado
+no plano, no HEAD atual, sem aceitar fragmentos como uma execução completa.
+
 Este pacote porta o harness para o Pi. No fluxo operacional atual, esta é a lane
 principal de criação e entrega diária: ideia/issue → spec → plano → pipeline por
 task → integração → validação agregada → memória → revisões finais → shipping.

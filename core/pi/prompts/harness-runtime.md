@@ -243,6 +243,21 @@ Execute-os antes dos olhos, depois do commit, usando o shell nativo; resolva fal
 e reaproveite os resultados atuais já aprovados pelo processo. Saída de outra sessão,
 HEAD anterior ou execução iniciada com árvore suja não satisfaz essa preparação.
 Essa verificação não aprova revisores nem autoriza publicação.
+Para suítes Vitest grandes, o harness distribui `bin/vitest-shards.mjs`.
+A adoção é uma mudança explícita de infraestrutura do projeto: com autorização
+e escopo próprios, defina o script `test` como
+`node .pi/harness/bin/vitest-shards.mjs --` (preserve o `pretest`).
+Sem filtros, ele executa todos os shards em processos separados (dois por padrão);
+com argumentos após `npm test --`, executa uma única validação focal.
+`HARNESS_TEST_SHARDS` configura de 1 a 32 processos e
+`HARNESS_TEST_TIMEOUT_SECONDS` define o limite total (3600s por padrão).
+Comece com dois processos em host compartilhado e meça CPU/memória e duração
+antes de aumentar. Mantenha o isolamento de storage/configuração do projeto.
+O script só retorna sucesso quando todos os shards terminam com exit zero;
+falha, timeout ou interrupção cancela os demais processos. A evidência final
+continua sendo o `npm test` completo no HEAD atual: shards avulsos, saídas
+parciais e testes focais não substituem o comando declarado no plano.
+Não altere scripts ou configuração durante uma task sem escopo para esses paths.
 Num monorepo cujo plano inteiro e testes congelados apontam para um único pacote,
 se a raiz não tem script `test`, execute `npm test --prefix <pacote>` e preserve
 o argumento após `--`. O host só reconhece essa forma quando o pacote é

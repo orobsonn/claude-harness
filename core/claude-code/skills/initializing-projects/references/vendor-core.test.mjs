@@ -381,6 +381,7 @@ function vendorAllInto(target) {
 const PI_TREE_ANCHORS = [
   ".pi/harness/pi-harness.mjs",
   ".pi/harness/bin/pi-harness.mjs",
+  ".pi/harness/bin/vitest-shards.mjs",
   ".pi/harness/extensions/harness-bootstrap.ts",
   ".pi/harness/extensions/harness-dispatch.ts",
   ".pi/harness/extensions/harness-memory.ts",
