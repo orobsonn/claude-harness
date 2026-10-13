@@ -50,6 +50,28 @@ test("pre-tool hook denies destructive cleanup and deploy commands", () => {
   }
 });
 
+test("pre-tool hook denies remote operations after shell line separators", () => {
+  for (const separator of ["\n", "\r\n", "\n  "]) {
+    for (const operation of [
+      "wrangler deploy",
+      "env wrangler versions upload",
+      "npx --yes wrangler secret put TOKEN",
+      "pnpm exec wrangler r2 object delete bucket/key",
+      "npm exec -- wrangler d1 execute db --remote",
+      "npm run deploy",
+      "yarn deploy",
+    ]) {
+      const command = `git status --short${separator}${operation}`;
+      assert.equal(evaluateHook(preBash(command)).hookSpecificOutput?.permissionDecision, "deny", command);
+    }
+  }
+  for (const command of [
+    "git status --short\nwrangler dev",
+    "git status --short\nwrangler d1 execute db --local",
+    'node -e "\n console.log(1);\n"',
+  ]) assert.deepEqual(evaluateHook(preBash(command)), {}, command);
+});
+
 test("pre-tool hook prevents shell reads of secret-bearing paths", () => {
   for (const command of [
     "cat .env",
