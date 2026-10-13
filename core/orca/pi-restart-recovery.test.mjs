@@ -6,6 +6,7 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import { interruptedPiSession } from "./pi-restart-recovery.mjs";
 import { runTick, normalizeConfig } from "./select-and-dispatch.mjs";
+import { resolveModelProfile, writeModelProfileSnapshot, modelStrategyFromProfile } from "../pi/lib/model-profile.mjs";
 
 // Captured boundary: #398 was stopped 85 ms after daemon SIGTERM; startup followed.
 const STOP = "2026-10-13T06:50:57.841Z";
@@ -44,6 +45,19 @@ test("Orca restart selects the exact unfinished conversation with native pre-pla
   assert.equal(interruptedPiSession(f.worktree, f.options), SESSION);
   assert.deepEqual(fs.readFileSync(path.join(f.state, "gate-state.json")), before);
   assert.equal(fs.existsSync(path.join(f.root, ".pi/harness/plans/status-stop/execution-plan.json")), false);
+});
+
+test("a planned run retains its admitted DeepSeek route; a changed snapshot cannot authorize resume", (t) => {
+  const f = fixture(t), profile = resolveModelProfile({ profile: "trial-orchestration-deepseek" });
+  const stored = writeModelProfileSnapshot(f.root, SESSION, profile);
+  fs.writeFileSync(path.join(f.root, ".pi/harness/plans/status-stop/execution-plan.json"), JSON.stringify({
+    feature_id: "status-stop", kind: "full", mode: "full", model_strategy: modelStrategyFromProfile(profile),
+    tasks: [{ id: "task-one", severity: "low", complexity: "low", scope_paths: ["src/control.ts"],
+      criterion_refs: ["#ac-1"], locked_tests: [], no_tests: true, depends_on: [] }],
+  }));
+  assert.equal(interruptedPiSession(f.worktree, f.options), SESSION);
+  fs.writeFileSync(stored.path, JSON.stringify({ ...profile, sha256: "changed" }));
+  assert.equal(interruptedPiSession(f.worktree, f.options), null);
 });
 
 test("idle, manual pause, terminal close, finalized, resumed, remote and inconsistent artifacts stay untouched", (t) => {

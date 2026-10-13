@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { homedir } from "node:os";
 import { recoverPiParentSession } from "../pi/lib/parent-session-recovery.mjs";
+import { readModelProfileSnapshot, modelStrategyFromProfile } from "../pi/lib/model-profile.mjs";
 
 function records(text) {
   return text.split("\n").flatMap((line) => {
@@ -33,7 +34,11 @@ export function interruptedPiSession(worktree, {
     const candidates = [];
     for (const entry of fs.readdirSync(stateRoot, { withFileTypes: true })) {
       if (!entry.isDirectory()) continue;
-      const recovered = recoverPiParentSession(worktree.path, entry.name);
+      const profile = readModelProfileSnapshot(worktree.path, entry.name);
+      if (!profile.ok && !profile.absent) continue;
+      const recovered = recoverPiParentSession(worktree.path, entry.name, profile.ok ? {
+        expectedModelStrategy: modelStrategyFromProfile(profile.snapshot),
+      } : {});
       if (!recovered.ok || recovered.taskAdmission) continue;
       if (fs.existsSync(path.join(stateRoot, entry.name, "memory-finalized.json"))) continue;
       const tail = records(fs.readFileSync(recovered.sessionFile, "utf8"));
