@@ -72,6 +72,17 @@ test("pre-tool hook denies remote operations after shell line separators", () =>
   ]) assert.deepEqual(evaluateHook(preBash(command)), {}, command);
 });
 
+test("pre-tool hook denies remote operations inside shell groups", () => {
+  for (const separator of ["; ", "\n", "\r\n"]) {
+    for (const group of ["(wrangler deploy)", "((wrangler deploy))", "{ wrangler deploy; }", "$(wrangler deploy)", "(npm run deploy)", "(npx wrangler d1 execute db --remote)"]) {
+      const command = `git status --short${separator}${group}`;
+      assert.equal(evaluateHook(preBash(command)).hookSpecificOutput?.permissionDecision, "deny", command);
+    }
+  }
+  assert.deepEqual(evaluateHook(preBash('node -e "\n console.log(1);\n"')), {});
+  assert.deepEqual(evaluateHook(preBash("git status --short\n(wrangler dev)")), {});
+});
+
 test("pre-tool hook prevents shell reads of secret-bearing paths", () => {
   for (const command of [
     "cat .env",
