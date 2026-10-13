@@ -84,6 +84,13 @@ test("focused npm arguments use one process and forward the exact filters", asyn
   assert.match(f.text(), /\["run","src\/example.spec.ts","-t","case with spaces"\]/);
 });
 
+test("focused native CLI does not inherit an IPC channel that listeners keep alive", async (t) => {
+  const f = fixture(t, "process.on('message',()=>{}); console.log('ipc='+Boolean(process.connected));");
+  assert.equal(await runVitestShards({ ...f, shards: 1, timeoutSeconds: 2, args: ['src/example.spec.ts'] }), 0);
+  assert.match(f.text(), /ipc=false/);
+  assert.doesNotMatch(f.text(), /Timeout/);
+});
+
 test("invalid counts and user sharding/watch overrides are rejected", () => {
   for (const value of ["0", "33", "2.5", "", "abc"]) {
     assert.throws(() => parseShardOptions(["--shards", value]), /integer/);

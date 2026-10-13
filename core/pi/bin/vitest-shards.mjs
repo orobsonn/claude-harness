@@ -66,7 +66,11 @@ export async function runVitestShards({ cwd = process.cwd(), vitest = path.join(
       stdout.write(`[harness-tests] Starting shard ${index}/${shards}\n`);
       const command = shards > 1 ? [worker, ...args, ...flags] : [vitest, "run", ...args];
       const child = spawn(process.execPath, command, {
-        cwd, detached: process.platform !== "win32", stdio: ["ignore", "pipe", "pipe", "ipc"],
+        cwd, detached: process.platform !== "win32",
+        // Only the sharded API worker sends failure notifications. Opening an
+        // unused IPC channel for the native CLI can keep Workers listeners alive
+        // after its tests finish, producing a false Vite close timeout.
+        stdio: shards > 1 ? ["ignore", "pipe", "pipe", "ipc"] : ["ignore", "pipe", "pipe"],
       });
       if (child.pid) groups.add(child.pid);
       child.stdout.pipe(stdout, { end: false });
