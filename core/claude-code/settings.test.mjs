@@ -584,3 +584,8 @@ test("the harness orchestrator (the main session) defaults to Sonnet; hands and 
   const settings = JSON.parse(readFileSync(settingsPath, "utf8"));
   strictEqual(settings.model, "sonnet");
 });
+
+test("commits never carry Claude Code's Co-Authored-By trailer (orchestrator, lanes and hands)", () => {
+  const settings = JSON.parse(readFileSync(settingsPath, "utf8"));
+  strictEqual(settings.includeCoAuthoredBy, false);
+});
