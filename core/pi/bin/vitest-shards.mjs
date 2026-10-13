@@ -72,7 +72,10 @@ export async function runVitestShards({ cwd = process.cwd(), vitest = path.join(
       child.stdout.pipe(stdout, { end: false });
       child.stderr.pipe(stderr, { end: false });
       child.on("message", (message) => {
-        if (message?.type === "harness-vitest-failure") cancel(`Shard ${index}/${shards} reported a failed test`);
+        if (message?.type === "harness-vitest-failure") {
+          const identity = typeof message.identity === "string" && message.identity ? `: ${message.identity}` : "";
+          cancel(`Shard ${index}/${shards} reported a failed test${identity}`);
+        }
       });
       child.once("error", (error) => {
         stderr.write(`[harness-tests] Shard ${index}/${shards}: ${error.message}\n`);
