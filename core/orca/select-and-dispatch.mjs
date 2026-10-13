@@ -63,6 +63,7 @@ import { fileURLToPath } from "node:url";
 
 import { inspectIssueDependencies, nativeBlockersClosed } from "../shared/lib/harness-deps.mjs";
 import { defaultQueuePrompt } from "../shared/lib/orca-queue-prompt.mjs";
+import { interruptedPiSession } from "./pi-restart-recovery.mjs";
 
 export const LABEL_READY = "harness:ready";
 export const LABEL_IN_PROGRESS = "harness:in-progress";
@@ -296,6 +297,43 @@ export function runTick(deps) {
   if (working >= config.globalMaxWorking) {
     log(`[${config.project}] skip: ${working}/${config.globalMaxWorking} worktrees working`);
     return { ok: true, dispatched: false, reason: "ceiling" };
+  }
+
+  // Preserve the same issue lock/worktree after an observed Orca-wide interruption.
+  // The native launcher rechecks ownership and admission; no delivery marker is inferred.
+  if (config.agent === "pi") {
+    let interrupted;
+    try {
+      interrupted = gh(["issue", "list", "--repo", config.ghRepo, "--label", LABEL_IN_PROGRESS,
+        "--state", "open", "--json", "number,title,labels"]);
+    } catch (err) {
+      log(`[${config.project}] skip: could not inspect interrupted issues — ${err?.message ?? err}`);
+      return { ok: false, dispatched: false, reason: "issues-unreadable" };
+    }
+    for (const issue of interrupted ?? []) {
+      if ((issue.labels ?? []).some((label) => ["harness:blocked", "needs-human"].includes(label.name ?? label))) continue;
+      if (config.titleIncludes && !String(issue.title).toLowerCase().includes(config.titleIncludes.toLowerCase())) continue;
+      const matches = entries.filter((entry) => entry.repoId === config.orcaRepoId && entry.linkedIssue === issue.number &&
+        !entry.parentWorktreeId && !entry.isArchived);
+      if (matches.length !== 1) continue;
+      const worktree = matches[0];
+      if (entries.some((entry) => entry.parentWorktreeId === worktree.worktreeId && entry.status === "working")) continue;
+      const session = (deps.interruptedPiSession ?? interruptedPiSession)(worktree);
+      if (!session) continue;
+      const prompt = `${config.prompt.replaceAll("{{ISSUE_NUMBER}}", String(issue.number))}\n\nO daemon do Orca interrompeu esta conversa durante uma ferramenta. Retome esta mesma sessão e reconcilie os artefatos nativos antes de continuar. Preserve trabalho, spec, plano, decisões e evidências válidas. Resolva interrupções recuperáveis sem nova confirmação; esta retomada não aprova nenhuma etapa nem dispensa verificações. Continue até a entrega autorizada, reconciliando efeitos remotos antes de repeti-los.`;
+      const command = [process.execPath, ".pi/harness/pi-harness.mjs", "--approve", "--harness-resume", session, "--", prompt]
+        .map(shellQuote).join(" ");
+      try {
+        const launched = unwrapOrca(orca(["terminal", "create", "--worktree", `id:${worktree.worktreeId}`,
+          "--title", `π - harness-${issue.number}`, "--command", command, "--json"]));
+        if (!launched?.terminal?.handle || launched.terminal.worktreeId !== worktree.worktreeId) throw new Error("Pi resume terminal unconfirmed");
+        log(`[${config.project}] resumed #${issue.number} in the same Pi session ${session}`);
+        return { ok: true, dispatched: true, resumed: true, issue: issue.number };
+      } catch (err) {
+        log(`[${config.project}] Pi resume unresolved for #${issue.number}: ${err?.message ?? err}; keeping in-progress`);
+        return { ok: false, dispatched: false, reason: "pi-resume-unresolved", issue: issue.number };
+      }
+    }
   }
 
   // 2) Candidates. A `gh` failure here is a skipped tick, never a crash — nothing has been mutated

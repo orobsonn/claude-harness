@@ -80,6 +80,16 @@ merge/deploy continuam seguindo o pedido e o harness. Se a criação da worktree
 for confirmada mas o lançamento ficar sem confirmação, a issue permanece
 `harness:in-progress` e o log aponta `pi-launch-unresolved`, evitando duplicar a entrega.
 
+Após um reinício local do daemon Orca por SIGTERM, a fila Pi também inspeciona
+issues abertas `harness:in-progress`. Uma conversa interrompida durante um
+subagente, registrada no intervalo entre shutdown e startup, pode retomar na
+mesma worktree e sessão pelo launcher nativo. A seleção exige que aquela
+worktree tivesse um terminal ativo no shutdown e que a recuperação nativa
+valide seus artefatos. Não cria outra entrega, não muda labels nem aprova
+etapas. Pausas anteriores ao shutdown, bloqueios explícitos, sessões concluídas,
+atividade já retomada e evidência ambígua não disparam essa recuperação.
+O pai continua decidindo como reconciliar o trabalho e os efeitos remotos.
+
 `globalMaxWorking` é uma propriedade **da máquina, não do projeto**: o selector conta os worktrees
 `working` de *toda* a VPS via `orca worktree ps --json`, então todos os JSONs precisam carregar o
 **mesmo** valor. Validado em **4 agentes Claude simultâneos numa VPS de 2 vCPU / 8 GB**.
