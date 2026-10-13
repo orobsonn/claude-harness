@@ -16,7 +16,8 @@ quatro processos são uma opção para CI com recursos disponíveis. Os filtros
 depois de `--` vão intactos ao Vitest em uma execução única.
 
 O processo só retorna zero quando todas as partes terminam com sucesso. Qualquer
-falha, timeout ou interrupção cancela os demais shards; em POSIX, cancela também
+falha, timeout ou interrupção cancela os demais shards; cada shard completo usa
+`--bail=1` para encerrar na primeira falha e evitar cascatas. Em POSIX, cancela também
 os descendentes de cada processo (incluindo workerd). Os logs completos permanecem
 na saída do comando, capturados pela evidência nativa. A adoção muda infraestrutura
 do consumidor e exige autorização/escopo para `package.json`; não é automática

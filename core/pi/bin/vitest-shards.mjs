@@ -59,7 +59,9 @@ export async function runVitestShards({ cwd = process.cwd(), vitest = path.join(
   try {
     const results = await Promise.all(Array.from({ length: shards }, (_, i) => new Promise((resolve) => {
       const index = i + 1;
-      const flags = shards > 1 ? [`--shard=${index}/${shards}`] : [];
+      // A broken storage teardown can poison every later file in one worker.
+      // Stop at the first failure instead of spending minutes on its cascade.
+      const flags = shards > 1 ? [`--bail=1`, `--shard=${index}/${shards}`] : [];
       stdout.write(`[harness-tests] Starting shard ${index}/${shards}\n`);
       const child = spawn(process.execPath, [vitest, "run", ...args, ...flags], {
         cwd, detached: process.platform !== "win32", stdio: ["ignore", "pipe", "pipe"],

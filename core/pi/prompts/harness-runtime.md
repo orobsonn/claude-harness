@@ -254,7 +254,8 @@ com argumentos após `npm test --`, executa uma única validação focal.
 Comece com dois processos em host compartilhado e meça CPU/memória e duração
 antes de aumentar. Mantenha o isolamento de storage/configuração do projeto.
 O script só retorna sucesso quando todos os shards terminam com exit zero;
-falha, timeout ou interrupção cancela os demais processos. A evidência final
+falha, timeout ou interrupção cancela os demais processos; cada shard completo
+usa `--bail=1` para não prolongar cascatas de falhas. A evidência final
 continua sendo o `npm test` completo no HEAD atual: shards avulsos, saídas
 parciais e testes focais não substituem o comando declarado no plano.
 Não altere scripts ou configuração durante uma task sem escopo para esses paths.
