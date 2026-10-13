@@ -111,7 +111,7 @@ export const CLAUDE_CODE_BASH_ALLOWLIST = Object.freeze([
   "Bash(echo:*)", "Bash(sort:*)", "Bash(uniq:*)", "Bash(sed:*)", "Bash(awk:*)",
   "Bash(diff:*)", "Bash(stat:*)", "Bash(file:*)", "Bash(jq:*)", "Bash(mkdir:*)",
   "Bash(touch:*)", "Bash(cp:*)", "Bash(mv:*)", "Bash(npm test:*)", "Bash(npm run:*)",
-  "Bash(npm ci:*)", "Bash(npm list:*)", "Bash(npm info:*)", "Bash(pnpm test:*)",
+  "Bash(npm ci:*)", "Bash(npm list:*)", "Bash(npm info:*)", "Bash(npm view:*)", "Bash(pnpm test:*)",
   "Bash(pnpm run:*)", "Bash(yarn test:*)", "Bash(bun test:*)", "Bash(bun run:*)",
   "Bash(vitest:*)", "Bash(vitest run:*)", "Bash(jest:*)", "Bash(tsc --noEmit:*)",
   "Bash(eslint:*)", "Bash(prettier:*)", "Bash(node:*)", "Bash(python:*)", "Bash(python3:*)",
