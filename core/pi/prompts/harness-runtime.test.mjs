@@ -409,6 +409,11 @@ test("o pedido explícito de autonomia nunca fica esperando uma escolha humana",
   assert.match(prompt, /registre a suposição.*resolved_judgments.*PR draft/is);
   assert.match(prompt, /autorização.*segredo.*efeito externo irreversível.*migração.*financeira.*segurança/is);
   assert.doesNotMatch(prompt, /quando exigir decisão, pare e peça direção/i);
+  assert.match(prompt, /Headless não significa ausência de navegador/);
+  assert.match(prompt, /executáveis e caches.*dependências do\s+projeto/s);
+  assert.match(prompt, /diretório temporário.*não altere dependências ou lockfiles/s);
+  assert.match(prompt, /Subir o servidor, jsdom.*não substitui observação em navegador real/s);
+  assert.match(prompt, /ausência de pacote no projeto não basta/);
 });
 
 test("revisores de implementação podem compartilhar um lote identificado pela tarefa canônica", () => {

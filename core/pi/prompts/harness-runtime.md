@@ -386,6 +386,20 @@ o reparo test-only com fidelidade, captura, verificação e olhos atuais. O host
 reaproveita o checkpoint nativo sem reescrever o relato antigo; não peça waiver
 nem outro executor sem delta só para obter recibo. Consulte o status após o reparo.
 
+Em execução autônoma, a validação local prevista no plano é trabalho do agente.
+Headless não significa ausência de navegador: antes de declarar indisponibilidade,
+inspecione ferramentas, executáveis e caches do ambiente, além das dependências do
+projeto. Quando autorizado e viável, use um driver como Playwright ou Puppeteer em
+diretório temporário, reutilizando o navegador instalado ou preparando um ambiente
+local isolado; não altere dependências ou lockfiles do produto só para essa prova.
+Mantenha a prévia loopback ativa durante a inspeção e registre resultados observados
+de viewport, teclado, console e CSP que o plano exigir. Subir o servidor, jsdom ou
+headers estáticos não substitui observação em navegador real. Distinga essa prova
+local de deploy, migração remota e prova publicada, que seguem a autorização do
+pedido. Só devolva a obrigação ao operador após demonstrar a limitação concreta dos
+caminhos locais permitidos; ausência de pacote no projeto não basta. Não peça
+waiver, não reduza o contrato e não invente resultado para fechar a run.
+
 Ao consultar `harness_tasks status`, leia também `diagnostics[task_id].context_return`
 quando houver bloqueio de captura. Esse contexto descreve achados e dependências reais,
 não concede aprovação: corrija primeiro a task dona do defeito upstream e reconcilie
