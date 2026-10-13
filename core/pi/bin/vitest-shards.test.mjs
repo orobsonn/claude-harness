@@ -45,12 +45,13 @@ test("a failing shard cancels a hanging sibling and cannot pass", async (t) => {
 
 test("a failure event cancels shards even while the failing process keeps traversing hooks", async (t) => {
   const f = fixture(t, `if(process.argv.at(-1).includes('1/2')) {
-      setTimeout(()=>process.send({type:'harness-vitest-failure'}),50);
+      setTimeout(()=>process.send({type:'harness-vitest-failure',identity:'test/matrix.spec.ts > matrix > case'}),50);
     }
     process.on('SIGTERM',()=>process.exit(0));
     setInterval(()=>{},1000);`);
   assert.equal(await runVitestShards({ ...f, shards: 2, timeoutSeconds: 10 }), 1);
   assert.match(f.text(), /reported a failed test/);
+  assert.match(f.text(), /test\/matrix.spec.ts > matrix > case/);
   assert.match(f.text(), /FAIL: 0\/2 shards passed/);
   assert.doesNotMatch(f.text(), /Timeout/);
 });
