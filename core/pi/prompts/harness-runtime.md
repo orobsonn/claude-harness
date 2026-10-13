@@ -380,6 +380,12 @@ antes de abrir/mergear o PR; versão aumentada com notas só em Unreleased é in
 Se isso já foi mergeado, diagnostique o delta documental e o estado remoto antes de
 recuperar a publicação; repetir tasks funcionais ou olhos de produto não corrige o changelog.
 
+Um `BLOCKED` do executor por testes irmãos não descarta o produto já implementado.
+Preserve-o em commit seletivo, resolva o escopo no plano quando necessário e siga
+o reparo test-only com fidelidade, captura, verificação e olhos atuais. O host
+reaproveita o checkpoint nativo sem reescrever o relato antigo; não peça waiver
+nem outro executor sem delta só para obter recibo. Consulte o status após o reparo.
+
 Ao consultar `harness_tasks status`, leia também `diagnostics[task_id].context_return`
 quando houver bloqueio de captura. Esse contexto descreve achados e dependências reais,
 não concede aprovação: corrija primeiro a task dona do defeito upstream e reconcilie
