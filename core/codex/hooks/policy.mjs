@@ -6,9 +6,9 @@ const FORBIDDEN_COMMANDS = [
   [/\bgit(?:\s+\S+)*\s+push\b[\s\S]*(?:--force(?:=|\s|$)|-f(?:\s|$))/, "Force push is blocked; use --force-with-lease only after review."],
   [/\bgit(?:\s+\S+)*\s+reset\b[\s\S]*--hard(?:\s|$)/, "Hard reset is blocked because it destroys local work."],
   [/\bgit(?:\s+\S+)*\s+clean\b[\s\S]*-[^\s]*f/, "Forced git clean is blocked because it destroys untracked work."],
-  [/(?:^|[;&|(){}\r\n]\s*)(?:(?:(?:\/usr\/bin\/)?env|command)\s+)*(?:(?:npx|bunx|pnpm(?:\s+--[\w-]+(?:=\S+)?)*\s+(?:exec|dlx)|yarn\s+dlx|bun\s+x|npm\s+exec)\b(?:\s+(?!wrangler\b)\S+)*\s+|\.\/node_modules\/\.bin\/)?wrangler\s+(?:deploy|versions|secret|r2)\b/, "Remote Wrangler operation is outside the default delivery lane."],
-  [/(?:^|[;&|(){}\r\n]\s*)(?:(?:(?:\/usr\/bin\/)?env|command)\s+)*(?:(?:npx|bunx|pnpm(?:\s+--[\w-]+(?:=\S+)?)*\s+(?:exec|dlx)|yarn\s+dlx|bun\s+x|npm\s+exec)\b(?:\s+(?!wrangler\b)\S+)*\s+|\.\/node_modules\/\.bin\/)?wrangler\s+d1\s+execute\b[\s\S]*--remote(?:[\s);&|}]|$)/, "Remote Wrangler D1 operation is outside the default delivery lane."],
-  [/(?:^|[;&|(){}\r\n]\s*)(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?deploy(?:[\s);&|}]|$)/, "Deployment is outside the default delivery lane."],
+  [/(?:^|[;&|(){}\x60\r\n]\s*)(?:(?:(?:\/usr\/bin\/)?env|command)\s+)*(?:(?:npx|bunx|pnpm(?:\s+--[\w-]+(?:=\S+)?)*\s+(?:exec|dlx)|yarn\s+dlx|bun\s+x|npm\s+exec)\b(?:\s+(?!wrangler\b)\S+)*\s+|\.\/node_modules\/\.bin\/)?wrangler\s+(?:deploy|versions|secret|r2)\b/, "Remote Wrangler operation is outside the default delivery lane."],
+  [/(?:^|[;&|(){}\x60\r\n]\s*)(?:(?:(?:\/usr\/bin\/)?env|command)\s+)*(?:(?:npx|bunx|pnpm(?:\s+--[\w-]+(?:=\S+)?)*\s+(?:exec|dlx)|yarn\s+dlx|bun\s+x|npm\s+exec)\b(?:\s+(?!wrangler\b)\S+)*\s+|\.\/node_modules\/\.bin\/)?wrangler\s+d1\s+execute\b[\s\S]*--remote(?:[\s);&|}\x60]|$)/, "Remote Wrangler D1 operation is outside the default delivery lane."],
+  [/(?:^|[;&|(){}\x60\r\n]\s*)(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?deploy(?:[\s);&|}\x60]|$)/, "Deployment is outside the default delivery lane."],
 ];
 
 const LAVISH_SEGMENTS = /[;&|\n]+/;
