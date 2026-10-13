@@ -85,6 +85,12 @@ contra descarte e exige esse checkpoint antes do reparo. Esse commit não aprova
 captura nem revisão. Mantenha o produto aplicado, corrija a fixture, execute o
 typecheck necessário antes da fidelidade e faça o novo freeze somente dos testes.
 Não remova produto para fabricar RED na manutenção de uma fixture existente.
+Se o executor já implementou o produto e parou por testes irmãos ou evidência,
+o checkpoint seletivo preserva esse trabalho mesmo se o retorno foi `BLOCKED`.
+Resolva o escopo com planner/reviewer quando necessário, corrija somente os testes
+com test-author e conclua fidelidade, captura, verificação e olhos atuais. O host
+pode reaproveitar o commit nativo observado antes do reparo; não converta o relato
+antigo em `DONE`, não peça waiver nem despache executor sem delta para gerar recibo.
 O test-author só pode alterar paths literais presentes em `locked_tests[].path` ou
 `locked_tests[].fixture_paths`. Um teste que aparece apenas em `scope_paths` não pertence
 a essa mão: trate sua atualização compatível como delta da implementação, ou reporte

@@ -237,21 +237,6 @@ function commitFromEvent(event, worktree) {
   } catch { return null; }
 }
 
-function legacyCommitFromEvent(event, worktree) {
-  if (!legacyCommitCommand(event?.args?.command)) return null;
-  const text = eventText(event?.end?.result);
-  // Require the native `git commit` summary itself. A later `git log`, `show`
-  // or echo may mention any SHA and is not proof that this command created it.
-  const abbreviated = event?.tool === "bash" && event.end && event.end.isError !== true
-    ? text.match(/^\[[^\]\n]+\s+([0-9a-f]{7,40})\]/m)?.[1]
-    : null;
-  if (!abbreviated) return null;
-  try {
-    const sha = String(git(worktree, ["rev-parse", `${abbreviated}^{commit}`])).trim();
-    return COMMIT_SHA.test(sha) ? sha : null;
-  } catch { return null; }
-}
-
 function observedImplementationReviewRoles(events, taskId) {
   const firstImplementation = events.find((event) => event.tool === "subagent" &&
     ["harness-executor", "harness-sniper"].includes(event.args?.subagent_type) &&
@@ -714,32 +699,6 @@ export function inspectTaskRun(entry, dependencies = {}) {
           producer_launch_index: native.events[implementationIndex].launchIndex };
         break;
       }
-      // Bounded legacy recovery for the concrete v3.1.4 ordering defect. Native
-      // evidence must show a capture-eligible implementation, then a successful
-      // product commit before the first author. The author's terminal HEAD must
-      // still equal that commit and be a strict ancestor of the final test-only
-      // commit. This deliberately rejects HEAD→HEAD inference and BLOCKED hands.
-      const implementation = native.events[implementationIndex];
-      const firstAuthor = native.events[firstAuthorIndex];
-      const preAuthorCommits = native.events.slice(implementationIndex + 1, firstAuthorIndex)
-        .filter((event) => Number.isInteger(implementation.endLine) && Number.isInteger(event.endLine) &&
-          (event.launchIndex > implementation.launchIndex ||
-            event.launchIndex === implementation.launchIndex && event.line > implementation.endLine) &&
-          (event.launchIndex < firstAuthor.launchIndex ||
-            event.launchIndex === firstAuthor.launchIndex && event.endLine < firstAuthor.line))
-        .map((event) => legacyCommitFromEvent(event, worktree)).filter(Boolean);
-      const preAuthorCommit = preAuthorCommits.at(-1) ?? null;
-      if (!recoveryOrigin && !captureAttemptedBeforeAuthor && producerIndex === firstAuthorIndex &&
-          captureEligibleWriterCompletion(implementation) && preAuthorCommit === hand.freezeCommitSha &&
-          COMMIT_SHA.test(hand.freezeCommitSha ?? "") && hand.freezeCommitSha !== head &&
-          ancestor(worktree, hand.freezeCommitSha, head)) {
-        recoveryOrigin = {
-          head_sha: hand.freezeCommitSha,
-          producer_call_id: native.events[implementationIndex].callId,
-          producer_launch_index: native.events[implementationIndex].launchIndex,
-          derived_from: "pre-author-product-commit",
-        };
-      }
       // A later successful dispatch can inspect or revert a disposable change
       // without writing product. Keep an older native capture when it precedes
       // that implementation's first author and the final Git delta is test-only.
@@ -800,7 +759,33 @@ export function inspectTaskRun(entry, dependencies = {}) {
           }
         }
       }
-      if (!recoveryOrigin) return failure("test-only recovery requires a clean captured implementation before the first test-author; commit then capture before correcting tests", contextDiagnostics);
+      // A BLOCKED hand may have left real product behind before a fixture repair.
+      // Its scoped native commit proves preservation, not completion: current
+      // fidelity, capture, reviews and re-gate below still decide readiness.
+      // Reuse the author's observed baseline across repeated repairs; no no-op
+      // writer or historical BLOCKED -> DONE rewrite is needed.
+      if (!recoveryOrigin && hand.freezeCommitSha !== head) {
+        for (let index = producerIndex - 1; index >= 0 && !recoveryOrigin; index--) {
+          const writer = native.events[index];
+          if (!isImplementationForTask(writer)) continue;
+          const nextWriterIndex = native.events.findIndex((event, eventIndex) => eventIndex > index && isCountingWriter(event));
+          if (nextWriterIndex < 0) continue;
+          const nextWriter = native.events[nextWriterIndex];
+          const checkpoint = native.events.slice(index + 1, nextWriterIndex).find((event) =>
+            Number.isInteger(writer.endLine) && Number.isInteger(event.endLine) &&
+            (event.launchIndex > writer.launchIndex || event.line > writer.endLine) &&
+            (event.launchIndex < nextWriter.launchIndex || event.endLine < nextWriter.line) &&
+            (legacyCommitCommand(event.args?.command) || /^\s*git\s+commit\s/.test(event.args?.command ?? "")) &&
+            /^\[[^\]\n]+\s+[0-9a-f]{7,40}\]/m.test(eventText(event.end.result)) &&
+            commitFromEvent(event, worktree) === hand.freezeCommitSha);
+          if (!checkpoint || !ancestor(worktree, hand.freezeCommitSha, head)) continue;
+          const productPaths = splitZero(git(worktree, ["diff", "--name-only", "-z", `${hand.freezeCommitSha}^`, hand.freezeCommitSha]));
+          if (!productPaths.length || productPaths.some((file) => !covered(file, scopes) || frozenPaths(binding.task).includes(file))) continue;
+          recoveryOrigin = { head_sha: hand.freezeCommitSha, producer_call_id: writer.callId,
+            producer_launch_index: writer.launchIndex, derived_from: "pre-author-product-commit" };
+        }
+      }
+      if (!recoveryOrigin) return failure("test-only recovery requires a clean captured implementation or its scoped native product checkpoint before repair", contextDiagnostics);
       if (producerIndex !== fidelity.authorIndex || native.events.some((event, index) => index > producerIndex && isCountingWriter(event)))
         return failure("test-only recovery requires the latest fidelity author without a later writing hand");
       if (!fidelity.freezeSha || !ancestor(worktree, hand.freezeCommitSha, fidelity.freezeSha) ||

@@ -599,6 +599,10 @@ test("a successful disposable writer cannot erase an earlier captured implementa
   });
   for (const variant of [{ capturedImplementation: false }, { productDelta: true }]) {
     const invalid = testOnlyRecovery({ extraAuthor: true, interveningWriter: true, ...variant });
+    if (variant.capturedImplementation === false) {
+      const file = invalid.entry.launches.at(-1).events_path;
+      write(file, fs.readFileSync(file, "utf8").split("\n").filter((line) => !line || !JSON.parse(line).toolCallId?.includes("product-commit")).join("\n"));
+    }
     const rejected = inspectTaskRun(invalid.entry, invalid.dependencies);
     assert.equal(rejected.ok, false);
     assert.match(rejected.reason, /clean captured implementation|cannot change product/);
@@ -619,6 +623,10 @@ test("dirty capture of a disposable writer cannot erase an earlier clean native 
     });
     for (const variant of [{ capturedImplementation: false }, { productDelta: true }]) {
       const invalid = testOnlyRecovery({ ...options, ...variant });
+      if (variant.capturedImplementation === false) {
+        const file = invalid.entry.launches.at(-1).events_path;
+        write(file, fs.readFileSync(file, "utf8").split("\n").filter((line) => !line || !JSON.parse(line).toolCallId?.includes("product-commit")).join("\n"));
+      }
       const rejected = inspectTaskRun(invalid.entry, invalid.dependencies);
       assert.equal(rejected.ok, false, JSON.stringify({ history, variant }));
       assert.match(rejected.reason, /clean captured implementation|cannot change product/);
@@ -647,7 +655,41 @@ test("the first scoped test-author freeze recovers a missing pre-author capture 
   assert.equal(inspected.result.hand_capture.recovery_origin.derived_from, "pre-author-product-commit");
 });
 
-test("legacy missing-capture recovery rejects absent commit proof, BLOCKED implementation and HEAD-to-HEAD inference", () => {
+test("a preserved BLOCKED implementation survives repeated fixture repair and a non-writing blocked dispatch", () => {
+  const f = testOnlyRecovery({ capturedImplementation: false, extraAuthor: true, interveningWriter: true });
+  const eventsPath = f.entry.launches.at(-1).events_path;
+  const events = fs.readFileSync(eventsPath, "utf8").trimEnd().split("\n").map((line) => {
+    const item = JSON.parse(line);
+    if (item.type === "tool_execution_end" && ["producer", "intervening-sniper"].includes(item.toolCallId)) {
+      item.result.content = [{ type: "text", text: "Product preserved; sibling fixture requires correction.\nStatus: BLOCKED" }];
+    }
+    if (item.type === "tool_execution_start" && item.toolCallId === "product-commit") {
+      item.args.command = 'git commit -m "implement"; echo "EXIT=$?"; git log -1 --format=%H';
+    }
+    return JSON.stringify(item);
+  });
+  const commitEnd = events.findIndex((line) => {
+    const item = JSON.parse(line);
+    return item.type === "tool_execution_end" && item.toolCallId === "product-commit";
+  });
+  events.splice(commitEnd + 1, 0,
+    event("tool_execution_start", { toolCallId: "failed-capture", toolName: "mark", args: { action: "capture-verified", task_id: TASK } }),
+    event("tool_execution_end", { toolCallId: "failed-capture", toolName: "mark", result: { details: { ok: false, reason: "hand_finished does not contain feature/task" } } }));
+  write(eventsPath, events.join("\n") + "\n");
+  const before = fs.readFileSync(eventsPath, "utf8");
+  const inspected = inspectTaskRun(f.entry, f.dependencies);
+  assert.equal(inspected.ok, true, inspected.reason);
+  assert.equal(inspected.result.hand_capture.recovery_origin.producer_call_id, "producer");
+  assert.equal(inspected.result.hand_capture.recovery_origin.head_sha, f.recoveryBaseline);
+  assert.equal(fs.readFileSync(eventsPath, "utf8"), before, "historical BLOCKED outcomes remain untouched");
+  const state = JSON.parse(fs.readFileSync(f.statePath, "utf8"));
+  state.regate_pending = [`${FEATURE}/${TASK}`];
+  state.regate_passed = [];
+  write(f.statePath, state);
+  assert.match(inspectTaskRun(f.entry, f.dependencies).reason, /re-gate is still pending/);
+});
+
+test("missing-capture recovery rejects absent commit proof, unresolved review and HEAD-to-HEAD inference", () => {
   const missingCommit = testOnlyRecovery({ capturedImplementation: false });
   const eventsPath = missingCommit.entry.launches.at(-1).events_path;
   const withoutCommit = fs.readFileSync(eventsPath, "utf8").trim().split("\n")
@@ -665,7 +707,11 @@ test("legacy missing-capture recovery rejects absent commit proof, BLOCKED imple
     return JSON.stringify(item);
   });
   write(blockedPath, blockedEvents.join("\n") + "\n");
-  assert.match(inspectTaskRun(blocked.entry, blocked.dependencies).reason, /clean captured implementation/);
+  const blockedState = JSON.parse(fs.readFileSync(blocked.statePath, "utf8"));
+  delete blockedState.task_review_evidence;
+  write(blocked.statePath, blockedState);
+  assert.equal(inspectTaskRun(blocked.entry, blocked.dependencies).ok, false,
+    "a preserved BLOCKED implementation is not approval while current reviews remain missing");
 
   const sameHead = testOnlyRecovery({ capturedImplementation: false });
   const handPath = path.join(sameHead.root, ".pi/harness/state/hand-records", FEATURE, CHILD, `${TASK}.json`);
@@ -1073,19 +1119,24 @@ test("integrated recovery rejects product drift, later writers and forged recove
   assert.equal(inspectTaskRun(second.entry, second.dependencies).ok, false);
 });
 
-test("test-only recovery cannot cover an uncaptured implementation, product drift or later writer", () => {
+test("test-only recovery cannot cover unproven product, product drift or later writer", () => {
   for (const options of [{ capturedImplementation: false, extraAuthor: true }, { productDelta: true }, { laterWriter: true },
     { earlierAuthorProductDrift: true }, { lateCapture: true }, { failedWriter: true },
     { overlappingCapture: true }, { originOverride: { head_sha: undefined } },
     { originOverride: { worktree_clean: false } }, { originOverride: { producer_call_id: "foreign" } },
     { originOverride: { head_sha: "0".repeat(40) } }]) {
     const f = testOnlyRecovery(options);
+    // Exercise failed capture without an independent native product checkpoint.
+    const file = f.entry.launches.at(-1).events_path;
+    write(file, fs.readFileSync(file, "utf8").split("\n").filter((line) => !line || JSON.parse(line).toolCallId !== "product-commit").join("\n"));
     assert.equal(inspectTaskRun(f.entry, f.dependencies).ok, false, JSON.stringify(options));
   }
 });
 
-test("uncaptured recovery reports a current upstream blocker without authorizing integration", () => {
+test("unproven recovery reports a current upstream blocker without authorizing integration", () => {
   const f = testOnlyRecovery({ capturedImplementation: false, extraAuthor: true });
+  const file = f.entry.launches.at(-1).events_path;
+  write(file, fs.readFileSync(file, "utf8").split("\n").filter((line) => !line || JSON.parse(line).toolCallId !== "product-commit").join("\n"));
   const head = run(f.root, "git", "rev-parse", "HEAD");
   const content = "BLOCKED: current RED requires correction in upstream task-3 before this task can finish.";
   const context = { version: 1, kind: "task-context-return", session_id: CHILD, task_id: TASK,
