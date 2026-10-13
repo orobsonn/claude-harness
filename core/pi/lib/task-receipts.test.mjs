@@ -2889,6 +2889,10 @@ test("new implementation cannot fall back to old integration when capture eviden
   for (const options of [{ lateCapture: true }, { productDelta: true },
     { originOverride: { producer_call_id: "producer" } }, { originOverride: { worktree_clean: false } }]) {
     const f = testOnlyRecovery({ integrated: true, freshImplementation: true, ...options });
+    // Invalid capture must not revive the old integration when the new product
+    // also lacks its independent native checkpoint proof.
+    const file = f.entry.launches.at(-1).events_path;
+    write(file, fs.readFileSync(file, "utf8").split("\n").filter((line) => !line || !JSON.parse(line).toolCallId?.includes("fresh-product-commit")).join("\n"));
     const inspected = inspectTaskRun(f.entry, f.dependencies);
     assert.equal(inspected.ok, false, JSON.stringify(options));
     assert.equal(inspected.result, undefined);
