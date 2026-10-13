@@ -399,6 +399,8 @@ const OC_OPAQUE_LOADER_ALLOWLIST = new Map([
   [PI_SUBAGENTS_LOADER_PATH, new Set([PI_SUBAGENTS_CREATE_REQUIRE, PI_SUBAGENTS_JITI_IMPORT])],
   // Optional operator-installed MCP adapter and verified Pi peers; never project code.
   [PI_PLANNING_LOADER_PATH, new Set([PI_SUBAGENTS_CREATE_REQUIRE, 'createRequire(join(profile, "npm/package.json"))', 'requireAdapter.resolve("pi-mcp-adapter")'])],
+  // The shard worker loads only the consumer's installed Vitest Node API.
+  ["core/pi/bin/vitest-shard-worker.mjs", new Set(['pathToFileURL(path.join(process.cwd(), "node_modules/vitest/dist/node.js")).href'])],
 ]);
 function slashPath(path) {
   return path.split(sep).join("/");
