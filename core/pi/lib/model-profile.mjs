@@ -14,16 +14,21 @@ export const GLM_MODEL = "glm-5.3";
 // Preserve the historical profile default for snapshot canonicalization.
 // New parents select the official provider through readDefaultModelProfile.
 export const DEFAULT_MODEL_PROFILE = "trial-orchestration-deepseek";
+export const OPENAI_ECONOMY_PROFILE = "openai-economy";
 
 /** Host preference applies only to new parents, never to admitted sessions. */
 export function readDefaultModelProfile(userHome) {
-  if (!userHome) return "verboo-orchestration-deepseek";
+  if (!userHome) return OPENAI_ECONOMY_PROFILE;
   let config;
   try {
     config = JSON.parse(fs.readFileSync(path.join(userHome, ".config", "claude-harness", "providers.json"), "utf8"));
   } catch (error) {
-    if (error.code === "ENOENT") return "verboo-orchestration-deepseek";
+    if (error.code === "ENOENT") return OPENAI_ECONOMY_PROFILE;
     throw new Error("invalid host provider configuration", { cause: error });
+  }
+  if (config.model_profile !== undefined) {
+    resolveModelProfile({ profile: config.model_profile });
+    return config.model_profile;
   }
   if (config.deepseek === "verboo") return "verboo-orchestration-deepseek";
   if (config.deepseek === "ollama") return DEFAULT_MODEL_PROFILE;
@@ -32,7 +37,7 @@ export function readDefaultModelProfile(userHome) {
 
 const COMPLEXITIES = Object.freeze(["low", "medium", "high", "max"]);
 const SUPPORTED_MODEL_PROFILE_VERSIONS = new Set([1, 2, 3, 4, MODEL_PROFILE_VERSION]);
-const PARENT_TARGETS = new Set(["baseline", "deepseek"]);
+const PARENT_TARGETS = new Set(["baseline", "deepseek", "luna"]);
 
 const BASELINE_FIXED = Object.freeze({
   "harness-support": Object.freeze({ model: "openai-codex/gpt-5.6-terra", thinking: "high" }),
@@ -72,6 +77,7 @@ const CURRENT_HANDS = Object.freeze(Object.fromEntries(Object.entries(V4_HANDS).
 ])));
 
 const PROFILE_DEFAULTS = Object.freeze({
+  [OPENAI_ECONOMY_PROFILE]: Object.freeze({ handModel: null, globalParent: "luna", localParent: "luna", provider: "openai-codex" }),
   "verboo-orchestration-deepseek": Object.freeze({ handModel: DEEPSEEK_MODEL, globalParent: "deepseek", localParent: "deepseek", provider: "verboo" }),
   baseline: Object.freeze({ handModel: null, globalParent: "baseline", localParent: "baseline" }),
   "trial-hands-deepseek": Object.freeze({ handModel: DEEPSEEK_MODEL, globalParent: "baseline", localParent: "baseline" }),
@@ -104,6 +110,7 @@ function ollamaRoute(model, provider = OLLAMA_PROVIDER) {
 }
 
 function parentRoute(target, provider = OLLAMA_PROVIDER) {
+  if (target === "luna") return { provider: "openai-codex", model: "gpt-6-luna", thinking_requested: "high", thinking_effective: "high" };
   return target === "deepseek"
     ? { provider, model: DEEPSEEK_MODEL, thinking_requested: "high", thinking_effective: "high" }
     : null;
@@ -124,7 +131,13 @@ export function resolveModelProfile({ profile = DEFAULT_MODEL_PROFILE, globalPar
   }
   const handRoute = defaults.handModel && defaults.handModel !== "tiered-open" ? ollamaRoute(defaults.handModel, provider) : null;
   const fixedRoutes = version < 4 ? BASELINE_FIXED : version === 4 ? V4_FIXED : CURRENT_FIXED;
-  const handRoutes = version < 4 ? BASELINE_HANDS : version === 4 ? V4_HANDS : CURRENT_HANDS;
+  const economy = profile === OPENAI_ECONOMY_PROFILE;
+  const handRoutes = economy ? {
+    low: { model: "openai-codex/gpt-6-luna", thinking: "high" },
+    medium: { model: "openai-codex/gpt-5.6-terra", thinking: "medium" },
+    high: { model: "openai-codex/gpt-5.6-terra", thinking: "xhigh" },
+    max: { model: "openai-codex/gpt-5.6-terra", thinking: "xhigh" },
+  } : version < 4 ? BASELINE_HANDS : version === 4 ? V4_HANDS : CURRENT_HANDS;
   const handTiers = Object.fromEntries(COMPLEXITIES.map((complexity) => [
     complexity,
     defaults.handModel === "tiered-open"
@@ -146,9 +159,9 @@ export function resolveModelProfile({ profile = DEFAULT_MODEL_PROFILE, globalPar
     budget_usd: budgetUsd === null ? null : Number(budgetUsd),
     provider: {
       id: provider,
-      endpoint: provider === "verboo" ? "https://code.verboo.ai/router/v1" : OLLAMA_ENDPOINT,
-      api: "openai-completions",
-      credential_env: provider === "verboo" ? "VERBOO_API_KEY" : "OLLAMA_API_KEY",
+      endpoint: provider === "openai-codex" ? "https://chatgpt.com/backend-api" : provider === "verboo" ? "https://code.verboo.ai/router/v1" : OLLAMA_ENDPOINT,
+      api: provider === "openai-codex" ? "openai-codex-responses" : "openai-completions",
+      credential_env: provider === "openai-codex" ? null : provider === "verboo" ? "VERBOO_API_KEY" : "OLLAMA_API_KEY",
       max_local_concurrency: 2,
     },
     models: {
@@ -160,7 +173,8 @@ export function resolveModelProfile({ profile = DEFAULT_MODEL_PROFILE, globalPar
       local: { target: selectedLocal, route: parentRoute(selectedLocal, provider) },
     },
     routes: {
-      fixed: Object.fromEntries(Object.entries(fixedRoutes).map(([role, route]) => [role, { ...route }])),
+      fixed: Object.fromEntries(Object.entries(fixedRoutes).map(([role, route]) => [role,
+        economy && role === "harness-test-reviewer" ? { ...route, model: "openai-codex/gpt-6.1-sol" } : { ...route }])),
       hands: handTiers,
       test_author: testAuthorTiers,
     },
@@ -216,7 +230,7 @@ export function profilePrompt(snapshot, { parentKind = null } = {}) {
     parents: snapshot.parents,
     model_strategy: modelStrategyFromProfile(snapshot),
   })}\n</HARNESS_MODEL_PROFILE>`;
-  if (!parentKind || snapshot.parents?.[parentKind]?.target === "baseline") return profile;
+  if (!parentKind || snapshot.parents?.[parentKind]?.route?.provider === "openai-codex" || snapshot.parents?.[parentKind]?.target === "baseline") return profile;
   return `${profile}\n\n<HARNESS_OPEN_PARENT_BOOTSTRAP>\n` +
     "Start every top-level request by applying harness-triage and calling classify. " +
     "Then follow the mode-specific ceremony. For LIGHT/FULL, complete the required spec and plan reviews, " +
@@ -265,6 +279,35 @@ export function readModelProfileSnapshot(projectRoot, sessionId) {
   }
 }
 
+/** Operator recovery changes future routes while preserving the admitted plan profile. */
+export function readRoutingRecovery(projectRoot, sessionId, admitted) {
+  const file = path.join(projectRoot, ".pi", "harness", "state", "model-profiles", `${sessionId}.routing.json`);
+  let value;
+  try { value = JSON.parse(fs.readFileSync(file, "utf8")); } catch (error) {
+    if (error.code === "ENOENT") return null;
+    throw new Error("session routing recovery unreadable", { cause: error });
+  }
+  if (!admitted.ok || value.version !== 1 || value.admitted_sha256 !== admitted.fileSha256 ||
+      !/^[a-f0-9]{64}$/.test(value.routing_sha256 ?? "")) throw new Error("session routing recovery identity mismatch");
+  const target = readModelProfileSnapshot(projectRoot, `${sessionId}-routing-${value.routing_sha256}`);
+  if (!target.ok || target.snapshot.sha256 !== value.routing_sha256 ||
+      !["baseline", OPENAI_ECONOMY_PROFILE].includes(target.snapshot.profile)) throw new Error("session routing recovery profile invalid");
+  return target;
+}
+
+export function writeRoutingRecovery(projectRoot, sessionId, admitted, snapshot) {
+  if (!admitted.ok || !["baseline", OPENAI_ECONOMY_PROFILE].includes(snapshot.profile)) {
+    throw new Error("routing recovery requires an admitted snapshot and an OpenAI recovery profile");
+  }
+  const saved = writeModelProfileSnapshot(projectRoot, `${sessionId}-routing-${snapshot.sha256}`, snapshot);
+  const file = path.join(projectRoot, ".pi", "harness", "state", "model-profiles", `${sessionId}.routing.json`);
+  const record = { version: 1, admitted_sha256: admitted.fileSha256, routing_sha256: snapshot.sha256 };
+  if (fs.existsSync(file)) {
+    if (fs.readFileSync(file, "utf8") !== stableProfileJson(record)) throw new Error("session routing recovery already selected");
+  } else fs.writeFileSync(file, stableProfileJson(record), { flag: "wx", mode: 0o600 });
+  return saved;
+}
+
 export function loadModelProfileFromEnv(env = process.env) {
   const file = env[MODEL_PROFILE_ENV];
   const expectedHash = env[MODEL_PROFILE_HASH_ENV];
@@ -294,6 +337,7 @@ export function parseModelProfileArgs(argv) {
     ["--harness-global-parent", "globalParent"],
     ["--harness-local-parent", "localParent"],
     ["--harness-budget-usd", "budgetUsd"],
+    ["--harness-recovery-profile", "recoveryProfile"],
   ]);
   let inspect = false;
   const marker = argv.indexOf("--");
@@ -313,7 +357,9 @@ export function parseModelProfileArgs(argv) {
     }
     values[key] = String(argv[++index]);
   }
-  return { argv: remaining, inspect, selection: values, explicit: Object.keys(values).length > 0 };
+  const { recoveryProfile, ...selection } = values;
+  return { argv: remaining, inspect, selection, explicit: Object.keys(selection).length > 0,
+    ...(recoveryProfile ? { recoveryProfile } : {}) };
 }
 
 export { BASELINE_FIXED, BASELINE_HANDS, CURRENT_FIXED, CURRENT_HANDS, PROFILE_DEFAULTS };

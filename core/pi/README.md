@@ -246,7 +246,13 @@ sempre pela task canônica; complexity omitida é herdada, divergência é rejei
 Executor/sniper mantêm low Luna/high, medium Terra/medium, high/max Terra/xhigh.
 O transporte mantém limite de inatividade de 15 minutos por chamada de modelo.
 
-Sessões novas usam `verboo-orchestration-deepseek` por padrão. Nesse perfil,
+Sessões novas usam temporariamente `openai-economy` por padrão: pais global e
+local em Luna 6/high; executor/sniper low em Luna 6/high, medium em Terra
+5.6/medium e high/max em Terra 5.6/xhigh. Planner, suporte, autor de testes e
+avaliações usam Sol 6.1; plan-reviewer usa Astra 6/high; harvester e shipper
+continuam em Luna 6/high. O perfil usa a autenticação Codex do operador.
+
+O perfil explícito `verboo-orchestration-deepseek` continua disponível. Nele,
 DeepSeek V4.1 Flash orquestra os pais global e local; executor, sniper e
 test-author usam DeepSeek em low/medium/high/max. `max` permanece somente como
 fallback defensivo para planos legados; o planner deve decompor a task antes da
@@ -261,7 +267,7 @@ e local para DeepSeek, ou eles podem ser escolhidos separadamente com
 # inspeção offline, sem credencial ou inferência
 pi-harness --harness-profile-inspect --harness-profile trial-hands-deepseek
 
-# sessão nova no default DeepSeek; OLLAMA_API_KEY existe apenas no ambiente host
+# sessão nova no default OpenAI economy
 pi-harness
 
 # rollback explícito para uma sessão nova totalmente Codex
@@ -270,7 +276,15 @@ pi-harness --harness-profile baseline
 
 Toda sessão nova grava um snapshot imutável de rota em
 `.pi/harness/state/model-profiles/<session-id>.json`. Retomada usa somente
-`--harness-resume <session-id>` e recusa overrides de perfil. O orçamento opcional
+`--harness-resume <session-id>` e recusa overrides comuns de perfil. Para uma
+recuperação autorizada pelo operador após perda de cota, use
+`--harness-resume <session-id> --harness-recovery-profile openai-economy`.
+O launcher valida o plano contra o snapshot original e grava uma seleção de
+rotas separada, vinculada ao hash original. Próximas retomadas reutilizam essa
+seleção; o snapshot original, plano, grants e recibos permanecem intactos.
+A retomada continua exigindo o lock exclusivo e o preflight da sessão exata.
+Essa troca altera despachos futuros e não concede aprovação de implementação.
+O orçamento opcional
 é metadado de auditoria; não é um teto local, e o painel Ollama continua sendo a
 autoridade externa de créditos. Para rollback, inicie sessões novas com
 `--harness-profile baseline`; sessões, worktrees e evidências anteriores permanecem.
@@ -291,11 +305,12 @@ Plan-reviewer usa essas lentes somente na revisão INITIAL, sem redescoberta em 
 
 ## Fornecedor DeepSeek: Ollama ou Verboo
 
-Verboo é o fornecedor oficial padrão do DeepSeek para sessões novas, inclusive
-sem configuração de host. Para escolher Ollama neste host, configure
+Para escolher Ollama neste host, configure
 `~/.config/claude-harness/providers.json` com `{"deepseek":"ollama"}`;
 `{"deepseek":"verboo"}` seleciona Verboo explicitamente. A escolha afeta somente pais novos: sessões retomadas e filhos
-conservam seus snapshots admitidos. Um `--harness-profile` explícito prevalece.
+conservam seus snapshots admitidos. Para o padrão temporário OpenAI, use
+`{"model_profile":"openai-economy"}` no mesmo arquivo; essa preferência prevalece
+sobre `deepseek`. Um `--harness-profile` explícito prevalece sobre o host.
 O mesmo harness atende ambos os fornecedores; não há uma distribuição separada.
 
 Para usar DeepSeek V4.1 Flash no endpoint Verboo nos pais e em todas as mãos,
@@ -411,7 +426,8 @@ A distribuição fixa Pi e pi-ai em `1.0.2`, com pi-subagents `23.0.0`,
 compatível com a major 1.0. O cache do runtime continua sendo provisionado
 e verificado pelo init/update; gerações anteriores não são sobrescritas.
 Autenticação compartilhada, retomada exata e validação dos recursos das filhas
-continuam protegidas pelos overlays verificados. Verboo permanece o padrão.
+continuam protegidas pelos overlays verificados. O padrão temporário de modelos
+é `openai-economy`; os perfis DeepSeek continuam disponíveis explicitamente.
 
 O Pi 1.0 usa TUI fullscreen por padrão; para manter o scrollback tradicional,
 configure `tuiMode: "regular"` nas configurações do Pi. Subagentes agora expõem

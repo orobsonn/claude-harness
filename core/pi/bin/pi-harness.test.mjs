@@ -25,7 +25,7 @@ import {
 import { applyPiAuthPathPatch, PI_AUTH_PATH_ENV, PI_AUTH_PATH_PATCH_MARKER, PI_RESUME_ENV, verifyPiAuthPathPatch } from "../lib/pi-auth-path-patch.mjs";
 import { piChildResourceSettings } from "../lib/pi-child-extensions.mjs";
 import { ensurePiRuntime } from "../lib/pi-runtime-cache.mjs";
-import { resolveModelProfile } from "../lib/model-profile.mjs";
+import { resolveModelProfile, writeModelProfileSnapshot } from "../lib/model-profile.mjs";
 
 const RUNTIME_ASSETS = fileURLToPath(new URL("../runtime-deps/", import.meta.url));
 
@@ -729,7 +729,7 @@ test("runtime materialization switches only exact harness Ollama defaults by adm
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
 
-test("default launcher requires the Verboo credential and injects the admitted DeepSeek parent route", () => {
+test("explicit Verboo launcher requires its credential and injects the admitted DeepSeek parent route", () => {
   const directory = mkdtempSync(join(tmpdir(), "pi-harness-profile-launch-"));
   const errors = [];
   let builtRuntimePrompt = "";
@@ -748,11 +748,11 @@ test("default launcher requires the Verboo credential and injects the admitted D
       };
     },
   };
-  assert.equal(runPiHarnessCli([], common).exitCode, 2);
+  assert.equal(runPiHarnessCli(["--harness-profile", "verboo-orchestration-deepseek"], common).exitCode, 2);
   assert.match(errors.pop(), /VERBOO_API_KEY/);
 
   let spawned;
-  const result = runPiHarnessCli([], {
+  const result = runPiHarnessCli(["--harness-profile", "verboo-orchestration-deepseek"], {
     ...common,
     env: { VERBOO_API_KEY: "test-only-key" },
     spawnSyncFn: (command, args, options) => { spawned = { command, args, env: options.env }; return { status: 0 }; },
@@ -781,6 +781,58 @@ test("delegated task persists the inherited profile for its own resume identity"
     taskGrant: undefined,
     admittedProfileFile: inherited,
   }), false);
+});
+
+test("operator routing recovery resumes with Luna while preserving the admitted plan and profile", () => {
+  const directory = mkdtempSync(join(tmpdir(), "pi-routing-launch-"));
+  const original = resolveModelProfile({ profile: "trial-orchestration-deepseek" });
+  const saved = writeModelProfileSnapshot(directory, "routing-session", original);
+  const before = readFileSync(saved.path, "utf8");
+  let spawned;
+  let recoveredStrategy;
+  const common = {
+    cwd: directory, userHome: directory, env: {}, runtimePrompt: "runtime",
+    acquireParentLockFn: () => ({ ok: true, release() {} }), materializeRuntimeFn() {},
+    recoverParentSessionFn: (_root, _id, options) => {
+      recoveredStrategy = options.expectedModelStrategy;
+      return { ok: true, context: "resume", sessionFile: "/test/original-session.jsonl" };
+    },
+    buildInvocationFn: ({ argv, env, runtimePrompt }) => ({ command: "pi", args: argv, env: { ...env,
+      PI_CODING_AGENT_DIR: join(directory, "runtime") }, runtimePrompt }),
+    spawnSyncFn: (command, args, options) => { spawned = { args, env: options.env }; return { status: 0 }; },
+  };
+  try {
+    assert.equal(runPiHarnessCli(["--harness-resume", "routing-session", "--harness-recovery-profile", "openai-economy"], common).exitCode, 0);
+    assert.deepEqual(spawned.args.slice(0, 6), ["--provider", "openai-codex", "--model", "gpt-6-luna", "--thinking", "high"]);
+    assert.equal(recoveredStrategy.hand_tiers.low, "ollama-cloud/deepseek-v4.1-flash");
+    assert.equal(readFileSync(saved.path, "utf8"), before);
+    assert.match(spawned.env.PI_HARNESS_MODEL_PROFILE, /routing-session-routing-/);
+    assert.equal(JSON.parse(readFileSync(spawned.env.PI_HARNESS_MODEL_PROFILE, "utf8")).profile, "openai-economy");
+    assert.equal(runPiHarnessCli(["--harness-resume", "routing-session"], common).exitCode, 0);
+    assert.equal(spawned.args[3], "gpt-6-luna");
+    const denied = runPiHarnessCli(["--harness-resume", "routing-session", "--harness-recovery-profile", "trial-orchestration-deepseek"], {
+      ...common, errorSink() {},
+    });
+    assert.equal(denied.exitCode, 2);
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("OpenAI new-session default starts Luna without a DeepSeek API credential", () => {
+  const directory = mkdtempSync(join(tmpdir(), "pi-economy-default-"));
+  let spawned;
+  try {
+    const result = runPiHarnessCli([], {
+      cwd: directory, userHome: directory, env: {}, runtimePrompt: "runtime",
+      randomSessionIdFn: () => "economy-session",
+      acquireParentLockFn: () => ({ ok: true, release() {} }), materializeRuntimeFn() {},
+      buildInvocationFn: ({ argv, env }) => ({ command: "pi", args: argv,
+        env: { ...env, PI_CODING_AGENT_DIR: join(directory, "runtime") } }),
+      spawnSyncFn: (command, args, options) => { spawned = { args, env: options.env }; return { status: 0 }; },
+    });
+    assert.equal(result.exitCode, 0);
+    assert.deepEqual(spawned.args.slice(0, 6), ["--provider", "openai-codex", "--model", "gpt-6-luna", "--thinking", "high"]);
+    assert.equal(JSON.parse(readFileSync(spawned.env.PI_HARNESS_MODEL_PROFILE, "utf8")).profile, "openai-economy");
+  } finally { rmSync(directory, { recursive: true, force: true }); }
 });
 
 test("Verboo provider is materialized without replacing operator providers", () => {

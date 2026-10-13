@@ -16,7 +16,7 @@ import { readTaskContextReturn, validateTaskContextReturn } from "./task-context
 import { readTaskPlanAuthority, recoveredTaskContractHash } from "./task-plan-recovery.mjs";
 import { capturePiReviewInput, currentPiReviewIssues, findPiReviewReceipt, isSatisfiedPiTaskReviewReceipt, readPiReviewPlan } from "./pi-review-evidence.mjs";
 import { PARALLEL_REVIEW_ROLES, requiredPiTaskReviewRoles } from "./roles.mjs";
-import { classifyPiReviewDispatch } from "./pi-review-concurrency.mjs";
+import { canonicalTaskReviewPrompt, classifyPiReviewDispatch } from "./pi-review-concurrency.mjs";
 import { piGateStatePath, piHandRecordPath } from "./pi-paths.mjs";
 import { readTaskProcess } from "./task-process.mjs";
 import { capturePlanReviewInput, readTaskRunBinding } from "./task-run.mjs";
@@ -242,7 +242,11 @@ function observedImplementationReviewRoles(events, taskId) {
     ["harness-executor", "harness-sniper"].includes(event.args?.subagent_type) &&
     taskFromPrompt(event.args?.prompt) === taskId && eventSucceeded(event));
   return new Map(events.filter((event) => {
-    const review = event.tool === "subagent" && classifyPiReviewDispatch(event.args?.subagent_type, event.args?.prompt);
+    // Native events retain the submitted headers, before dispatch normalizes
+    // them. Observe the same role/task identity as the live dispatch rail.
+    const role = event.args?.subagent_type;
+    const review = event.tool === "subagent" && classifyPiReviewDispatch(role,
+      canonicalTaskReviewPrompt(role, event.args?.prompt, taskId));
     // A tool-call refused by the entry gate has a start/end pair but never
     // reached a child. It is audit evidence of an attempted call, not a review
     // dispatch, and must not supersede the call id of an accepted receipt.

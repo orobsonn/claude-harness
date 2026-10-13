@@ -9,7 +9,7 @@ import {
   MODEL_PROFILE_VERSION,
   loadModelProfileFromEnv, modelStrategyFromProfile, parseModelProfileArgs,
   profilePrompt, readDefaultModelProfile, readModelProfileSnapshot, resolveModelProfile, routeFromModelProfile,
-  stableProfileJson, writeModelProfileSnapshot,
+  stableProfileJson, writeModelProfileSnapshot, readRoutingRecovery, writeRoutingRecovery,
 } from "./model-profile.mjs";
 
 test("AC-01 baseline uses the new Pi OpenAI routes and needs no Ollama credential", () => {
@@ -22,7 +22,7 @@ test("AC-01 baseline uses the new Pi OpenAI routes and needs no Ollama credentia
   assert.equal(profile.parents.local.route, null);
 });
 
-test("new sessions default to DeepSeek orchestration while baseline stays explicit", () => {
+test("historical resolver default preserves DeepSeek snapshot canonicalization", () => {
   const profile = resolveModelProfile();
   assert.equal(MODEL_PROFILE_VERSION, 5);
   assert.equal(profile.version, 5);
@@ -216,11 +216,43 @@ test("model strategy projects only the plan contract", () => {
   });
 });
 
-test("Verboo is the new-session default while explicit Ollama and admitted snapshots stay intact", (t) => {
+test("OpenAI economy separates Luna orchestration, Terra writing and Sol test authority", () => {
+  const profile = resolveModelProfile({ profile: "openai-economy" });
+  assert.equal(profile.provider.credential_env, null);
+  for (const kind of ["global", "local"]) {
+    assert.deepEqual(profile.parents[kind].route, { provider: "openai-codex", model: "gpt-6-luna",
+      thinking_requested: "high", thinking_effective: "high" });
+  }
+  assert.deepEqual(routeFromModelProfile(profile, "harness-executor", "medium"), {
+    ok: true, model: "openai-codex/gpt-5.6-terra", thinking: "medium" });
+  assert.deepEqual(routeFromModelProfile(profile, "harness-executor", "high"), {
+    ok: true, model: "openai-codex/gpt-5.6-terra", thinking: "xhigh" });
+  assert.equal(routeFromModelProfile(profile, "harness-test-author", "high").model, "openai-codex/gpt-6.1-sol");
+  assert.equal(routeFromModelProfile(profile, "harness-test-reviewer").model, "openai-codex/gpt-6.1-sol");
+  assert.equal(routeFromModelProfile(profile, "harness-plan-reviewer").model, "openai-codex/gpt-6-astra");
+});
+
+test("routing recovery preserves the admitted snapshot and detects changed source authority", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-routing-recovery-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const original = resolveModelProfile();
+  const saved = writeModelProfileSnapshot(root, "session", original);
+  const admitted = readModelProfileSnapshot(root, "session");
+  const originalText = fs.readFileSync(saved.path, "utf8");
+  assert.equal(readRoutingRecovery(root, "session", admitted), null);
+  const snapshot = resolveModelProfile({ profile: "openai-economy" });
+  writeRoutingRecovery(root, "session", admitted, snapshot);
+  assert.deepEqual(readRoutingRecovery(root, "session", admitted).snapshot, snapshot);
+  assert.equal(fs.readFileSync(saved.path, "utf8"), originalText);
+  assert.throws(() => readRoutingRecovery(root, "session", { ...admitted, fileSha256: "0".repeat(64) }), /identity mismatch/);
+  assert.throws(() => writeRoutingRecovery(root, "session", admitted, resolveModelProfile({ profile: "baseline" })), /already selected/);
+});
+
+test("OpenAI economy is the new-session default while explicit providers and admitted snapshots stay intact", (t) => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "pi-provider-default-"));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
-  assert.equal(readDefaultModelProfile(home), "verboo-orchestration-deepseek");
-  assert.equal(readDefaultModelProfile(), "verboo-orchestration-deepseek");
+  assert.equal(readDefaultModelProfile(home), "openai-economy");
+  assert.equal(readDefaultModelProfile(), "openai-economy");
   const old = resolveModelProfile({ profile: DEFAULT_MODEL_PROFILE });
   writeModelProfileSnapshot(home, "old", old);
   const directory = path.join(home, ".config", "claude-harness");
@@ -231,6 +263,9 @@ test("Verboo is the new-session default while explicit Ollama and admitted snaps
   assert.deepEqual(readModelProfileSnapshot(home, "old").snapshot, old);
   fs.writeFileSync(file, '{"deepseek":"ollama"}');
   assert.equal(readDefaultModelProfile(home), DEFAULT_MODEL_PROFILE);
+  fs.writeFileSync(file, '{"deepseek":"ollama","model_profile":"openai-economy"}');
+  assert.equal(readDefaultModelProfile(home), "openai-economy");
+  assert.deepEqual(readModelProfileSnapshot(home, "old").snapshot, old);
   fs.writeFileSync(file, '{"deepseek":"unknown"}');
   assert.throws(() => readDefaultModelProfile(home), /must be verboo or ollama/);
   fs.writeFileSync(file, 'invalid');
