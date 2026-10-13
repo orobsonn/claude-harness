@@ -598,7 +598,7 @@ export function checkHarvestReady(projectRoot, sessionId) {
     if (!DURABLE_MEMORY_FILES.includes(change.path) || sha(readSmall(join(paths.root, change.path), 1024 * 1024) ?? "") !== change.after_sha256) throw new Error("Durable memory differs from the harvested proposal");
   }
   if (harvest.receipt_version === 2) {
-    const verification = checkPiFinalCommands({ projectRoot: paths.root, sessionId, commands: harvest.verification_commands });
+    const verification = checkPiFinalCommands({ projectRoot: paths.root, sessionId, commands: harvest.verification_commands, exactHead: true });
     if (!verification.ok) {
       const commands = Array.isArray(verification.commands) ? `: ${JSON.stringify(verification.commands)}` : "";
       throw new Error(`Run the harvest structural verification commands on the committed durable-memory HEAD before shipping${commands}`);

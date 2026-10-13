@@ -16,6 +16,26 @@ const INLINE_OUTPUT_MAX_BYTES = 128 * 1024;
 const COMMAND_MAX_BYTES = 32 * 1024;
 const REVIEW_DIFF_MAX_BYTES = 64 * 1024 * 1024;
 const FULL_GIT_SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+const APPLICATION_TREES = new Map();
+
+// Operational documents and generated agent runtimes are not application
+// inputs. Keep every other path, including tests, configs, lockfiles, assets,
+// migrations and arbitrary documentation that a build may consume.
+function peripheralValidationPath(relative) {
+  return /^(?:\.pi|\.claude|\.codex|\.opencode|\.agents)\//.test(relative) ||
+    /^(?:MEMORY|CONTEXT|AGENTS|CLAUDE|README|CHANGELOG)\.md$/.test(relative) || relative === "kaizen.md";
+}
+
+function applicationTree(root, head) {
+  if (!FULL_GIT_SHA.test(head ?? "")) throw new Error("invalid application evidence HEAD");
+  const key = `${root}:${head}`;
+  if (APPLICATION_TREES.has(key)) return APPLICATION_TREES.get(key);
+  const entries = gitBuffer(root, ["ls-tree", "-r", "-z", head]).toString("utf8").split("\0").filter(Boolean);
+  const tree = hash(entries.filter((entry) => !peripheralValidationPath(entry.slice(entry.indexOf("\t") + 1))).join("\0"));
+  if (APPLICATION_TREES.size >= 256) APPLICATION_TREES.clear();
+  APPLICATION_TREES.set(key, tree);
+  return tree;
+}
 
 function hash(value) {
   return createHash("sha256").update(value).digest("hex");
@@ -389,7 +409,7 @@ function packageScopedFinalCommands(root, sessionId, commands) {
 }
 
 /** Read existing native output for declared final checks; never execute or approve a command. */
-export function checkPiFinalCommands({ projectRoot, sessionId, commands } = {}) {
+export function checkPiFinalCommands({ projectRoot, sessionId, commands, exactHead = false } = {}) {
   const validated = validatePiVerificationCommands(commands, { optional: true });
   if (!validated.ok) return validated;
   commands = validated.commands;
@@ -398,6 +418,11 @@ export function checkPiFinalCommands({ projectRoot, sessionId, commands } = {}) 
   try {
     const identity = worktreeIdentity(projectRoot);
     if (identity.worktree_identity_status !== "available" || identity.worktree_dirty) throw new Error("clean HEAD required");
+    const currentTree = exactHead ? null : applicationTree(identity.worktree_root, identity.head_sha);
+    const strictRecord = (record) => exactHead || /^git diff --check(?: |$)/.test(record.command);
+    const matchingInput = (record) => record.observed_worktree_status_sha256 === identity.worktree_status_sha256 &&
+      (strictRecord(record) ? record.observed_head_sha === identity.head_sha :
+        applicationTree(identity.worktree_root, record.observed_head_sha) === currentTree);
     const aliases = packageScopedFinalCommands(identity.worktree_root, sessionId, commands);
     const declaredForActual = new Map(commands.map((command) => [aliases.get(command) ?? command, command]));
     const directory = evidenceDirectory(projectRoot, sessionId, false);
@@ -408,7 +433,7 @@ export function checkPiFinalCommands({ projectRoot, sessionId, commands } = {}) 
         const metadataPath = path.join(directory, entry.name);
         const record = evidenceRecord(directory, metadataPath, identity, sessionId, false);
         const declared = declaredForActual.get(record.command);
-        if (record.freshness !== "exact-current" || !missing.has(declared)) continue;
+        if (!missing.has(declared) || !matchingInput(record)) continue;
         const modified = fs.statSync(metadataPath, { bigint: true }).mtimeNs;
         if (!latest.has(declared) || latest.get(declared).modified < modified) latest.set(declared, { metadataPath, modified });
       } catch { /* altered, foreign or stale evidence cannot satisfy preparation */ }
@@ -417,16 +442,17 @@ export function checkPiFinalCommands({ projectRoot, sessionId, commands } = {}) 
       try {
         const record = evidenceRecord(directory, metadataPath, identity, sessionId);
         const start = record.started_identity;
-        if (record.freshness === "exact-current" && record.original_status?.kind === "success" &&
+        if (matchingInput(record) && record.original_status?.kind === "success" &&
           record.original_status.is_error === false && record.original_status.exit_code === 0 &&
           start?.worktree_identity_status === "available" && start.worktree_dirty === false &&
-          start.worktree_root === identity.worktree_root && start.head_sha === identity.head_sha &&
+          start.worktree_root === identity.worktree_root &&
+          (strictRecord(record) ? start.head_sha === identity.head_sha : applicationTree(identity.worktree_root, start.head_sha) === currentTree) &&
           start.worktree_status_sha256 === identity.worktree_status_sha256) missing.delete(declared);
       } catch { /* unreadable latest output cannot fall back to an older success */ }
     }
   } catch { /* missing native evidence is reported with the exact next commands */ }
   return missing.size ? { ok: false, commands: [...missing], reason:
-    `Run the pending final verification commands on the current committed HEAD before final eyes: ${JSON.stringify([...missing])}. Reuse passing current evidence; fix failures before retrying. This does not approve reviews or shipping.` } : { ok: true };
+    `Run the pending final verification commands on the current committed application input before final eyes: ${JSON.stringify([...missing])}. Reuse passing evidence for identical application inputs; fix failures before retrying. This does not approve reviews or shipping.` } : { ok: true };
 }
 
 function reviewPacketDirectory(evidenceRoot) {

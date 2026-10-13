@@ -241,7 +241,17 @@ Na fase final, `preparation.commands` identifica apenas os comandos declarados e
 `final_review.verification_commands` que ainda precisam passar no HEAD atual.
 Execute-os antes dos olhos, depois do commit, usando o shell nativo; resolva falhas
 e reaproveite os resultados atuais já aprovados pelo processo. Saída de outra sessão,
-HEAD anterior ou execução iniciada com árvore suja não satisfaz essa preparação.
+Uma execução iniciada com árvore suja não satisfaz essa preparação. Para comandos
+de aplicação, o host compara a árvore de inputs da aplicação entre os commits:
+documentos operacionais da raiz (`MEMORY.md`, `CONTEXT.md`, `kaizen.md`, `AGENTS.md`,
+`CLAUDE.md`, `README.md`, `CHANGELOG.md`) e runtimes gerados dos agentes não
+invalidam por si só uma verificação já aprovada. Código, testes, dependências,
+configuração, migrations, assets e demais arquivos continuam no hash. Uma falha
+posterior para os mesmos inputs prevalece sobre o sucesso antigo. A evidência
+mantém o SHA real da execução; não reescreva recibos para o novo commit.
+`git diff --check` e os comandos estruturais do harvest continuam exigidos no
+HEAD exato que contém a alteração documental. Não repita a suíte só por um
+commit periférico quando `preparation.ok` já estiver verdadeiro.
 Essa verificação não aprova revisores nem autoriza publicação.
 Para suítes Vitest grandes, o harness distribui `bin/vitest-shards.mjs`.
 A adoção é uma mudança explícita de infraestrutura do projeto: com autorização

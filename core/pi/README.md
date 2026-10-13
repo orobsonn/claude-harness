@@ -1,5 +1,22 @@
 # Pi Harness
 
+## Evidência de validação entre commits
+
+Os comandos finais da aplicação são vinculados à árvore dos inputs da aplicação,
+preservando o SHA Git original na evidência. Commits que só alteram documentos
+operacionais da raiz (`MEMORY.md`, `CONTEXT.md`, `kaizen.md`, `AGENTS.md`,
+`CLAUDE.md`, `README.md`, `CHANGELOG.md`) ou runtimes gerados em `.pi/`, `.claude/`,
+`.codex/`, `.opencode/`, `.agents/` não exigem repetir a suíte da aplicação.
+Código, testes, manifests/lockfiles, configurações, migrations, assets e demais
+arquivos permanecem no hash. Documentação fora dessa lista permanece incluída:
+por exemplo, Markdown consumido pelo build de um site também é input da aplicação.
+
+A árvore deve estar limpa, e a entrada e a saída do comando precisam comprovar
+os mesmos inputs. Uma falha posterior sobre esses inputs prevalece sobre um
+sucesso anterior; evidência de outra sessão, saída adulterada ou execução iniciada
+com alterações pendentes continua recusada. `git diff --check` e verificações
+estruturais declaradas pelo harvest exigem o HEAD documental atual.
+
 ## Suítes Vitest grandes
 
 Se o projeto ainda usa `miniflare@4.20250906.0`, há um backport explícito da
