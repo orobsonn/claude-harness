@@ -74,7 +74,7 @@ test("pre-tool hook denies remote operations after shell line separators", () =>
 
 test("pre-tool hook denies remote operations inside shell groups", () => {
   for (const separator of ["; ", "\n", "\r\n"]) {
-    for (const group of ["(wrangler deploy)", "((wrangler deploy))", "{ wrangler deploy; }", "$(wrangler deploy)", "(npm run deploy)", "(npx wrangler d1 execute db --remote)"]) {
+    for (const group of ["(wrangler deploy)", "( (wrangler deploy) )", "{ wrangler deploy; }", "$(wrangler deploy)", "(npm run deploy)", "(npx wrangler d1 execute db --remote)"]) {
       const command = `git status --short${separator}${group}`;
       assert.equal(evaluateHook(preBash(command)).hookSpecificOutput?.permissionDecision, "deny", command);
     }
