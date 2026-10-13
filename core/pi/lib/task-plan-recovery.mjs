@@ -33,7 +33,15 @@ function approvalValid(approval, session, feature, planHash, specHash) {
     approval.plan_sha256 === planHash && approval.spec_sha256 === specHash;
 }
 
-/** Scope and corrective proof can grow; admitted contracts and evidence cannot disappear or be rewritten. */
+function preservesJudgments(before, after) {
+  if (stableTaskJson(before) === stableTaskJson(after)) return true;
+  const object = (value) => value && typeof value === "object" && !Array.isArray(value);
+  return object(after) && (before === undefined || object(before)) &&
+    Object.entries(before ?? {}).every(([key, value]) => Object.hasOwn(after, key) &&
+      stableTaskJson(value) === stableTaskJson(after[key]));
+}
+
+/** Scope, corrective proof and reviewed clarifications can grow; admitted evidence stays intact. */
 export function validateTaskScopeRecovery(before, after) {
   const valid = validatePlan(after, { expect: "full", expectedModelStrategy: before.model_strategy });
   if (!valid.ok) throw new Error(`invalid corrected plan: ${valid.errors.join("; ")}`);
@@ -44,10 +52,13 @@ export function validateTaskScopeRecovery(before, after) {
   for (const previous of before.tasks) {
     const current = after.tasks.find((task) => task.id === previous.id);
     if (!current) throw new Error("scope recovery must preserve task IDs");
-    const contract = ({ scope_paths, allowed_writes, locked_tests, ...rest }) => rest;
+    const contract = ({ scope_paths, allowed_writes, locked_tests, resolved_judgments,
+      resolved_judgments_model_resolved, ...rest }) => rest;
     if (stableTaskJson(contract(previous)) !== stableTaskJson(contract(current)))
       throw new Error(`scope recovery must preserve task ${previous.id} behavior, frozen tests and dependencies`);
-    for (const key of ["scope_paths", "allowed_writes", "locked_tests"]) {
+    if (!preservesJudgments(previous.resolved_judgments, current.resolved_judgments))
+      throw new Error(`scope recovery must preserve task ${previous.id} admitted judgments`);
+    for (const key of ["scope_paths", "allowed_writes", "locked_tests", "resolved_judgments_model_resolved"]) {
       const admitted = previous[key] ?? [];
       const corrected = current[key] ?? [];
       if (corrected.length < admitted.length || admitted.some((item, index) =>

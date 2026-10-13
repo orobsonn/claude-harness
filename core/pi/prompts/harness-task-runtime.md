@@ -87,6 +87,9 @@ typecheck necessário antes da fidelidade e faça o novo freeze somente dos test
 Não remova produto para fabricar RED na manutenção de uma fixture existente.
 Se o executor já implementou o produto e parou por testes irmãos ou evidência,
 o checkpoint seletivo preserva esse trabalho mesmo se o retorno foi `BLOCKED`.
+Na emenda de escopo, o planner/reviewer pode acrescentar decisões de recuperação em
+prosa sem apagar ou reescrever as decisões admitidas. Leia essa orientação revisada;
+ela não substitui fidelidade, captura, testes ou olhos atuais.
 Resolva o escopo com planner/reviewer quando necessário, corrija somente os testes
 com test-author e conclua fidelidade, captura, verificação e olhos atuais. O host
 pode reaproveitar o commit nativo observado antes do reparo; não converta o relato

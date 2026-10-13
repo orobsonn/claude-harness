@@ -380,6 +380,12 @@ antes de abrir/mergear o PR; versão aumentada com notas só em Unreleased é in
 Se isso já foi mergeado, diagnostique o delta documental e o estado remoto antes de
 recuperar a publicação; repetir tasks funcionais ou olhos de produto não corrige o changelog.
 
+Uma emenda de escopo aprovada pode acrescentar novas decisões em `resolved_judgments`
+e seus marcadores de autoria para explicar a recuperação na base atual. Preserve as
+decisões admitidas, dependências e provas congeladas; não apague a prosa nova só para
+satisfazer um rail. A decisão adicional não aprova testes ou implementação: a mesma
+task deve concluir a correção e a verificação nativas dentro do plano revisado.
+
 Um `BLOCKED` do executor por testes irmãos não descarta o produto já implementado.
 Preserve-o em commit seletivo, resolva o escopo no plano quando necessário e siga
 o reparo test-only com fidelidade, captura, verificação e olhos atuais. O host
