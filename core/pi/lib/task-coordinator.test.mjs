@@ -291,6 +291,10 @@ test("Claude Code scope correction flows through planner review and the same Pi 
   const corrected = structuredClone(f.plan);
   corrected.tasks[0].scope_paths.push("src/audit.mjs");
   corrected.tasks[0].allowed_writes = ["src/audit-helper.mjs"];
+  corrected.tasks[0].resolved_judgments = { ...corrected.tasks[0].resolved_judgments,
+    reconciliation: "Current base needs an additive fixture repair without changing product behavior." };
+  corrected.tasks[0].resolved_judgments_model_resolved = [
+    ...(corrected.tasks[0].resolved_judgments_model_resolved ?? []), "reconciliation" ];
   corrected.tasks[0].locked_tests.push({
     id: "a-audit-recovery",
     path: "tests/a-audit.test.mjs",
@@ -315,6 +319,7 @@ test("Claude Code scope correction flows through planner review and the same Pi 
   assert.equal(binding.ok, true, binding.reason);
   assert.ok(binding.task.scope_paths.includes("src/audit.mjs"));
   assert.equal(binding.task.locked_tests.at(-1).path, "tests/a-audit.test.mjs");
+  assert.match(binding.task.resolved_judgments.reconciliation, /Current base/);
   assert.ok(binding.recovered_task_contract_sha256);
   const writer = canonicalPiDispatchFromPlan(a.worktree, "feature", "a", "harness-sniper");
   assert.equal(writer.ok, true, writer.reason);
@@ -328,6 +333,29 @@ test("Claude Code scope correction flows through planner review and the same Pi 
   assert.equal(f.registry().tasks.a.attempt_id, a.attempt_id);
   assert.equal(f.registry().tasks.a.launches.length, a.launches.length + 1);
   assert.deepEqual(f.registry().tasks.b, b, "unaffected task and all its evidence are untouched");
+});
+
+test("reviewed recovery may append judgment prose but preserves every admitted decision and audit marker", (t) => {
+  const f = fixture(t);
+  const before = structuredClone(f.plan);
+  before.tasks[0].resolved_judgments = { behavior: "keep", proof: { source: "same" } };
+  before.tasks[0].resolved_judgments_model_resolved = ["behavior"];
+  const after = structuredClone(before);
+  after.tasks[0].resolved_judgments.reconciliation = "Renumber this unpublished migration after the new base.";
+  after.tasks[0].resolved_judgments_model_resolved.push("reconciliation");
+  assert.deepEqual(validateTaskScopeRecovery(before, after), ["a"]);
+  for (const change of [
+    (task) => { delete task.resolved_judgments.behavior; },
+    (task) => { task.resolved_judgments.behavior = "changed"; },
+    (task) => { task.resolved_judgments.proof.source = "changed"; },
+    (task) => { task.resolved_judgments = "replacement"; },
+    (task) => { task.resolved_judgments_model_resolved.shift(); },
+    (task) => { task.resolved_judgments_model_resolved.reverse(); },
+  ]) {
+    const altered = structuredClone(after);
+    change(altered.tasks[0]);
+    assert.throws(() => validateTaskScopeRecovery(before, altered));
+  }
 });
 
 test("scope port preserves contracts and refuses changing plans underneath a running task", async (t) => {
