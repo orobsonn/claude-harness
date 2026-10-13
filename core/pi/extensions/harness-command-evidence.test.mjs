@@ -446,6 +446,48 @@ test("final review packet uses origin/main when origin HEAD is absent and carrie
   assert.match(readFileSync(packet.diff_path, "utf8"), /committed review delta/);
 });
 
+test("final review diff includes committed runtime code while omitting private and volatile files", (t) => {
+  const f = fixture(t);
+  const publicPaths = [".pi/harness/lib/policy.mjs", ".pi/harness/vendor/codex/hooks/policy.mjs"];
+  const privatePaths = [
+    ".pi/harness/state/task-session/private.json", ".pi/harness/runtime/harness.json",
+    ".pi/harness/sessions/history.jsonl", ".pi/agent/auth.json",
+    ".pi/harness/lib/credentials.json", ".pi/harness/lib/.aws/keys",
+    ".pi/harness/lib/.env.private", ".pi/harness/lib/node_modules/dependency/index.js",
+  ];
+  for (const file of [...publicPaths, ...privatePaths]) {
+    mkdirSync(join(f.root, file, ".."), { recursive: true });
+    writeFileSync(join(f.root, file), "baseline\n");
+  }
+  execFileSync("git", ["add", "--", ...publicPaths, ...privatePaths], { cwd: f.root });
+  execFileSync("git", ["commit", "-q", "-m", "test: runtime baseline"], { cwd: f.root });
+  const base = execFileSync("git", ["rev-parse", "HEAD"], { cwd: f.root, encoding: "utf8" }).trim();
+  execFileSync("git", ["update-ref", "refs/remotes/origin/main", base], { cwd: f.root });
+  for (const file of publicPaths) writeFileSync(join(f.root, file), "export const reviewedRuntimeDelta = true;\n");
+  for (const file of privatePaths) writeFileSync(join(f.root, file), "PRIVATE_RUNTIME_BYTES_MUST_NOT_TRAVEL\n");
+  execFileSync("git", ["add", "--", ...publicPaths, ...privatePaths], { cwd: f.root });
+  execFileSync("git", ["commit", "-q", "-m", "test: runtime delta"], { cwd: f.root });
+  const helper = ".pi/harness/lib/new-helper.mjs";
+  writeFileSync(join(f.root, helper), "export const publicUntrackedRuntime = true;\n");
+  const event = { toolName: "subagent", toolCallId: "runtime-review", input: {
+    subagent_type: "harness-security", prompt: "[HARNESS_FINAL_REVIEW]\nReview the aggregate delivery.",
+  } };
+  const packet = attachPiReviewEvidencePacket({ projectRoot: f.root, sessionId: "task-session", event });
+  assert.equal(packet.status, "available");
+  const snapshot = JSON.parse(readFileSync(packet.snapshot_path, "utf8"));
+  assert.equal(snapshot.baseline.sha, base);
+  assert.ok(snapshot.untracked_paths.includes(helper));
+  const diff = readFileSync(packet.diff_path, "utf8");
+  for (const file of publicPaths) assert.ok(diff.includes(`diff --git a/${file} b/${file}`), file);
+  assert.match(diff, /reviewedRuntimeDelta/);
+  assert.match(diff, /publicUntrackedRuntime/);
+  assert.doesNotMatch(diff, /PRIVATE_RUNTIME_BYTES_MUST_NOT_TRAVEL/);
+  for (const file of privatePaths) {
+    assert.equal(diff.includes(file), false, file);
+    assert.equal(JSON.stringify(snapshot).includes(file), false, file);
+  }
+});
+
 test("review packet transport failure is explanatory and never blocks", (t) => {
   const root = mkdtempSync(join(tmpdir(), "pi-review-packet-broken-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
