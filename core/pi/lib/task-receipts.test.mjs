@@ -2182,6 +2182,34 @@ test("context-first adversary redispatch supersedes an older approval", () => {
   assert.match(inspectTaskRun(f.entry, f.dependencies).reason, /accepted adversary task review/);
 });
 
+test("task inspection recognizes normalized review redispatches from raw native events", () => {
+  for (const role of ["harness-adversary", "harness-compliance", "harness-security"]) {
+    for (const separator of ["\n", "\r\n"]) {
+      const f = inspectionFixture();
+      appendImplementationReviews(f, [role]);
+      const marker = `[HARNESS_TASK_CONTEXT]{"task_id":"${TASK}"}[/HARNESS_TASK_CONTEXT]`;
+      const prompt = role === "harness-adversary" ? `[HARNESS_TASK_REVIEW]${separator}${marker}` : marker;
+      const callId = `normalized-${role}`;
+      fs.appendFileSync(f.entry.launches.at(-1).events_path, [
+        event("tool_execution_start", { toolCallId: callId, toolName: "subagent", args: { subagent_type: role, prompt } }),
+        event("tool_execution_end", { toolCallId: callId, toolName: "subagent", result: { details: { status: "completed" } } }), "",
+      ].join("\n"));
+      assert.match(inspectTaskRun(f.entry, f.dependencies).reason, /accepted .* task review/,
+        "a new normalized dispatch must supersede the older receipt");
+      const state = JSON.parse(fs.readFileSync(f.statePath, "utf8"));
+      const receipt = role === "harness-adversary" ? state.task_adversary_evidence[`${FEATURE}/${TASK}`]
+        : state.task_review_evidence[`${FEATURE}/${TASK}`][role.replace("harness-", "")];
+      receipt.dispatch_call_id = callId;
+      write(f.statePath, state);
+      const before = fs.readFileSync(f.entry.launches.at(-1).events_path, "utf8");
+      const inspected = inspectTaskRun(f.entry, f.dependencies);
+      assert.equal(inspected.ok, true, inspected.reason);
+      assert.equal(inspected.result.review_receipts[role.replace("harness-", "")].dispatch_call_id, callId);
+      assert.equal(fs.readFileSync(f.entry.launches.at(-1).events_path, "utf8"), before);
+    }
+  }
+});
+
 test("repeating fidelity after captured implementation preserves the original freeze chain", () => {
   const f = inspectionFixture();
   fs.appendFileSync(f.entry.launches.at(-1).events_path, [

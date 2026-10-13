@@ -16,7 +16,7 @@ import {
   DEEPSEEK_MODEL, GLM_MODEL, LEGACY_OLLAMA_CONTEXT_WINDOW, MODEL_PROFILE_ENV, MODEL_PROFILE_HASH_ENV,
   MODEL_PROFILE_VERSION, OLLAMA_CONTEXT_WINDOW, loadModelProfileFromEnv, modelStrategyFromProfile,
   parseModelProfileArgs, profilePrompt, readDefaultModelProfile, readModelProfileSnapshot, resolveModelProfile,
-  writeModelProfileSnapshot,
+  writeModelProfileSnapshot, readRoutingRecovery, writeRoutingRecovery,
 } from "../lib/model-profile.mjs";
 import { acquirePiParentWorktreeLock, recoverPiParentSession } from "../lib/parent-session-recovery.mjs";
 import { admitTaskRun, inspectTaskAdmission, rollbackTaskAdmission, taskRunPrompt, TASK_RUN_ENV } from "../lib/task-run.mjs";
@@ -589,12 +589,18 @@ export function runPiHarnessCli(argv, options = {}) {
   }
 
   const sessionId = parsed.resumeSessionId ?? randomSessionIdFn();
+  if (profileArgs.recoveryProfile && !parsed.resumeSessionId) {
+    errorSink("Pi harness: --harness-recovery-profile requires an exact --harness-resume session");
+    return { exitCode: 2 };
+  }
   if (parsed.resumeSessionId && profileArgs.explicit) {
     errorSink("Pi harness: resume uses the admitted model profile; profile overrides are disabled");
     return { exitCode: 2 };
   }
   let admittedProfile = selectedProfile;
   let admittedProfileFile = null;
+  let planProfile;
+  let storedProfile;
   if (!parsed.resumeSessionId && !taskGrant && !dispatchedChild(env) && !profileArgs.selection.profile) {
     try {
       admittedProfile = resolveModelProfile({ ...profileArgs.selection,
@@ -621,6 +627,7 @@ export function runPiHarnessCli(argv, options = {}) {
   }
   if (parsed.resumeSessionId) {
     const stored = readModelProfileSnapshot(cwd, sessionId);
+    storedProfile = stored;
     if (stored.ok) {
       admittedProfile = stored.snapshot;
       admittedProfileFile = { path: stored.path, sha256: stored.fileSha256 };
@@ -632,6 +639,25 @@ export function runPiHarnessCli(argv, options = {}) {
       // with the historical Codex routes, regardless of today's new-session default.
       admittedProfile = resolveModelProfile({ profile: "baseline" });
     }
+    planProfile = admittedProfile;
+    try {
+      const recovery = readRoutingRecovery(cwd, sessionId, stored);
+      if (recovery) {
+        admittedProfile = recovery.snapshot;
+        admittedProfileFile = { path: recovery.path, sha256: recovery.fileSha256 };
+      }
+      if (profileArgs.recoveryProfile) {
+        if (!stored.ok || !["baseline", "openai-economy"].includes(profileArgs.recoveryProfile)) {
+          throw new Error("routing recovery requires an admitted snapshot and an OpenAI recovery profile");
+        }
+        const selected = resolveModelProfile({ profile: profileArgs.recoveryProfile });
+        if (recovery && selected.sha256 !== recovery.snapshot.sha256) throw new Error("session routing recovery already selected");
+        admittedProfile = selected;
+      }
+    } catch (error) {
+      errorSink(`Pi harness: ${error.message}`);
+      return { exitCode: 2 };
+    }
   }
   const usesOllama = admittedProfile.profile !== "baseline" ||
     admittedProfile.parents.global.target !== "baseline" || admittedProfile.parents.local.target !== "baseline";
@@ -641,7 +667,7 @@ export function runPiHarnessCli(argv, options = {}) {
       if (auth.verboo?.type === "api_key" && typeof auth.verboo.key === "string") env.VERBOO_API_KEY = auth.verboo.key;
     } catch { /* Missing host credential is reported below. */ }
   }
-  if (usesOllama && !env[admittedProfile.provider.credential_env]) {
+  if (usesOllama && admittedProfile.provider.credential_env && !env[admittedProfile.provider.credential_env]) {
     errorSink(`Pi harness: admitted ${admittedProfile.provider.id} profile requires ${admittedProfile.provider.credential_env} in the host environment`);
     return { exitCode: 2 };
   }
@@ -676,7 +702,7 @@ export function runPiHarnessCli(argv, options = {}) {
     let resumeSessionFile;
     if (parsed.resumeSessionId) {
       const recovery = recoverParentSessionFn(cwd, parsed.resumeSessionId, {
-        expectedModelStrategy: modelStrategyFromProfile(admittedProfile),
+        expectedModelStrategy: modelStrategyFromProfile(planProfile ?? admittedProfile),
       });
       if (!recovery.ok) {
         errorSink(`Pi harness: cannot resume ceremony: ${recovery.reason}`);
@@ -694,6 +720,11 @@ export function runPiHarnessCli(argv, options = {}) {
 
     const parentKind = taskGrant || (parsed.resumeSessionId && env[TASK_RUN_ENV]) ? "local" : "global";
     runtimePrompt = `${runtimePrompt}\n\n${profilePrompt(admittedProfile, { parentKind })}`;
+    if (planProfile && planProfile.sha256 !== admittedProfile.sha256) {
+      runtimePrompt += "\n\n<HARNESS_ROUTING_RECOVERY>Operator-selected OpenAI recovery routes apply to future dispatches. " +
+        "Preserve the admitted plan, spec, commits, task grants and review receipts; their historical model_strategy remains the planning authority. " +
+        "Use the current HARNESS_MODEL_PROFILE for new model dispatches. This routing recovery grants no implementation or review approval.</HARNESS_ROUTING_RECOVERY>";
+    }
 
     const parentRoute = admittedProfile.parents[parentKind].route;
     if (parentRoute) {
@@ -719,6 +750,9 @@ export function runPiHarnessCli(argv, options = {}) {
       sessionId,
     });
     materializeRuntimeFn(packageRoot, invocation.env.PI_CODING_AGENT_DIR, undefined, admittedProfile);
+    if (profileArgs.recoveryProfile) {
+      admittedProfileFile = writeRoutingRecovery(cwd, sessionId, storedProfile, admittedProfile);
+    }
     if (admittedProfile.provider.id === "verboo") {
       invocation.env = providerTraceEnvironment(invocation.env, { userHome: options.userHome ?? homedir(), sessionId, providerId: "verboo" });
     }
