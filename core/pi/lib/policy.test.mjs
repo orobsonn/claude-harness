@@ -189,6 +189,22 @@ test('em cerimônia LIGHT/FULL o pai aplica a mesma allowlist Bash do Claude Cod
   )
 })
 
+test('pai consulta metadata npm por info e view sem delegar diagnóstico nem liberar instalação', () => {
+  for (const mode of ['LIGHT', 'FULL']) {
+    const parent = { gateState: { classified: true, mode }, isChild: false }
+    for (const alias of ['info', 'view']) {
+      const command = `npm ${alias} @cloudflare/vitest-pool-workers@latest version peerDependencies --json`
+      assert.deepEqual(decidePiPolicy({ toolName: 'bash', input: { command } }, parent), { block: false }, command)
+      for (const suffix of ['\ncat .env', '; git reset --hard HEAD']) {
+        assert.equal(decidePiPolicy({ toolName: 'bash', input: { command: command + suffix } }, parent).block, true)
+      }
+    }
+    for (const command of ['npm viewx vitest', 'npm install vitest@latest', 'npm update vitest']) {
+      assert.equal(decidePiPolicy({ toolName: 'bash', input: { command } }, parent).block, true, command)
+    }
+  }
+})
+
 test('pai executa verificações Node multilinha sem dispensar a política de segredos e comandos perigosos', () => {
   const parent = { gateState: { classified: true, mode: 'FULL' }, isChild: false }
   const verification = `node --input-type=module -e "
