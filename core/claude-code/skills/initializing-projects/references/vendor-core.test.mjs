@@ -382,6 +382,7 @@ const PI_TREE_ANCHORS = [
   ".pi/harness/pi-harness.mjs",
   ".pi/harness/bin/pi-harness.mjs",
   ".pi/harness/bin/vitest-shards.mjs",
+  ".pi/harness/bin/patch-miniflare-loopback.mjs",
   ".pi/harness/bin/vitest-shard-worker.mjs",
   ".pi/harness/lib/vitest-shard-reporter.mjs",
   ".pi/harness/extensions/harness-bootstrap.ts",
