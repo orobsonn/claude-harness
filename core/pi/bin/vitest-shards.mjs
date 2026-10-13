@@ -82,7 +82,9 @@ export async function runVitestShards({ cwd = process.cwd(), vitest = path.join(
         }
         stdout.write(`[harness-tests] Shard ${index}/${shards} finished: ${signal ?? code}\n`);
         if (code !== 0 || signal) cancel(`Shard ${index}/${shards} failed`);
-        resolve(code === 0 && !signal);
+        // Vitest can return zero during graceful cancellation even after an
+        // error. Cancellation never counts as a successful shard.
+        resolve(!cancelled && code === 0 && !signal);
       });
     })));
     const passed = !cancelled && results.every(Boolean);

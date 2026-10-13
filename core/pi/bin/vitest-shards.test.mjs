@@ -81,7 +81,7 @@ test("invalid counts and user sharding/watch overrides are rejected", () => {
 });
 
 test("CLI interruption reports failure and cleans up descendants", async (t) => {
-  const f = fixture(t, "console.log('ready'); setInterval(()=>{},1000);");
+  const f = fixture(t, "process.on('SIGTERM',()=>process.exit(0)); console.log('ready'); setInterval(()=>{},1000);");
   const child = spawn(process.execPath, [path.resolve(import.meta.dirname, "vitest-shards.mjs"), "--shards", "1"], {
     cwd: f.cwd, stdio: ["ignore", "pipe", "pipe"],
   });
@@ -97,4 +97,5 @@ test("CLI interruption reports failure and cleans up descendants", async (t) => 
   assert.equal(code, 1);
   assert.match(output, /Interrupted/);
   assert.match(output, /FAIL/);
+  assert.match(output, /0\/1 shards passed/);
 });
