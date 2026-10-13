@@ -183,7 +183,9 @@ async function main() {
   }
   const child = spawn(args.claude, argv, {
     cwd,
-    env: { ...process.env, ...LANE_GIT_ENV, [TASK_RUN_ENV]: JSON.stringify({ cwd, sessionId }), CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1" },
+    env: { ...process.env, ...LANE_GIT_ENV, [TASK_RUN_ENV]: JSON.stringify({ cwd, sessionId }), CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1",
+      // The lane's Bash returns to the worktree root after every command (a `cd` never strands it).
+      CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR: "1" },
     stdio: args.presentation === "tui" ? "inherit" : ["pipe", "inherit", "inherit"],
   });
   if (child.stdin) {

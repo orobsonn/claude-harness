@@ -64,6 +64,7 @@ test("a fresh launch admits the attempt and runs claude -p with the lane flags a
   assert.match(system, /"resumed": false/);
   assert.deepEqual(JSON.parse(dump.env.CLAUDE_HARNESS_TASK_RUN), { cwd: lane.worktree, sessionId: claim.session_id }, "inherited value is replaced");
   assert.equal(dump.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS, "1");
+  assert.equal(dump.env.CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR, "1", "a Bash cd never strands the lane outside its root");
   assert.equal(dump.env.GIT_CONFIG_KEY_0, "protocol.allow", "every remote transport is refused inside Git too");
   assert.equal(dump.env.GIT_CONFIG_VALUE_0, "never");
   assert.equal(dump.env.GIT_CONFIG_KEY_1, "protocol.file.allow");

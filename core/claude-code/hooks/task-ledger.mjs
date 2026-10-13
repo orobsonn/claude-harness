@@ -17,6 +17,7 @@
  * the task, which is the safe direction.
  */
 import fs from "node:fs";
+import path from "node:path";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -103,7 +104,9 @@ export function handle(payload, { env = process.env, cwd = process.cwd(), now } 
   let root;
   try {
     root = fs.realpathSync(binding.cwd);
-    if (fs.realpathSync(cwd) !== root || !fs.existsSync(sessionStateDir(root, binding.sessionId))) return null;
+    const real = fs.realpathSync(cwd);
+    // A Bash `cd` moves the hook cwd to a subdirectory of the same lane worktree (see task-gate).
+    if ((real !== root && !real.startsWith(root + path.sep)) || !fs.existsSync(sessionStateDir(root, binding.sessionId))) return null;
   } catch {
     return null;
   }

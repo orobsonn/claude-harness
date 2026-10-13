@@ -44,7 +44,15 @@ test("a malformed env or an identity mismatch denies every tool", (t) => {
   }
   const env = { CLAUDE_HARNESS_TASK_RUN: JSON.stringify({ cwd: lane.worktree, sessionId: LANE }) };
   assert.match(decide({ ...payload("Read", {}), session_id: "other-session" }, { env, hookCwd: lane.worktree }).reason, /session differs/);
-  assert.match(decide(payload("Read", {}), { env, hookCwd: path.dirname(lane.worktree) }).reason, /hook cwd differs/);
+  assert.match(decide(payload("Read", {}), { env, hookCwd: path.dirname(lane.worktree) }).reason, /hook cwd is outside the admitted task worktree/);
+  // Claude Code's Bash keeps its cwd: after `cd src` the lane must not be stranded (real TUI lane).
+  fs.mkdirSync(path.join(lane.worktree, "src", "a"), { recursive: true });
+  assert.equal(decide(payload("Bash", { command: "pwd" }), { env, hookCwd: path.join(lane.worktree, "src", "a") }).deny, false, "a subdirectory of the worktree is the same lane");
+  // A sibling whose name only extends the worktree's (worktree-other) is never the lane.
+  const sibling = `${lane.worktree}-other`;
+  fs.mkdirSync(sibling, { recursive: true });
+  t.after(() => fs.rmSync(sibling, { recursive: true, force: true }));
+  assert.match(decide(payload("Read", {}), { env, hookCwd: sibling }).reason, /hook cwd is outside the admitted task worktree/);
   assert.equal(decide(undefined, { env, hookCwd: lane.worktree }).deny, true);
 });
 
