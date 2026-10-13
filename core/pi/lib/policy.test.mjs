@@ -199,6 +199,10 @@ test('pai executa verificações Node multilinha sem dispensar a política de se
   for (const command of [
     `${verification}\ngit push --force origin main`,
     `${verification}\ncat .env`,
+    'git status --short\nwrangler deploy',
+    'git status --short\r\n  npx --yes wrangler versions upload',
+    `${verification}\nwrangler d1 execute db --remote`,
+    `${verification}\n npm run deploy`,
     'printf "not an allowed executable\\n"',
   ]) {
     assert.equal(decidePiPolicy({ toolName: 'bash', input: { command } }, parent).block, true, command)
