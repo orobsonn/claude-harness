@@ -19,6 +19,14 @@ estruturais declaradas pelo harvest exigem o HEAD documental atual.
 
 ## Suítes Vitest grandes
 
+Se o projeto ainda usa `miniflare@4.20250906.0`, há um backport explícito da
+[correção upstream de keep-alive](https://github.com/cloudflare/workers-sdk/pull/14850):
+`node .pi/harness/bin/patch-miniflare-loopback.mjs`. Adicione-o ao `pretest` com
+escopo/autorização de infraestrutura do projeto. Ele corrige somente o timeout
+do servidor loopback, preservando versões, isolamento e assertions; é idempotente
+e recusa outras versões/blocos de código. Ao atualizar o Miniflare, revise/remova
+esse backport. O runner de shards não altera dependências automaticamente.
+
 O runner vendorizado `node .pi/harness/bin/vitest-shards.mjs --` pode ser adotado
 como script `test` do projeto, preservando o `pretest`. `npm test` executa a suíte
 completa em dois processos Vitest separados, usando o sharding nativo por arquivo;
