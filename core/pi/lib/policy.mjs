@@ -102,6 +102,7 @@ export const REVIEWER_GREP_GUARD = '!{.[eE][nN][vV],.[eE][nN][vV].*,**/.[eE][nN]
 // depois, como no Claude Code.
 export const CLAUDE_CODE_BASH_ALLOWLIST = Object.freeze([
   "Bash(git status:*)", "Bash(git log:*)", "Bash(git diff:*)", "Bash(git show:*)",
+  "Bash(git merge-base:*)", "Bash(git rev-parse:*)",
   "Bash(git add:*)", "Bash(git commit:*)", "Bash(git push)",
   "Bash(git push --force-with-lease:*)", "Bash(git push * --force-with-lease:*)",
   "Bash(git branch:*)", "Bash(git checkout:*)", "Bash(git switch:*)", "Bash(git fetch:*)",

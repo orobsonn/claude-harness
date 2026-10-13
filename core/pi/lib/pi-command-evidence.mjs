@@ -11,6 +11,7 @@ import { isSafeSessionId, isSafeFeatureId } from "../../shared/lib/feature-id.mj
 import { parseTaskDispatchIdentity } from "../../opencode/lib/task-dispatch-identity.mjs";
 import { classifyPiReviewDispatch } from "./pi-review-concurrency.mjs";
 import { readTaskRunBinding } from "./task-run.mjs";
+import { isPiReviewSecretPath } from "./policy.mjs";
 
 const INLINE_OUTPUT_MAX_BYTES = 128 * 1024;
 const COMMAND_MAX_BYTES = 32 * 1024;
@@ -188,8 +189,12 @@ function reviewBaseline(root, sessionId, audience, headSha) {
 function sensitiveEvidencePath(value) {
   if (typeof value !== "string") return true;
   const normalized = value.replaceAll("\\", "/");
-  return normalized === "node_modules" || normalized.startsWith("node_modules/") ||
-    normalized === ".pi/harness" || normalized.startsWith(".pi/harness/") ||
+  const lower = normalized.toLowerCase();
+  // Runtime source is reviewable code. Exclude only dependencies, secrets and
+  // volatile host state rather than hiding the entire vendored harness tree.
+  return lower.split("/").includes("node_modules") ||
+    /^\.pi\/harness\/(?:state|runtime|sessions)(?:\/|$)/.test(lower) ||
+    /^\.pi\/agent(?:\/|$)/.test(lower) || isPiReviewSecretPath(normalized) ||
     sensitiveCommand(`git diff -- ${normalized}`);
 }
 

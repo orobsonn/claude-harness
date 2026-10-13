@@ -141,6 +141,9 @@ test('em cerimônia LIGHT/FULL o pai aplica a mesma allowlist Bash do Claude Cod
   for (const command of [
     'git status --short',
     'git diff --check',
+    'git merge-base --is-ancestor abc123 HEAD',
+    'git rev-parse HEAD',
+    "git merge-base --is-ancestor abc123 HEAD; git diff --stat abc123..HEAD -- src/app.ts; git show -s --format=%H HEAD",
     'gh issue view 17 --json number,title,body,labels,state,url',
     'gh pr list --state all --json number,title,state,url',
     'gh pr view 42 --json number,title,state,url',
