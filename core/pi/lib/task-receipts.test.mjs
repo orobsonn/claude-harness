@@ -1170,6 +1170,45 @@ test("historical recovery uses the admitted frozen set after reviewed append-onl
     assert.deepEqual(Object.keys(inspected.result.frozen_blobs).sort(), ["src/extra.spec.mjs", "src/task.spec.mjs"]);
     assert.equal(Object.hasOwn(archived.result.frozen_blobs, "src/extra.spec.mjs"), false);
 
+    // A second reviewed append must validate the immediately preceding receipt
+    // against its own frozen set, rather than retroactively adding today's fixture.
+    const nextIntegration = { ...archived.integration, child_head: recovery.head,
+      integrated_head: recovery.head, result_sha256: hashTaskReceipt(inspected.result) };
+    recovery.entry.integration_history.push(nextIntegration);
+    recovery.entry.result_history[nextIntegration.result_sha256] = inspected.result;
+    const previousLaunch = recovery.entry.launches.at(-1);
+    const nextRun = "run-second-append";
+    const nextDir = path.join(recovery.entry.job_dir, nextRun);
+    const nextLaunch = { ...previousLaunch, run_id: nextRun, events_path: path.join(nextDir, "events.jsonl"),
+      process_path: path.join(nextDir, "process.json"), result_path: path.join(nextDir, "result.json") };
+    write(nextLaunch.events_path, event("session", { id: CHILD }) + "\n");
+    for (const field of ["process_path", "result_path"]) write(nextLaunch[field], {
+      ...JSON.parse(fs.readFileSync(previousLaunch[field])), run_id: nextRun });
+    recovery.entry.launches.push(nextLaunch);
+    binding.task.locked_tests.push({ id: "second-extra-test", path: "src/extra.spec.mjs", fixture_paths: ["README.md"],
+      assertion: "Given input When invoked Then output is correct" });
+    write(planPath, binding.plan);
+    currentApproval.plan_sha256 = crypto.createHash("sha256").update(fs.readFileSync(planPath)).digest("hex");
+    write(parentStatePath, { session_id: PARENT, feature_id: FEATURE, plan_review_evidence: currentApproval });
+    binding.recovered_task_contract_sha256 = hashTaskReceipt(binding.task);
+    const secondRecovery = testOnlyRecovery({ fixture: recovery, capturedImplementation: false, suffix: "-second-append" });
+    const secondInspected = inspectTaskRun(secondRecovery.entry, secondRecovery.dependencies);
+    assert.equal(secondInspected.ok, true, secondInspected.reason);
+    assert.equal(secondInspected.result.hand_capture.recovery_origin.head_sha, inspected.result.child_head);
+    assert.equal(Object.hasOwn(secondInspected.result.frozen_blobs, "README.md"), true);
+    assert.equal(Object.hasOwn(inspected.result.frozen_blobs, "README.md"), false);
+    const validDigest = nextIntegration.result_sha256;
+    for (const corruption of ["missing-admitted", "unknown-frozen"]) {
+      const forged = structuredClone(inspected.result);
+      if (corruption === "missing-admitted") delete forged.frozen_blobs["src/task.spec.mjs"];
+      else forged.frozen_blobs["src/task.mjs"] = "a".repeat(64);
+      nextIntegration.result_sha256 = hashTaskReceipt(forged);
+      recovery.entry.result_history[nextIntegration.result_sha256] = forged;
+      assert.match(inspectTaskRun(secondRecovery.entry, secondRecovery.dependencies).reason,
+        /historical task frozen paths do not match/, corruption);
+    }
+    nextIntegration.result_sha256 = validDigest;
+
     for (const mutate of [
       () => { registry.plan_snapshot.text += " "; },
       () => { currentApproval.verdict = "REVISE"; },

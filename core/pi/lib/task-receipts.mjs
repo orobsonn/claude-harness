@@ -975,7 +975,23 @@ function validateIntegration(entry, integration, { projectRoot, sessionId, featu
     const contractHash = result.recovered_task_contract_sha256 ?? null;
     // Historical receipts prove the reviewed contract at that time. Appended
     // obligations require fresh inspection through the current authority check.
-    canonical = { ok: true, plan: contractHash === null ? recovered.originalPlan : recovered.plan };
+    let historicalPlan = contractHash === null ? recovered.originalPlan : recovered.plan;
+    if (contractHash !== null) {
+      const currentTask = recovered.plan.tasks.find((item) => item.id === taskId);
+      const admittedTask = recovered.originalPlan.tasks.find((item) => item.id === taskId);
+      const recorded = new Set(Object.keys(result.frozen_blobs));
+      // A reviewed append cannot rewrite the frozen obligations of an already
+      // hashed receipt. Preserve every admitted path and reject unknown paths;
+      // current inspection still freezes the entire newly approved set.
+      if (!currentTask || !admittedTask || frozenPaths(admittedTask).some((file) => !recorded.has(file)) ||
+          [...recorded].some((file) => !frozenPaths(currentTask).includes(file)))
+        return failure("historical task frozen paths do not match the admitted and corrected contracts");
+      const historicalTask = { ...currentTask, locked_tests: currentTask.locked_tests
+        .filter((test) => recorded.has(test.path)).map((test) => ({ ...test,
+          fixture_paths: (test.fixture_paths ?? []).filter((file) => recorded.has(file)) })) };
+      historicalPlan = { ...recovered.plan, tasks: recovered.plan.tasks.map((item) => item.id === taskId ? historicalTask : item) };
+    }
+    canonical = { ok: true, plan: historicalPlan };
   }
   const canonicalTask = canonical.ok && canonical.plan.tasks.find((item) => item.id === taskId);
   if (!canonicalTask || requiredPiTaskReviewRoles(canonical.plan, canonicalTask).some((role) =>
