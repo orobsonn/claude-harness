@@ -112,7 +112,11 @@ export function decideLane(payload, env, { readBinding = readTaskRunBinding, hoo
   let root;
   try {
     root = fs.realpathSync(env.cwd);
-    if (fs.realpathSync(hookCwd) !== root) return deny("[task-run] hook cwd differs from the admitted task worktree");
+    // Claude Code's Bash keeps its cwd between calls: after `cd workers/api` every later hook runs
+    // there (seen on a real TUI lane). Any directory INSIDE the admitted worktree is the same lane;
+    // every path below is resolved from the binding's root, never from the hook cwd.
+    const hookReal = fs.realpathSync(hookCwd);
+    if (hookReal !== root && !hookReal.startsWith(root + path.sep)) return deny("[task-run] hook cwd is outside the admitted task worktree");
   } catch {
     return deny("[task-run] task worktree is unavailable");
   }

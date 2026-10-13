@@ -88,3 +88,24 @@ test("the CLI appends from stdin and never prints", (t) => {
   assert.equal(l.read().length, 1);
   assert.equal(spawnSync(process.execPath, [HOOK], { cwd: l.worktree, input: "garbage", encoding: "utf8", env: { PATH: process.env.PATH, ...l.env } }).status, 0);
 });
+
+test("a hook running from a subdirectory of the lane (after a Bash cd) still ledgers into the lane root", async (t) => {
+  const { handle } = await import("./task-ledger.mjs");
+  const { createTaskProject, reserveLane } = await import("./lib/__fixtures__/task-fixture.mjs");
+  const { admitTaskRun } = await import("./lib/task-admission.mjs");
+  const fsm = await import("node:fs");
+  const pathm = await import("node:path");
+  const project = createTaskProject(t);
+  const lane = reserveLane(project, "task-a");
+  const session = "77777777-7777-4777-8777-777777777777";
+  if (!admitTaskRun(lane.grantPath, { cwd: lane.worktree, sessionId: session }).ok) throw new Error("admission");
+  const sub = pathm.join(lane.worktree, "src", "a");
+  fsm.mkdirSync(sub, { recursive: true });
+  const env = { CLAUDE_HARNESS_TASK_RUN: JSON.stringify({ cwd: lane.worktree, sessionId: session }) };
+  const record = handle({ session_id: session, hook_event_name: "PreToolUse", tool_name: "Bash", tool_use_id: "toolu_cd", tool_input: { command: "pwd" } }, { env, cwd: sub });
+  if (!record || record.event !== "pre") throw new Error("not ledgered from a subdirectory");
+  const ledger = fsm.readFileSync(pathm.join(lane.worktree, ".claude/plans/.state", session, "task-ledger.jsonl"), "utf8");
+  if (!ledger.includes("toolu_cd")) throw new Error("ledger line missing in the lane root");
+  const outside = handle({ session_id: session, hook_event_name: "PreToolUse", tool_name: "Bash", tool_use_id: "toolu_out", tool_input: { command: "pwd" } }, { env, cwd: project.root });
+  if (outside !== null) throw new Error("a hook outside the lane must not ledger");
+});
