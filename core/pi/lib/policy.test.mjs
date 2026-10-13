@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
+import { execFileSync } from 'node:child_process'
 
 import {
   CLAUDE_CODE_BASH_ALLOWLIST,
@@ -210,6 +211,24 @@ test('pai executa verificações Node multilinha sem dispensar a política de se
     'printf "not an allowed executable\\n"',
   ]) {
     assert.equal(decidePiPolicy({ toolName: 'bash', input: { command } }, parent).block, true, command)
+  }
+})
+
+test('shipper transports multiline PR prose as data in a temporary body file', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'pi-shipper-body-'))
+  try {
+    const target = join(directory, 'body.md')
+    const body = 'Documentação: .pi/harness/ e <noscript>.\nExemplo não executado: (wrangler deploy).\n'
+    const encoded = Buffer.from(body, 'utf8').toString('base64')
+    const script = `require("node:fs").writeFileSync(${JSON.stringify(target)}, Buffer.from("${encoded}", "base64"))`
+    const quote = value => "'" + value.replaceAll("'", "'\"'\"'") + "'"
+    const options = { isChild: true, reviewerRole: 'harness-shipper', gateState: { classified: true, mode: 'FULL' } }
+    assert.deepEqual(decidePiPolicy({ toolName: 'bash', input: { command: `node -e ${quote(script)}` } }, options), { block: false })
+    execFileSync(process.execPath, ['-e', script])
+    assert.equal(readFileSync(target, 'utf8'), body)
+    assert.deepEqual(decidePiPolicy({ toolName: 'bash', input: { command: `gh pr create --body-file ${quote(target)}` } }, options), { block: false })
+  } finally {
+    rmSync(directory, { recursive: true, force: true })
   }
 })
 

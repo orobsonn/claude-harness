@@ -56,6 +56,10 @@ test("spec seal follows its native adversary marker", () => {
 
 test("shipper waits for the explicit PR with bounded CI observation", () => {
   const shipper = readFileSync(shipperPath, "utf8");
+  assert.match(shipper, /diretório temporário.*--body-file/s);
+  assert.match(shipper, /Bash, não Write\/Edit/);
+  assert.match(shipper, /Codifique apenas o.*texto autorizado, nunca um programa ou operação negada/s);
+  assert.match(shipper, /não remova evidência/);
   assert.match(shipper, /gh pr checks <PR> --watch --interval 30/);
   assert.match(shipper, /timeout.*maior.*CI observado/is);
   assert.match(shipper, /no máximo um retry.*checks.*publicados/is);
