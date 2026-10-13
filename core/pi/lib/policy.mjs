@@ -123,7 +123,7 @@ function claudeBashPatternMatches(pattern, command) {
   const boundary = normalized.endsWith(" *")
   const body = boundary ? normalized.slice(0, -2) : normalized
   const escaped = body.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*")
-  return new RegExp(`^${escaped}${boundary ? "(?: .*)?" : ""}$`).test(command)
+  return new RegExp(`^${escaped}${boundary ? "(?: .*)?" : ""}$`, "s").test(command)
 }
 
 /**

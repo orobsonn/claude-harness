@@ -188,6 +188,23 @@ test('em cerimônia LIGHT/FULL o pai aplica a mesma allowlist Bash do Claude Cod
   )
 })
 
+test('pai executa verificações Node multilinha sem dispensar a política de segredos e comandos perigosos', () => {
+  const parent = { gateState: { classified: true, mode: 'FULL' }, isChild: false }
+  const verification = `node --input-type=module -e "
+    const response = await fetch('http://127.0.0.1:8882/home');
+    console.log(response.status);
+    if (!response.ok) process.exitCode = 1;
+  "`
+  assert.deepEqual(decidePiPolicy({ toolName: 'bash', input: { command: verification } }, parent), { block: false })
+  for (const command of [
+    `${verification}\ngit push --force origin main`,
+    `${verification}\ncat .env`,
+    'printf "not an allowed executable\\n"',
+  ]) {
+    assert.equal(decidePiPolicy({ toolName: 'bash', input: { command } }, parent).block, true, command)
+  }
+})
+
 test('pai calcula hash somente dos artefatos canônicos de plano sem aceitar injeção', () => {
   const gateState = { classified: true, mode: 'FULL', feature_id: 'normalizador-dispatch-e-estados' }
   const fullParent = { gateState, isChild: false }
