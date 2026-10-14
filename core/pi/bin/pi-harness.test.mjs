@@ -783,9 +783,12 @@ test("delegated task persists the inherited profile for its own resume identity"
   }), false);
 });
 
-test("operator routing recovery resumes with Luna while preserving the admitted plan and profile", () => {
+for (const [target, model, thinking, originalProfile] of [
+  ["openai-economy", "gpt-6-luna", "high", "trial-orchestration-deepseek"],
+  ["openai-economy-terra", "gpt-5.6-terra", "medium", "openai-economy"],
+]) test(`operator routing recovery resumes with ${target} while preserving the admitted plan and profile`, () => {
   const directory = mkdtempSync(join(tmpdir(), "pi-routing-launch-"));
-  const original = resolveModelProfile({ profile: "trial-orchestration-deepseek" });
+  const original = resolveModelProfile({ profile: originalProfile });
   const saved = writeModelProfileSnapshot(directory, "routing-session", original);
   const before = readFileSync(saved.path, "utf8");
   let spawned;
@@ -802,14 +805,14 @@ test("operator routing recovery resumes with Luna while preserving the admitted 
     spawnSyncFn: (command, args, options) => { spawned = { args, env: options.env }; return { status: 0 }; },
   };
   try {
-    assert.equal(runPiHarnessCli(["--harness-resume", "routing-session", "--harness-recovery-profile", "openai-economy"], common).exitCode, 0);
-    assert.deepEqual(spawned.args.slice(0, 6), ["--provider", "openai-codex", "--model", "gpt-6-luna", "--thinking", "high"]);
-    assert.equal(recoveredStrategy.hand_tiers.low, "ollama-cloud/deepseek-v4.1-flash");
+    assert.equal(runPiHarnessCli(["--harness-resume", "routing-session", "--harness-recovery-profile", target], common).exitCode, 0);
+    assert.deepEqual(spawned.args.slice(0, 6), ["--provider", "openai-codex", "--model", model, "--thinking", thinking]);
+    assert.equal(recoveredStrategy.hand_tiers.low, originalProfile === "openai-economy" ? "openai-codex/gpt-6-luna" : "ollama-cloud/deepseek-v4.1-flash");
     assert.equal(readFileSync(saved.path, "utf8"), before);
     assert.match(spawned.env.PI_HARNESS_MODEL_PROFILE, /routing-session-routing-/);
-    assert.equal(JSON.parse(readFileSync(spawned.env.PI_HARNESS_MODEL_PROFILE, "utf8")).profile, "openai-economy");
+    assert.equal(JSON.parse(readFileSync(spawned.env.PI_HARNESS_MODEL_PROFILE, "utf8")).profile, target);
     assert.equal(runPiHarnessCli(["--harness-resume", "routing-session"], common).exitCode, 0);
-    assert.equal(spawned.args[3], "gpt-6-luna");
+    assert.equal(spawned.args[3], model);
     const denied = runPiHarnessCli(["--harness-resume", "routing-session", "--harness-recovery-profile", "trial-orchestration-deepseek"], {
       ...common, errorSink() {},
     });
@@ -817,7 +820,7 @@ test("operator routing recovery resumes with Luna while preserving the admitted 
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
 
-test("OpenAI new-session default starts Luna without a DeepSeek API credential", () => {
+test("OpenAI new-session default starts Terra medium without a DeepSeek API credential", () => {
   const directory = mkdtempSync(join(tmpdir(), "pi-economy-default-"));
   let spawned;
   try {
@@ -830,8 +833,8 @@ test("OpenAI new-session default starts Luna without a DeepSeek API credential",
       spawnSyncFn: (command, args, options) => { spawned = { args, env: options.env }; return { status: 0 }; },
     });
     assert.equal(result.exitCode, 0);
-    assert.deepEqual(spawned.args.slice(0, 6), ["--provider", "openai-codex", "--model", "gpt-6-luna", "--thinking", "high"]);
-    assert.equal(JSON.parse(readFileSync(spawned.env.PI_HARNESS_MODEL_PROFILE, "utf8")).profile, "openai-economy");
+    assert.deepEqual(spawned.args.slice(0, 6), ["--provider", "openai-codex", "--model", "gpt-5.6-terra", "--thinking", "medium"]);
+    assert.equal(JSON.parse(readFileSync(spawned.env.PI_HARNESS_MODEL_PROFILE, "utf8")).profile, "openai-economy-terra");
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
 

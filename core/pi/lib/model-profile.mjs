@@ -15,15 +15,16 @@ export const GLM_MODEL = "glm-5.3";
 // New parents select the official provider through readDefaultModelProfile.
 export const DEFAULT_MODEL_PROFILE = "trial-orchestration-deepseek";
 export const OPENAI_ECONOMY_PROFILE = "openai-economy";
+export const OPENAI_TERRA_PROFILE = "openai-economy-terra";
 
 /** Host preference applies only to new parents, never to admitted sessions. */
 export function readDefaultModelProfile(userHome) {
-  if (!userHome) return OPENAI_ECONOMY_PROFILE;
+  if (!userHome) return OPENAI_TERRA_PROFILE;
   let config;
   try {
     config = JSON.parse(fs.readFileSync(path.join(userHome, ".config", "claude-harness", "providers.json"), "utf8"));
   } catch (error) {
-    if (error.code === "ENOENT") return OPENAI_ECONOMY_PROFILE;
+    if (error.code === "ENOENT") return OPENAI_TERRA_PROFILE;
     throw new Error("invalid host provider configuration", { cause: error });
   }
   if (config.model_profile !== undefined) {
@@ -37,7 +38,7 @@ export function readDefaultModelProfile(userHome) {
 
 const COMPLEXITIES = Object.freeze(["low", "medium", "high", "max"]);
 const SUPPORTED_MODEL_PROFILE_VERSIONS = new Set([1, 2, 3, 4, MODEL_PROFILE_VERSION]);
-const PARENT_TARGETS = new Set(["baseline", "deepseek", "luna"]);
+const PARENT_TARGETS = new Set(["baseline", "deepseek", "luna", "terra"]);
 
 const BASELINE_FIXED = Object.freeze({
   "harness-support": Object.freeze({ model: "openai-codex/gpt-5.6-terra", thinking: "high" }),
@@ -77,6 +78,7 @@ const CURRENT_HANDS = Object.freeze(Object.fromEntries(Object.entries(V4_HANDS).
 ])));
 
 const PROFILE_DEFAULTS = Object.freeze({
+  [OPENAI_TERRA_PROFILE]: Object.freeze({ handModel: null, globalParent: "terra", localParent: "terra", provider: "openai-codex" }),
   [OPENAI_ECONOMY_PROFILE]: Object.freeze({ handModel: null, globalParent: "luna", localParent: "luna", provider: "openai-codex" }),
   "verboo-orchestration-deepseek": Object.freeze({ handModel: DEEPSEEK_MODEL, globalParent: "deepseek", localParent: "deepseek", provider: "verboo" }),
   baseline: Object.freeze({ handModel: null, globalParent: "baseline", localParent: "baseline" }),
@@ -110,6 +112,7 @@ function ollamaRoute(model, provider = OLLAMA_PROVIDER) {
 }
 
 function parentRoute(target, provider = OLLAMA_PROVIDER) {
+  if (target === "terra") return { provider: "openai-codex", model: "gpt-5.6-terra", thinking_requested: "medium", thinking_effective: "medium" };
   if (target === "luna") return { provider: "openai-codex", model: "gpt-6-luna", thinking_requested: "high", thinking_effective: "high" };
   return target === "deepseek"
     ? { provider, model: DEEPSEEK_MODEL, thinking_requested: "high", thinking_effective: "high" }
@@ -131,7 +134,7 @@ export function resolveModelProfile({ profile = DEFAULT_MODEL_PROFILE, globalPar
   }
   const handRoute = defaults.handModel && defaults.handModel !== "tiered-open" ? ollamaRoute(defaults.handModel, provider) : null;
   const fixedRoutes = version < 4 ? BASELINE_FIXED : version === 4 ? V4_FIXED : CURRENT_FIXED;
-  const economy = profile === OPENAI_ECONOMY_PROFILE;
+  const economy = [OPENAI_ECONOMY_PROFILE, OPENAI_TERRA_PROFILE].includes(profile);
   const handRoutes = economy ? {
     low: { model: "openai-codex/gpt-6-luna", thinking: "high" },
     medium: { model: "openai-codex/gpt-5.6-terra", thinking: "medium" },
@@ -291,12 +294,12 @@ export function readRoutingRecovery(projectRoot, sessionId, admitted) {
       !/^[a-f0-9]{64}$/.test(value.routing_sha256 ?? "")) throw new Error("session routing recovery identity mismatch");
   const target = readModelProfileSnapshot(projectRoot, `${sessionId}-routing-${value.routing_sha256}`);
   if (!target.ok || target.snapshot.sha256 !== value.routing_sha256 ||
-      !["baseline", OPENAI_ECONOMY_PROFILE].includes(target.snapshot.profile)) throw new Error("session routing recovery profile invalid");
+      !["baseline", OPENAI_ECONOMY_PROFILE, OPENAI_TERRA_PROFILE].includes(target.snapshot.profile)) throw new Error("session routing recovery profile invalid");
   return target;
 }
 
 export function writeRoutingRecovery(projectRoot, sessionId, admitted, snapshot) {
-  if (!admitted.ok || !["baseline", OPENAI_ECONOMY_PROFILE].includes(snapshot.profile)) {
+  if (!admitted.ok || !["baseline", OPENAI_ECONOMY_PROFILE, OPENAI_TERRA_PROFILE].includes(snapshot.profile)) {
     throw new Error("routing recovery requires an admitted snapshot and an OpenAI recovery profile");
   }
   const saved = writeModelProfileSnapshot(projectRoot, `${sessionId}-routing-${snapshot.sha256}`, snapshot);

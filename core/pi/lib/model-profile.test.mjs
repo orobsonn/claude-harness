@@ -251,8 +251,8 @@ test("routing recovery preserves the admitted snapshot and detects changed sourc
 test("OpenAI economy is the new-session default while explicit providers and admitted snapshots stay intact", (t) => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "pi-provider-default-"));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
-  assert.equal(readDefaultModelProfile(home), "openai-economy");
-  assert.equal(readDefaultModelProfile(), "openai-economy");
+  assert.equal(readDefaultModelProfile(home), "openai-economy-terra");
+  assert.equal(readDefaultModelProfile(), "openai-economy-terra");
   const old = resolveModelProfile({ profile: DEFAULT_MODEL_PROFILE });
   writeModelProfileSnapshot(home, "old", old);
   const directory = path.join(home, ".config", "claude-harness");
@@ -288,4 +288,27 @@ test("Verboo routes both parents and every writing tier to DeepSeek while preser
   const saved = writeModelProfileSnapshot(root, "verboo", profile);
   assert.equal(readModelProfileSnapshot(root, "verboo").ok, true);
   assert.equal(loadModelProfileFromEnv({ [MODEL_PROFILE_ENV]: saved.path, [MODEL_PROFILE_HASH_ENV]: saved.sha256 }).sha256, profile.sha256);
+});
+
+
+test("Terra economy changes only global/local orchestrators and preserves historical Luna snapshots", (t) => {
+  const luna = resolveModelProfile({ profile: "openai-economy" });
+  const terra = resolveModelProfile({ profile: "openai-economy-terra" });
+  assert.deepEqual(terra.routes, luna.routes);
+  assert.deepEqual(terra.provider, luna.provider);
+  assert.deepEqual(terra.models, luna.models);
+  for (const kind of ["global", "local"]) {
+    assert.deepEqual(terra.parents[kind], { target: "terra", route: { provider: "openai-codex", model: "gpt-5.6-terra",
+      thinking_requested: "medium", thinking_effective: "medium" } });
+    assert.equal(luna.parents[kind].route.model, "gpt-6-luna");
+  }
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-terra-recovery-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const saved = writeModelProfileSnapshot(root, "session", luna);
+  const admitted = readModelProfileSnapshot(root, "session");
+  const bytes = fs.readFileSync(saved.path, "utf8");
+  writeRoutingRecovery(root, "session", admitted, terra);
+  assert.deepEqual(readRoutingRecovery(root, "session", admitted).snapshot, terra);
+  assert.equal(fs.readFileSync(saved.path, "utf8"), bytes);
+  assert.deepEqual(readModelProfileSnapshot(root, "session").snapshot, luna);
 });
