@@ -81,6 +81,103 @@ test("memory, operator documentation and vendored runtime commits retain applica
   assert.deepEqual(f.check().commands, ["npm test"], "a later failure on the same application cannot fall back to older green");
 });
 
+function validationRuntime(f) {
+  const files = {
+    "package.json": JSON.stringify({ scripts: {
+      pretest: "node .pi/harness/bin/patch.mjs",
+      test: "node .pi/harness/bin/runner.mjs",
+    } }),
+    ".pi/harness/bin/patch.mjs": "export const patched = true;\n",
+    ".pi/harness/bin/runner.mjs": 'new URL("./worker.mjs", import.meta.url);\n',
+    ".pi/harness/bin/worker.mjs": 'import "../lib/reporter.mjs";\n',
+    ".pi/harness/lib/reporter.mjs": "export default class Reporter {}\n",
+    ".pi/harness/lib/policy.mjs": "export const operatorPolicy = true;\n",
+  };
+  for (const [file, content] of Object.entries(files)) {
+    fs.mkdirSync(path.dirname(path.join(f.root, file)), { recursive: true });
+    fs.writeFileSync(path.join(f.root, file), content);
+    f.git("add", "-f", "--", file);
+  }
+  f.git("commit", "-qm", "validation uses vendored executables");
+}
+
+for (const file of ["bin/patch.mjs", "bin/runner.mjs", "bin/worker.mjs", "lib/reporter.mjs"]) {
+  test(`changing consumed runtime ${file} invalidates GREEN, while unused runtime stays peripheral`, async (t) => {
+    const f = fixture(t, ["npm test"]);
+    validationRuntime(f);
+    await f.record("npm test");
+    const policy = ".pi/harness/lib/policy.mjs";
+    fs.appendFileSync(path.join(f.root, policy), "// operator update\n");
+    f.git("add", "-f", "--", policy); f.git("commit", "-qm", "peripheral operator update");
+    assert.equal(f.check().ok, true, "unconsumed operator code does not rerun product tests");
+    const consumed = `.pi/harness/${file}`;
+    fs.appendFileSync(path.join(f.root, consumed), "// validation implementation changed\n");
+    f.git("add", "-f", "--", consumed); f.git("commit", "-qm", "change consumed validation runtime");
+    assert.deepEqual(f.check().commands, ["npm test"]);
+    await f.record("npm test");
+    assert.equal(f.check().ok, true);
+  });
+}
+
+test("dirty consumed runtime cannot become GREEN by committing during the command", async (t) => {
+  const f = fixture(t, ["npm test"]);
+  validationRuntime(f);
+  const file = ".pi/harness/lib/reporter.mjs";
+  fs.appendFileSync(path.join(f.root, file), "// uncommitted reporter\n");
+  await f.record("npm test", { during: () => {
+    f.git("add", "-f", "--", file); f.git("commit", "-qm", "commit runtime during check");
+  } });
+  assert.equal(f.check().ok, false, "ignored runtime must not hide dirty execution inputs");
+  await f.record("npm test");
+  assert.equal(f.check().ok, true);
+  fs.appendFileSync(path.join(f.root, file), "// dirty again\n");
+  assert.equal(f.check().ok, false, "uncommitted consumed runtime invalidates final preparation");
+});
+
+test("direct commands and product config references include generated dependencies", async (t) => {
+  const command = "node .pi/harness/bin/runner.mjs";
+  const f = fixture(t, [command]);
+  validationRuntime(f);
+  fs.writeFileSync(path.join(f.root, "package.json"), "{}\n");
+  f.git("add", "package.json"); f.git("commit", "-qm", "direct command without npm script");
+  await f.record(command);
+  assert.equal(f.check().ok, true);
+  const file = ".pi/harness/lib/reporter.mjs";
+  fs.appendFileSync(path.join(f.root, file), "// direct dependency\n");
+  f.git("add", "-f", "--", file); f.git("commit", "-qm", "direct dependency changed");
+  assert.equal(f.check().ok, false);
+  fs.writeFileSync(path.join(f.root, "vitest.config.mjs"), 'import "./.pi/harness/lib/reporter.mjs";\n');
+  f.git("add", "vitest.config.mjs"); f.git("commit", "-qm", "product config imports generated code");
+  await f.record("npm test");
+  const check = () => checkPiFinalCommands({ ...f.input, commands: ["npm test"] });
+  assert.equal(check().ok, true);
+  fs.appendFileSync(path.join(f.root, file), "// config dependency\n");
+  f.git("add", "-f", "--", file); f.git("commit", "-qm", "config dependency changed");
+  assert.equal(check().ok, false);
+});
+
+test("generated CommonJS helpers are followed through extensionless require and directory index", async (t) => {
+  const f = fixture(t, ["npm test"]);
+  validationRuntime(f);
+  const files = {
+    ".pi/harness/bin/worker.mjs": 'require("../lib/support");\n',
+    ".pi/harness/lib/support.js": 'require("./nested");\n',
+    ".pi/harness/lib/nested/index.js": "module.exports = true;\n",
+  };
+  for (const [file, source] of Object.entries(files)) {
+    fs.mkdirSync(path.dirname(path.join(f.root, file)), { recursive: true });
+    fs.writeFileSync(path.join(f.root, file), source);
+    f.git("add", "-f", "--", file);
+  }
+  f.git("commit", "-qm", "validation uses CommonJS dependencies");
+  await f.record("npm test");
+  assert.equal(f.check().ok, true);
+  const helper = ".pi/harness/lib/nested/index.js";
+  fs.appendFileSync(path.join(f.root, helper), "// changed transitive dependency\n");
+  f.git("add", "-f", "--", helper); f.git("commit", "-qm", "change nested CommonJS helper");
+  assert.equal(f.check().ok, false);
+});
+
 for (const file of ["product.txt", "src/app.ts", "test/app.spec.ts", "package.json", "package-lock.json", "tsconfig.json", "migrations/001.sql", "public/site.css", "docs/app-content.md"]) {
   test(`application input ${file} invalidates previous evidence`, async (t) => {
     const f = fixture(t, ["npm test"]);
