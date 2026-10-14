@@ -23,7 +23,7 @@ function fixtureRoot() {
     version: "1.0.0",
     private: true,
     dependencies: {
-      "@earendil-works/pi-coding-agent": "1.0.2",
+      "@earendil-works/pi-coding-agent": "1.2.0",
       "@gotgenes/pi-subagents": "23.0.0",
     },
   }));

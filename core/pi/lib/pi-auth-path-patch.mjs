@@ -1,5 +1,5 @@
 /**
- * Compatibility overlay for the pinned Pi 1.0.2 runtime.
+ * Compatibility overlay for the pinned Pi 1.2.0 runtime.
  *
  * Pi binds credentials to PI_CODING_AGENT_DIR. The harness keeps that directory
  * per worktree, so this sealed patch introduces PI_CODING_AGENT_AUTH_PATH while
@@ -15,7 +15,7 @@ export const PI_SUBAGENTS_AUTH_PATH_PATCH_MARKER = "CLAUDE_HARNESS_SUBAGENTS_AUT
 export const PI_AUTH_PATH_ENV = "PI_CODING_AGENT_AUTH_PATH";
 export const PI_RESUME_ENV = "PI_HARNESS_RESUME";
 const PI_RESUME_PATCH_MARKER = "CLAUDE_HARNESS_EXACT_RESUME_PATCH_v1";
-const PINNED_PI_VERSION = "1.0.2";
+const PINNED_PI_VERSION = "1.2.0";
 const PINNED_SUBAGENTS_VERSION = "23.0.0";
 
 function sha256(content) {
@@ -72,7 +72,7 @@ const PATCHES = [
   },
   {
     rel: "dist/config.js",
-    sha256: "1cb67c079000a6ec800601e9774f7c23bcce6f8064c62251b97bd0232b8601d1",
+    sha256: "b53418ca3bc54b70e18ccb192eb471696f5211c5aa2e80d68fe6fe3851ff23ae",
     transform(content) {
       let next = replaceExactly(
         content,
@@ -89,7 +89,7 @@ const PATCHES = [
   },
   {
     rel: "dist/core/auth-storage.js",
-    sha256: "0b45029901579032b19273a1427f63b622df8e1aaf9ea185eb932c0d4898998c",
+    sha256: "59791d54e50bfb86f0bb9e8dcee776547ae1744fc4aeb2fe14ff6610c1f5c567",
     transform(content) {
       let next = replaceExactly(content, 'import { getAgentDir } from "../config.js";', 'import { getAuthPath } from "../config.js";');
       next = replaceExactly(next, 'join(getAgentDir(), "auth.json")', "getAuthPath()", 4);
@@ -107,7 +107,7 @@ const PATCHES = [
   },
   {
     rel: "dist/core/sdk.js",
-    sha256: "fe643170de3d259c7e06179d9e18270a009dfb54df915f6e3de515425b8d009b",
+    sha256: "8155c0b7d819d2248a1bbf0fa4b8e40d15552ff7fa6a772154cbbccb6ae59235",
     transform(content) {
       let next = replaceExactly(content, 'import { getAgentDir } from "../config.js";', 'import { getAgentDir, getAuthPath } from "../config.js";');
       next = replaceExactly(next, 'const authPath = options.agentDir ? join(agentDir, "auth.json") : undefined;', "const authPath = getAuthPath();");
@@ -130,7 +130,7 @@ const PATCHES = [
   },
   {
     rel: "dist/package-manager-cli.js",
-    sha256: "aefcf40b94d7b7f457ec37c030d6961b255a6808773cee679593acb6c0a8c016",
+    sha256: "441e3adf91eea1393bf6c5f845025aa29ba1d68d78627c532d17f1c3b9b07af1",
     transform(content) {
       let next = replaceExactly(
         content,
@@ -165,7 +165,7 @@ function patchFile(path, spec) {
 
 
 // Pinned internal PromptOptions.preflightResult seam, not a stable public SDK API.
-const PI_REVIEW_PREFLIGHT_SHA = "35ca1dabd54d98c236c9601b569c2856b726ade392d06b2eaaf50158f48913ab";
+const PI_REVIEW_PREFLIGHT_SHA = "a5c9ff22e42215405804dc0c850e98aff424a1262829161155132a3da020b693";
 const PI_SUBAGENTS_LIFECYCLE_MARKER = "CLAUDE_HARNESS_SUBAGENTS_LIFECYCLE_PATCH_v1";
 const SUBAGENTS_LIFECYCLE_PATCHES = [
   {

@@ -693,7 +693,7 @@ export function registerPiCommandEvidence(pi) {
   const starts = new Map();
   const key = (event, ctx) => JSON.stringify([ctx?.cwd, piSessionId(ctx), event?.toolCallId]);
   pi.on("tool_execution_start", (event, ctx) => {
-    // Pi 1.0.2 emits args at start; input belongs to tool_result/tool_call.
+    // Pi emits args at start; input belongs to tool_result/tool_call.
     const command = event?.args?.command ?? event?.input?.command;
     if (isPiBashTool(event?.toolName)) starts.set(key(event, ctx), worktreeIdentity(ctx.cwd,
       typeof command === "string" ? [command] : []));
