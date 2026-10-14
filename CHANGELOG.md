@@ -5,6 +5,38 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [3.8.0](https://github.com/orobsonn/claude-harness/compare/v3.7.7...v3.8.0) (2026-10-14)
+
+
+### Features
+
+* **pi:** execução Vitest em shards para suítes grandes ([#1125](https://github.com/orobsonn/claude-harness/issues/1125)) ([6b21d62](https://github.com/orobsonn/claude-harness/commit/6b21d62d0a5e4049a6879d441135f3787c878034))
+
+
+### Bug Fixes
+
+* **orca:** approve project trust for queued Pi deliveries ([#1114](https://github.com/orobsonn/claude-harness/issues/1114)) ([68544ec](https://github.com/orobsonn/claude-harness/commit/68544ec777f82bcd69c998e3e22f7b808ffeb098))
+* **orca:** retoma fila Pi após reinício do daemon ([#1122](https://github.com/orobsonn/claude-harness/issues/1122)) ([54b61b0](https://github.com/orobsonn/claude-harness/commit/54b61b0dd87846a455b98ccba92318b86039fd5a))
+* **pi:** cancela shards imediatamente por evento Vitest ([#1126](https://github.com/orobsonn/claude-harness/issues/1126)) ([8d63fdf](https://github.com/orobsonn/claude-harness/commit/8d63fdf48b8e1d9b8e842135039a470f54323a03))
+* **pi:** captura argumentos nativos no início da validação ([#1134](https://github.com/orobsonn/claude-harness/issues/1134)) ([eda7ea4](https://github.com/orobsonn/claude-harness/commit/eda7ea4fb03124e30e14044d6de26d9a2c0e3f2f))
+* **pi:** completa diff de runtime e inspeção Git das revisões ([#1132](https://github.com/orobsonn/claude-harness/issues/1132)) ([04c4fba](https://github.com/orobsonn/claude-harness/commit/04c4fba14dbdc291e100d0c53794ffa28718bb1c))
+* **pi:** distribui backport do keep-alive Miniflare ([#1128](https://github.com/orobsonn/claude-harness/issues/1128)) ([4a20ded](https://github.com/orobsonn/claude-harness/commit/4a20deda43da1e137747509f5ee57b723f9b650c))
+* **pi:** evita IPC desnecessário no CLI Vitest focal ([#1131](https://github.com/orobsonn/claude-harness/issues/1131)) ([efe8ab7](https://github.com/orobsonn/claude-harness/commit/efe8ab777629c7b39741e6dc8d03dfd6dfb4f9bb))
+* **pi:** inclui executáveis de validação no hash de inputs ([#1133](https://github.com/orobsonn/claude-harness/issues/1133)) ([520f506](https://github.com/orobsonn/claude-harness/commit/520f5064350598eaacb8d529eb50d05425e02f3f))
+* **pi:** preserva freeze histórico em emendas sucessivas de testes ([#1124](https://github.com/orobsonn/claude-harness/issues/1124)) ([ff03793](https://github.com/orobsonn/claude-harness/commit/ff037933cb26007a0accf68e7d67b12a98129b29))
+* **pi:** preserva identidade do teste antes de cancelar shards ([#1130](https://github.com/orobsonn/claude-harness/issues/1130)) ([7e14476](https://github.com/orobsonn/claude-harness/commit/7e144762b2c3f41560ea74927b9ba14df77be3c5))
+* **pi:** preserva validação após commits periféricos ([#1127](https://github.com/orobsonn/claude-harness/issues/1127)) ([8f48dc5](https://github.com/orobsonn/claude-harness/commit/8f48dc50119ef56a4240af1f79e1b0d328edf78b))
+* **pi:** preserve reviewed additive recovery judgments ([#1120](https://github.com/orobsonn/claude-harness/issues/1120)) ([9b3e119](https://github.com/orobsonn/claude-harness/commit/9b3e11961910167b33a23075eed71d10e1ca5dc4))
+* **pi:** recupera revisões e retoma sessões com modelos OpenAI ([#1123](https://github.com/orobsonn/claude-harness/issues/1123)) ([7b41851](https://github.com/orobsonn/claude-harness/commit/7b4185171cf4e6de10f8ba5083de146e066df355))
+* **pi:** replay sealed test recovery after exact parent refresh ([#1121](https://github.com/orobsonn/claude-harness/issues/1121)) ([5519165](https://github.com/orobsonn/claude-harness/commit/5519165c98e657104c49012f12884e7d5a6fc4e1))
+* **pi:** reuse preserved product after blocked fixture recovery ([#1115](https://github.com/orobsonn/claude-harness/issues/1115)) ([2fb40ce](https://github.com/orobsonn/claude-harness/commit/2fb40ce4f52f4c901caead8f51264e2253be6903))
+* **pi:** ship multiline PR prose through temporary body files ([#1119](https://github.com/orobsonn/claude-harness/issues/1119)) ([5cbc2ee](https://github.com/orobsonn/claude-harness/commit/5cbc2eefc8b5ddf614e3424a87366ff4beccffeb))
+* **pi:** unblock autonomous local browser verification ([#1116](https://github.com/orobsonn/claude-harness/issues/1116)) ([4ae5f9c](https://github.com/orobsonn/claude-harness/commit/4ae5f9cc488289ac3578620e63399283e9a7dc7d))
+* **planning:** clarify glossary reads and journey references ([#1112](https://github.com/orobsonn/claude-harness/issues/1112)) ([7a921f7](https://github.com/orobsonn/claude-harness/commit/7a921f74f8736998d0399ac45045d4bbb7000ba0))
+* **policy:** deny remote operations after shell newlines ([#1117](https://github.com/orobsonn/claude-harness/issues/1117)) ([ba96c67](https://github.com/orobsonn/claude-harness/commit/ba96c6751187ac318d1f111c8960e1d8e701caa4))
+* **policy:** permite consultas de metadata com npm view ([#1129](https://github.com/orobsonn/claude-harness/issues/1129)) ([82afc7e](https://github.com/orobsonn/claude-harness/commit/82afc7e695386509f956a0874c9f70311e02a00d))
+* **policy:** recognize remote operations in shell groups ([#1118](https://github.com/orobsonn/claude-harness/issues/1118)) ([a658e56](https://github.com/orobsonn/claude-harness/commit/a658e562c80419f010ed7e0f6d9d53e337ebfff7))
+
 ## [3.7.7](https://github.com/orobsonn/claude-harness/compare/v3.7.6...v3.7.7) (2026-10-11)
 
 
