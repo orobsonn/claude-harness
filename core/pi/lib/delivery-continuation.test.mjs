@@ -257,13 +257,14 @@ test("pinned native Pi drains agent_end follow-up without a new operator prompt"
   const sdk = await import("@earendil-works/pi-coding-agent");
   const { fauxProvider, fauxAssistantMessage } = await import("@earendil-works/pi-ai");
   const f = fixture(t), agentDir = path.join(f.ctx.cwd, "agent");
-  const faux = fauxProvider(); let calls = 0;
+  const faux = fauxProvider(); let calls = 0, waits = 0;
   faux.setResponses([() => { calls++; return fauxAssistantMessage("Captured; reviews pending."); },
     () => { calls++; return fauxAssistantMessage("Reviews finished."); }]);
   const loader = new sdk.DefaultResourceLoader({ cwd: f.ctx.cwd, agentDir, noExtensions: true, noSkills: true,
     noPromptTemplates: true, noThemes: true, extensionFactories: [pi => {
       const end = installDeliveryContinuation(pi, { local: true, readPending: ctx => calls === 1
-        ? { sessionId: ctx.sessionManager.getSessionId(), stage: "task-reviews", key: "native-capture", content: "Finish the pending review." } : null });
+        ? { sessionId: ctx.sessionManager.getSessionId(), stage: "task-reviews", key: "native-capture", liveTasks: waits === 0, content: "Finish the pending review." } : null,
+        waitForLiveTasks: async () => { waits++; return { ok: true, wait: { outcome: "changed" } }; } });
       pi.on("agent_end", end);
     }] });
   await loader.reload();
@@ -278,7 +279,63 @@ test("pinned native Pi drains agent_end follow-up without a new operator prompt"
     await session.bindExtensions({});
     await session.prompt("Complete the authorized task.");
     assert.equal(calls, 2);
+    assert.equal(waits, 1, "host observation wakes native Pi without a new user prompt");
     assert.equal(session.messages.filter(m => m.role === "user").length, 1, "one operator prompt only");
     assert.equal(session.messages.filter(m => m.role === "assistant").length, 2);
   } finally { session.dispose(); }
+});
+
+test("live delegated work waits in the host even after the same diagnosis was exhausted", async () => {
+  let release, observations = 0;
+  const f = controller({ waitForLiveTasks: async (_ctx, signal) => {
+    observations++;
+    assert.equal(signal.aborted, false);
+    await new Promise(resolve => { release = resolve; });
+    f.set({ sessionId: "parent", stage: "tasks", key: "unchanged", content: "recover result" });
+    return { ok: true, wait: { outcome: "changed" } };
+  } });
+  f.set({ sessionId: "parent", stage: "tasks", key: "unchanged", content: "recover result" });
+  await f.end(stopped, f.ctx); await f.end(stopped, f.ctx);
+  assert.equal(await f.end(stopped, f.ctx), false);
+  f.set({ sessionId: "parent", stage: "tasks", key: "unchanged", liveTasks: true, content: "wait" });
+  const end = f.end(stopped, f.ctx);
+  assert.equal(observations, 1);
+  assert.equal(f.messages.length, 2, "waiting must not poll through model calls");
+  release();
+  assert.equal(await end, true, "a native result must wake the parent without operator input");
+  assert.equal(f.messages.length, 3);
+  assert.equal(await f.end(stopped, f.ctx), false, "unchanged settled failures still cannot spin");
+});
+
+test("operator pause and shutdown cancel host observation without waking the model", async () => {
+  for (const event of ["input", "session_shutdown"]) {
+    const f = controller({ waitForLiveTasks: async (_ctx, signal) => {
+      await new Promise(resolve => signal.addEventListener("abort", resolve, { once: true }));
+      return { ok: true, wait: { outcome: "aborted" } };
+    } });
+    f.set({ sessionId: "parent", stage: "tasks", key: "live", liveTasks: true });
+    const end = f.end(stopped, f.ctx);
+    f.handlers.get(event)(event === "input" ? { source: "interactive", text: "pare" } : {}, f.ctx);
+    assert.equal(await end, false);
+    assert.equal(f.messages.length, 0);
+  }
+});
+
+test("observation errors yield an explicit warning rather than model polling", async () => {
+  const f = controller({ waitForLiveTasks: async () => ({ ok: false, reason: "owner mismatch" }) });
+  f.set({ sessionId: "parent", stage: "tasks", key: "live", liveTasks: true });
+  assert.equal(await f.end(stopped, f.ctx), false);
+  assert.equal(f.messages.length, 0);
+  assert.match(f.notifications[0][0], /owner mismatch/);
+});
+
+test("a new launch is progress even when the parent HEAD and task status repeat", t => {
+  const f = fixture(t);
+  f.registry.tasks.one.launches = [{ run_id: "first" }];
+  f.write("task-runs/index.json", f.registry);
+  const first = readDeliveryContinuation(f.ctx);
+  assert.equal(first.liveTasks, true);
+  f.registry.tasks.one.launches.push({ run_id: "second" });
+  f.write("task-runs/index.json", f.registry);
+  assert.notEqual(readDeliveryContinuation(f.ctx).key, first.key);
 });

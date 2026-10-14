@@ -91,7 +91,7 @@ export function readDeliveryContinuation(ctx, { readBinding = readTaskRunBinding
       !["FULL", "LIGHT"].includes(String(state.mode).toUpperCase())) return null;
   const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
   const feature = state.feature_id;
-  let stage, progress;
+  let stage, progress, liveTasks = false;
   let verificationCommands = [];
   if (state.task_run) {
     const binding = readBinding(root, sessionId);
@@ -120,7 +120,9 @@ export function readDeliveryContinuation(ctx, { readBinding = readTaskRunBinding
         shipment.feature_id === feature && shipment.status === "completed" && shipment.head === head) return null;
     if (finalized?.written_by === "host-memory-finalize" && finalized.session_id === sessionId && finalized.feature_id === feature && finalized.head === head) return null;
     const tasks = Object.values(registry.tasks).map(e => ({ task: e.task_id, status: e.status,
-      head: e.integration?.integrated_head ?? e.result?.child_head, reason: e.reason }));
+      head: e.integration?.integrated_head ?? e.result?.child_head, reason: e.reason,
+      run: e.launches?.at(-1)?.run_id }));
+    liveTasks = tasks.some(t => t.status === "running");
     if (!tasks.length) return null;
     stage = tasks.some(t => t.status !== "integrated") ? "tasks" : state.final_review_done ? "shipping" : "final-review";
     const harvest = read(root, `${directory}/memory-harvest.json`);
@@ -143,13 +145,14 @@ export function readDeliveryContinuation(ctx, { readBinding = readTaskRunBinding
       .filter(e => e?.head_sha === head && e.worktree_dirty === false && e.original_status?.exit_code === 0)
       .map(e => e.command).filter(c => typeof c === "string" && verificationCommands.includes(c));
   } catch { /* Evidence is advisory; absence never waives a gate. */ }
-  return { sessionId, stage, key: hash({ sessionId, feature, stage, progress, commands: [...new Set(commands)].sort() }), content: instructions[stage] };
+  return { sessionId, stage, liveTasks, key: hash({ sessionId, feature, stage, progress, commands: [...new Set(commands)].sort() }), content: instructions[stage] };
 }
 
 /** Progress-sensitive continuation, then diagnosis; neither repeats for unchanged input. */
-export function installDeliveryContinuation(pi, { readPending = readDeliveryContinuation, local = false } = {}) {
+export function installDeliveryContinuation(pi, { readPending = readDeliveryContinuation, local = false, waitForLiveTasks } = {}) {
   let active = local;
   let paused = false;
+  let waiting;
   const seen = new Set();
   const diagnosed = new Set();
   const owned = ctx => !isChildSession(ctx) && isSafeSessionId(piSessionId(ctx));
@@ -164,6 +167,7 @@ export function installDeliveryContinuation(pi, { readPending = readDeliveryCont
   };
   const reset = (_event, ctx) => {
     if (!owned(ctx)) return;
+    waiting?.abort();
     active = local; paused = false; seen.clear(); diagnosed.clear(); restore(ctx);
   };
   pi.on("session_start", reset);
@@ -173,6 +177,7 @@ export function installDeliveryContinuation(pi, { readPending = readDeliveryCont
     // Explicit stop requests remain stops even if the model answers normally.
     if (/^\s*(?:\/abort|\/quit|stop|pause|cancel|pare|pausa|cancele|cancelar|n[aã]o continue|do not continue)\b/i.test(event.text ?? "")) {
       paused = true;
+      waiting?.abort();
       active = false;
       pi.appendEntry(ENTRY, { sessionId: piSessionId(ctx), paused: true });
     } else if (paused) {
@@ -181,6 +186,7 @@ export function installDeliveryContinuation(pi, { readPending = readDeliveryCont
       pi.appendEntry(ENTRY, { sessionId: piSessionId(ctx), paused: false });
     }
   });
+  pi.on("session_shutdown", () => waiting?.abort());
   pi.on("tool_result", (event, ctx) => {
     if (!owned(ctx) || event.isError || paused) return;
     // A fresh workflow action renews existing authorization after a pause.
@@ -196,8 +202,30 @@ export function installDeliveryContinuation(pi, { readPending = readDeliveryCont
     try {
       restore(ctx);
       if (paused) return false;
-      const pending = readPending(ctx);
+      let pending = readPending(ctx);
       if (!pending) return false;
+      // An unchanged RUNNING label is not a failed action. Observe the owning
+      // processes in the host, without model polling or spending retry budget.
+      if (pending.liveTasks && waitForLiveTasks) {
+        const controller = new AbortController();
+        waiting = controller;
+        let observation;
+        try {
+          observation = await waitForLiveTasks(ctx, controller.signal);
+        } finally {
+          if (waiting === controller) waiting = undefined;
+        }
+        if (controller.signal.aborted || paused) return false;
+        if (!observation?.ok || !["changed", "settled"].includes(observation.wait?.outcome))
+          throw new Error(observation?.reason ?? "native task observation did not settle");
+        pending = readPending(ctx);
+        if (!pending) return false;
+        // The native wait has reconciled receipts. Wake once to handle its
+        // result even when an earlier launch had the same blocked diagnosis.
+        await pi.sendMessage({ customType: ENTRY, content: pending.content, display: true },
+          { deliverAs: "followUp", triggerTurn: true });
+        return true;
+      }
       const diagnostic = seen.has(pending.key);
       if (diagnostic && diagnosed.has(pending.key)) {
         ctx.ui?.notify?.("Harness: obrigação pendente após solicitação de diagnóstico, sem progresso observado. A causa não foi classificada pelo runtime; consulte a evidência da sessão. A mesma ação não será repetida automaticamente.", "warning");

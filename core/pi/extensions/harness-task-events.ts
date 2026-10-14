@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { waitForTaskChange } from "./harness-tasks.ts";
 import { installDeliveryContinuation } from "../lib/delivery-continuation.mjs";
 
 import {
@@ -24,7 +25,10 @@ function errorText(error: unknown): string {
 /** Record the native Pi event stream for a host-owned TUI job. */
 export default function harnessTaskEvents(pi: ExtensionAPI, continuationDependencies = {}) {
   const jobFile = process.env[TUI_JOB_ENV];
-  const continueDelivery = installDeliveryContinuation(pi, { local: Boolean(jobFile), ...continuationDependencies });
+  const continueDelivery = installDeliveryContinuation(pi, { local: Boolean(jobFile),
+    waitForLiveTasks: (ctx: any, signal: AbortSignal) => waitForTaskChange({
+      context: { projectRoot: ctx.cwd, sessionId: piSessionId(ctx), isChild: isChildSession(ctx) }, signal,
+    }), ...continuationDependencies });
   if (!jobFile) {
     pi.on("agent_end", continueDelivery);
     return;

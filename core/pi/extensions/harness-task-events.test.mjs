@@ -355,3 +355,29 @@ test("TUI persists the local assistant report before shutdown without private th
   await f.handlers.get("agent_end")({}, f.ctx);
   assert.equal(f.lines().at(-1).message.content[0].text, message.content[1].text);
 });
+
+test("global agent_end waits for delegated work before waking the coordinator", async t => {
+  let release, reads = 0;
+  const extension = install(undefined, {
+    readPending: () => ({ sessionId: SESSION, stage: "tasks", key: "live",
+      liveTasks: ++reads === 1, content: "reconcile completed task" }),
+    waitForLiveTasks: async () => {
+      await new Promise(resolve => { release = resolve; });
+      return { ok: true, wait: { outcome: "changed" } };
+    },
+  });
+  t.after(() => extension.restore());
+  const ctx = { cwd: "/tmp", sessionManager: {
+    getSessionId: () => SESSION, getHeader: () => ({ id: SESSION }),
+  } };
+  extension.handlers.get("tool_result")({ toolName: "harness_tasks",
+    details: { ok: true, tasks: [{ status: "running" }] } }, ctx);
+  let ended = false;
+  const end = extension.handlers.get("agent_end")({ messages: [{ role: "assistant", stopReason: "stop" }] }, ctx)
+    .then(value => { ended = true; return value; });
+  assert.equal(ended, false);
+  assert.equal(typeof release, "function");
+  release();
+  assert.equal(await end, true);
+  assert.equal(reads, 2);
+});
