@@ -1,5 +1,6 @@
+import { execFileSync } from "node:child_process";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -221,5 +222,44 @@ test("corrective test-author waits for capture of the latest implementation delt
     const blockedOutcome = handler()({ toolName: "subagent", input: author() }, f.context);
     assert.equal(blockedOutcome?.block, true);
     assert.match(blockedOutcome.reason, /recover with an implementation hand/);
+  } finally { f.close(); }
+});
+
+
+test("admitted blocked writer can repair a fixture after a scoped product checkpoint without gaining approval", () => {
+  const f = canonicalFixture();
+  const run = (...args) => execFileSync("git", args, { cwd: f.root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+  const handPath = join(f.root, ".pi/harness/state/hand-records", FEATURE, SESSION, "task-1.json");
+  const binding = { ok: true, root: f.root, sessionId: SESSION,
+    grant: { feature_id: FEATURE, task_id: "task-1" },
+    task: { scope_paths: ["src/a.ts"], locked_tests: [{ path: "tests/a.test.mjs" }] } };
+  const dispatch = handler({ readTaskRunBindingFn: () => binding });
+  const author = () => ({ subagent_type: "harness-test-author", model: "openai-codex/gpt-6.1-sol", thinking: "high",
+    description: "Correct fixture", prompt: `${MARKER}\nCorrect only the fixture.` });
+  try {
+    run("init", "-q"); run("config", "user.email", "test@example.test"); run("config", "user.name", "Test");
+    writeFileSync(join(f.root, ".gitignore"), ".pi/\n");
+    mkdirSync(join(f.root, "src")); writeFileSync(join(f.root, "src/a.ts"), "base\n");
+    run("add", "."); run("commit", "-qm", "freeze");
+    const record = { featureId: FEATURE, taskId: "task-1", sessionId: SESSION,
+      producerCallId: "blocked-writer", freezeCommitSha: run("rev-parse", "HEAD"),
+      outcome: "BLOCKED", touchedPaths: ["src/a.ts"], scopeViolations: [], frozenViolations: [],
+      agent: "harness-executor", writtenBy: "host-hand-finished" };
+    mkdirSync(join(handPath, ".."), { recursive: true }); writeFileSync(handPath, JSON.stringify(record));
+    assert.equal(dispatch({ toolName: "subagent", input: author() }, f.context)?.block, true, "no checkpoint yet");
+    writeFileSync(join(f.root, "src/a.ts"), "implemented\n");
+    assert.equal(dispatch({ toolName: "subagent", input: author() }, f.context)?.block, true, "dirty implementation is preserved");
+    run("add", "src/a.ts"); run("commit", "-qm", "product checkpoint");
+    assert.equal(dispatch({ toolName: "subagent", input: author() }, f.context), undefined, "fixture repair is admitted");
+    assert.equal(handler()({ toolName: "subagent", input: author() }, f.context)?.block, true, "ordinary session is still blocked");
+    assert.equal(JSON.parse(readFileSync(handPath, "utf8")).outcome, "BLOCKED", "admission never approves the writer");
+    for (const changed of [{ scopeViolations: ["src/a.ts"] }, { frozenViolations: ["tests/a.test.mjs"] }, { outcome: "DONE" }]) {
+      writeFileSync(handPath, JSON.stringify({ ...record, ...changed }));
+      assert.equal(dispatch({ toolName: "subagent", input: author() }, f.context)?.block, true);
+    }
+    writeFileSync(handPath, JSON.stringify(record));
+    mkdirSync(join(f.root, "tests")); writeFileSync(join(f.root, "tests/a.test.mjs"), "changed fixture\n");
+    run("add", "tests/a.test.mjs"); run("commit", "-qm", "mixed test change");
+    assert.equal(dispatch({ toolName: "subagent", input: author() }, f.context)?.block, true, "checkpoint cannot include frozen tests");
   } finally { f.close(); }
 });
