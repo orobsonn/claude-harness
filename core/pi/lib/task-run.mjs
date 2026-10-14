@@ -500,6 +500,28 @@ export function decideTaskRunTool(binding, event) {
   return { block: false };
 }
 
+/** A blocked writer may authorize a test repair, never completion, after a scoped checkpoint. */
+export function checkBlockedTaskRepairCheckpoint(binding, record) {
+  try {
+    if (binding?.ok !== true || record?.outcome !== "BLOCKED" || !HEX_40.test(record.freezeCommitSha ?? ""))
+      return { ok: false };
+    const preserved = checkTaskRepairPreservation(binding, {
+      toolName: "subagent", input: { subagent_type: "harness-test-author" },
+    });
+    if (!preserved.ok) return preserved;
+    const root = binding.root;
+    const head = git(root, "rev-parse", "HEAD");
+    if (head === record.freezeCommitSha) return { ok: false };
+    git(root, "merge-base", "--is-ancestor", record.freezeCommitSha, head);
+    const paths = git(root, "diff", "--no-ext-diff", "--no-textconv", "--name-only", "-z", record.freezeCommitSha, head).split("\0").filter(Boolean);
+    const scopes = [...(binding.task.scope_paths ?? []), ...(binding.task.allowed_writes ?? [])];
+    const frozen = (binding.task.locked_tests ?? []).flatMap((test) => [test.path, ...(test.fixture_paths ?? [])]);
+    if (!paths.length || paths.some((file) => frozen.includes(file)) || checkScope(paths, scopes).length)
+      return { ok: false };
+    return { ok: true, head };
+  } catch { return { ok: false }; }
+}
+
 /** A fixture repair must not erase the implementation already produced by this task. */
 export function checkTaskRepairPreservation(binding, event) {
   const command = String(event?.input?.command ?? "");

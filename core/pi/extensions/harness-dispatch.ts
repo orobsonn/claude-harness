@@ -2,12 +2,12 @@ import { existsSync, readFileSync } from "node:fs";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import { validateOcCaptureEligibleHandRecord } from "../../opencode/lib/hand-records.mjs";
-import { isCaptureEligibleHandRecord } from "../../shared/lib/real-file-capture-rail.mjs";
+import { isCaptureEligibleHandRecord, recordViolations } from "../../shared/lib/real-file-capture-rail.mjs";
 import { findShadowedCanonicalRoles, validateSubagentDispatch } from "../lib/dispatch-rail.mjs";
 import { loadModelProfileFromEnv, profilePrompt } from "../lib/model-profile.mjs";
 import { isDiscussionRole, isParallelReviewRole, isSupportRole } from "../lib/roles.mjs";
 import { canonicalTaskReviewPrompt, classifyPiReviewDispatch } from "../lib/pi-review-concurrency.mjs";
-import { readTaskRunBinding } from "../lib/task-run.mjs";
+import { readTaskRunBinding, checkBlockedTaskRepairCheckpoint } from "../lib/task-run.mjs";
 import { isChildSession, isPiHeadlessContext, piSessionId, piSubagentArgs } from "../lib/pi-adapter-map.mjs";
 import { loadPiGateStateFromDisk } from "../lib/pi-gate-state.mjs";
 import { piHandRecordPath } from "../lib/pi-paths.mjs";
@@ -48,7 +48,7 @@ function canonicalTaskPrompt(prompt: unknown, task: unknown) {
     `${JSON.stringify(task)}\n${CANONICAL_TASK_CLOSE}`;
 }
 
-function uncapturedImplementationReason(projectRoot: string, sessionId: string, featureId: string, taskId: string) {
+function uncapturedImplementationReason(projectRoot: string, sessionId: string, featureId: string, taskId: string, binding: any) {
   const resolved = piHandRecordPath({ projectRoot, sessionId, featureId }, taskId);
   if (!resolved.ok) return null;
   let record: any;
@@ -57,6 +57,18 @@ function uncapturedImplementationReason(projectRoot: string, sessionId: string, 
       record.featureId !== featureId || record.taskId !== taskId || record.sessionId !== sessionId ||
       (typeof record.capturedVerifiedAt === "string" && record.capturedVerifiedAt.length > 0)) return null;
   if (!isCaptureEligibleHandRecord(record)) {
+    // BLOCKED is not approval. An admitted task may repair its frozen tests
+    // after preserving product in a selective checkpoint, as task-run already
+    // requires. Receipt inspection still requires native checkpoint lineage,
+    // test-only changes, fidelity, capture, reviews and re-gate; none is waived.
+    if (record.outcome === "BLOCKED" && binding?.ok === true &&
+        binding.grant?.feature_id === featureId && binding.grant?.task_id === taskId &&
+        binding.sessionId === sessionId && binding.root === projectRoot &&
+        recordViolations(record).scope.length === 0 && recordViolations(record).frozen.length === 0) {
+      const checkpoint = checkBlockedTaskRepairCheckpoint(binding, record);
+      if (checkpoint.ok) return null;
+      if (checkpoint.reason) return checkpoint.reason;
+    }
     return Array.isArray(record.touchedPaths) && record.touchedPaths.length > 0
       ? "latest implementation hand ended without a capture-eligible outcome and left a product delta; recover with an implementation hand before dispatching test-author"
       : null;
@@ -118,7 +130,7 @@ export default function harnessDispatch(pi: ExtensionAPI, injected: {
       const featureId = loaded?.ok === true && typeof loaded.state?.feature_id === "string" ? loaded.state.feature_id : "";
       const taskId = canonical.canonicalTask?.id;
       const captureReason = sessionId && featureId && typeof taskId === "string"
-        ? uncapturedImplementationReason(ctx.cwd, sessionId, featureId, taskId)
+        ? uncapturedImplementationReason(ctx.cwd, sessionId, featureId, taskId, readTaskBinding(ctx.cwd, sessionId))
         : null;
       if (captureReason) return { block: true, reason: `harness dispatch blocked: ${captureReason}` };
       // Resolve before routing and native execution; all later hooks/records see
