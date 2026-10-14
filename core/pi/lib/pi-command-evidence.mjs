@@ -19,24 +19,72 @@ const REVIEW_DIFF_MAX_BYTES = 64 * 1024 * 1024;
 const FULL_GIT_SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 const APPLICATION_TREES = new Map();
 
-// Operational documents and generated agent runtimes are not application
-// inputs. Keep every other path, including tests, configs, lockfiles, assets,
-// migrations and arbitrary documentation that a build may consume.
+// Operational documents and unused generated agent runtimes are peripheral.
+// Referenced runtime executables/dependencies are included by applicationInputs.
+// Keep tests, configs, lockfiles, assets, migrations and build documentation.
 function peripheralValidationPath(relative) {
   return /^(?:\.pi|\.claude|\.codex|\.opencode|\.agents)\//.test(relative) ||
     /^(?:MEMORY|CONTEXT|AGENTS|CLAUDE|README|CHANGELOG)\.md$/.test(relative) || relative === "kaizen.md";
 }
 
-function applicationTree(root, head) {
+function applicationInputs(root, head, commands = []) {
   if (!FULL_GIT_SHA.test(head ?? "")) throw new Error("invalid application evidence HEAD");
-  const key = `${root}:${head}`;
+  const key = `${root}:${head}:${hash(JSON.stringify(commands))}`;
   if (APPLICATION_TREES.has(key)) return APPLICATION_TREES.get(key);
   const entries = gitBuffer(root, ["ls-tree", "-r", "-z", head]).toString("utf8").split("\0").filter(Boolean);
-  const tree = hash(entries.filter((entry) => !peripheralValidationPath(entry.slice(entry.indexOf("\t") + 1))).join("\0"));
+  const files = entries.map((entry) => ({
+    name: entry.slice(entry.indexOf("\t") + 1),
+    oid: entry.slice(0, entry.indexOf("\t")).split(" ").at(-1),
+  }));
+  const generated = files.filter(({ name }) => /^(?:\.pi|\.claude|\.codex|\.opencode|\.agents)\//.test(name));
+  const runtimePaths = new Set();
+  if (generated.length) {
+    // A generated runtime becomes application input when committed product/config
+    // files or the declared command actually reference it. Follow local literal
+    // references transitively (imports, require, new URL, shell helper paths).
+    // Read the recorded commit, never today's filesystem for historical evidence.
+    let references = [];
+    try {
+      references = gitBuffer(root, ["grep", "-I", "-l", "-z", "-F",
+        ...[".pi/", ".claude/", ".codex/", ".opencode/", ".agents/"].flatMap((value) => ["-e", value]),
+        head, "--"]).toString("utf8").split("\0").filter(Boolean).map((value) => value.slice(head.length + 1));
+    } catch (error) { if (error.status !== 1) throw error; }
+    const referenced = new Set(references.filter((name) => !peripheralValidationPath(name)));
+    const pending = files.filter(({ name }) => referenced.has(name));
+    const follow = (source, owner) => {
+      for (const file of generated) {
+        const local = path.posix.relative(path.posix.dirname(owner), file.name);
+        const modulePaths = [local, file.name].flatMap((value) => {
+          const stem = value.replace(/\.(?:[cm]?[jt]sx?|json|node)$/, "");
+          return stem === value ? [] : [stem, ...(path.posix.basename(stem) === "index" ? [path.posix.dirname(stem)] : [])];
+        });
+        const extensionless = modulePaths.some((value) => ["'", '"', "`"].some((quote) =>
+          source.includes(`${quote}${value}${quote}`) || source.includes(`${quote}./${value}${quote}`)));
+        // A conservative textual match also includes paths in comments: it may
+        // ask for verification, but cannot silently omit a literal dependency.
+        if (!runtimePaths.has(file.name) && local && (source.includes(local) || source.includes(file.name) || extensionless)) {
+          runtimePaths.add(file.name);
+          pending.push(file);
+        }
+      }
+    };
+    follow(commands.join("\n"), "package.json");
+    for (let index = 0; index < pending.length; index += 1) {
+      const file = pending[index];
+      follow(gitBuffer(root, ["cat-file", "blob", file.oid]).toString("utf8"), file.name);
+    }
+  }
+  const tree = hash(entries.filter((entry) => {
+    const name = entry.slice(entry.indexOf("\t") + 1);
+    return !peripheralValidationPath(name) || runtimePaths.has(name);
+  }).join("\0"));
+  const input = { tree, runtimePaths: [...runtimePaths].sort() };
   if (APPLICATION_TREES.size >= 256) APPLICATION_TREES.clear();
-  APPLICATION_TREES.set(key, tree);
-  return tree;
+  APPLICATION_TREES.set(key, input);
+  return input;
 }
+
+const applicationTree = (root, head, commands) => applicationInputs(root, head, commands).tree;
 
 function hash(value) {
   return createHash("sha256").update(value).digest("hex");
@@ -107,18 +155,22 @@ function originalStatus(event) {
   return { kind: "error", is_error: true };
 }
 
-function worktreeIdentity(cwd) {
+function worktreeIdentity(cwd, commands = []) {
   try {
     const [rootText, headSha, ...extra] = execFileSync("git", ["rev-parse", "--show-toplevel", "HEAD"], {
       cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 10000,
     }).trim().split("\n");
     if (extra.length > 0 || !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(headSha)) throw new Error("invalid git identity");
-    const status = execFileSync("git", [
+    let status = execFileSync("git", [
       "status", "--porcelain=v1", "-z", "--untracked-files=all", "--", ".",
       ":(exclude).pi/harness/", ":(exclude)node_modules/",
     ], {
       cwd, encoding: "buffer", stdio: ["ignore", "pipe", "ignore"], timeout: 10000,
     });
+    const runtimePaths = applicationInputs(rootText, headSha, commands).runtimePaths;
+    if (runtimePaths.length) status = Buffer.concat([status, gitBuffer(rootText, [
+      "status", "--porcelain=v1", "-z", "--untracked-files=all", "--", ...runtimePaths,
+    ])]);
     return {
       worktree_identity_status: "available",
       worktree_root: fs.realpathSync(rootText),
@@ -421,13 +473,13 @@ export function checkPiFinalCommands({ projectRoot, sessionId, commands, exactHe
   if (!commands.length) return { ok: true };
   const missing = new Set(commands);
   try {
-    const identity = worktreeIdentity(projectRoot);
+    const identity = worktreeIdentity(projectRoot, commands);
     if (identity.worktree_identity_status !== "available" || identity.worktree_dirty) throw new Error("clean HEAD required");
-    const currentTree = exactHead ? null : applicationTree(identity.worktree_root, identity.head_sha);
+    const currentTree = exactHead ? null : applicationTree(identity.worktree_root, identity.head_sha, commands);
     const strictRecord = (record) => exactHead || /^git diff --check(?: |$)/.test(record.command);
     const matchingInput = (record) => record.observed_worktree_status_sha256 === identity.worktree_status_sha256 &&
       (strictRecord(record) ? record.observed_head_sha === identity.head_sha :
-        applicationTree(identity.worktree_root, record.observed_head_sha) === currentTree);
+        applicationTree(identity.worktree_root, record.observed_head_sha, commands) === currentTree);
     const aliases = packageScopedFinalCommands(identity.worktree_root, sessionId, commands);
     const declaredForActual = new Map(commands.map((command) => [aliases.get(command) ?? command, command]));
     const directory = evidenceDirectory(projectRoot, sessionId, false);
@@ -451,7 +503,7 @@ export function checkPiFinalCommands({ projectRoot, sessionId, commands, exactHe
           record.original_status.is_error === false && record.original_status.exit_code === 0 &&
           start?.worktree_identity_status === "available" && start.worktree_dirty === false &&
           start.worktree_root === identity.worktree_root &&
-          (strictRecord(record) ? start.head_sha === identity.head_sha : applicationTree(identity.worktree_root, start.head_sha) === currentTree) &&
+          (strictRecord(record) ? start.head_sha === identity.head_sha : applicationTree(identity.worktree_root, start.head_sha, commands) === currentTree) &&
           start.worktree_status_sha256 === identity.worktree_status_sha256) missing.delete(declared);
       } catch { /* unreadable latest output cannot fall back to an older success */ }
     }
@@ -577,7 +629,7 @@ async function persistEvidence({ source, output, cwd, sessionId, event, startedI
   if (typeof event?.toolCallId !== "string" || event.toolCallId.length === 0 || event.toolCallId.length > 512) {
     throw new Error("tool call identity unavailable");
   }
-  const identity = worktreeIdentity(cwd);
+  const identity = worktreeIdentity(cwd, [command]);
   const directory = evidenceDirectory(cwd, sessionId);
   const id = randomUUID();
   const outputPath = path.join(directory, `${id}.log`);
@@ -641,7 +693,8 @@ export function registerPiCommandEvidence(pi) {
   const starts = new Map();
   const key = (event, ctx) => JSON.stringify([ctx?.cwd, piSessionId(ctx), event?.toolCallId]);
   pi.on("tool_execution_start", (event, ctx) => {
-    if (isPiBashTool(event?.toolName)) starts.set(key(event, ctx), worktreeIdentity(ctx.cwd));
+    if (isPiBashTool(event?.toolName)) starts.set(key(event, ctx), worktreeIdentity(ctx.cwd,
+      typeof event?.input?.command === "string" ? [event.input.command] : []));
   });
   pi.on("tool_execution_update", (event, ctx) => {
     if (!isPiBashTool(event?.toolName)) return;
