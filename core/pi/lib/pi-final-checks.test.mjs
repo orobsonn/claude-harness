@@ -26,7 +26,7 @@ function fixture(t, commands = ["npm test", "npm run typecheck", "npm run build"
   let id = 0;
   async function record(command, { failure = false, during, start = true } = {}) {
     const event = { toolName: "bash", toolCallId: `call-${++id}`, input: { command } };
-    if (start) handlers.get("tool_execution_start")(event, ctx);
+    if (start) handlers.get("tool_execution_start")({ toolName: event.toolName, toolCallId: event.toolCallId, args: event.input }, ctx);
     during?.();
     return handlers.get("tool_result")({ ...event, isError: failure, content: [{ type: "text", text: failure ? "Command exited with code 1" : "passed" }] }, ctx);
   }
@@ -176,6 +176,21 @@ test("generated CommonJS helpers are followed through extensionless require and 
   fs.appendFileSync(path.join(f.root, helper), "// changed transitive dependency\n");
   f.git("add", "-f", "--", helper); f.git("commit", "-qm", "change nested CommonJS helper");
   assert.equal(f.check().ok, false);
+});
+
+test("native start args detect a dirty direct-command helper even when restored before its result", async (t) => {
+  const command = "node .pi/harness/bin/runner.mjs";
+  const f = fixture(t, [command]);
+  validationRuntime(f);
+  fs.writeFileSync(path.join(f.root, "package.json"), "{}\n");
+  f.git("add", "package.json"); f.git("commit", "-qm", "direct validation without npm references");
+  const helper = path.join(f.root, ".pi/harness/lib/reporter.mjs");
+  const original = fs.readFileSync(helper);
+  fs.appendFileSync(helper, "// dirty when the native tool starts\n");
+  await f.record(command, { during: () => fs.writeFileSync(helper, original) });
+  assert.equal(f.check().ok, false, "restoring a helper cannot hide dirty native execution inputs");
+  await f.record(command);
+  assert.equal(f.check().ok, true);
 });
 
 for (const file of ["product.txt", "src/app.ts", "test/app.spec.ts", "package.json", "package-lock.json", "tsconfig.json", "migrations/001.sql", "public/site.css", "docs/app-content.md"]) {
