@@ -299,11 +299,13 @@ sempre pela task canônica; complexity omitida é herdada, divergência é rejei
 Executor/sniper mantêm low Luna/high, medium Terra/medium, high/max Terra/xhigh.
 O transporte mantém limite de inatividade de 15 minutos por chamada de modelo.
 
-Sessões novas usam temporariamente `openai-economy` por padrão: pais global e
-local em Luna 6/high; executor/sniper low em Luna 6/high, medium em Terra
+Sessões novas usam temporariamente `openai-economy-terra` por padrão: pais global e
+local em Terra 5.6/medium; executor/sniper low em Luna 6/high, medium em Terra
 5.6/medium e high/max em Terra 5.6/xhigh. Planner, suporte, autor de testes e
 avaliações usam Sol 6.1; plan-reviewer usa Astra 6/high; harvester e shipper
 continuam em Luna 6/high. O perfil usa a autenticação Codex do operador.
+O perfil histórico `openai-economy` mantém Luna nos dois pais; seus snapshots
+não são reescritos. A seleção de recuperação continua única por sessão.
 
 O perfil explícito `verboo-orchestration-deepseek` continua disponível. Nele,
 DeepSeek V4.1 Flash orquestra os pais global e local; executor, sniper e
@@ -331,7 +333,7 @@ Toda sessão nova grava um snapshot imutável de rota em
 `.pi/harness/state/model-profiles/<session-id>.json`. Retomada usa somente
 `--harness-resume <session-id>` e recusa overrides comuns de perfil. Para uma
 recuperação autorizada pelo operador após perda de cota, use
-`--harness-resume <session-id> --harness-recovery-profile openai-economy`.
+`--harness-resume <session-id> --harness-recovery-profile openai-economy-terra`.
 O launcher valida o plano contra o snapshot original e grava uma seleção de
 rotas separada, vinculada ao hash original. Próximas retomadas reutilizam essa
 seleção; o snapshot original, plano, grants e recibos permanecem intactos.
@@ -362,7 +364,7 @@ Para escolher Ollama neste host, configure
 `~/.config/claude-harness/providers.json` com `{"deepseek":"ollama"}`;
 `{"deepseek":"verboo"}` seleciona Verboo explicitamente. A escolha afeta somente pais novos: sessões retomadas e filhos
 conservam seus snapshots admitidos. Para o padrão temporário OpenAI, use
-`{"model_profile":"openai-economy"}` no mesmo arquivo; essa preferência prevalece
+`{"model_profile":"openai-economy-terra"}` no mesmo arquivo; essa preferência prevalece
 sobre `deepseek`. Um `--harness-profile` explícito prevalece sobre o host.
 O mesmo harness atende ambos os fornecedores; não há uma distribuição separada.
 
@@ -480,7 +482,7 @@ compatível com a major 1.0. O cache do runtime continua sendo provisionado
 e verificado pelo init/update; gerações anteriores não são sobrescritas.
 Autenticação compartilhada, retomada exata e validação dos recursos das filhas
 continuam protegidas pelos overlays verificados. O padrão temporário de modelos
-é `openai-economy`; os perfis DeepSeek continuam disponíveis explicitamente.
+é `openai-economy-terra`; os perfis DeepSeek continuam disponíveis explicitamente.
 
 O Pi 1.0 usa TUI fullscreen por padrão; para manter o scrollback tradicional,
 configure `tuiMode: "regular"` nas configurações do Pi. Subagentes agora expõem

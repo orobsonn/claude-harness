@@ -648,7 +648,7 @@ export function runPiHarnessCli(argv, options = {}) {
         admittedProfileFile = { path: recovery.path, sha256: recovery.fileSha256 };
       }
       if (profileArgs.recoveryProfile) {
-        if (!stored.ok || !["baseline", "openai-economy"].includes(profileArgs.recoveryProfile)) {
+        if (!stored.ok || !["baseline", "openai-economy", "openai-economy-terra"].includes(profileArgs.recoveryProfile)) {
           throw new Error("routing recovery requires an admitted snapshot and an OpenAI recovery profile");
         }
         const selected = resolveModelProfile({ profile: profileArgs.recoveryProfile });
