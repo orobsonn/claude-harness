@@ -437,8 +437,20 @@ function onlyRecoveryChanges(entry, root, baseline, head, task, plan, replayHand
     const exactParentRefresh = sameAuthor && proof.kind === "aggregate-refresh" &&
       String(git(root, ["rev-parse", `${proof.merged_head}^{tree}`])).trim() ===
         String(git(root, ["rev-parse", `${proof.parent_head}^{tree}`])).trim();
+    // taskScopeBase has validated the merge tree and each corrected ancestor's
+    // receipt against registry history. Its product belongs to that ancestor,
+    // not to this test-author. Keep child writes restricted on both sides.
+    const upstreamTasks = (proof.upstreams ?? []).map((upstream) => plan.tasks.find((item) => item.id === upstream.task_id));
+    const dependencyPaths = replayHand?.agent === "harness-test-author" &&
+      ancestor(root, replayHand.freeze_sha, proof.pre_child_head) &&
+      upstreamTasks.length && upstreamTasks.every(Boolean) && !proof.conflicts?.length
+      ? [...importedPaths, ...upstreamTasks.flatMap((item) => [...(item.scope_paths ?? []), ...(item.allowed_writes ?? [])])]
+      : null;
+    const exactDependencyImport = dependencyPaths && ancestor(root, proof.pre_child_head, proof.merged_head) &&
+      checkScope(splitZero(git(root, ["diff", "--no-renames", "--name-only", "-z",
+        proof.pre_child_head, proof.merged_head, "--"])), dependencyPaths).length === 0;
     if (!onlyFrozenChanges(root, cursor, proof.pre_child_head, paths) ||
-        (!exactParentRefresh && !onlyFrozenChanges(root, proof.pre_child_head, proof.merged_head, importedPaths))) return false;
+        (!exactParentRefresh && !exactDependencyImport && !onlyFrozenChanges(root, proof.pre_child_head, proof.merged_head, importedPaths))) return false;
     cursor = proof.merged_head;
   }
   return onlyFrozenChanges(root, cursor, head, paths);
