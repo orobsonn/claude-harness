@@ -17,7 +17,12 @@ confira status, branch, série de commits, evidências e política de release. C
 que o HEAD e o conteúdo que serão publicados correspondem às revisões. Se houver
 produto/teste não commitado, devolva ao pai para reconciliar e commitar antes dos
 olhos finais; não crie o commit faltante depois da revisão. Preserve resíduos
-alheios e nunca inclua runtime transitório de `.pi/harness/` no PR.
+alheios e nunca inclua estado transitório de `.pi/harness/` no PR.
+Código e defaults vendorizados, já versionados, autorizados pelo operador e cobertos
+pelas revisões atuais podem ser publicados na série existente, inclusive correções
+operacionais do harness. O prefixo `.pi/harness/` não é motivo de veto, separação de
+commits ou repetição de revisões válidas. Confira o diff e a evidência desses arquivos;
+isso não autoriza o shipper a editar o runtime nem a incluir manutenção não revisada.
 
 O despacho deve delimitar a operação autorizada: publicar PR draft, mergear o PR
 funcional, preparar a release ou confirmar sua publicação. Não reinicie revisões válidas apenas por receber
@@ -38,8 +43,10 @@ estado remoto e continue pela forma suportada, sem pedir escrita nativa indispon
 
 Ao aguardar CI, use uma espera bloqueante para o PR explícito:
 `gh pr checks <PR> --watch --interval 30`, com timeout total maior que o CI observado
-(inclua margem para fila e execução). Faça no máximo um retry se os checks ainda não foram
-publicados; após esse retry ou timeout, reporte estado e bloqueio. Não faça polling aberto
+(inclua margem para fila e execução). Se os checks ainda não foram publicados, repita a
+observação com intervalo de 30 segundos dentro desse mesmo prazo total; ausência inicial
+de checks não é falha nem exige intervenção do operador. Ao expirar o prazo, diagnostique
+o estado remoto antes de reportar um impedimento concreto. Não faça polling aberto
 por checks/status. Se o executor retornar um handle de processo, aguarde esse mesmo handle.
 Confirme os checks exigidos no PR antes do merge; timeout nunca equivale a CI verde.
 Se a espera expirar, identifique o run, job e etapa que pararam, seus horários,
@@ -123,9 +130,12 @@ ignore CI/checks nem use bypass para mergear testes vermelhos.
 Confira os nomes e o diff de todo o stage (`git diff --cached --name-only` e
 `git diff --cached`), inclusive resíduos prévios. Nunca stagear `.dev.vars`,
 `.env*`, `.env.local`, `.local.*`, `.claude/settings.local.json`, `.claude/plans/`,
-`.pi/harness/`, `.DS_Store`, `*.log`, `node_modules/`, `dist/`, `coverage/`, arquivos
-de credenciais (credential) ou token. Path suspeito bloqueia a entrega; não leia
-valores de segredos para verificá-lo.
+`.DS_Store`, `*.log`, `node_modules/`, `dist/`, `coverage/`, arquivos de credenciais
+(credential) ou token. Exclua também o estado transitório de `.pi/harness/state/`,
+`.pi/harness/sessions/`, `.pi/harness/runtime/` e `.pi/harness/plans/`.
+Essas exclusões não abrangem código e defaults vendorizados já versionados,
+autorizados pelo operador e cobertos pelas revisões atuais. Path suspeito exige
+classificar o arquivo antes de publicar; confirme segredos pelo path sem ler seus valores.
 
 Encerre com uma linha terminal `Status: DONE` somente quando a operação delimitada
 foi concluída e verificada. Havendo bloqueio, use `Status: BLOCKED`; interrupção ou

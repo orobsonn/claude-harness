@@ -62,7 +62,9 @@ test("shipper waits for the explicit PR with bounded CI observation", () => {
   assert.match(shipper, /não remova evidência/);
   assert.match(shipper, /gh pr checks <PR> --watch --interval 30/);
   assert.match(shipper, /timeout.*maior.*CI observado/is);
-  assert.match(shipper, /no máximo um retry.*checks.*publicados/is);
+  assert.match(shipper, /checks ainda não foram publicados.*mesmo prazo total/is);
+  assert.match(shipper, /ausência inicial.*não é falha.*intervenção do operador/is);
+  assert.doesNotMatch(shipper, /no máximo um retry/i);
   assert.match(shipper, /Não faça polling aberto/);
   assert.match(shipper, /não usa Release Please.*não.*PR de release/is);
 });
@@ -200,7 +202,10 @@ test("pai e shipper preservam a lista de never-stage do Claude Code", () => {
     ".local.*",
     ".claude/settings.local.json",
     ".claude/plans/",
-    ".pi/harness/",
+    ".pi/harness/state/",
+    ".pi/harness/sessions/",
+    ".pi/harness/runtime/",
+    ".pi/harness/plans/",
     ".DS_Store",
     "*.log",
     "node_modules/",
@@ -213,6 +218,18 @@ test("pai e shipper preservam a lista de never-stage do Claude Code", () => {
   for (const exclusion of exclusions) {
     assert.ok(prompt.includes(exclusion), `parent prompt missing never-stage exclusion: ${exclusion}`);
     assert.ok(shipper.includes(exclusion), `shipper missing never-stage exclusion: ${exclusion}`);
+  }
+});
+
+test("shipping allows reviewed authorized vendor fixes without publishing transient state", () => {
+  for (const path of [promptPath, shipperPath]) {
+    const text = readFileSync(path, "utf8");
+    const staging = text.slice(text.indexOf("Nunca stagear"));
+    assert.doesNotMatch(staging, /`\.pi\/harness\/`,/);
+    assert.match(text, /código e defaults vendorizados.*já versionados.*autorizados pelo operador.*cobertos pelas revisões atuais/is);
+    assert.match(text, /prefixo `\.pi\/harness\/` não é motivo de veto, separação de\s+commits ou repetição de revisões válidas/is);
+    assert.match(text, /(?:estado transitório|Exclua também).*`\.pi\/harness\/state\/`.*`\.pi\/harness\/sessions\/`.*`\.pi\/harness\/runtime\/`.*`\.pi\/harness\/plans\/`/is);
+    assert.match(text, /Path suspeito exige\s+classificar o arquivo.*confirme segredos pelo path sem ler seus valores/is);
   }
 });
 
