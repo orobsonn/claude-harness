@@ -11,7 +11,7 @@ import { isCaptureEligibleHandRecord, recordViolations } from "../../shared/lib/
 import { isSafeFeatureId, isSafeSessionId, isSafeTaskId } from "../../shared/lib/feature-id.mjs";
 import { parseTestReviewVerdict } from "../../shared/lib/test-review-verdict.mjs";
 import { parseHandStatusFromOutput, validateOcCaptureEligibleHandRecord } from "../../opencode/lib/hand-records.mjs";
-import { hashTaskReceipt, unsupportedTaskScopePattern } from "./task-contract.mjs";
+import { hashTaskReceipt, taskRegistryPath, unsupportedTaskScopePattern } from "./task-contract.mjs";
 import { readTaskContextReturn, validateTaskContextReturn } from "./task-context.mjs";
 import { readTaskPlanAuthority, recoveredTaskContractHash } from "./task-plan-recovery.mjs";
 import { capturePiReviewInput, hasCurrentPiTaskReviewCompletion, currentPiReviewIssues, findPiReviewReceipt, isSatisfiedPiTaskReviewReceipt, readPiReviewPlan } from "./pi-review-evidence.mjs";
@@ -440,15 +440,21 @@ function onlyRecoveryChanges(entry, root, baseline, head, task, plan, replayHand
     // taskScopeBase has validated the merge tree and each corrected ancestor's
     // receipt against registry history. Its product belongs to that ancestor,
     // not to this test-author. Keep child writes restricted on both sides.
-    const upstreamTasks = (proof.upstreams ?? []).map((upstream) => plan.tasks.find((item) => item.id === upstream.task_id));
-    const dependencyPaths = replayHand?.agent === "harness-test-author" &&
-      ancestor(root, replayHand.freeze_sha, proof.pre_child_head) &&
-      upstreamTasks.length && upstreamTasks.every(Boolean) && !proof.conflicts?.length
-      ? [...importedPaths, ...upstreamTasks.flatMap((item) => [...(item.scope_paths ?? []), ...(item.allowed_writes ?? [])])]
-      : null;
-    const exactDependencyImport = dependencyPaths && ancestor(root, proof.pre_child_head, proof.merged_head) &&
-      checkScope(splitZero(git(root, ["diff", "--no-renames", "--name-only", "-z",
-        proof.pre_child_head, proof.merged_head, "--"])), dependencyPaths).length === 0;
+    let dependencyPaths = null;
+    if (replayHand?.agent === "harness-test-author" &&
+        ancestor(root, replayHand.freeze_sha, proof.pre_child_head) && proof.upstreams?.length && !proof.conflicts?.length) {
+      const registry = readJson(taskRegistryPath(entry.parent_root, entry.parent_session_id), entry.parent_root);
+      const results = proof.upstreams.map((upstream) => {
+        const dependency = registry.tasks?.[upstream.task_id];
+        return [dependency?.result, ...Object.values(dependency?.result_history ?? {})]
+          .find((result) => result && hashTaskReceipt(result) === upstream.receipt.result_sha256);
+      });
+      // The dependency may have an approved scope repair newer than this task's
+      // archived plan. Use its sealed inspection paths, not that stale scope.
+      if (results.every((result) => Array.isArray(result?.changed_paths) && result.changed_paths.every((file) => typeof file === "string")))
+        dependencyPaths = [...importedPaths, ...results.flatMap((result) => result.changed_paths)];
+    }
+    const exactDependencyImport = dependencyPaths && onlyFrozenChanges(root, proof.pre_child_head, proof.merged_head, dependencyPaths);
     if (!onlyFrozenChanges(root, cursor, proof.pre_child_head, paths) ||
         (!exactParentRefresh && !exactDependencyImport && !onlyFrozenChanges(root, proof.pre_child_head, proof.merged_head, importedPaths))) return false;
     cursor = proof.merged_head;

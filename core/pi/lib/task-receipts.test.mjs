@@ -798,7 +798,7 @@ test("missing-capture recovery rejects absent commit proof, unresolved review an
 });
 
 function reconciledTestRecovery({ productDelta = false, memoryDelta = false, childProductDelta = false, aggregateRefresh = false,
-  replayExistingAuthor = false } = {}) {
+  replayExistingAuthor = false, expandedDependency = false } = {}) {
   const f = replayExistingAuthor ? testOnlyRecovery() : inspectionFixture();
   bindPinnedRuntime(f);
   appendImplementationReviews(f);
@@ -831,14 +831,17 @@ function reconciledTestRecovery({ productDelta = false, memoryDelta = false, chi
   run(f.root, "git", "checkout", "-b", "upstream-correction", aggregateRefresh ? f.head : f.base);
   write(path.join(f.root, "upstream.spec.mjs"), "export const oracle = 'corrected';\n");
   if (productDelta) write(path.join(f.root, "upstream.mjs"), "export const behavior = 'changed';\n");
+  if (expandedDependency) write(path.join(f.root, "upstream-extra.mjs"), "export const approvedLater = true;\n");
   if (memoryDelta) write(path.join(f.root, "MEMORY.md"), "Host-harvested lesson.\n");
-  run(f.root, "git", "add", "upstream.spec.mjs", ...(productDelta ? ["upstream.mjs"] : []), ...(memoryDelta ? ["MEMORY.md"] : []));
+  run(f.root, "git", "add", "upstream.spec.mjs", ...(productDelta ? ["upstream.mjs"] : []),
+    ...(expandedDependency ? ["upstream-extra.mjs"] : []), ...(memoryDelta ? ["MEMORY.md"] : []));
   run(f.root, "git", "commit", "-m", "upstream correction");
   const parent = run(f.root, "git", "rev-parse", "HEAD");
   run(f.root, "git", "checkout", "-b", "dependent-recovery", f.head);
   run(f.root, "git", "merge", "--no-ff", "-m", "host reconciliation", parent);
   const merged = run(f.root, "git", "rev-parse", "HEAD");
-  const result = { child_head: parent };
+  const result = { child_head: parent, changed_paths: ["upstream.spec.mjs", ...(productDelta ? ["upstream.mjs"] : []),
+    ...(expandedDependency ? ["upstream-extra.mjs"] : []), ...(memoryDelta ? ["MEMORY.md"] : [])] };
   const receipt = { ...previous, child_head: parent, integrated_head: parent, result_sha256: hashTaskReceipt(result) };
   const registry = { version: 1, parent_session_id: PARENT, feature_id: FEATURE,
     plan_sha256: f.entry.plan_sha256, spec_sha256: f.entry.spec_sha256,
@@ -896,7 +899,7 @@ test("test-only host reconciliation preserves captured implementation without a 
 });
 
 test("an existing fidelity author survives a proven upstream product correction before first integration", () => {
-  const f = reconciledTestRecovery({ productDelta: true, replayExistingAuthor: true });
+  const f = reconciledTestRecovery({ productDelta: true, replayExistingAuthor: true, expandedDependency: true });
   assert.equal(f.entry.integration_history, undefined);
   const inspected = inspectTaskRun(f.entry, f.dependencies);
   assert.equal(inspected.ok, true, inspected.reason);
