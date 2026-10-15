@@ -4,7 +4,7 @@ import { execFileSync } from "node:child_process";
 import { isSafeFeatureId, isSafeTaskId } from "../../shared/lib/feature-id.mjs";
 import { isChildSession, piSessionId } from "../lib/pi-adapter-map.mjs";
 import { loadPiGateStateFromDisk } from "../lib/pi-gate-state.mjs";
-import { capturePiReviewInput, checkPiReviewPreparation, piTaskRegateStatus, findPiReviewReceipt, isSatisfiedPiTaskReviewReceipt, missingPiReviewRoles, observedPiTaskReviewRoles, readPiReviewPlan } from "../lib/pi-review-evidence.mjs";
+import { capturePiReviewInput, checkPiReviewPreparation, piTaskRegateStatus, piTaskClosureReview, findPiReviewReceipt, isSatisfiedPiTaskReviewReceipt, missingPiReviewRoles, observedPiTaskReviewRoles, readPiReviewPlan } from "../lib/pi-review-evidence.mjs";
 import { PARALLEL_REVIEW_ROLES, requiredPiFinalReviewRoles, requiredPiTaskReviewRoles } from "../lib/roles.mjs";
 import { resolvePostHarvestReviewSnapshot } from "../lib/memory-cycle.mjs";
 
@@ -93,13 +93,17 @@ export default function harnessReviews(pi: ExtensionAPI) {
           return [role, receipt?.active_dispatch_call_id ?? receipt?.dispatch_call_id];
         }))) : new Map<string, { callId: string; afterImplementation: boolean }>();
       if (observed === null) return denied("Task review status requires durable parent session entries.");
-      const unavailable = params.phase === "final" ? missingPiReviewRoles({ ...input, roles }) : roles.filter((role) =>
+      let unavailable = params.phase === "final" ? missingPiReviewRoles({ ...input, roles }) : roles.filter((role) =>
         !isSatisfiedPiTaskReviewReceipt(receipts.get(role), {
           ...input, role, snapshot: captured.snapshot, dispatchCallId: observed.get(role)?.callId,
           reviewAfterImplementation: observed.get(role)?.afterImplementation,
         }));
       const baseline = requiredPiTaskReviewRoles({ ...plan.plan, mode: plan.plan.mode ?? loaded.state.mode },
         plan.plan.tasks.find((task: any) => task.id === params.task_id));
+      const closureRole = params.phase === "task" ? piTaskClosureReview({ ...input, state: loaded.state,
+        snapshot: captured.snapshot, observed, roles: roles.filter(role => baseline.includes(role) ||
+          observed.has(role) || receipts.get(role) !== null) }) : null;
+      if (closureRole) unavailable = [...unavailable, closureRole];
       const unresolvedBeforeAffected = params.phase === "task" ? unavailable.filter((role) =>
         baseline.includes(role) || observed.has(role) || receipts.get(role) !== null) : [];
       const affected = params.affected_roles ?? [];
@@ -153,6 +157,8 @@ export default function harnessReviews(pi: ExtensionAPI) {
             available: roles,
             accepted,
             missing: taskRequired.filter((role) => effectiveUnavailable.includes(role)),
+            ...(closureRole ? { closure_review: { role: closureRole,
+              reason: "No satisfied ancestral re-gate or current host-owned review anchor. Refresh only this role for native closure; preserve accepted siblings." } } : {}),
             ...(affected.length ? { affected, affected_reason: params.affected_reason.trim() } : {}),
           };
       const preparation = checkPiReviewPreparation(input);
