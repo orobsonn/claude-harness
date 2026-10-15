@@ -11,7 +11,7 @@ import { isCaptureEligibleHandRecord, recordViolations } from "../../shared/lib/
 import { isSafeFeatureId, isSafeSessionId, isSafeTaskId } from "../../shared/lib/feature-id.mjs";
 import { parseTestReviewVerdict } from "../../shared/lib/test-review-verdict.mjs";
 import { parseHandStatusFromOutput, validateOcCaptureEligibleHandRecord } from "../../opencode/lib/hand-records.mjs";
-import { hashTaskReceipt, unsupportedTaskScopePattern } from "./task-contract.mjs";
+import { hashTaskReceipt, taskRegistryPath, unsupportedTaskScopePattern } from "./task-contract.mjs";
 import { readTaskContextReturn, validateTaskContextReturn } from "./task-context.mjs";
 import { readTaskPlanAuthority, recoveredTaskContractHash } from "./task-plan-recovery.mjs";
 import { capturePiReviewInput, hasCurrentPiTaskReviewCompletion, currentPiReviewIssues, findPiReviewReceipt, isSatisfiedPiTaskReviewReceipt, readPiReviewPlan } from "./pi-review-evidence.mjs";
@@ -19,7 +19,7 @@ import { PARALLEL_REVIEW_ROLES, requiredPiTaskReviewRoles } from "./roles.mjs";
 import { canonicalTaskReviewPrompt, classifyPiReviewDispatch } from "./pi-review-concurrency.mjs";
 import { piGateStatePath, piHandRecordPath } from "./pi-paths.mjs";
 import { readTaskProcess } from "./task-process.mjs";
-import { capturePlanReviewInput, readTaskRunBinding } from "./task-run.mjs";
+import { capturePlanReviewInput, readTaskRunBinding, validateTaskRepairCheckpoint } from "./task-run.mjs";
 import { readPiSpecApproval } from "./spec-approval.mjs";
 import { taskScopeBase, taskReconciliationDigest } from "./task-reconciliation.mjs";
 import { DURABLE_MEMORY_FILES } from "./memory-cycle.mjs";
@@ -222,7 +222,7 @@ function legacyCommitCommand(command) {
   return segments.length === 4 &&
     /^git\s+add\s+(?:--\s+)?[A-Za-z0-9_./-]+(?:\s+[A-Za-z0-9_./-]+)*$/.test(segments[0]) &&
     commit.test(segments[1]) && segments[2] === "git status --short" &&
-    segments[3] === "git log -1 --format='%H%n%s'";
+    /^git\s+log\s+-1\s+--format=(?:%H|'%H(?:%n%s)?'|"%H(?:%n%s)?")$/.test(segments[3]);
 }
 
 function commitFromEvent(event, worktree) {
@@ -437,8 +437,26 @@ function onlyRecoveryChanges(entry, root, baseline, head, task, plan, replayHand
     const exactParentRefresh = sameAuthor && proof.kind === "aggregate-refresh" &&
       String(git(root, ["rev-parse", `${proof.merged_head}^{tree}`])).trim() ===
         String(git(root, ["rev-parse", `${proof.parent_head}^{tree}`])).trim();
+    // taskScopeBase has validated the merge tree and each corrected ancestor's
+    // receipt against registry history. Its product belongs to that ancestor,
+    // not to this test-author. Keep child writes restricted on both sides.
+    let dependencyPaths = null;
+    if (replayHand?.agent === "harness-test-author" &&
+        ancestor(root, replayHand.freeze_sha, proof.pre_child_head) && proof.upstreams?.length && !proof.conflicts?.length) {
+      const registry = readJson(taskRegistryPath(entry.parent_root, entry.parent_session_id), entry.parent_root);
+      const results = proof.upstreams.map((upstream) => {
+        const dependency = registry.tasks?.[upstream.task_id];
+        return [dependency?.result, ...Object.values(dependency?.result_history ?? {})]
+          .find((result) => result && hashTaskReceipt(result) === upstream.receipt.result_sha256);
+      });
+      // The dependency may have an approved scope repair newer than this task's
+      // archived plan. Use its sealed inspection paths, not that stale scope.
+      if (results.every((result) => Array.isArray(result?.changed_paths) && result.changed_paths.every((file) => typeof file === "string")))
+        dependencyPaths = [...importedPaths, ...results.flatMap((result) => result.changed_paths)];
+    }
+    const exactDependencyImport = dependencyPaths && onlyFrozenChanges(root, proof.pre_child_head, proof.merged_head, dependencyPaths);
     if (!onlyFrozenChanges(root, cursor, proof.pre_child_head, paths) ||
-        (!exactParentRefresh && !onlyFrozenChanges(root, proof.pre_child_head, proof.merged_head, importedPaths))) return false;
+        (!exactParentRefresh && !exactDependencyImport && !onlyFrozenChanges(root, proof.pre_child_head, proof.merged_head, importedPaths))) return false;
     cursor = proof.merged_head;
   }
   return onlyFrozenChanges(root, cursor, head, paths);
@@ -786,6 +804,32 @@ export function inspectTaskRun(entry, dependencies = {}) {
               head_sha: reconciliation.merged_head, derived_from: "host-reconciliation",
               reconciliation_sha256: taskReconciliationDigest(entry) };
           }
+        }
+      }
+      const repairAuthor = native.events[firstAuthorIndex];
+      const repairImplementation = native.events[implementationIndex];
+      // A rejected capture is not approval and must not create a permanent
+      // deadlock. Native commit events can prove a restored, scoped checkpoint;
+      // the new author's fidelity/capture and implementation eyes still apply.
+      if (!recoveryOrigin && repairAuthor && hand.freezeCommitSha !== head) {
+        const beforeImplementation = native.events.slice(0, implementationIndex);
+        const markerIndex = beforeImplementation.findLastIndex((event) => event.tool === "mark" &&
+          event.args?.action === "fidelity" && event.args?.task_id === entry.task_id && markerSucceeded(event));
+        const originalFreeze = markerIndex < 0 ? null : beforeImplementation.slice(0, markerIndex)
+          .map((event) => commitFromEvent(event, worktree)).filter(Boolean).at(-1);
+        const checkpointObserved = native.events.slice(implementationIndex + 1, firstAuthorIndex).some((event) =>
+          Number.isInteger(repairImplementation.endLine) && Number.isInteger(event.endLine) &&
+          (event.launchIndex > repairImplementation.launchIndex || event.line > repairImplementation.endLine) &&
+          (event.launchIndex < repairAuthor.launchIndex || event.endLine < repairAuthor.line) &&
+          /\bgit\s+commit\b/.test(event.args?.command ?? "") &&
+          /^\[[^\]\n]+\s+[0-9a-f]{7,40}\]/m.test(eventText(event.end?.result)) &&
+          commitFromEvent(event, worktree) === hand.freezeCommitSha);
+        const restoredFrozen = originalFreeze && splitZero(git(worktree, ["log", "--format=", "--name-only", "-z",
+          `${originalFreeze}..${hand.freezeCommitSha}`, "--", ...frozenPaths(binding.task)])).length > 0;
+        if (checkpointObserved && restoredFrozen && validateTaskRepairCheckpoint({ root: worktree, task: binding.task,
+          baseSha: originalFreeze, headSha: hand.freezeCommitSha }).ok) {
+          recoveryOrigin = { head_sha: hand.freezeCommitSha, producer_call_id: repairImplementation.callId,
+            producer_launch_index: repairImplementation.launchIndex, derived_from: "pre-author-product-commit" };
         }
       }
       // A BLOCKED hand may have left real product behind before a fixture repair.

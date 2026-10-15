@@ -655,6 +655,25 @@ test("the first scoped test-author freeze recovers a missing pre-author capture 
   assert.equal(inspected.result.hand_capture.recovery_origin.derived_from, "pre-author-product-commit");
 });
 
+test("native checkpoint accepts SHA-only log formatting without replaying the implementation", () => {
+  for (const format of ["%H", "'%H'", '"%H"', "'%H%n%s'"]) {
+    const f = testOnlyRecovery({ capturedImplementation: false });
+    const file = f.entry.launches.at(-1).events_path;
+    const events = fs.readFileSync(file, "utf8").trimEnd().split("\n").map((line) => {
+      const item = JSON.parse(line);
+      if (item.type === "tool_execution_start" && item.toolCallId === "product-commit") {
+        item.args.command = `git add src/task.mjs && git commit -m "implement" && git status --short && git log -1 --format=${format}`;
+      }
+      return JSON.stringify(item);
+    }).join("\n") + "\n";
+    write(file, events);
+    const inspected = inspectTaskRun(f.entry, f.dependencies);
+    assert.equal(inspected.ok, true, `${format}: ${inspected.reason}`);
+    assert.equal(inspected.result.hand_capture.recovery_origin.producer_call_id, "producer");
+    assert.equal(fs.readFileSync(file, "utf8"), events, "native evidence is preserved");
+  }
+});
+
 test("a preserved BLOCKED implementation survives repeated fixture repair and a non-writing blocked dispatch", () => {
   const f = testOnlyRecovery({ capturedImplementation: false, extraAuthor: true, interveningWriter: true });
   const eventsPath = f.entry.launches.at(-1).events_path;
@@ -778,8 +797,9 @@ test("missing-capture recovery rejects absent commit proof, unresolved review an
   assert.match(inspectTaskRun(expanded.entry, expanded.dependencies).reason, /clean captured implementation/);
 });
 
-function reconciledTestRecovery({ productDelta = false, memoryDelta = false, childProductDelta = false, aggregateRefresh = false } = {}) {
-  const f = inspectionFixture();
+function reconciledTestRecovery({ productDelta = false, memoryDelta = false, childProductDelta = false, aggregateRefresh = false,
+  replayExistingAuthor = false, expandedDependency = false } = {}) {
+  const f = replayExistingAuthor ? testOnlyRecovery() : inspectionFixture();
   bindPinnedRuntime(f);
   appendImplementationReviews(f);
   const binding = f.dependencies.readTaskRunBindingFn();
@@ -788,7 +808,7 @@ function reconciledTestRecovery({ productDelta = false, memoryDelta = false, chi
   binding.task.depends_on = [upstreamTask.id];
   binding.plan.tasks.unshift(upstreamTask);
   f.dependencies.readTaskRunBindingFn = () => binding;
-  if (aggregateRefresh) {
+  if (aggregateRefresh || replayExistingAuthor) {
     const specPath = path.join(f.root, ".pi/harness/plans", FEATURE, "spec.md");
     write(specPath, "Approved aggregate spec\n");
     f.entry.spec_sha256 = binding.grant.spec_sha256 = crypto.createHash("sha256").update(fs.readFileSync(specPath)).digest("hex");
@@ -804,17 +824,24 @@ function reconciledTestRecovery({ productDelta = false, memoryDelta = false, chi
   binding.grant.dependencies = [{ task_id: "upstream", child_head: f.base, integrated_head: f.base,
     receipt: previous, receipt_sha256: hashTaskReceipt(previous) }];
   archiveInspectedIntegration(f);
+  if (replayExistingAuthor) {
+    delete f.entry.integration_history;
+    delete f.entry.result_history;
+  }
   run(f.root, "git", "checkout", "-b", "upstream-correction", aggregateRefresh ? f.head : f.base);
   write(path.join(f.root, "upstream.spec.mjs"), "export const oracle = 'corrected';\n");
   if (productDelta) write(path.join(f.root, "upstream.mjs"), "export const behavior = 'changed';\n");
+  if (expandedDependency) write(path.join(f.root, "upstream-extra.mjs"), "export const approvedLater = true;\n");
   if (memoryDelta) write(path.join(f.root, "MEMORY.md"), "Host-harvested lesson.\n");
-  run(f.root, "git", "add", "upstream.spec.mjs", ...(productDelta ? ["upstream.mjs"] : []), ...(memoryDelta ? ["MEMORY.md"] : []));
+  run(f.root, "git", "add", "upstream.spec.mjs", ...(productDelta ? ["upstream.mjs"] : []),
+    ...(expandedDependency ? ["upstream-extra.mjs"] : []), ...(memoryDelta ? ["MEMORY.md"] : []));
   run(f.root, "git", "commit", "-m", "upstream correction");
   const parent = run(f.root, "git", "rev-parse", "HEAD");
   run(f.root, "git", "checkout", "-b", "dependent-recovery", f.head);
   run(f.root, "git", "merge", "--no-ff", "-m", "host reconciliation", parent);
   const merged = run(f.root, "git", "rev-parse", "HEAD");
-  const result = { child_head: parent };
+  const result = { child_head: parent, changed_paths: ["upstream.spec.mjs", ...(productDelta ? ["upstream.mjs"] : []),
+    ...(expandedDependency ? ["upstream-extra.mjs"] : []), ...(memoryDelta ? ["MEMORY.md"] : [])] };
   const receipt = { ...previous, child_head: parent, integrated_head: parent, result_sha256: hashTaskReceipt(result) };
   const registry = { version: 1, parent_session_id: PARENT, feature_id: FEATURE,
     plan_sha256: f.entry.plan_sha256, spec_sha256: f.entry.spec_sha256,
@@ -830,6 +857,27 @@ function reconciledTestRecovery({ productDelta = false, memoryDelta = false, chi
       source_integration_sha256: hashTaskReceipt(f.entry.integration_history.at(-1)) });
     registry.tasks[TASK] = f.entry;
     write(path.join(f.root, ".pi/harness/state", PARENT, "task-runs/index.json"), registry);
+  }
+  if (replayExistingAuthor) {
+    f.head = merged;
+    if (childProductDelta) {
+      write(path.join(f.root, "src/task.mjs"), "export const actual = 'child product drift';\n");
+      run(f.root, "git", "add", "src/task.mjs"); run(f.root, "git", "commit", "-m", "child product drift");
+      f.head = run(f.root, "git", "rev-parse", "HEAD");
+    }
+    const state = JSON.parse(fs.readFileSync(f.statePath));
+    const bare = `${FEATURE}/${TASK}`;
+    for (const receipt of [state.task_adversary_evidence[bare], ...Object.values(state.task_review_evidence[bare])]) receipt.reviewed_head_sha = f.head;
+    write(f.statePath, state);
+    const file = f.entry.launches.at(-1).events_path;
+    fs.appendFileSync(file, [
+      event("tool_execution_start", { toolCallId: "replay-capture", toolName: "mark", args: { action: "capture-verified", task_id: TASK } }),
+      event("tool_execution_end", { toolCallId: "replay-capture", toolName: "mark", result: { details: {
+        ok: true, capture_origin: { task_id: TASK, producer_call_id: "correct-author", worktree_clean: true, head_sha: f.head } } } }), "",
+    ].join("\n"));
+    appendImplementationReviews(f);
+    f.dependencies.captureReviewInputFn = () => ({ ok: true, snapshot: { head_sha: f.head, input_digest: DIGEST } });
+    return f;
   }
   return testOnlyRecovery({ fixture: { ...f, head: merged }, capturedImplementation: false,
     productDelta: childProductDelta });
@@ -848,6 +896,26 @@ test("test-only host reconciliation preserves captured implementation without a 
     assert.equal(again.ok, true, again.reason);
     assert.equal(again.result.hand_capture.recovery_origin.head_sha, f.head);
   }
+});
+
+test("an existing fidelity author survives a proven upstream product correction before first integration", () => {
+  const f = reconciledTestRecovery({ productDelta: true, replayExistingAuthor: true, expandedDependency: true });
+  assert.equal(f.entry.integration_history, undefined);
+  const inspected = inspectTaskRun(f.entry, f.dependencies);
+  assert.equal(inspected.ok, true, inspected.reason);
+  assert.equal(inspected.result.hand_capture.producer_call_id, "correct-author");
+  const integration = { version: 1, written_by: "host-task-integration", parent_session_id: PARENT,
+    feature_id: FEATURE, task_id: TASK, attempt_id: ATTEMPT, parent_root: f.root, worktree: f.root,
+    session_id: CHILD, plan_sha256: inspected.result.plan_sha256, spec_sha256: inspected.result.spec_sha256,
+    base_sha: f.base, child_head: f.head, integrated_head: f.head, result_sha256: hashTaskReceipt(inspected.result) };
+  persistRecoveryIntegration(f, { result: inspected.result, integration });
+  const evidence = readIntegratedTaskEvidence({ projectRoot: f.root, sessionId: PARENT,
+    featureId: FEATURE, taskId: TASK, headSha: f.head });
+  assert.equal(evidence.ok, true, evidence.reason);
+  const drift = reconciledTestRecovery({ productDelta: true, replayExistingAuthor: true, childProductDelta: true });
+  assert.equal(inspectTaskRun(drift.entry, drift.dependencies).ok, false, "host imports cannot hide child product writes");
+  f.entry.reconciliations[0].upstreams[0].receipt.result_sha256 = "0".repeat(64);
+  assert.equal(inspectTaskRun(f.entry, f.dependencies).ok, false, "upstream receipt authority is mandatory");
 });
 
 test("reviewed upstream product can be the host baseline for a frozen-test-only correction", () => {
@@ -3136,4 +3204,43 @@ test("integrated evidence survives same-plan reapproval only with intact origina
   const forged = readIntegratedTaskEvidence(input);
   assert.equal(forged.ok, false);
   assert.match(forged.reason, /current host-owned plan approval/);
+});
+
+test("restored historical frozen violations admit test repair with current proof and reviews", () => {
+  for (const restored of [true, false]) {
+    const f = inspectionFixture();
+    write(path.join(f.root, "src/task.spec.mjs"), "// invalid executor test change\n");
+    run(f.root, "git", "add", "src/task.spec.mjs");
+    run(f.root, "git", "commit", "-m", "executor touched frozen file");
+    if (restored) {
+      run(f.root, "git", "restore", `--source=${f.freeze}`, "--", "src/task.spec.mjs");
+      run(f.root, "git", "add", "src/task.spec.mjs");
+      run(f.root, "git", "commit", "-m", "restore frozen file");
+    }
+    f.head = run(f.root, "git", "rev-parse", "HEAD");
+    const eventsPath = f.entry.launches.at(-1).events_path;
+    fs.appendFileSync(eventsPath, [
+      event("tool_execution_start", { toolCallId: "restored-checkpoint", toolName: "bash", args: {
+        command: `git restore --source=${f.freeze} -- src/task.spec.mjs && git add src/task.spec.mjs && git commit -m "restore frozen file" && git status --short` } }),
+      event("tool_execution_end", { toolCallId: "restored-checkpoint", toolName: "bash", isError: false,
+        result: { content: [{ type: "text", text: `[task ${f.head.slice(0, 7)}] restore frozen file` }] } }),
+      // Refused authors have no writer and must not precede the real baseline.
+      event("tool_execution_start", { toolCallId: "refused-author", toolName: "subagent", args: {
+        subagent_type: "harness-test-author", prompt: `[HARNESS_TASK_CONTEXT]{"task_id":"${TASK}"}[/HARNESS_TASK_CONTEXT]` } }),
+      event("tool_execution_end", { toolCallId: "refused-author", toolName: "subagent", isError: true,
+        result: { content: [{ type: "text", text: "harness dispatch blocked: uncaptured implementation" }] } }), "",
+    ].join("\n"));
+    const recovery = testOnlyRecovery({ fixture: f, capturedImplementation: false });
+    write(eventsPath, replaceEventText(fs.readFileSync(eventsPath, "utf8"), "producer", "Status: BLOCKED"));
+    const inspected = inspectTaskRun(recovery.entry, recovery.dependencies);
+    assert.equal(inspected.ok, restored, inspected.reason);
+    if (restored) {
+      assert.equal(inspected.result.hand_capture.agent, "harness-test-author");
+      assert.equal(inspected.result.hand_capture.recovery_origin.head_sha, recovery.recoveryBaseline);
+      const state = JSON.parse(fs.readFileSync(recovery.statePath));
+      delete state.task_review_evidence[`${FEATURE}/${TASK}`].compliance;
+      write(recovery.statePath, state);
+      assert.equal(inspectTaskRun(recovery.entry, recovery.dependencies).ok, false, "current reviews remain required");
+    }
+  }
 });

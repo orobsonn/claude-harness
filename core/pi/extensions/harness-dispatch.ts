@@ -48,7 +48,7 @@ function canonicalTaskPrompt(prompt: unknown, task: unknown) {
     `${JSON.stringify(task)}\n${CANONICAL_TASK_CLOSE}`;
 }
 
-function uncapturedImplementationReason(projectRoot: string, sessionId: string, featureId: string, taskId: string, binding: any) {
+function uncapturedImplementationReason(projectRoot: string, sessionId: string, featureId: string, taskId: string, binding: any = readTaskRunBinding(projectRoot, sessionId)) {
   const resolved = piHandRecordPath({ projectRoot, sessionId, featureId }, taskId);
   if (!resolved.ok) return null;
   let record: any;
@@ -61,14 +61,7 @@ function uncapturedImplementationReason(projectRoot: string, sessionId: string, 
     // after preserving product in a selective checkpoint, as task-run already
     // requires. Receipt inspection still requires native checkpoint lineage,
     // test-only changes, fidelity, capture, reviews and re-gate; none is waived.
-    if (record.outcome === "BLOCKED" && binding?.ok === true &&
-        binding.grant?.feature_id === featureId && binding.grant?.task_id === taskId &&
-        binding.sessionId === sessionId && binding.root === projectRoot &&
-        recordViolations(record).scope.length === 0 && recordViolations(record).frozen.length === 0) {
-      const checkpoint = checkBlockedTaskRepairCheckpoint(binding, record);
-      if (checkpoint.ok) return null;
-      if (checkpoint.reason) return checkpoint.reason;
-    }
+    if (checkBlockedTaskRepairCheckpoint(binding, record).ok) return null;
     return Array.isArray(record.touchedPaths) && record.touchedPaths.length > 0
       ? "latest implementation hand ended without a capture-eligible outcome and left a product delta; recover with an implementation hand before dispatching test-author"
       : null;

@@ -253,7 +253,10 @@ test("admitted blocked writer can repair a fixture after a scoped product checkp
     assert.equal(dispatch({ toolName: "subagent", input: author() }, f.context), undefined, "fixture repair is admitted");
     assert.equal(handler()({ toolName: "subagent", input: author() }, f.context)?.block, true, "ordinary session is still blocked");
     assert.equal(JSON.parse(readFileSync(handPath, "utf8")).outcome, "BLOCKED", "admission never approves the writer");
-    for (const changed of [{ scopeViolations: ["src/a.ts"] }, { frozenViolations: ["tests/a.test.mjs"] }, { outcome: "DONE" }]) {
+    writeFileSync(handPath, JSON.stringify({ ...record, frozenViolations: ["tests/a.test.mjs"] }));
+    assert.equal(dispatch({ toolName: "subagent", input: author() }, f.context), undefined,
+      "historical frozen violations permit repair after exact restoration");
+    for (const changed of [{ scopeViolations: ["src/a.ts"] }, { outcome: "DONE" }]) {
       writeFileSync(handPath, JSON.stringify({ ...record, ...changed }));
       assert.equal(dispatch({ toolName: "subagent", input: author() }, f.context)?.block, true);
     }
