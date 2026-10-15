@@ -513,6 +513,7 @@ implementação, testes ou entrega.
 | Falha de suíte | Focal isolado é diagnóstico, não aprovação agregada. Não repetir suíte inalterada sem causa e recuperação concreta. |
 | Nova implementação/escopo/frozen test | Continuam exigindo contrato aprovado, fidelidade, produtor/captura nativos e olhos aplicáveis. Nenhuma correção desta auditoria amplia paths por prosa. |
 | Provider, processo ou observação indisponível | Abort/erro não vira sucesso. Preservar evidência e informar erro exato; não fabricar recibos ou repetir indefinidamente uma falha inalterada. |
+| Flag antiga de final-review | O encaminhamento para shipping exige recibos finais atuais, incluindo o carry documental nativo; o booleano sozinho não basta. |
 | Harvest/shipping/finalização | Reutilizar apenas recibos compatíveis; entrega não infere autorização de merge, deploy ou release. Pausa e fronteira de entrega concluída continuam sendo paradas válidas. |
 
 Cobertura: `delivery-continuation`, `harness-reviews`, `policy`, `pi-final-checks`,

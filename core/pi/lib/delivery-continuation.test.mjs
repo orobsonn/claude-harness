@@ -113,9 +113,9 @@ test("real run states move from waiting to final review to shipping, but stop at
   f.write("evidence/diff.json", { head_sha: f.head, command: "git diff --stat", worktree_dirty: false, original_status: { exit_code: 0 } });
   assert.equal(readDeliveryContinuation(f.ctx).key, verified.key, "new diagnostic commands cannot renew a blocked obligation");
   f.state.final_review_done = true; f.write("gate-state.json", f.state);
-  assert.equal(readDeliveryContinuation(f.ctx).stage, "shipping");
+  assert.equal(readDeliveryContinuation(f.ctx, { hasCurrentFinalReviews: () => true }).stage, "shipping");
   f.write("memory-shipment.json", { written_by: "host-subagent-completion", session_id: "parent", feature_id: "issue-22", head: "wrong", status: "completed" });
-  assert.equal(readDeliveryContinuation(f.ctx).stage, "shipping", "stale shipment is not completion");
+  assert.equal(readDeliveryContinuation(f.ctx, { hasCurrentFinalReviews: () => true }).stage, "shipping", "stale shipment is not completion");
   f.write("memory-shipment.json", { written_by: "host-subagent-completion", session_id: "parent", feature_id: "issue-22", head: f.head, status: "completed" });
   assert.equal(readDeliveryContinuation(f.ctx), null, "draft delivery does not auto-merge");
 });
@@ -393,4 +393,13 @@ test("final continuation reuses native full-suite proof across a peripheral comm
   fs.writeFileSync(path.join(f.ctx.cwd, "product.js"), "new application behavior\n");
   git("add", "product.js"); git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", "product");
   assert.match(readDeliveryContinuation(f.ctx).content, /Native preparation requires only/);
+});
+
+
+test("an old final-review flag cannot route a changed aggregate straight to shipping", t => {
+  const f = fixture(t);
+  f.registry.tasks.one.status = "integrated"; f.write("task-runs/index.json", f.registry);
+  f.state.final_review_done = true; f.write("gate-state.json", f.state);
+  assert.equal(readDeliveryContinuation(f.ctx).stage, "final-review", "current native final receipts are still required");
+  assert.equal(readDeliveryContinuation(f.ctx, { hasCurrentFinalReviews: () => true }).stage, "shipping");
 });

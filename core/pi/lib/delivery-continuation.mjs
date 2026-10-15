@@ -9,7 +9,8 @@ import { validateOcCaptureEligibleHandRecord } from "../../opencode/lib/hand-rec
 import { isChildSession, piSessionId } from "./pi-adapter-map.mjs";
 import { piHandRecordPath } from "./pi-paths.mjs";
 import { checkPiFinalCommands } from "./pi-command-evidence.mjs";
-import { piTaskRegateStatus, capturePiReviewInput, isSatisfiedPiTaskReviewReceipt, observedPiTaskReviewRoles } from "./pi-review-evidence.mjs";
+import { piTaskRegateStatus, missingPiReviewRoles, capturePiReviewInput, isSatisfiedPiTaskReviewReceipt, observedPiTaskReviewRoles } from "./pi-review-evidence.mjs";
+import { requiredPiFinalReviewRoles } from "./roles.mjs";
 import { readTaskRunBinding } from "./task-run.mjs";
 import { checkScope } from "../../shared/lib/capture-oracle.mjs";
 
@@ -82,7 +83,8 @@ function hasCurrentTaskCapture(root, { state, sessionId, featureId, taskId, key,
 }
 
 /** Read-only hints. Existing tools remain the sole approval and scheduling authority. */
-export function readDeliveryContinuation(ctx, { readBinding = readTaskRunBinding } = {}) {
+export function readDeliveryContinuation(ctx, { readBinding = readTaskRunBinding,
+  hasCurrentFinalReviews = input => missingPiReviewRoles(input).length === 0 } = {}) {
   const sessionId = piSessionId(ctx);
   if (isChildSession(ctx) || !isSafeSessionId(sessionId)) return null;
   const root = fs.realpathSync(ctx.cwd);
@@ -124,7 +126,8 @@ export function readDeliveryContinuation(ctx, { readBinding = readTaskRunBinding
   } else {
     const registry = read(root, `${directory}/task-runs/index.json`);
     if (registry?.parent_session_id !== sessionId || registry.feature_id !== feature || !registry.tasks) return null;
-    verificationCommands = read(root, `.pi/harness/plans/${feature}/execution-plan.json`)?.final_review?.verification_commands ?? [];
+    const plan = read(root, `.pi/harness/plans/${feature}/execution-plan.json`);
+    verificationCommands = plan?.final_review?.verification_commands ?? [];
     const shipment = read(root, `${directory}/memory-shipment.json`);
     const finalized = read(root, `${directory}/memory-finalized.json`);
     if (shipment?.written_by === "host-subagent-completion" && shipment.session_id === sessionId &&
@@ -135,7 +138,10 @@ export function readDeliveryContinuation(ctx, { readBinding = readTaskRunBinding
       run: e.launches?.at(-1)?.run_id }));
     liveTasks = tasks.some(t => t.status === "running");
     if (!tasks.length) return null;
-    stage = tasks.some(t => t.status !== "integrated") ? "tasks" : state.final_review_done ? "shipping" : "final-review";
+    const finalCurrent = state.final_review_done === true && hasCurrentFinalReviews({
+      projectRoot: root, sessionId, featureId: feature, phase: "final", roles: requiredPiFinalReviewRoles(plan ?? {}),
+    });
+    stage = tasks.some(t => t.status !== "integrated") ? "tasks" : finalCurrent ? "shipping" : "final-review";
     const harvest = read(root, `${directory}/memory-harvest.json`);
     if (stage === "final-review" && verificationCommands.length)
       finalPreparation = checkPiFinalCommands({ projectRoot: root, sessionId, commands: verificationCommands });
