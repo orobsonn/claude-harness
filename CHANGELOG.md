@@ -5,6 +5,23 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [3.9.0](https://github.com/orobsonn/claude-harness/compare/v3.8.0...v3.9.0) (2026-10-15)
+
+
+### Features
+
+* **pi:** usa Terra medium na orquestração OpenAI ([#1138](https://github.com/orobsonn/claude-harness/issues/1138)) ([5d5724e](https://github.com/orobsonn/claude-harness/commit/5d5724ef9916da52383833a668a966df59af5648))
+
+
+### Bug Fixes
+
+* **pi:** admite reparo de fixture após checkpoint bloqueado ([#1136](https://github.com/orobsonn/claude-harness/issues/1136)) ([2139292](https://github.com/orobsonn/claude-harness/commit/2139292fcec0ef69b5c816d7379bdf11c68598d6))
+* **pi:** allow the minimal review required for native regate closure ([#1141](https://github.com/orobsonn/claude-harness/issues/1141)) ([b2b5b99](https://github.com/orobsonn/claude-harness/commit/b2b5b996e227fd432769aa2ef211a4a650f11f30))
+* **pi:** await live tasks before ending delivery continuation ([#1139](https://github.com/orobsonn/claude-harness/issues/1139)) ([6568d3d](https://github.com/orobsonn/claude-harness/commit/6568d3d3dabf3527756cd8b58a2f2472b39ee0f9))
+* **pi:** elimina contradições na recuperação de entrega ([#1140](https://github.com/orobsonn/claude-harness/issues/1140)) ([9639645](https://github.com/orobsonn/claude-harness/commit/9639645adc9a97c98164cb1748301e3ba86fffac))
+* **pi:** preserve accepted reviews after pre-dispatch refusals ([#1142](https://github.com/orobsonn/claude-harness/issues/1142)) ([aad3693](https://github.com/orobsonn/claude-harness/commit/aad36933bbfdb458bf3d5e8c93c68c50bd80172c))
+* **pi:** recover task captures without replaying valid work ([#1143](https://github.com/orobsonn/claude-harness/issues/1143)) ([79097d2](https://github.com/orobsonn/claude-harness/commit/79097d20cfa7d5e0f30d3904d8af9afda270d5f4))
+
 ## [3.8.0](https://github.com/orobsonn/claude-harness/compare/v3.7.7...v3.8.0) (2026-10-14)
 
 
