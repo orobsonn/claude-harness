@@ -2162,6 +2162,45 @@ test("an entry-gate-blocked review retry does not supersede its accepted receipt
   assert.equal(inspected.result.review_receipts.compliance.dispatch_call_id, "call-harness-compliance");
 });
 
+test("native dispatch refusals preserve accepted reviews without hiding child failures", () => {
+  const refusal = "harness dispatch blocked: model-route";
+  for (const [label, text, isError, details, expected] of [
+    ["model-route refusal", refusal, true, {}, true],
+    ["background refusal", "harness dispatch blocked: background-disabled", true, {}, true],
+    ["actual failed child", refusal, true, { agentId: "failed-security", status: "error" }, false],
+    ["child status without agent id", refusal, true, { status: "error" }, false],
+    ["successful tool result", refusal, false, {}, false],
+    ["unknown error", "security review failed", true, {}, false],
+    ["entry-gate text from a child", "[review-dispatch] Blocked: review failed", true,
+      { agentId: "failed-security", status: "error" }, false],
+  ]) {
+    const f = inspectionFixture();
+    appendImplementationReviews(f, ["harness-security"]);
+    const stateBefore = fs.readFileSync(f.statePath, "utf8");
+    fs.appendFileSync(f.entry.launches.at(-1).events_path, [
+      event("tool_execution_start", { toolCallId: "security-retry", toolName: "subagent", args: {
+        subagent_type: "harness-security",
+        prompt: `[HARNESS_TASK_REVIEW]\n[HARNESS_TASK_CONTEXT]{"task_id":"${TASK}"}[/HARNESS_TASK_CONTEXT]`,
+      } }),
+      event("tool_execution_end", { toolCallId: "security-retry", toolName: "subagent", isError,
+        result: { content: [{ type: "text", text }], details } }),
+      "",
+    ].join("\n"));
+    const inspected = inspectTaskRun(f.entry, f.dependencies);
+    assert.equal(inspected.ok, expected, `${label}: ${inspected.reason}`);
+    assert.equal(fs.readFileSync(f.statePath, "utf8"), stateBefore, "inspection preserves host receipts");
+    if (expected) {
+      assert.equal(inspected.result.review_receipts.security.dispatch_call_id, "call-harness-security");
+      const state = JSON.parse(stateBefore);
+      state.task_review_evidence[`${FEATURE}/${TASK}`].security.accepted = false;
+      write(f.statePath, state);
+      assert.equal(inspectTaskRun(f.entry, f.dependencies).ok, false, "a refusal cannot erase a negative review");
+    } else {
+      assert.match(inspected.reason, /accepted security task review/);
+    }
+  }
+});
+
 test("an ancestral approval dispatched before executor completion cannot satisfy implementation review", () => {
   for (const timing of ["before", "in-flight", "after"]) {
     const f = inspectionFixture();
