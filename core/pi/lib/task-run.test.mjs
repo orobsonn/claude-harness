@@ -10,6 +10,7 @@ import {
   admitTaskRun,
   capturePlanReviewInput,
   checkTaskRepairPreservation,
+  checkBlockedTaskRepairCheckpoint,
   decideTaskRunTool,
   hashTaskArtifact,
   parsePlanReviewCompletion,
@@ -26,6 +27,7 @@ import { classifyPiReviewDispatch } from "./pi-review-concurrency.mjs";
 import { runPiHarnessCli } from "../bin/pi-harness.mjs";
 import { resolveModelProfile, writeModelProfileSnapshot } from "./model-profile.mjs";
 import harnessTaskRun from "../extensions/harness-task-run.ts";
+import { testApi as dispatchApi } from "../extensions/harness-dispatch.ts";
 import { writePiChildIdentity } from "./pi-child-identity.mjs";
 
 const MODELS = {
@@ -760,4 +762,69 @@ test("task coordinator cannot amend a producer SHA but can create follow-up comm
     assert.match(decision.reason, /producer evidence/);
   }
   assert.equal(decideTaskRunTool(binding, { toolName: "bash", input: { command: "git commit -m fix" } }).block, false);
+});
+
+test("restored frozen violations permit real test repair without promoting the blocked implementation", (t) => {
+  const f = fixture(t);
+  assert.equal(admitTaskRun(f.grantPath, { cwd: f.root, sessionId: "task-parent" }).ok, true);
+  f.git("config", "user.name", "Harness");
+  f.git("config", "user.email", "harness@example.invalid");
+  fs.mkdirSync(path.join(f.root, "test"));
+  fs.mkdirSync(path.join(f.root, "src"));
+  fs.writeFileSync(path.join(f.root, "test/task-one.test.ts"), "// reviewed baseline\n");
+  f.git("add", "test/task-one.test.ts"); f.git("commit", "-qm", "freeze");
+  const binding = readTaskRunBinding(f.root, "task-parent");
+  const record = { featureId: f.grant.feature_id, taskId: f.grant.task_id, sessionId: "task-parent",
+    agent: "harness-executor", outcome: "BLOCKED", freezeCommitSha: f.git("rev-parse", "HEAD"),
+    touchedPaths: ["src/task-one.ts", "test/task-one.test.ts"], scopeViolations: [],
+    frozenViolations: ["test/task-one.test.ts"] };
+  const recordPath = path.join(f.root, ".pi/harness/state/hand-records", record.featureId, record.sessionId, `${record.taskId}.json`);
+  fs.mkdirSync(path.dirname(recordPath), { recursive: true });
+  fs.writeFileSync(recordPath, JSON.stringify(record));
+  const reason = () => dispatchApi.uncapturedImplementationReason(f.root, record.sessionId, record.featureId, record.taskId);
+  fs.writeFileSync(path.join(f.root, "src/task-one.ts"), "export const actual = true;\n");
+  fs.writeFileSync(path.join(f.root, "test/task-one.test.ts"), "// executor changed test\n");
+  f.git("add", "src/task-one.ts", "test/task-one.test.ts"); f.git("commit", "-qm", "mixed implementation");
+  assert.equal(checkBlockedTaskRepairCheckpoint(binding, record).ok, false, "current frozen drift blocks");
+  assert.match(reason(), /recover with an implementation hand/);
+  f.git("restore", `--source=${record.freezeCommitSha}`, "--", "test/task-one.test.ts");
+  assert.equal(checkBlockedTaskRepairCheckpoint(binding, record).ok, false, "restoration must be committed");
+  f.git("add", "test/task-one.test.ts"); f.git("commit", "-qm", "restore reviewed test");
+  assert.equal(checkBlockedTaskRepairCheckpoint(binding, record).ok, true);
+  assert.equal(reason(), null, "native dispatch now admits the actual test-author correction");
+  assert.deepEqual(JSON.parse(fs.readFileSync(recordPath)), record, "historical violation is never erased or approved");
+  assert.equal(checkBlockedTaskRepairCheckpoint(binding, { ...record, scopeViolations: ["unowned.ts"] }).ok, false);
+  assert.equal(checkBlockedTaskRepairCheckpoint(binding, { ...record, frozenViolations: ["unowned.spec.ts"] }).ok, false);
+  assert.equal(checkBlockedTaskRepairCheckpoint(binding, { ...record, sessionId: "other" }).ok, false);
+  fs.writeFileSync(path.join(f.root, "src/task-one.ts"), "// dirty product\n");
+  assert.equal(checkBlockedTaskRepairCheckpoint(binding, record).ok, false);
+});
+
+
+test("task tools prevent detached HEAD before losing the binding, preserving path restoration", (t) => {
+  const f = fixture(t);
+  assert.equal(admitTaskRun(f.grantPath, { cwd: f.root, sessionId: "task-parent" }).ok, true);
+  const binding = readTaskRunBinding(f.root, "task-parent");
+  for (const toolName of ["bash", "powershell"]) {
+    const decide = command => decideTaskRunTool(binding, { toolName, input: { command } });
+    for (const command of [
+      "git checkout HEAD~1 && git status -sb && git log -1 --format='%H %s'",
+      "git checkout --detach HEAD", "git checkout other-branch", "git checkout -B task-attempt HEAD~1",
+      "git switch --detach HEAD~1", "git switch other-branch", "git switch -c other-branch",
+      "git status --short;git checkout HEAD~1", "git status --short\ngit switch other-branch",
+      "git checkout HEAD~1 --guess -- test/task-one.test.ts", "/usr/bin/git checkout HEAD~1",
+    ]) {
+      const decision = decide(command);
+      assert.equal(decision.block, true, command);
+      assert.match(decision.reason, /preserve the exact task branch/, command);
+    }
+    for (const command of [
+      "git checkout -- test/task-one.test.ts", "git checkout HEAD~1 -- test/task-one.test.ts",
+      "git restore -- test/task-one.test.ts", "git branch --show-current",
+      'git commit -m "explain git checkout HEAD~1; preserve branch"',
+    ]) assert.equal(decide(command).block, false, command);
+  }
+  f.git("checkout", "--detach", "HEAD");
+  assert.equal(readTaskRunBinding(f.root, "task-parent").ok, false,
+    "external identity changes still fail closed; no recovery bypass");
 });

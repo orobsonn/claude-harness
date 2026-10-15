@@ -19,7 +19,7 @@ import { PARALLEL_REVIEW_ROLES, requiredPiTaskReviewRoles } from "./roles.mjs";
 import { canonicalTaskReviewPrompt, classifyPiReviewDispatch } from "./pi-review-concurrency.mjs";
 import { piGateStatePath, piHandRecordPath } from "./pi-paths.mjs";
 import { readTaskProcess } from "./task-process.mjs";
-import { capturePlanReviewInput, readTaskRunBinding } from "./task-run.mjs";
+import { capturePlanReviewInput, readTaskRunBinding, validateTaskRepairCheckpoint } from "./task-run.mjs";
 import { readPiSpecApproval } from "./spec-approval.mjs";
 import { taskScopeBase, taskReconciliationDigest } from "./task-reconciliation.mjs";
 import { DURABLE_MEMORY_FILES } from "./memory-cycle.mjs";
@@ -786,6 +786,32 @@ export function inspectTaskRun(entry, dependencies = {}) {
               head_sha: reconciliation.merged_head, derived_from: "host-reconciliation",
               reconciliation_sha256: taskReconciliationDigest(entry) };
           }
+        }
+      }
+      const repairAuthor = native.events[firstAuthorIndex];
+      const repairImplementation = native.events[implementationIndex];
+      // A rejected capture is not approval and must not create a permanent
+      // deadlock. Native commit events can prove a restored, scoped checkpoint;
+      // the new author's fidelity/capture and implementation eyes still apply.
+      if (!recoveryOrigin && repairAuthor && hand.freezeCommitSha !== head) {
+        const beforeImplementation = native.events.slice(0, implementationIndex);
+        const markerIndex = beforeImplementation.findLastIndex((event) => event.tool === "mark" &&
+          event.args?.action === "fidelity" && event.args?.task_id === entry.task_id && markerSucceeded(event));
+        const originalFreeze = markerIndex < 0 ? null : beforeImplementation.slice(0, markerIndex)
+          .map((event) => commitFromEvent(event, worktree)).filter(Boolean).at(-1);
+        const checkpointObserved = native.events.slice(implementationIndex + 1, firstAuthorIndex).some((event) =>
+          Number.isInteger(repairImplementation.endLine) && Number.isInteger(event.endLine) &&
+          (event.launchIndex > repairImplementation.launchIndex || event.line > repairImplementation.endLine) &&
+          (event.launchIndex < repairAuthor.launchIndex || event.endLine < repairAuthor.line) &&
+          /\bgit\s+commit\b/.test(event.args?.command ?? "") &&
+          /^\[[^\]\n]+\s+[0-9a-f]{7,40}\]/m.test(eventText(event.end?.result)) &&
+          commitFromEvent(event, worktree) === hand.freezeCommitSha);
+        const restoredFrozen = originalFreeze && splitZero(git(worktree, ["log", "--format=", "--name-only", "-z",
+          `${originalFreeze}..${hand.freezeCommitSha}`, "--", ...frozenPaths(binding.task)])).length > 0;
+        if (checkpointObserved && restoredFrozen && validateTaskRepairCheckpoint({ root: worktree, task: binding.task,
+          baseSha: originalFreeze, headSha: hand.freezeCommitSha }).ok) {
+          recoveryOrigin = { head_sha: hand.freezeCommitSha, producer_call_id: repairImplementation.callId,
+            producer_launch_index: repairImplementation.launchIndex, derived_from: "pre-author-product-commit" };
         }
       }
       // A BLOCKED hand may have left real product behind before a fixture repair.

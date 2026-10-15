@@ -10,6 +10,7 @@ import { validatePlan } from "../../shared/lib/validate-plan.mjs";
 import { parseTaskDispatchIdentity } from "../../opencode/lib/task-dispatch-identity.mjs";
 import { parseTestReviewVerdict } from "../../shared/lib/test-review-verdict.mjs";
 import { checkScope } from "../../shared/lib/capture-oracle.mjs";
+import { splitShellSegments } from "../../shared/lib/dangerous-bash-denylist.mjs";
 import { piSubagentArgs } from "./pi-adapter-map.mjs";
 import { piDispatchRoute } from "./dispatch-rail.mjs";
 import { loadModelProfileFromEnv } from "./model-profile.mjs";
@@ -463,6 +464,18 @@ export function validateTaskFidelityFreeze({ projectRoot, sessionId, taskId, ses
 export function decideTaskRunTool(binding, event) {
   const deny = (reason) => ({ block: true, reason: `[task-run] ${reason}` });
   if (!binding?.ok) return deny(binding?.reason ?? "validated task binding required");
+  if (["bash", "powershell"].includes(event?.toolName)) {
+    for (const segment of splitShellSegments(String(event.input?.command ?? ""))) {
+      // A checkout of a revision invalidates the binding on the very next call,
+      // including the call that would reattach the branch. Only explicit path
+      // restoration is task-local; branch changes belong to the host.
+      const change = segment.match(/^(?:\S*\/)?git\s+(checkout|switch)\b([\s\S]*)$/);
+      if (change && (change[1] === "switch" ||
+          !/^\s+(?:[A-Za-z0-9_./@~^:+]+\s+)?--\s+\S/.test(change[2]))) {
+        return deny("preserve the exact task branch; checkout/switch of revisions is forbidden. Restore only explicit paths with git restore -- <paths> or git checkout [<revision>] -- <paths>.");
+      }
+    }
+  }
   const preservation = checkTaskRepairPreservation(binding, event);
   if (!preservation.ok) return deny(preservation.reason);
   const input = event?.input ?? {};
@@ -500,25 +513,35 @@ export function decideTaskRunTool(binding, event) {
   return { block: false };
 }
 
-/** A blocked writer may authorize a test repair, never completion, after a scoped checkpoint. */
+/** Prove a scoped product checkpoint with every locked file restored to its reviewed baseline.
+ * This authorizes repair, never completion or approval of the implementation.
+ */
+export function validateTaskRepairCheckpoint({ root, task, baseSha, headSha }) {
+  try {
+    if (!HEX_40.test(baseSha ?? "") || !HEX_40.test(headSha ?? "") || baseSha === headSha) return { ok: false };
+    git(root, "merge-base", "--is-ancestor", baseSha, headSha);
+    const frozen = (task.locked_tests ?? []).flatMap((test) => [test.path, ...(test.fixture_paths ?? [])]);
+    const scopes = [...(task.scope_paths ?? []), ...(task.allowed_writes ?? [])];
+    const paths = git(root, "diff", "--no-ext-diff", "--no-textconv", "--name-only", "-z", baseSha, headSha).split("\0").filter(Boolean);
+    if (!paths.length || paths.some((file) => frozen.includes(file)) || checkScope(paths, scopes).length) return { ok: false };
+    return { ok: true, head: headSha };
+  } catch { return { ok: false }; }
+}
+
 export function checkBlockedTaskRepairCheckpoint(binding, record) {
   try {
-    if (binding?.ok !== true || record?.outcome !== "BLOCKED" || !HEX_40.test(record.freezeCommitSha ?? ""))
-      return { ok: false };
-    const preserved = checkTaskRepairPreservation(binding, {
-      toolName: "subagent", input: { subagent_type: "harness-test-author" },
-    });
-    if (!preserved.ok) return preserved;
-    const root = binding.root;
-    const head = git(root, "rev-parse", "HEAD");
-    if (head === record.freezeCommitSha) return { ok: false };
-    git(root, "merge-base", "--is-ancestor", record.freezeCommitSha, head);
-    const paths = git(root, "diff", "--no-ext-diff", "--no-textconv", "--name-only", "-z", record.freezeCommitSha, head).split("\0").filter(Boolean);
-    const scopes = [...(binding.task.scope_paths ?? []), ...(binding.task.allowed_writes ?? [])];
+    if (binding?.ok !== true || record?.outcome !== "BLOCKED" ||
+        record.featureId !== binding.grant.feature_id || record.taskId !== binding.grant.task_id ||
+        record.sessionId !== binding.sessionId || (record.scopeViolations ?? []).length ||
+        !["harness-executor", "harness-sniper"].includes(record.agent)) return { ok: false };
     const frozen = (binding.task.locked_tests ?? []).flatMap((test) => [test.path, ...(test.fixture_paths ?? [])]);
-    if (!paths.length || paths.some((file) => frozen.includes(file)) || checkScope(paths, scopes).length)
-      return { ok: false };
-    return { ok: true, head };
+    if ((record.frozenViolations ?? []).some((file) => !frozen.includes(file))) return { ok: false };
+    // Include the index and working tree. A restored commit with dirty tests is
+    // not a restored baseline. Runtime state is excluded from product dirtiness.
+    if (git(binding.root, "status", "--porcelain", "--untracked-files=all", "--", ".",
+      ":(exclude).pi/harness/", ":(exclude)node_modules/")) return { ok: false };
+    return validateTaskRepairCheckpoint({ root: binding.root, task: binding.task,
+      baseSha: record.freezeCommitSha, headSha: git(binding.root, "rev-parse", "HEAD") });
   } catch { return { ok: false }; }
 }
 

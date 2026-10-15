@@ -66,6 +66,14 @@ ordem exata: (1) test-author; (2) RED comportamental executável; (3) aprovaçã
 fidelidade pelo harness-test-reviewer; (4) freeze commit seletivo contendo somente testes/fixtures travados;
 (5) marker `fidelity`; (6) marker `capture-verified`; (7) executor. O pai faz o freeze
 seletivo diretamente; não despache outro test-author apenas para commitar testes aprovados.
+O brief inicial do test-author deve incluir todos os `locked_tests` da tarefa,
+inclusive specs de documentação. `scope_paths`/`allowed_writes` não autorizam o
+executor a atualizar esses testes: essa autoria continua sendo do test-author.
+Execute `git add -- <paths>` e `git commit -m "<mensagem>"` em chamadas separadas.
+Não use `-q`/`--quiet` no freeze: a saída nativa do commit é a prova exigida pelo marker.
+Preserve a branch exata da tentativa; nunca use `git checkout <revisão>` ou `git switch`
+para refazer um freeze. Se faltar evidência, reporte a lacuna sem desanexar HEAD nem
+reescrever o histórico; restauração de arquivo exige paths explícitos após `--`.
 O marker de fidelity
 antes do freeze commit é inválido e não autoriza o executor. Não passe `sha` aos markers:
 a autoridade deriva o commit do estado host-owned. Ao relatar um SHA, leia o valor

@@ -3137,3 +3137,42 @@ test("integrated evidence survives same-plan reapproval only with intact origina
   assert.equal(forged.ok, false);
   assert.match(forged.reason, /current host-owned plan approval/);
 });
+
+test("restored historical frozen violations admit test repair with current proof and reviews", () => {
+  for (const restored of [true, false]) {
+    const f = inspectionFixture();
+    write(path.join(f.root, "src/task.spec.mjs"), "// invalid executor test change\n");
+    run(f.root, "git", "add", "src/task.spec.mjs");
+    run(f.root, "git", "commit", "-m", "executor touched frozen file");
+    if (restored) {
+      run(f.root, "git", "restore", `--source=${f.freeze}`, "--", "src/task.spec.mjs");
+      run(f.root, "git", "add", "src/task.spec.mjs");
+      run(f.root, "git", "commit", "-m", "restore frozen file");
+    }
+    f.head = run(f.root, "git", "rev-parse", "HEAD");
+    const eventsPath = f.entry.launches.at(-1).events_path;
+    fs.appendFileSync(eventsPath, [
+      event("tool_execution_start", { toolCallId: "restored-checkpoint", toolName: "bash", args: {
+        command: `git restore --source=${f.freeze} -- src/task.spec.mjs && git add src/task.spec.mjs && git commit -m "restore frozen file" && git status --short` } }),
+      event("tool_execution_end", { toolCallId: "restored-checkpoint", toolName: "bash", isError: false,
+        result: { content: [{ type: "text", text: `[task ${f.head.slice(0, 7)}] restore frozen file` }] } }),
+      // Refused authors have no writer and must not precede the real baseline.
+      event("tool_execution_start", { toolCallId: "refused-author", toolName: "subagent", args: {
+        subagent_type: "harness-test-author", prompt: `[HARNESS_TASK_CONTEXT]{"task_id":"${TASK}"}[/HARNESS_TASK_CONTEXT]` } }),
+      event("tool_execution_end", { toolCallId: "refused-author", toolName: "subagent", isError: true,
+        result: { content: [{ type: "text", text: "harness dispatch blocked: uncaptured implementation" }] } }), "",
+    ].join("\n"));
+    const recovery = testOnlyRecovery({ fixture: f, capturedImplementation: false });
+    write(eventsPath, replaceEventText(fs.readFileSync(eventsPath, "utf8"), "producer", "Status: BLOCKED"));
+    const inspected = inspectTaskRun(recovery.entry, recovery.dependencies);
+    assert.equal(inspected.ok, restored, inspected.reason);
+    if (restored) {
+      assert.equal(inspected.result.hand_capture.agent, "harness-test-author");
+      assert.equal(inspected.result.hand_capture.recovery_origin.head_sha, recovery.recoveryBaseline);
+      const state = JSON.parse(fs.readFileSync(recovery.statePath));
+      delete state.task_review_evidence[`${FEATURE}/${TASK}`].compliance;
+      write(recovery.statePath, state);
+      assert.equal(inspectTaskRun(recovery.entry, recovery.dependencies).ok, false, "current reviews remain required");
+    }
+  }
+});
