@@ -655,6 +655,25 @@ test("the first scoped test-author freeze recovers a missing pre-author capture 
   assert.equal(inspected.result.hand_capture.recovery_origin.derived_from, "pre-author-product-commit");
 });
 
+test("native checkpoint accepts SHA-only log formatting without replaying the implementation", () => {
+  for (const format of ["%H", "'%H'", '"%H"', "'%H%n%s'"]) {
+    const f = testOnlyRecovery({ capturedImplementation: false });
+    const file = f.entry.launches.at(-1).events_path;
+    const events = fs.readFileSync(file, "utf8").trimEnd().split("\n").map((line) => {
+      const item = JSON.parse(line);
+      if (item.type === "tool_execution_start" && item.toolCallId === "product-commit") {
+        item.args.command = `git add src/task.mjs && git commit -m "implement" && git status --short && git log -1 --format=${format}`;
+      }
+      return JSON.stringify(item);
+    }).join("\n") + "\n";
+    write(file, events);
+    const inspected = inspectTaskRun(f.entry, f.dependencies);
+    assert.equal(inspected.ok, true, `${format}: ${inspected.reason}`);
+    assert.equal(inspected.result.hand_capture.recovery_origin.producer_call_id, "producer");
+    assert.equal(fs.readFileSync(file, "utf8"), events, "native evidence is preserved");
+  }
+});
+
 test("a preserved BLOCKED implementation survives repeated fixture repair and a non-writing blocked dispatch", () => {
   const f = testOnlyRecovery({ capturedImplementation: false, extraAuthor: true, interveningWriter: true });
   const eventsPath = f.entry.launches.at(-1).events_path;

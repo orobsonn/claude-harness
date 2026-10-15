@@ -222,7 +222,7 @@ function legacyCommitCommand(command) {
   return segments.length === 4 &&
     /^git\s+add\s+(?:--\s+)?[A-Za-z0-9_./-]+(?:\s+[A-Za-z0-9_./-]+)*$/.test(segments[0]) &&
     commit.test(segments[1]) && segments[2] === "git status --short" &&
-    segments[3] === "git log -1 --format='%H%n%s'";
+    /^git\s+log\s+-1\s+--format=(?:%H|'%H(?:%n%s)?'|"%H(?:%n%s)?")$/.test(segments[3]);
 }
 
 function commitFromEvent(event, worktree) {
