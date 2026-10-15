@@ -543,3 +543,16 @@ test('falha de auditoria é silenciosa e nunca vira contexto do modelo', (t) => 
   assert.deepEqual(recordPiPolicyAudit({ sessionId: '../escape', toolCallId: 'c1', toolName: 'bash', auditDir }), {})
   assert.deepEqual(readdirSync(auditDir), [])
 })
+
+test('the parent can change only the official shard count around the complete npm test lifecycle', () => {
+  const parent = { gateState: { classified: true, mode: 'FULL' }, isChild: false };
+  for (const count of [1, 2, 32]) assert.equal(decidePiPolicy({ toolName: 'bash', input: {
+    command: `HARNESS_TEST_SHARDS=${count} npm test` } }, parent).block, false);
+  for (const command of [
+    'HARNESS_TEST_SHARDS=0 npm test', 'HARNESS_TEST_SHARDS=33 npm test',
+    'HARNESS_TEST_SHARDS=1 npm test -- --passWithNoTests',
+    'NODE_OPTIONS=--require=./unsafe.js npm test', 'HARNESS_TEST_SHARDS=$(touch x) npm test',
+    'HARNESS_TEST_SHARDS=1 npm test; echo x', 'HARNESS_TEST_SHARDS=1 npm test\nnode x',
+    'HARNESS_TEST_SHARDS=1 npm run deploy', 'HARNESS_TEST_SHARDS=1 OTHER=x npm test',
+  ]) assert.equal(decidePiPolicy({ toolName: 'bash', input: { command } }, parent).block, true, command);
+});

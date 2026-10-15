@@ -5,6 +5,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { execFileSync } from "node:child_process";
 
+import { matchesAbsolution } from "../../shared/lib/absolution.mjs";
 import { withGateStateLock } from "../../opencode/lib/gate-state.mjs";
 import { parseTaskDispatchIdentity } from "../../opencode/lib/task-dispatch-identity.mjs";
 import { validateReviewReport } from "../../shared/lib/review-report-schema.mjs";
@@ -477,6 +478,24 @@ function boundCurrentReceipt(receipt, { sessionId, featureId, role, phase, taskI
 
 export function isCurrentPiReviewReceipt(receipt, identity) {
   return receipt?.accepted === true && boundCurrentReceipt(receipt, identity);
+}
+
+/** Read the same ancestral re-gate contract used by task receipt inspection.
+ * This is status only: captures, current review obligations and native producers
+ * remain independently required. It never writes or rebases a marker. */
+export function piTaskRegateStatus({ projectRoot, state, featureId, taskId, headSha }) {
+  const bare = `${featureId}/${taskId}`;
+  const pending = (state?.regate_pending ?? []).filter(value =>
+    typeof value === "string" && (value === bare || value.startsWith(`${bare}@`)));
+  const ancestor = sha => {
+    if (!/^[0-9a-f]{40}$/.test(sha ?? "") || !/^[0-9a-f]{40}$/.test(headSha ?? "")) return false;
+    try { execFileSync("git", ["merge-base", "--is-ancestor", sha, headSha],
+      { cwd: projectRoot, stdio: "ignore", timeout: 10000 }); return true; }
+    catch { return false; }
+  };
+  const satisfied = matchesAbsolution(bare, state?.regate_passed, ancestor) &&
+    pending.every(value => matchesAbsolution(value, state?.regate_passed, ancestor));
+  return { required: pending.length > 0, satisfied };
 }
 
 /** A task's last positive review survives later product fixes; a new dispatch revokes it. */

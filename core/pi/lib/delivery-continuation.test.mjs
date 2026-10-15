@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
+import { registerPiCommandEvidence } from "./pi-command-evidence.mjs";
 import { installDeliveryContinuation, readDeliveryContinuation } from "./delivery-continuation.mjs";
 
 function controller(options = {}) {
@@ -112,9 +113,9 @@ test("real run states move from waiting to final review to shipping, but stop at
   f.write("evidence/diff.json", { head_sha: f.head, command: "git diff --stat", worktree_dirty: false, original_status: { exit_code: 0 } });
   assert.equal(readDeliveryContinuation(f.ctx).key, verified.key, "new diagnostic commands cannot renew a blocked obligation");
   f.state.final_review_done = true; f.write("gate-state.json", f.state);
-  assert.equal(readDeliveryContinuation(f.ctx).stage, "shipping");
+  assert.equal(readDeliveryContinuation(f.ctx, { hasCurrentFinalReviews: () => true }).stage, "shipping");
   f.write("memory-shipment.json", { written_by: "host-subagent-completion", session_id: "parent", feature_id: "issue-22", head: "wrong", status: "completed" });
-  assert.equal(readDeliveryContinuation(f.ctx).stage, "shipping", "stale shipment is not completion");
+  assert.equal(readDeliveryContinuation(f.ctx, { hasCurrentFinalReviews: () => true }).stage, "shipping", "stale shipment is not completion");
   f.write("memory-shipment.json", { written_by: "host-subagent-completion", session_id: "parent", feature_id: "issue-22", head: f.head, status: "completed" });
   assert.equal(readDeliveryContinuation(f.ctx), null, "draft delivery does not auto-merge");
 });
@@ -338,4 +339,67 @@ test("a new launch is progress even when the parent HEAD and task status repeat"
   f.registry.tasks.one.launches.push({ run_id: "second" });
   f.write("task-runs/index.json", f.registry);
   assert.notEqual(readDeliveryContinuation(f.ctx).key, first.key);
+});
+
+test("ancestral native re-gate closes a reconciled task without a no-op marker or reviewer", t => {
+  const f = fixture(t), bare = "issue-22/one";
+  const git = (...args) => execFileSync("git", args, { cwd: f.ctx.cwd, encoding: "utf8" }).trim();
+  git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "--allow-empty", "-m", "reconciliation");
+  const current = git("rev-parse", "HEAD");
+  Object.assign(f.state, { task_run: { task_id: "one" }, hand_finished: [bare],
+    capture_verified: [`${bare}@${current}`], regate_pending: [bare], regate_passed: [`${bare}@${f.head}`] });
+  f.write("gate-state.json", f.state);
+  const deps = { readBinding: () => ({ ok: true, grant: { task_id: "one" }, task: {} }) };
+  assert.equal(readDeliveryContinuation(f.ctx, deps), null, "the receipt gate accepts the same ancestral marker");
+  f.state.regate_passed = [`another-feature/one@${f.head}`]; f.write("gate-state.json", f.state);
+  assert.equal(readDeliveryContinuation(f.ctx, deps).stage, "task-reviews", "foreign markers never close the task");
+  f.state.regate_passed = [`${bare}@${"f".repeat(40)}`]; f.write("gate-state.json", f.state);
+  assert.equal(readDeliveryContinuation(f.ctx, deps).stage, "task-reviews", "unresolved ancestry is not completion");
+  f.state.regate_passed = [`${bare}@${f.head}`];
+  f.state.task_adversary_evidence = { [bare]: { status: "completed", accepted: false } };
+  f.write("gate-state.json", f.state);
+  assert.equal(readDeliveryContinuation(f.ctx, deps).stage, "task-reviews", "a fresh negative review must not disappear behind an old absolution");
+});
+
+test("native workflow activation survives a session restart before its first continuation", async () => {
+  const f = controller({ local: false });
+  f.handlers.get("tool_result")({ toolName: "harness_tasks", details: { ok: true,
+    tasks: [{ status: "integrated" }] } }, f.ctx);
+  const reloaded = f.create();
+  f.handlers.get("session_start")({}, f.ctx);
+  assert.equal(await reloaded(stopped, f.ctx), true, "resume must not require an operator to re-arm delivery");
+  f.handlers.get("input")({ source: "interactive", text: "pare" }, f.ctx);
+  const paused = f.create();
+  f.handlers.get("session_start")({}, f.ctx);
+  assert.equal(await paused(stopped, f.ctx), false, "persisted authorization never overrides an explicit pause");
+});
+
+test("final continuation reuses native full-suite proof across a peripheral commit", async t => {
+  const f = fixture(t), handlers = new Map();
+  f.registry.tasks.one.status = "integrated"; f.write("task-runs/index.json", f.registry);
+  const plan = path.join(f.ctx.cwd, ".pi/harness/plans/issue-22/execution-plan.json");
+  fs.mkdirSync(path.dirname(plan), { recursive: true });
+  fs.writeFileSync(plan, JSON.stringify({ final_review: { verification_commands: ["npm test"] } }));
+  assert.match(readDeliveryContinuation(f.ctx).content, /Native preparation requires only/);
+  registerPiCommandEvidence({ on: (name, fn) => handlers.set(name, fn) });
+  const event = { toolName: "bash", toolCallId: "full-suite", input: { command: "npm test" } };
+  handlers.get("tool_execution_start")({ toolName: "bash", toolCallId: event.toolCallId, args: event.input }, f.ctx);
+  await handlers.get("tool_result")({ ...event, isError: false, content: [{ type: "text", text: "all tests passed" }] }, f.ctx);
+  assert.match(readDeliveryContinuation(f.ctx).content, /preparation is already satisfied/);
+  const git = (...args) => execFileSync("git", args, { cwd: f.ctx.cwd, encoding: "utf8" });
+  fs.writeFileSync(path.join(f.ctx.cwd, "README.md"), "operator documentation\n");
+  git("add", "README.md"); git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", "docs");
+  assert.match(readDeliveryContinuation(f.ctx).content, /preparation is already satisfied/);
+  fs.writeFileSync(path.join(f.ctx.cwd, "product.js"), "new application behavior\n");
+  git("add", "product.js"); git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", "product");
+  assert.match(readDeliveryContinuation(f.ctx).content, /Native preparation requires only/);
+});
+
+
+test("an old final-review flag cannot route a changed aggregate straight to shipping", t => {
+  const f = fixture(t);
+  f.registry.tasks.one.status = "integrated"; f.write("task-runs/index.json", f.registry);
+  f.state.final_review_done = true; f.write("gate-state.json", f.state);
+  assert.equal(readDeliveryContinuation(f.ctx).stage, "final-review", "current native final receipts are still required");
+  assert.equal(readDeliveryContinuation(f.ctx, { hasCurrentFinalReviews: () => true }).stage, "shipping");
 });

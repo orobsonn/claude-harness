@@ -8,6 +8,9 @@ import { isCaptureEligibleHandRecord, recordViolations } from "../../shared/lib/
 import { validateOcCaptureEligibleHandRecord } from "../../opencode/lib/hand-records.mjs";
 import { isChildSession, piSessionId } from "./pi-adapter-map.mjs";
 import { piHandRecordPath } from "./pi-paths.mjs";
+import { checkPiFinalCommands } from "./pi-command-evidence.mjs";
+import { piTaskRegateStatus, missingPiReviewRoles, capturePiReviewInput, isSatisfiedPiTaskReviewReceipt, observedPiTaskReviewRoles } from "./pi-review-evidence.mjs";
+import { requiredPiFinalReviewRoles } from "./roles.mjs";
 import { readTaskRunBinding } from "./task-run.mjs";
 import { checkScope } from "../../shared/lib/capture-oracle.mjs";
 
@@ -80,7 +83,8 @@ function hasCurrentTaskCapture(root, { state, sessionId, featureId, taskId, key,
 }
 
 /** Read-only hints. Existing tools remain the sole approval and scheduling authority. */
-export function readDeliveryContinuation(ctx, { readBinding = readTaskRunBinding } = {}) {
+export function readDeliveryContinuation(ctx, { readBinding = readTaskRunBinding,
+  hasCurrentFinalReviews = input => missingPiReviewRoles(input).length === 0 } = {}) {
   const sessionId = piSessionId(ctx);
   if (isChildSession(ctx) || !isSafeSessionId(sessionId)) return null;
   const root = fs.realpathSync(ctx.cwd);
@@ -91,7 +95,7 @@ export function readDeliveryContinuation(ctx, { readBinding = readTaskRunBinding
       !["FULL", "LIGHT"].includes(String(state.mode).toUpperCase())) return null;
   const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
   const feature = state.feature_id;
-  let stage, progress, liveTasks = false;
+  let stage, progress, liveTasks = false, finalPreparation = null;
   let verificationCommands = [];
   if (state.task_run) {
     const binding = readBinding(root, sessionId);
@@ -105,7 +109,16 @@ export function readDeliveryContinuation(ctx, { readBinding = readTaskRunBinding
     });
     const reviews = { ...(state.task_review_evidence?.[key] ?? {}), adversary: state.task_adversary_evidence?.[key] };
     const reviewRequired = state.mode.toUpperCase() === "FULL" || Object.values(reviews).some(Boolean);
-    const regated = (state.regate_passed ?? []).includes(`${key}@${head}`);
+    const regate = piTaskRegateStatus({ projectRoot: root, state, featureId: feature, taskId, headSha: head });
+    const receipts = Object.entries(reviews).filter(([, r]) => r);
+    const observed = observedPiTaskReviewRoles(ctx.sessionManager, taskId,
+      new Map(receipts.map(([role, r]) => [`harness-${role}`, r.active_dispatch_call_id ?? r.dispatch_call_id])));
+    const reviewInput = receipts.length ? capturePiReviewInput({ projectRoot: root, sessionId, featureId: feature, phase: "task", taskId }) : null;
+    const regated = regate.satisfied && receipts.every(([role, receipt]) =>
+      reviewInput?.ok && isSatisfiedPiTaskReviewReceipt(receipt, { projectRoot: root, sessionId, featureId: feature,
+        taskId, role: `harness-${role}`, snapshot: reviewInput.snapshot,
+        dispatchCallId: observed?.get(`harness-${role}`)?.callId,
+        reviewAfterImplementation: observed?.get(`harness-${role}`)?.afterImplementation }));
     if (captured && (!reviewRequired || regated)) return null;
     stage = captured ? "task-reviews" : "task-implementation";
     progress = { taskId, head, captured, pendingContent, fidelity: state.fidelity_pass?.at(-1),
@@ -113,7 +126,8 @@ export function readDeliveryContinuation(ctx, { readBinding = readTaskRunBinding
   } else {
     const registry = read(root, `${directory}/task-runs/index.json`);
     if (registry?.parent_session_id !== sessionId || registry.feature_id !== feature || !registry.tasks) return null;
-    verificationCommands = read(root, `.pi/harness/plans/${feature}/execution-plan.json`)?.final_review?.verification_commands ?? [];
+    const plan = read(root, `.pi/harness/plans/${feature}/execution-plan.json`);
+    verificationCommands = plan?.final_review?.verification_commands ?? [];
     const shipment = read(root, `${directory}/memory-shipment.json`);
     const finalized = read(root, `${directory}/memory-finalized.json`);
     if (shipment?.written_by === "host-subagent-completion" && shipment.session_id === sessionId &&
@@ -124,14 +138,19 @@ export function readDeliveryContinuation(ctx, { readBinding = readTaskRunBinding
       run: e.launches?.at(-1)?.run_id }));
     liveTasks = tasks.some(t => t.status === "running");
     if (!tasks.length) return null;
-    stage = tasks.some(t => t.status !== "integrated") ? "tasks" : state.final_review_done ? "shipping" : "final-review";
+    const finalCurrent = state.final_review_done === true && hasCurrentFinalReviews({
+      projectRoot: root, sessionId, featureId: feature, phase: "final", roles: requiredPiFinalReviewRoles(plan ?? {}),
+    });
+    stage = tasks.some(t => t.status !== "integrated") ? "tasks" : finalCurrent ? "shipping" : "final-review";
     const harvest = read(root, `${directory}/memory-harvest.json`);
+    if (stage === "final-review" && verificationCommands.length)
+      finalPreparation = checkPiFinalCommands({ projectRoot: root, sessionId, commands: verificationCommands });
     progress = { head, tasks, final: state.final_review_done, harvest: harvest?.apply_status,
       reviews: Object.fromEntries(Object.entries(state.final_review_evidence ?? {}).map(([role, r]) => [role, [r.status, r.accepted, r.report_digest, r.reviewed_head_sha]])) };
   }
   const instructions = {
     "task-implementation": "Continue this same task through the remaining implementation, verification, capture and applicable reviews. Inspect existing pending work first. If the author already produced the required RED or fixture repair, review its fidelity and freeze/commit the authorized tests, then continue the required implementation; do not redispatch authorship just to repeat that work. Repair an incorrect frozen fixture with the existing test-author/reviewer recovery. Preserve valid product work. If an external dependency or authority is genuinely missing, report that exact blocker; do not repeat an unchanged failed action.",
-    "task-reviews": "The task has a capture but its local review closure remains pending. Use harness_reviews phase=task, satisfy only affected missing obligations, then record regate-passed. Do not repeat implementation or valid reviews merely to close the task.",
+    "task-reviews": "The task has a capture but its local review closure remains pending. Use harness_reviews phase=task, satisfy only affected missing obligations, then record regate-passed only if its regate status remains unsatisfied. An already satisfied ancestral marker does not need rebinding to HEAD. Do not repeat implementation or valid reviews merely to close the task.",
     tasks: "The delivery still has unsettled tasks. Use harness_tasks status to reconcile actual processes and read diagnostics, wait for live tasks, integrate ready results, and recover actionable blockers in the same attempts. Do not end with only a running label.",
     "final-review": "Task integration is not delivery completion. Verify the current aggregate, finish applicable final reviews and final-review marking, then harvest and ship within the existing authorization. Do not reopen integrated tasks without a concrete finding.",
     shipping: "Finish the existing harvest/apply/shipping obligations, reusing valid receipts. A draft PR is a valid headless delivery boundary; never infer merge, release or deployment authorization from this reminder.",
@@ -145,7 +164,11 @@ export function readDeliveryContinuation(ctx, { readBinding = readTaskRunBinding
       .filter(e => e?.head_sha === head && e.worktree_dirty === false && e.original_status?.exit_code === 0)
       .map(e => e.command).filter(c => typeof c === "string" && verificationCommands.includes(c));
   } catch { /* Evidence is advisory; absence never waives a gate. */ }
-  return { sessionId, stage, liveTasks, key: hash({ sessionId, feature, stage, progress, commands: [...new Set(commands)].sort() }), content: instructions[stage] };
+  const content = instructions[stage] + (finalPreparation ? finalPreparation.ok
+    ? " Native final verification preparation is already satisfied for current application inputs. Reuse that evidence; do not rerun the full suite for an empty/peripheral reconciliation commit. Continue with the missing final reviews."
+    : ` Native preparation requires only these commands: ${JSON.stringify(finalPreparation.commands ?? [])}. Inspect the latest failure before executing a missing command; a failure requires diagnosis and a concrete correction or justified operational recovery, not another unchanged full-suite attempt. Use harness_reviews phase=final for current preparation diagnostics.`
+    : "");
+  return { sessionId, stage, liveTasks, key: hash({ sessionId, feature, stage, progress, commands: [...new Set(commands)].sort() }), content };
 }
 
 /** Progress-sensitive continuation, then diagnosis; neither repeats for unchanged input. */
@@ -159,6 +182,7 @@ export function installDeliveryContinuation(pi, { readPending = readDeliveryCont
   const restore = ctx => {
     for (const e of ctx.sessionManager?.getBranch?.() ?? []) {
       if (e.type === "custom" && e.customType === ENTRY && e.data?.sessionId === piSessionId(ctx)) {
+        if (e.data.active === true || e.data.key || e.data.diagnosticKey) active = true;
         if (e.data.key) seen.add(e.data.key);
         if (e.data.diagnosticKey) diagnosed.add(e.data.diagnosticKey);
         if (e.data.paused !== undefined) paused = e.data.paused;
@@ -192,6 +216,7 @@ export function installDeliveryContinuation(pi, { readPending = readDeliveryCont
     // A fresh workflow action renews existing authorization after a pause.
     if (event.toolName === "harness_tasks" && event.details?.ok &&
         event.details.tasks?.some(t => ["running", "ready", "integrated"].includes(t.status))) {
+      if (!active) pi.appendEntry(ENTRY, { sessionId: piSessionId(ctx), active: true });
       active = true;
     }
   });

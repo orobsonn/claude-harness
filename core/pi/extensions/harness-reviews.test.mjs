@@ -460,3 +460,24 @@ test("final status lists only reviewers required by the canonical plan", async (
   writeFileSync(file, JSON.stringify({ ...plan, final_review: { security: "true" } }));
   assert.equal((await (await tool()).execute("invalid-plan", { phase: "final" }, undefined, undefined, f.ctx)).isError, true);
 });
+
+test("reconciled task status exposes an already satisfied ancestral re-gate separately from reviews", async t => {
+  const f = fixture(t);
+  implementationCompleted(f);
+  record(f.root, "harness-compliance", "task");
+  f.entries.push(reviewDispatch("harness-compliance"));
+  const old = execFileSync("git", ["rev-parse", "HEAD"], { cwd: f.root, encoding: "utf8" }).trim();
+  execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "--allow-empty", "-qm", "reconcile"], { cwd: f.root });
+  const state = JSON.parse(readFileSync(f.statePath));
+  state.regate_pending = [`${FEATURE}/${TASK}`]; state.regate_passed = [`${FEATURE}/${TASK}@${old}`];
+  writeFileSync(f.statePath, JSON.stringify(state));
+  const before = readFileSync(f.statePath, "utf8");
+  const result = await (await tool()).execute("status", { phase: "task", task_id: TASK }, undefined, undefined, f.ctx);
+  assert.deepEqual(result.details.missing, []);
+  assert.equal(result.details.regate.satisfied, true);
+  assert.match(result.details.regate.guidance, /Do not repeat regate-passed/);
+  assert.equal(readFileSync(f.statePath, "utf8"), before, "read-only status cannot manufacture absolution");
+  state.regate_passed = []; writeFileSync(f.statePath, JSON.stringify(state));
+  const missing = await (await tool()).execute("status", { phase: "task", task_id: TASK }, undefined, undefined, f.ctx);
+  assert.equal(missing.details.regate.satisfied, false);
+});

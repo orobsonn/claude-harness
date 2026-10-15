@@ -4,7 +4,7 @@ import { execFileSync } from "node:child_process";
 import { isSafeFeatureId, isSafeTaskId } from "../../shared/lib/feature-id.mjs";
 import { isChildSession, piSessionId } from "../lib/pi-adapter-map.mjs";
 import { loadPiGateStateFromDisk } from "../lib/pi-gate-state.mjs";
-import { capturePiReviewInput, checkPiReviewPreparation, findPiReviewReceipt, isSatisfiedPiTaskReviewReceipt, missingPiReviewRoles, observedPiTaskReviewRoles, readPiReviewPlan } from "../lib/pi-review-evidence.mjs";
+import { capturePiReviewInput, checkPiReviewPreparation, piTaskRegateStatus, findPiReviewReceipt, isSatisfiedPiTaskReviewReceipt, missingPiReviewRoles, observedPiTaskReviewRoles, readPiReviewPlan } from "../lib/pi-review-evidence.mjs";
 import { PARALLEL_REVIEW_ROLES, requiredPiFinalReviewRoles, requiredPiTaskReviewRoles } from "../lib/roles.mjs";
 import { resolvePostHarvestReviewSnapshot } from "../lib/memory-cycle.mjs";
 
@@ -163,7 +163,12 @@ export default function harnessReviews(pi: ExtensionAPI) {
           ? [{ role, reason: receipt.reason, dispatch_call_id: receipt.active_dispatch_call_id }] : [];
       });
       const carryDiagnostic = carry?.reason ? { post_harvest_carry: { ok: false, reason: carry.reason } } : {};
-      const status = { ...result, ...(preparation.ok ? {} : { preparation }), ...carryDiagnostic, ...(diagnostics.length ? { diagnostics } : {}) };
+      const regate = params.phase === "task" ? piTaskRegateStatus({ projectRoot: ctx.cwd,
+        state: loaded.state, featureId: input.featureId, taskId: params.task_id, headSha: captured.snapshot.head_sha }) : null;
+      const status = { ...result,
+        ...(regate?.required ? { regate: { ...regate, guidance: regate.satisfied
+          ? "The native task gate already accepts the ancestral re-gate marker. Do not repeat regate-passed or accepted reviews for HEAD freshness; resolve any missing reviews separately."
+          : "Close re-gate after the applicable missing reviews. A new regate-passed marker requires current host-owned review evidence." } } : {}), ...(preparation.ok ? {} : { preparation }), ...carryDiagnostic, ...(diagnostics.length ? { diagnostics } : {}) };
       const details = affected.length ? { ...status, review_input_digest: captured.snapshot.input_digest } : status;
       return { content: [{ type: "text" as const, text: JSON.stringify(status) }], details };
     },

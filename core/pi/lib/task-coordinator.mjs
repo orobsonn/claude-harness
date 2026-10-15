@@ -221,7 +221,8 @@ function summary(entry, { compact = false, currentEvidence } = {}) {
     child_head: entry.result?.child_head,
     ...(entry.orca ? { orca: entry.orca } : {}),
     ...(!compact && exposesResultContext && entry.result?.context_return
-      ? { context_return: entry.result.context_return }
+      ? { context_return: entry.result.context_return,
+        context_return_notice: "Advisory session diary snapshotted at result HEAD, not a current test verdict. Its text can predate later launches/corrections. Compare current_evidence, latest native job output, reviews and raw test receipts before reopening a task; preserve unresolved findings only while applicable." }
       : {}),
     ...(entry.reason ? { reason: entry.reason } : {}),
     ...(entry.status !== "integrated" && entry.launches.length >= 6 && (entry.integration_history?.length ?? 0) >= 3
