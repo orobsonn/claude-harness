@@ -247,11 +247,13 @@ function observedImplementationReviewRoles(events, taskId) {
     const role = event.args?.subagent_type;
     const review = event.tool === "subagent" && classifyPiReviewDispatch(role,
       canonicalTaskReviewPrompt(role, event.args?.prompt, taskId));
-    // A tool-call refused by the entry gate has a start/end pair but never
+    // A tool-call refused by a dispatch gate has a start/end pair but never
     // reached a child. It is audit evidence of an attempted call, not a review
     // dispatch, and must not supersede the call id of an accepted receipt.
-    const refusedByGate = event.end?.isError === true &&
-      eventText(event.end.result).trimStart().startsWith("[review-dispatch] Blocked:");
+    const details = event.end?.result?.details;
+    const text = eventText(event.end?.result).trimStart();
+    const refusedByGate = event.end?.isError === true && !details?.agentId && !details?.status &&
+      (text.startsWith("[review-dispatch] Blocked:") || text.startsWith("harness dispatch blocked:"));
     return review?.phase === "task" && review.taskId === taskId && !refusedByGate;
   }).map((event) => [event.args.subagent_type, { callId: event.callId,
     afterImplementation: Boolean(firstImplementation && (event.launchIndex > firstImplementation.launchIndex ||
