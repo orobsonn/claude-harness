@@ -1713,6 +1713,44 @@ test("status checks integrated evidence at the current aggregate and returns bou
   assert.equal(current.diagnostics, undefined, "status does not persist obsolete diagnosis");
 });
 
+test("external host runtime recovers a vendored task after a base merge without rewriting launch receipts", async t => {
+  const f = fixture(t, [task("a")], { vendored: true });
+  git(f.dir, "add", ".");
+  git(f.dir, "commit", "-qm", "vendor fixture");
+  const originalCoordinator = await import(pathToFileURL(path.join(f.dir, ".pi/harness/lib/task-coordinator.mjs")));
+  f.deps.captureRuntime = captureTaskRuntime;
+  f.deps.verifyRuntime = verifyTaskRuntime;
+  const dispatched = await originalCoordinator.executeTaskAction({ action: "dispatch", task_ids: ["a"] }, f.context, f.deps);
+  assert.equal(dispatched.ok, true, dispatched.reason);
+  const original = f.registry().tasks.a;
+  assert.equal(admitTaskRun(original.grant_path, { cwd: original.worktree, sessionId: "external-host-recovery" }).ok, true);
+  const claim = fs.readFileSync(original.grant_path + ".claim", "utf8");
+  fs.appendFileSync(path.join(f.dir, ".pi/harness/prompts/harness-runtime.md"), "\nBase updated the old child runtime.\n");
+  git(f.dir, "add", ".pi/harness/prompts/harness-runtime.md");
+  git(f.dir, "commit", "-qm", "base runtime correction");
+  git(original.worktree, "merge", "--no-ff", "--no-edit", git(f.dir, "rev-parse", "HEAD"));
+  assert.equal(verifyTaskRuntime(original.runtime).ok, false);
+  const action = params => executeTaskAction(params, f.context, f.deps);
+  const resumed = await action({ action: "resume", task_id: "a", attempt_id: original.attempt_id });
+  assert.equal(resumed.ok, true, resumed.reason);
+  const updated = f.registry().tasks.a;
+  const host = captureTaskRuntime(fileURLToPath(new URL("../bin/pi-harness.mjs", import.meta.url)));
+  assert.equal(host.ok, true);
+  assert.deepEqual(updated.runtime, host.runtime);
+  assert.deepEqual(updated.launches[0], original.launches[0]);
+  assert.deepEqual(updated.grant, original.grant);
+  assert.equal(fs.readFileSync(original.grant_path + ".claim", "utf8"), claim);
+  assert.deepEqual(updated.launches.at(-1).runtime, host.runtime);
+  assert.equal((await action({ action: "resume", task_id: "a", attempt_id: original.attempt_id })).ok, true);
+  assert.deepEqual(f.registry().tasks.a.launches[0], original.launches[0], "vendored provenance survives subsequent external resumes");
+  const launches = f.launches();
+  f.deps.captureRuntime = () => ({ ok: false, reason: "invalid current runtime assets" });
+  const invalid = await action({ action: "resume", task_id: "a", attempt_id: original.attempt_id });
+  assert.equal(invalid.ok, false);
+  assert.match(invalid.reason, /invalid current runtime assets/);
+  assert.equal(f.launches(), launches, "external recovery must capture valid current assets");
+});
+
 test("source runtime drift remains blocked without consumer upgrade recovery", async t => {
   const f = fixture(t, [task("a")]);
   const action = params => executeTaskAction(params, f.context, f.deps);
