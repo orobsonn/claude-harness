@@ -200,8 +200,18 @@ function approvedPlan(owner) {
   return { plan, directory, ...captured.snapshot, receipt };
 }
 function installedTaskRuntime(entry) {
-  return entry.launches.length > 0 &&
-    path.relative(entry.parent_root, TASK_LAUNCHER) === ".pi/harness/bin/pi-harness.mjs";
+  if (!entry.launches.length) return false;
+  const relative = path.relative(entry.parent_root, TASK_LAUNCHER);
+  if (relative === ".pi/harness/bin/pi-harness.mjs") return true;
+  // An operator can recover a consumer with an external source launcher. A
+  // base merge may have changed its old vendored child assets before resume.
+  // Adopt the actual host runtime, retaining every historical launch receipt;
+  // source-development tasks without vendored provenance remain pinned.
+  const external = relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative);
+  return external && entry.launches.some((launch) =>
+    typeof launch.runtime?.launcher_path === "string" &&
+    [entry.parent_root, entry.worktree].some((root) =>
+      path.relative(root, launch.runtime.launcher_path) === ".pi/harness/bin/pi-harness.mjs"));
 }
 function runtimeRecovery(entry, reason) {
   if (!installedTaskRuntime(entry) ||
