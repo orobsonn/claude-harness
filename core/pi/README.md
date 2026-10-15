@@ -505,6 +505,7 @@ implementação, testes ou entrega.
 | Pai encerra com filho ativo | Espera nativa fora do lock; mudança reconciliada acorda o pai sem polling pelo modelo. Pausa/shutdown cancelam a observação. |
 | Reinício após despacho | Autorização de acompanhamento é persistida/restaurada; pausa explícita continua prevalecendo. |
 | Re-gate após merge de reconciliação | Continuação e `harness_reviews` reconhecem a absolvição ancestral que a inspeção nativa já aceita. Não exigir outro marker/olho apenas pelo HEAD novo. |
+| Re-gate sem marker ancestral nem review corrente | Status e despacho permitem atualizar exatamente um review aceito para obter a âncora host-owned exigida pelo marker; irmãos aceitos permanecem protegidos e negativos têm prioridade. |
 | Review negativo, identidade estrangeira ou ancestralidade inválida | Permanecem pendentes; marker anterior não apaga review negativo nem concede captura. |
 | Retorno antigo do diário | `context_return_notice` distingue snapshot consultivo de veredito atual. Confrontar último job, saída bruta e recibos antes de reabrir task. |
 | Timeout/concorrência do runner | Pai pode usar somente `HARNESS_TEST_SHARDS=1..32 npm test`, mantendo o ciclo npm completo. Evidência guarda comando literal; falha posterior em outra quantidade de shards revoga sucesso anterior. |

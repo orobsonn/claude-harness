@@ -33,7 +33,7 @@ import { isAncestorSha as defaultIsAncestorSha, resolveHeadSha as defaultResolve
 import { toOcRole } from "./pi-adapter-map.mjs";
 import { piExecutionPlanPath, piGateStatePath, piHandRecordPath } from "./pi-paths.mjs";
 import { readPiSpecApproval, readPiSpecDraft } from "./spec-approval.mjs";
-import { capturePiReviewInput, hasAcceptedPiReviewEvidence, readPiReviewPlan } from "./pi-review-evidence.mjs";
+import { capturePiReviewInput, hasAcceptedPiReviewEvidence, hasCurrentPiTaskReviewCompletion, readPiReviewPlan } from "./pi-review-evidence.mjs";
 import { postHarvestReviewSnapshot } from "./memory-cycle.mjs";
 import { PARALLEL_REVIEW_ROLES, requiredPiFinalReviewRoles } from "./roles.mjs";
 import { readIntegratedTaskEvidence } from "./task-receipts.mjs";
@@ -195,20 +195,9 @@ function hasCurrentTaskReviewCompletion(previous, authorization, taskId, headSha
     phase: "task",
     taskId,
   });
-  return PARALLEL_REVIEW_ROLES.some((role) => {
-    const evidence = role === "harness-adversary" ? previous?.task_adversary_evidence?.[key] :
-      previous?.task_review_evidence?.[key]?.[role.replace("harness-", "")];
-    if (!evidence || typeof evidence !== "object" || Array.isArray(evidence)) return false;
-    return captured?.ok === true && hasAcceptedPiReviewEvidence(evidence, captured.snapshot) &&
-    evidence.written_by === "host-subagent-completion" &&
-    evidence.role === role &&
-    evidence.parent_session_id === authorization.sessionId &&
-    evidence.feature_id === authorization.featureId &&
-    evidence.task_id === taskId &&
-    typeof evidence.dispatch_call_id === "string" && evidence.dispatch_call_id.length > 0 &&
-    typeof evidence.child_session_id === "string" && evidence.child_session_id.length > 0 &&
-    typeof evidence.agent_id === "string" && evidence.agent_id.length > 0 &&
-    evidence.status === "completed" && evidence.reviewed_head_sha === headSha;
+  return captured?.ok === true && hasCurrentPiTaskReviewCompletion(previous, {
+    sessionId: authorization.sessionId, featureId: authorization.featureId, taskId,
+    snapshot: { ...captured.snapshot, head_sha: headSha },
   });
 }
 

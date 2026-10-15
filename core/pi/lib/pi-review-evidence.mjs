@@ -12,7 +12,7 @@ import { validateReviewReport } from "../../shared/lib/review-report-schema.mjs"
 import { isSafeFeatureId, isSafeSessionId, isSafeTaskId } from "../../shared/lib/feature-id.mjs";
 import { piExecutionPlanPath, piGateStatePath, piSpecPath } from "./pi-paths.mjs";
 import { isPiReviewSecretPath } from "./policy.mjs";
-import { isParallelReviewRole } from "./roles.mjs";
+import { isParallelReviewRole, PARALLEL_REVIEW_ROLES } from "./roles.mjs";
 import { checkPiFinalCommands } from "./pi-command-evidence.mjs";
 import { postHarvestReviewSnapshot } from "./memory-cycle.mjs";
 import { classifyPiReviewDispatch } from "./pi-review-concurrency.mjs";
@@ -496,6 +496,32 @@ export function piTaskRegateStatus({ projectRoot, state, featureId, taskId, head
   const satisfied = matchesAbsolution(bare, state?.regate_passed, ancestor) &&
     pending.every(value => matchesAbsolution(value, state?.regate_passed, ancestor));
   return { required: pending.length > 0, satisfied };
+}
+
+/** Exact same current receipt anchor required by the native regate marker. */
+export function hasCurrentPiTaskReviewCompletion(state, { sessionId, featureId, taskId, snapshot }) {
+  return PARALLEL_REVIEW_ROLES.some(role => {
+    const evidence = findPiReviewReceipt(state, { featureId, taskId, phase: "task", role });
+    return hasAcceptedPiReviewEvidence(evidence, snapshot) &&
+      evidence.written_by === "host-subagent-completion" && evidence.role === role &&
+      evidence.parent_session_id === sessionId && evidence.feature_id === featureId && evidence.task_id === taskId &&
+      typeof evidence.dispatch_call_id === "string" && evidence.dispatch_call_id.length > 0 &&
+      typeof evidence.child_session_id === "string" && evidence.child_session_id.length > 0 &&
+      typeof evidence.agent_id === "string" && evidence.agent_id.length > 0 &&
+      evidence.status === "completed" && evidence.reviewed_head_sha === snapshot?.head_sha;
+  });
+}
+
+/** Refresh exactly one accepted reviewer only when native closure cannot yet be
+ * recorded. Existing missing/negative reviews take precedence over this repair. */
+export function piTaskClosureReview({ projectRoot, state, sessionId, featureId, taskId, snapshot, roles, observed }) {
+  const regate = piTaskRegateStatus({ projectRoot, state, featureId, taskId, headSha: snapshot?.head_sha });
+  if (!regate.required || regate.satisfied || hasCurrentPiTaskReviewCompletion(state,
+    { sessionId, featureId, taskId, snapshot }) || !roles?.length) return null;
+  if (!roles.every(role => isSatisfiedPiTaskReviewReceipt(findPiReviewReceipt(state,
+    { featureId, taskId, phase: "task", role }), { projectRoot, sessionId, featureId, taskId, role, snapshot,
+    dispatchCallId: observed?.get(role)?.callId, reviewAfterImplementation: observed?.get(role)?.afterImplementation }))) return null;
+  return roles[0];
 }
 
 /** A task's last positive review survives later product fixes; a new dispatch revokes it. */

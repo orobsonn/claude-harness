@@ -14,7 +14,7 @@ import { parseHandStatusFromOutput, validateOcCaptureEligibleHandRecord } from "
 import { hashTaskReceipt, unsupportedTaskScopePattern } from "./task-contract.mjs";
 import { readTaskContextReturn, validateTaskContextReturn } from "./task-context.mjs";
 import { readTaskPlanAuthority, recoveredTaskContractHash } from "./task-plan-recovery.mjs";
-import { capturePiReviewInput, currentPiReviewIssues, findPiReviewReceipt, isSatisfiedPiTaskReviewReceipt, readPiReviewPlan } from "./pi-review-evidence.mjs";
+import { capturePiReviewInput, hasCurrentPiTaskReviewCompletion, currentPiReviewIssues, findPiReviewReceipt, isSatisfiedPiTaskReviewReceipt, readPiReviewPlan } from "./pi-review-evidence.mjs";
 import { PARALLEL_REVIEW_ROLES, requiredPiTaskReviewRoles } from "./roles.mjs";
 import { canonicalTaskReviewPrompt, classifyPiReviewDispatch } from "./pi-review-concurrency.mjs";
 import { piGateStatePath, piHandRecordPath } from "./pi-paths.mjs";
@@ -844,7 +844,13 @@ export function inspectTaskRun(entry, dependencies = {}) {
     // actual required/dispatched receipts (including negatives) still govern above.
     const hasReviewObligation = !reviews.ok || Object.keys(reviews.receipts).length > 0;
     if (hasReviewObligation && regatePending.some((pending) => !matchesAbsolution(pending, state.regate_passed, (sha) => ancestor(worktree, sha, head)))) {
-      const next = reviews.ok
+      const closureAnchor = reviews.ok && hasCurrentPiTaskReviewCompletion(state, {
+        sessionId: claim.session_id, featureId: entry.feature_id, taskId: entry.task_id,
+        snapshot: { head_sha: head, input_digest: reviews.inputDigest },
+      });
+      const next = reviews.ok && !closureAnchor
+        ? "ancestral reviews remain accepted but native closure lacks a current host-owned anchor; consult harness_reviews and refresh only its closure_review role, then mark regate-passed. Preserve accepted siblings and do not repeat writers"
+        : reviews.ok
         ? "reviews are accepted; in the task session consult harness_reviews and mark regate-passed if still satisfied. Do not repeat writers or accepted reviews just to close this marker"
         : "in the task session consult harness_reviews, resolve only missing or negative reviews and their applicable findings, then mark regate-passed";
       return failure(`task re-gate is still pending: ${next}`, diagnostics);

@@ -481,3 +481,19 @@ test("reconciled task status exposes an already satisfied ancestral re-gate sepa
   const missing = await (await tool()).execute("status", { phase: "task", task_id: TASK }, undefined, undefined, f.ctx);
   assert.equal(missing.details.regate.satisfied, false);
 });
+
+test("closure review never reopens a positive sibling while an ancestral negative remains missing", async t => {
+  const f = fixture(t);
+  implementationCompleted(f);
+  for (const role of ["harness-adversary", "harness-compliance"]) {
+    record(f.root, role, "task", role === "harness-compliance" ? JSON.stringify({ issues: [{ description: "Unresolved boundary", scope: "feature.txt", evidence: "Missing check", fix_hint: "Add check", severity: "high", category: "locked-decision" }] }) : '{"issues":[]}' );
+    f.entries.push(reviewDispatch(role));
+  }
+  execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "--allow-empty", "-qm", "new capture"], { cwd: f.root });
+  const state = JSON.parse(readFileSync(f.statePath)); state.regate_pending = [`${FEATURE}/${TASK}`];
+  writeFileSync(f.statePath, JSON.stringify(state));
+  const result = await (await tool()).execute("status", { phase: "task", task_id: TASK }, undefined, undefined, f.ctx);
+  assert.deepEqual(result.details.missing, ["harness-compliance"]);
+  assert.ok(result.details.accepted.includes("harness-adversary"));
+  assert.equal(result.details.closure_review, undefined);
+});

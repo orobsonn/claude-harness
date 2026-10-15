@@ -22,7 +22,7 @@ import { readPiSpecDraft } from "../lib/spec-approval.mjs";
 import { removePiChildIdentity, writePiChildIdentity } from "../lib/pi-child-identity.mjs";
 import { bindPiChildSession, removePiDispatchRecord } from "../lib/pi-state-records.mjs";
 import { parseTaskDispatchIdentity } from "../../opencode/lib/task-dispatch-identity.mjs";
-import { isDiscussionRole, isSupportRole, isRuntimeRole } from "../lib/roles.mjs";
+import { isDiscussionRole, isSupportRole, isRuntimeRole, PARALLEL_REVIEW_ROLES, requiredPiTaskReviewRoles } from "../lib/roles.mjs";
 import { classifyPiReviewDispatch } from "../lib/pi-review-concurrency.mjs";
 import {
   capturePiReviewInput,
@@ -30,6 +30,8 @@ import {
   checkPiReviewPreparation,
   findPiReviewReceipt,
   isSatisfiedPiTaskReviewReceipt,
+  piTaskClosureReview,
+  readPiReviewPlan,
   missingPiReviewRoles,
   observedPiTaskReviewRoles,
   parsePiReviewCompletion,
@@ -337,6 +339,21 @@ export default function harnessEntryGate(pi: ExtensionAPI) {
           dispatchCallId: observed.get(args.subagent_type)?.callId,
           reviewAfterImplementation: observed.get(args.subagent_type)?.afterImplementation,
         });
+        if (accepted) {
+          const plan = readPiReviewPlan({ projectRoot, featureId,
+            expectedSha256: captured.snapshot.canonical_plan.sha256 });
+          if (!plan.ok) return { block: true, reason: plan.reason };
+          const receipts = new Map(PARALLEL_REVIEW_ROLES.map(role => [role,
+            findPiReviewReceipt(loaded.state, { featureId, taskId: review.taskId, phase: "task", role })]));
+          const allObserved = observedPiTaskReviewRoles(ctx.sessionManager, review.taskId,
+            new Map([...receipts].map(([role, receipt]) => [role, receipt?.active_dispatch_call_id ?? receipt?.dispatch_call_id])));
+          const baseline = requiredPiTaskReviewRoles({ ...plan.plan, mode: plan.plan.mode ?? loaded.state.mode },
+            plan.plan.tasks.find(task => task.id === review.taskId));
+          const closureRole = piTaskClosureReview({ projectRoot, state: loaded.state, sessionId, featureId,
+            taskId: review.taskId, snapshot: captured.snapshot, observed: allObserved,
+            roles: PARALLEL_REVIEW_ROLES.filter(role => baseline.includes(role) || allObserved?.has(role) || receipts.get(role) !== null) });
+          if (closureRole === args.subagent_type) accepted = false;
+        }
       } else {
         accepted = !missingPiReviewRoles({
           projectRoot,

@@ -453,7 +453,11 @@ no host antes de retomar a dependente. Não reduza todo retorno BLOCKED a um ped
 capture/re-gate repetido quando o filho reportou testes RED ou defeito de produto.
 Quando `harness_reviews` informar `regate.satisfied=true`, o marker ancestral já é
 aceito pelo gate nativo. Não tente gravar outro `regate-passed` só pelo HEAD novo nem
-repita olhos aceitos para rebinding. Reviews faltantes/negativos continuam obrigatórios.
+repita olhos aceitos para rebinding. Reviews faltantes/negativos continuam obrigatórios. Se não existir marker ancestral
+válido nem review corrente para gravar o primeiro marker, `closure_review` identifica
+um único papel que deve ser atualizado no HEAD atual; ele aparece em `missing` e o
+despacho nativo permite essa recuperação. Preserve os irmãos aceitos. Não altere
+recibos nem repita implementação para criar esse vínculo.
 Para falha operacional na suíte com o runner oficial, `HARNESS_TEST_SHARDS=1 npm test`
 é uma variação autorizada de execução completa: preserva pretest, coleta, setup e
 asserts. Use a evidência desse comando; não peça ao operador para reiniciar a sessão

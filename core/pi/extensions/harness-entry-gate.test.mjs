@@ -18,6 +18,8 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import harnessReviews from "./harness-reviews.ts";
+import { createPiMarkerAuthority } from "../lib/marker-authority.mjs";
 import harnessEntryGate from "./harness-entry-gate.ts";
 import harnessTasks from "./harness-tasks.ts";
 import { readPiChildIdentity } from "../lib/pi-child-identity.mjs";
@@ -1310,5 +1312,59 @@ test("native planner dispatch preserves admitted task plan before scope correcti
     assert.ok(event.input.prompt.includes(readable));
     assert.match(event.input.prompt, /HARNESS_PLAN_RECOVERY/);
     assert.match(event.input.prompt, /never from session logs/);
+  } finally { f.close(); }
+});
+
+
+test("native status, dispatch and regate recover exactly one ancestral review when closure has no anchor", async () => {
+  const f = fixture();
+  try {
+    const git = (...args) => execFileSync("git", args, { cwd: f.root, encoding: "utf8" }).trim();
+    git("init", "-q"); git("add", ".");
+    git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "base");
+    const statePath = join(f.root, ".pi/harness/state", SESSION, "gate-state.json");
+    const initial = JSON.parse(readFileSync(statePath, "utf8"));
+    writeFileSync(statePath, JSON.stringify({ ...initial, spec_status: "adversary-reviewed", adversary_fired: true }));
+    const entries = [{ type: "message", message: { role: "assistant", stopReason: "toolUse", content: [
+      { type: "toolCall", id: "implementation", name: "subagent", arguments: { subagent_type: "harness-executor", prompt: BRIEF } },
+    ] } }, { type: "message", message: { role: "toolResult", toolCallId: "implementation", details: { status: "completed" }, content: [] } }];
+    const ctx = ctxOf(f.root, { entries });
+    const prompt = role => role === "harness-adversary" ? BRIEF : `[HARNESS_TASK_REVIEW]\n${BRIEF}`;
+    const record = (role, callId) => {
+      entries.push({ type: "message", message: { role: "assistant", stopReason: "toolUse", content: [
+        { type: "toolCall", id: callId, name: "subagent", arguments: { subagent_type: role, prompt: prompt(role) } },
+      ] } });
+      const input = { projectRoot: f.root, sessionId: SESSION, featureId: FEATURE, phase: "task", taskId: "task-1", role };
+      const captured = capturePiReviewInput(input), agentId = `agent-${callId}`, body = '{"issues":[]}';
+      assert.equal(beginPiReviewReceipt({ ...input, dispatchCallId: callId }).ok, true);
+      const parsed = parsePiReviewCompletion({ role, snapshotStart: captured.snapshot, snapshotEnd: captured.snapshot,
+        nativeRecord: { id: agentId, type: role, status: "completed", isBackground: false, result: body, completedAt: 2 },
+        result: wrappedReviewResult(agentId, body) });
+      assert.equal(parsed.ok, true, parsed.reason);
+      assert.equal(recordPiReviewReceipt({ ...input, completion: parsed.completion,
+        binding: { agentId, dispatchCallId: callId, childSessionId: `child-${callId}` } }).ok, true);
+    };
+    for (const role of ["harness-adversary", "harness-compliance", "harness-security"]) record(role, `initial-${role}`);
+    git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "--allow-empty", "-qm", "capture advanced");
+    const state = JSON.parse(readFileSync(statePath)); state.regate_pending = [`${FEATURE}/task-1`]; state.regate_passed = [];
+    writeFileSync(statePath, JSON.stringify(state));
+    const tools = new Map(); harnessReviews({ on() {}, registerTool: tool => tools.set(tool.name, tool) });
+    const status = await tools.get("harness_reviews").execute("status", { phase: "task", task_id: "task-1" }, undefined, undefined, ctx);
+    assert.deepEqual(status.details.missing, ["harness-adversary"]);
+    assert.equal(status.details.closure_review.role, "harness-adversary");
+    assert.ok(status.details.accepted.includes("harness-security"));
+    const h = handlers(); h.get("session_start")({}, ctx);
+    const dispatch = (role, id) => h.get("tool_call")({ toolName: "subagent", toolCallId: id,
+      input: { subagent_type: role, prompt: prompt(role), description: "closure" } }, ctx);
+    assert.equal((await dispatch("harness-security", "sibling"))?.block, true);
+    assert.equal(await dispatch("harness-adversary", "closure"), undefined, "host closure recovery must be dispatchable");
+    record("harness-adversary", "closure");
+    const complete = await tools.get("harness_reviews").execute("status", { phase: "task", task_id: "task-1" }, undefined, undefined, ctx);
+    assert.deepEqual(complete.details.missing, []);
+    const authority = createPiMarkerAuthority({ projectRoot: f.root });
+    const params = { action: "regate-passed", task_id: "task-1" };
+    assert.equal(authority.authorize({ toolName: "mark", input: params, sessionId: SESSION, toolCallId: "regate" }).ok, true);
+    const result = authority.execute({ toolCallId: "regate", params, sessionId: SESSION, isChild: false });
+    assert.equal(result.ok, true, result.output);
   } finally { f.close(); }
 });
