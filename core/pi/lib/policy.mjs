@@ -155,9 +155,17 @@ function isCanonicalPlanDigestCommand(command, gateState) {
     command === `sha256sum ${spec} ${plan}`
 }
 
+// Only the official runner's shard count may vary around the COMPLETE npm
+// lifecycle. No arbitrary env, filters, shell operators or script overrides.
+export function canonicalPiVerificationCommand(command) {
+  const match = /^HARNESS_TEST_SHARDS=([1-9]|[12][0-9]|3[0-2]) npm test$/.exec(command ?? "");
+  return match ? "npm test" : command;
+}
+
 function isParentVerificationCommand(command, gateState) {
   return typeof command === "string" && (
     isCanonicalPlanDigestCommand(command, gateState) ||
+    canonicalPiVerificationCommand(command) !== command ||
     CLAUDE_CODE_BASH_ALLOWLIST.some((pattern) => claudeBashPatternMatches(pattern, command))
   )
 }

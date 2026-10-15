@@ -246,3 +246,24 @@ test("final npm checks accept only the package proven by every frozen test and t
   fs.writeFileSync(planFile, JSON.stringify(plan));
   assert.deepEqual(check().commands, commands, "mixed task scope cannot infer one package cwd");
 });
+
+test("official shard-count variation retains full-suite evidence and a later failure revokes it", async t => {
+  const f = fixture(t, ["npm test"]);
+  const pass = await f.record("HARNESS_TEST_SHARDS=1 npm test");
+  assert.equal(f.check().ok, true, JSON.stringify(f.check()));
+  const metadata = JSON.parse(fs.readFileSync(pass.details.command_evidence.metadata_path ?? pass.details.command_evidence.path.replace(/\.log$/, '.json'), "utf8"));
+  assert.equal(metadata.command, "HARNESS_TEST_SHARDS=1 npm test", "retain the real command in native evidence");
+  await f.record("HARNESS_TEST_SHARDS=2 npm test", { failure: true });
+  assert.equal(f.check().ok, false, "never fall back to an older success in another shard mode");
+  await f.record("HARNESS_TEST_SHARDS=1 npm test");
+  assert.equal(f.check().ok, true);
+});
+
+test("filters, arbitrary env and lifecycle changes cannot masquerade as a full-suite receipt", async t => {
+  for (const command of ["HARNESS_TEST_SHARDS=1 npm test -- one.test.ts", "HARNESS_TEST_SHARDS=0 npm test",
+    "HARNESS_TEST_SHARDS=1 npm run test", "NODE_OPTIONS=x npm test", "HARNESS_TEST_SHARDS=1 npm test; true"]) {
+    const f = fixture(t, ["npm test"]);
+    await f.record(command);
+    assert.equal(f.check().ok, false, command);
+  }
+});

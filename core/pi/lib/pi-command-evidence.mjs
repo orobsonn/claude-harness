@@ -11,7 +11,7 @@ import { isSafeSessionId, isSafeFeatureId } from "../../shared/lib/feature-id.mj
 import { parseTaskDispatchIdentity } from "../../opencode/lib/task-dispatch-identity.mjs";
 import { classifyPiReviewDispatch } from "./pi-review-concurrency.mjs";
 import { readTaskRunBinding } from "./task-run.mjs";
-import { isPiReviewSecretPath } from "./policy.mjs";
+import { isPiReviewSecretPath, canonicalPiVerificationCommand } from "./policy.mjs";
 
 const INLINE_OUTPUT_MAX_BYTES = 128 * 1024;
 const COMMAND_MAX_BYTES = 32 * 1024;
@@ -489,7 +489,7 @@ export function checkPiFinalCommands({ projectRoot, sessionId, commands, exactHe
       try {
         const metadataPath = path.join(directory, entry.name);
         const record = evidenceRecord(directory, metadataPath, identity, sessionId, false);
-        const declared = declaredForActual.get(record.command);
+        const declared = declaredForActual.get(record.command) ?? declaredForActual.get(canonicalPiVerificationCommand(record.command));
         if (!missing.has(declared) || !matchingInput(record)) continue;
         const modified = fs.statSync(metadataPath, { bigint: true }).mtimeNs;
         if (!latest.has(declared) || latest.get(declared).modified < modified) latest.set(declared, { metadataPath, modified });
@@ -581,6 +581,7 @@ function sensitiveCommand(command) {
 // executable. This selects automatic transport, not permission to run a command,
 // and does not prove that project scripts cannot print private data.
 function shortEvidenceCommand(command) {
+  command = canonicalPiVerificationCommand(command);
   if (typeof command !== "string" || /[;&|`$\n\r]/.test(command)) return false;
   return /^node\s+\.pi\/harness\/bin\/pi-verify\.mjs\s+--(?:pool|node)\s/.test(command.trim()) ||
     /^(?:git\s+(?:diff|status|log|show|rev-parse)|rg|(?:vitest|jest|mocha|tsc)|(?:npm|pnpm|yarn|bun)\s+(?:test|run(?:-script)?|typecheck)|npx\s+(?:--no-install\s+)?(?:vitest|jest|mocha|tsc))\b/.test(command.trim()) ||

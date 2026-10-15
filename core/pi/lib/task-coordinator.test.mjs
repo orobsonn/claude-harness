@@ -780,6 +780,8 @@ test("summary exposes durable context only for ready or integrated tasks", async
   await executeTaskAction({ action: "dispatch", task_ids: ["a"] }, f.context, f.deps);
   const ready = await executeTaskAction({ action: "status", task_id: "a" }, f.context, f.deps);
   assert.deepEqual(ready.tasks[0].context_return, { summary: "Current result" });
+  assert.match(ready.tasks[0].context_return_notice, /not a current test verdict/);
+  assert.match(ready.tasks[0].context_return_notice, /latest native job/);
   const compact = await executeTaskAction({ action: "status", task_id: "a", compact: true }, f.context, f.deps);
   assert.equal(compact.tasks[0].context_return, undefined);
   assert.equal(compact.tasks[0].child_head, ready.tasks[0].child_head);

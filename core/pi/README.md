@@ -491,3 +491,31 @@ a conclusão da task continua dependendo dos recibos e gates do harness.
 
 Referências: [changelog do Pi](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/CHANGELOG.md)
 e [changelog dos subagentes](https://github.com/gotgenes/pi-packages/blob/main/packages/pi-subagents/CHANGELOG.md).
+
+### Auditoria de recuperação da entrega (Victor #403)
+
+O runtime deve recuperar pendências internas pelos caminhos nativos, sem converter
+um estado histórico em nova obrigação nem exigir que o operador renove uma
+autorização existente. A matriz abaixo registra os caminhos auditados; não é uma
+garantia de ausência de falhas futuras. Estado, diário ou lembrete nunca aprovam
+implementação, testes ou entrega.
+
+| Caminho | Recuperação e limite verificados |
+| --- | --- |
+| Pai encerra com filho ativo | Espera nativa fora do lock; mudança reconciliada acorda o pai sem polling pelo modelo. Pausa/shutdown cancelam a observação. |
+| Reinício após despacho | Autorização de acompanhamento é persistida/restaurada; pausa explícita continua prevalecendo. |
+| Re-gate após merge de reconciliação | Continuação e `harness_reviews` reconhecem a absolvição ancestral que a inspeção nativa já aceita. Não exigir outro marker/olho apenas pelo HEAD novo. |
+| Review negativo, identidade estrangeira ou ancestralidade inválida | Permanecem pendentes; marker anterior não apaga review negativo nem concede captura. |
+| Retorno antigo do diário | `context_return_notice` distingue snapshot consultivo de veredito atual. Confrontar último job, saída bruta e recibos antes de reabrir task. |
+| Timeout/concorrência do runner | Pai pode usar somente `HARNESS_TEST_SHARDS=1..32 npm test`, mantendo o ciclo npm completo. Evidência guarda comando literal; falha posterior em outra quantidade de shards revoga sucesso anterior. |
+| Filtro, env arbitrário ou alteração de lifecycle | Não equivalem à suíte completa; não são admitidos pela exceção de shards. |
+| Commit vazio/documental após testes | Preparação final usa a prova nativa compatível com os inputs da aplicação. Mudanças no runner efetivamente consumido ou no produto exigem nova validação. |
+| Falha de suíte | Focal isolado é diagnóstico, não aprovação agregada. Não repetir suíte inalterada sem causa e recuperação concreta. |
+| Nova implementação/escopo/frozen test | Continuam exigindo contrato aprovado, fidelidade, produtor/captura nativos e olhos aplicáveis. Nenhuma correção desta auditoria amplia paths por prosa. |
+| Provider, processo ou observação indisponível | Abort/erro não vira sucesso. Preservar evidência e informar erro exato; não fabricar recibos ou repetir indefinidamente uma falha inalterada. |
+| Harvest/shipping/finalização | Reutilizar apenas recibos compatíveis; entrega não infere autorização de merge, deploy ou release. Pausa e fronteira de entrega concluída continuam sendo paradas válidas. |
+
+Cobertura: `delivery-continuation`, `harness-reviews`, `policy`, `pi-final-checks`,
+`task-coordinator`, `task-receipts`, `harness-entry-gate`, `harness-command-evidence`
+e testes do prompt. A integração do SDK Pi testa continuação com um único prompt
+inicial. Gates de captura e review final mantêm suas validações independentes.
