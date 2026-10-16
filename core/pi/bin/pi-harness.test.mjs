@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { cpSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
@@ -529,6 +529,45 @@ test("runtime já materializado atualiza os agentes travados sem tocar em autent
 
   assert.equal(readFileSync(plannerPath, "utf8"), readFileSync(join(process.cwd(), "core/pi/runtime/agents/harness-planner.md"), "utf8"));
   assert.equal(existsSync(join(runtimeDir, "auth.json")), false);
+});
+
+test("source and vendored launches keep development suites out of consumer runtime and clean only known leaks", () => {
+  const directory = mkdtempSync(join(tmpdir(), "pi-runtime-test-leak-"));
+  try {
+    const runtime = join(directory, "runtime");
+    materializeRuntime(process.cwd(), runtime);
+    assert.equal(readdirSync(join(runtime, "agents")).some((file) => file.endsWith(".test.mjs")), false);
+    const leaked = ["harness-planner.test.mjs", "harness-plan-reviewer.test.mjs",
+      "memory-context-isolation.test.mjs", "reviewer-context-isolation.test.mjs"];
+    for (const file of leaked) writeFileSync(join(runtime, "agents", file), "old generated test\n");
+    writeFileSync(join(runtime, "agents", "operator-agent.md"), "operator agent\n");
+    writeFileSync(join(runtime, "agents", "operator.test.mjs"), "operator test\n");
+    writeFileSync(join(runtime, "auth.json"), "operator auth sentinel\n");
+    // A packaged vendor has already excluded source tests; cleanup must still
+    // work rather than depending on those test files being present in source.
+    const packaged = join(directory, "packaged");
+    cpSync(join(process.cwd(), "core/pi/runtime"), join(packaged, "core/pi/runtime"), {
+      recursive: true, filter: (file) => !file.endsWith(".test.mjs"),
+    });
+    materializeRuntime(packaged, runtime);
+    for (const file of leaked) assert.equal(existsSync(join(runtime, "agents", file)), false, file);
+    assert.equal(readFileSync(join(runtime, "agents/operator-agent.md"), "utf8"), "operator agent\n");
+    assert.equal(readFileSync(join(runtime, "agents/operator.test.mjs"), "utf8"), "operator test\n");
+    assert.equal(readFileSync(join(runtime, "auth.json"), "utf8"), "operator auth sentinel\n");
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("runtime test-leak cleanup cannot follow an agents directory redirected outside the runtime", () => {
+  const directory = mkdtempSync(join(tmpdir(), "pi-runtime-test-link-"));
+  try {
+    const runtime = join(directory, "runtime");
+    const outside = join(directory, "outside");
+    mkdirSync(runtime); mkdirSync(outside);
+    writeFileSync(join(outside, "harness-planner.test.mjs"), "preserve outside\n");
+    symlinkSync(outside, join(runtime, "agents"));
+    assert.throws(() => materializeRuntime(process.cwd(), runtime), /real directory/);
+    assert.equal(readFileSync(join(outside, "harness-planner.test.mjs"), "utf8"), "preserve outside\n");
+  } finally { rmSync(directory, { recursive: true, force: true }); }
 });
 
 test("shipper vendorizado é olho de entrega e não recebe tools de escrita", () => {
