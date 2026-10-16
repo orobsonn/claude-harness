@@ -525,3 +525,31 @@ Cobertura: `delivery-continuation`, `harness-reviews`, `policy`, `pi-final-check
 `task-coordinator`, `task-receipts`, `harness-entry-gate`, `harness-command-evidence`
 e testes do prompt. A integração do SDK Pi testa continuação com um único prompt
 inicial. Gates de captura e review final mantêm suas validações independentes.
+
+### Auditoria das paradas de Lainny #370 e Victor #412 (2026-10-16)
+
+A investigação confrontou os transcripts nativos dos pais, tentativas dos filhos,
+recibos de integração, árvores Git e logs completos das suítes. Foram encontrados
+os seguintes atritos no harness, com correções na fonte e testes de regressão:
+
+| Atrito confirmado | Correção |
+| --- | --- |
+| Retomada sem delta bloqueada após merge de reconciliação com árvore idêntica | [#1148](https://github.com/orobsonn/claude-harness/pull/1148) preserva a integração selada quando diário, árvore, processos e reviews comprovam que não há nova entrega; mantém o histórico `BLOCKED`. |
+| Resolver conflito exigia reproduzir integralmente cada hunk, inclusive o LF final | [#1148](https://github.com/orobsonn/claude-harness/pull/1148) admite o hash exato do hunk do preview, preservando hash do arquivo, ordem e resolução de todos os conflitos. |
+| Exceção de finalização recusava `gh issue edit` com seleção explícita do mesmo repositório | [#1148](https://github.com/orobsonn/claude-harness/pull/1148) admite `-R`/`--repo` compatíveis, após provar merge da branch, fechamento da issue e identidade do repositório. |
+| Launcher externo copiava testes do harness para o runtime consumidor; Vitest tentava executá-los | [#1150](https://github.com/orobsonn/claude-harness/pull/1150) exclui testes da materialização e remove somente os quatro vazamentos gerados conhecidos, sem esconder arquivos no runner do produto. |
+| Planner precisava reescrever o plano inteiro para ajustar uma obrigação | [#1151](https://github.com/orobsonn/claude-harness/pull/1151) libera `edit` apenas no plano canônico, com a mesma identidade, validação integral e revisão já exigidas para `write`. |
+| Ferramentas consultivas eram tratadas como mutação pelo controle de concorrência | [#1153](https://github.com/orobsonn/claude-harness/pull/1153) classifica as cinco consultas do planner como leitura; não libera shell, MCP geral ou ferramentas desconhecidas. |
+
+Na Victor #412, o runtime instalado também estava atrasado em relação à exceção
+canônica de `HARNESS_TEST_SHARDS=1 npm test`; relançar a mesma sessão com a fonte
+atual admitiu a execução serial sem mudar o lifecycle ou filtrar testes. Retomadas
+externas preservam as tentativas e reconhecem a proveniência histórica conforme
+[#1146](https://github.com/orobsonn/claude-harness/pull/1146).
+
+Nem toda parada era um bloqueio inútil: as revisões encontraram exposição de dados
+excluídos pelo contrato da Lainny e precedência incorreta do erro de seleção congelada
+na Victor. As suítes também expuseram fixture dependente de UTC/BRT e um teste que
+concentrava dezoito requisições no mesmo timeout. Esses casos exigem correção no
+produto ou nos testes consumidores e nova evidência; remover o review, ignorar o
+teste ou editar o estado para marcar sucesso não resolve a causa.
