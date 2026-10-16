@@ -11,7 +11,8 @@ import {
   decideTaskCoordinatorEdit,
 } from "./task-coordinator.mjs";
 import { captureTaskRuntime, verifyTaskRuntime } from "./task-runtime-assets.mjs";
-import { taskScopeBase } from "./task-reconciliation.mjs";
+import { taskScopeBase, taskMergePreview } from "./task-reconciliation.mjs";
+import { hashTaskReceipt } from "./task-contract.mjs";
 import { snapshotWorktreeBaseline, pathsChangedSinceBaseline } from "../../opencode/lib/worktree-baseline.mjs";
 import { hashTaskArtifact, admitTaskRun, readTaskRunBinding } from "./task-run.mjs";
 import { preserveTaskPlanForPlanner, readTaskPlanAuthority, validateTaskScopeRecovery } from "./task-plan-recovery.mjs";
@@ -2055,6 +2056,40 @@ test("integrated evidence owner imports a clean aggregate before same-attempt re
   assert.equal(taskScopeBase(entry, entry.worktree, corrected, ["src/a.mjs"]), f.parentHead);
   const integrated = await f.action({ action: "integrate", task_id: "a", attempt_id: entry.attempt_id, expected_head: corrected });
   assert.equal(integrated.ok, true, integrated.reason);
+});
+
+test("aggregate refresh revalidates an abandoned equivalent child before a later real correction", async t => {
+  const f = await aggregateRefreshFixture(t);
+  const entry = f.registry().tasks.a;
+  git(entry.worktree, "merge", "--no-ff", "-qm", "ancestry-only refresh", entry.integration.integrated_head);
+  const head = git(entry.worktree, "rev-parse", "HEAD");
+  assert.notEqual(head, entry.integration.child_head);
+  const preview = taskMergePreview(entry.worktree, entry.integration.child_head, entry.integration.integrated_head);
+  entry.reconciliations = [{ written_by: "host-task-reconciliation", kind: "aggregate-refresh", task_id: "a",
+    attempt_id: entry.attempt_id, scope_base_sha: entry.base_sha, pre_child_head: entry.integration.child_head,
+    parent_head: entry.integration.integrated_head, merged_head: head, tree: preview.tree,
+    launch_count: entry.launches.length, upstreams: [], source_integration_sha256: hashTaskReceipt(entry.integration) }];
+  entry.integration_history = [entry.integration];
+  entry.result_history = { [entry.integration.result_sha256]: entry.result };
+  const abandoned = { written_by: "host-task-resume-abandonment", no_product_obligation: true, reason: "No delta",
+    proof: { parent_head: entry.integration.integrated_head, child_head: entry.integration.child_head,
+      child_current_head: head, result_sha256: entry.integration.result_sha256,
+      integration_sha256: hashTaskReceipt(entry.integration), reconciliations_sha256: hashTaskReceipt(entry.reconciliations) } };
+  entry.abandoned_resumes = [abandoned];
+  write(path.join(f.dir, ".pi/harness/state/parent/task-runs/index.json"), { ...f.registry(), tasks: { a: entry } });
+  f.deps.inspectResumeAbandonment = () => ({ ok: false, reason: "changed abandonment evidence" });
+  const before = f.launches();
+  assert.equal((await f.action(f.request)).ok, false);
+  assert.equal(f.launches(), before);
+  f.deps.inspectResumeAbandonment = (current, input) => {
+    assert.equal(input.headSha, abandoned.proof.parent_head);
+    return { ok: true, proof: abandoned.proof, integration: current.integration };
+  };
+  const result = await f.action(f.request);
+  assert.equal(result.ok, true, result.reason);
+  const updated = f.registry().tasks.a;
+  assert.equal(updated.reconciliations.at(-1).source_abandonment_sha256, hashTaskReceipt(abandoned));
+  assert.equal(taskScopeBase(updated, updated.worktree, git(updated.worktree, "rev-parse", "HEAD")), f.parentHead);
 });
 
 test("aggregate refresh rejects stale HEAD, missing finding, dirty trees and external conflict before invalidation", async t => {

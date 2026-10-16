@@ -789,7 +789,8 @@ export function inspectTaskRun(entry, dependencies = {}) {
           onlyRecoveryChanges(entry, worktree, reconciliation.merged_head, head, binding.task, binding.plan)) {
         const historicalIntegration = entry.integration_history?.at(-1);
         const historicalResult = object(entry.result_history)?.[historicalIntegration?.result_sha256];
-        if (historicalResult?.child_head === reconciliation.pre_child_head &&
+        if ((historicalResult?.child_head === reconciliation.pre_child_head ||
+            reconciliation.source_abandonment_sha256 && recoveryReconciliationMatches(reconciliation, historicalIntegration)) &&
             historicalResult.launches?.length <= reconciliation.launch_count) {
           const historicalHand = historicalResult.hand_capture;
           const historicalCallId = historicalHand?.agent === "harness-test-author"
@@ -1076,7 +1077,7 @@ function validateIntegration(entry, integration, { projectRoot, sessionId, featu
         reconciliation.merged_head !== recoveryOrigin.head_sha ||
         recoveryOrigin.reconciliation_sha256 !== taskReconciliationDigest(entry) ||
         !priorResult || hashTaskReceipt(priorResult) !== priorIntegration.result_sha256 ||
-        priorResult.child_head !== reconciliation.pre_child_head ||
+        (priorResult.child_head !== reconciliation.pre_child_head && !reconciliation.source_abandonment_sha256) ||
         priorResult.launches?.length > reconciliation.launch_count ||
         priorOrigin?.producer_call_id !== recoveryOrigin.producer_call_id ||
         priorOrigin?.producer_launch_index !== recoveryOrigin.producer_launch_index)
@@ -1272,9 +1273,24 @@ export function inspectTaskResumeAbandonment(entry, { headSha } = {}, dependenci
       return failure("resume abandonment requires the immediately previous integration and exact inspection");
     if (entry.reconciliation_required || entry.reconciliation_intent)
       return failure("dependency reconciliation cannot be abandoned as an unchanged resume");
-    if (entry.reconciliations?.some((proof) => proof.launch_count >= result.launches.length))
-      return failure("resume abandonment cannot discard a host reconciliation; integrate the current ready receipt instead");
-    const inspectionEntry = { ...entry, result, launches: entry.launches.slice(0, result.launches.length) };
+    const laterReconciliations = entry.reconciliations?.filter((proof) => proof.launch_count >= result.launches.length) ?? [];
+    const childHead = String(git(entry.worktree, ["rev-parse", "HEAD"])).trim();
+    if (laterReconciliations.length) {
+      // An ancestry-only aggregate refresh carries no new product obligation.
+      // Validate the entire journal before selecting the sealed inspection prefix;
+      // retain the merges and the BLOCKED hand verbatim in the abandonment proof.
+      if (laterReconciliations.at(-1).merged_head !== childHead || laterReconciliations.some((proof) =>
+          proof.kind !== "aggregate-refresh" || proof.conflicts?.length ||
+          !ancestor(entry.worktree, result.child_head, proof.pre_child_head) ||
+          String(git(entry.worktree, ["rev-parse", `${proof.pre_child_head}^{tree}`])).trim() !==
+            String(git(entry.worktree, ["rev-parse", `${result.child_head}^{tree}`])).trim() ||
+          String(git(entry.worktree, ["rev-parse", `${proof.merged_head}^{tree}`])).trim() !==
+            String(git(entry.worktree, ["rev-parse", `${result.child_head}^{tree}`])).trim()))
+        return failure("resume abandonment cannot discard a host reconciliation; integrate the current ready receipt instead");
+      taskScopeBase(entry, entry.worktree, childHead);
+    }
+    const inspectionEntry = { ...entry, result, launches: entry.launches.slice(0, result.launches.length),
+      reconciliations: entry.reconciliations?.filter((proof) => proof.launch_count < result.launches.length) };
     const historical = validateIntegration(inspectionEntry, integration, {
       projectRoot: entry.parent_root, sessionId: entry.parent_session_id,
       featureId: entry.feature_id, taskId: entry.task_id, headSha,
@@ -1287,7 +1303,7 @@ export function inspectTaskResumeAbandonment(entry, { headSha } = {}, dependenci
     const launches = validateLaunches(entry, jobRoot, dependencies.readTaskProcessFn ?? readTaskProcess, true);
     if (!launches.ok) return launches;
     if (launches.interruptedIndexes.size) return failure("resume abandonment requires known terminal process evidence for every launch");
-    if (String(git(worktree, ["rev-parse", "HEAD"])).trim() !== result.child_head ||
+    if ((!laterReconciliations.length && childHead !== result.child_head) ||
         String(git(worktree, ["status", "--porcelain", "--untracked-files=all", "--", ".",
           ":(exclude).pi/harness/", ":(exclude)node_modules/"])).trim())
       return failure("resume abandonment requires the original clean child HEAD");
@@ -1321,7 +1337,7 @@ export function inspectTaskResumeAbandonment(entry, { headSha } = {}, dependenci
       violations.scope.every((file) => typeof file === "string" && hand.touchedPaths.includes(file));
     if (originalHand ? (violations.scope.length || !isCaptureEligibleHandRecord(hand) || hand.agent !== result.hand_capture.agent ||
         hand.freezeCommitSha !== result.hand_capture.freeze_sha || hand.capturedVerifiedAt !== result.hand_capture.captured_verified_at)
-      : (hand.outcome !== "BLOCKED" || hand.freezeCommitSha !== result.child_head ||
+      : (hand.outcome !== "BLOCKED" || hand.freezeCommitSha !== childHead ||
         !Array.isArray(hand.touchedPaths) ||
         (violations.scope.length ? !restoredScopeViolation : hand.touchedPaths.length) ||
         !events.events.some((event) =>
@@ -1337,9 +1353,10 @@ export function inspectTaskResumeAbandonment(entry, { headSha } = {}, dependenci
     const state = readJson(piGateStatePath({ projectRoot: worktree, sessionId: result.session_id }).path, worktree);
     const reviews = validateCurrentReviews({ state, events: events.events, plan: binding.plan, task: binding.task,
       projectRoot: worktree, sessionId: result.session_id, featureId: entry.feature_id, taskId: entry.task_id,
-      head: result.child_head, captureReviewInputFn: dependencies.captureReviewInputFn ?? capturePiReviewInput });
+      head: childHead, captureReviewInputFn: dependencies.captureReviewInputFn ?? capturePiReviewInput });
     if (!reviews.ok) return reviews;
-    if (reviews.inputDigest !== result.review_input_digest || hashTaskReceipt(reviews.receipts) !== hashTaskReceipt(result.review_receipts))
+    if (!laterReconciliations.length && (reviews.inputDigest !== result.review_input_digest ||
+        hashTaskReceipt(reviews.receipts) !== hashTaskReceipt(result.review_receipts)))
       return failure("resume abandonment requires unchanged review input and original accepted eyes");
     const eventDigests = entry.launches.map((launch) => {
       const bytes = fs.readFileSync(regularFile(launch.events_path, jobRoot, MAX_EVENTS_BYTES));
@@ -1348,10 +1365,13 @@ export function inspectTaskResumeAbandonment(entry, { headSha } = {}, dependenci
     });
     return { ok: true, result, integration, inspectionEntry, proof: {
       integration_sha256: hashTaskReceipt(integration), result_sha256: integration.result_sha256,
-      parent_head: headSha, child_head: result.child_head, review_input_digest: reviews.inputDigest,
+      parent_head: headSha, child_head: result.child_head, review_input_digest: result.review_input_digest,
       inspected_launch_count: result.launches.length, launch_count: entry.launches.length,
       launches_sha256: hashTaskReceipt(entry.launches), events_sha256: eventDigests,
       hand_sha256: hashTaskReceipt(hand), hand_record: hand,
+      ...(laterReconciliations.length ? { child_current_head: childHead,
+        reconciliations_sha256: taskReconciliationDigest(entry), current_review_input_digest: reviews.inputDigest,
+        current_review_receipts_sha256: hashTaskReceipt(reviews.receipts) } : {}),
     } };
   } catch (error) {
     return failure(`resume abandonment evidence unavailable: ${error.message}`);

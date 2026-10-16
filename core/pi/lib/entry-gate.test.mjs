@@ -1065,6 +1065,36 @@ test("apenas o done da issue fechada pelo PR mergeado da branch é permitido", a
   assert.equal(queued.decision, "deny");
 });
 
+test("done aceita seleção explícita do repositório atual e mantém a prova de merge e fechamento", () => {
+  const calls = [];
+  const run = (binary, args) => {
+    calls.push([binary, args]);
+    if (binary === "git") return "orobsonn/harness-371\n";
+    if (args[0] === "repo") return JSON.stringify({ nameWithOwner: "orobsonn/proj-lainny" });
+    if (args[0] === "pr") return JSON.stringify({ state: "MERGED", mergedAt: "2026-10-15T22:46:39Z",
+      headRefName: "orobsonn/harness-371", closingIssuesReferences: [{ number: 371 }] });
+    return JSON.stringify({ state: "CLOSED" });
+  };
+  for (const command of [
+    "gh issue edit 371 -R orobsonn/proj-lainny --add-label harness:done --remove-label harness:in-progress",
+    "gh issue edit 371 --add-label harness:done --repo orobsonn/proj-lainny",
+    "gh issue edit 371 --remove-label harness:in-progress --add-label harness:done --repo orobsonn/proj-lainny",
+  ]) assert.equal(verifyPiDoneLabelTransition(command, ROOT, run), true, command);
+  assert.ok(calls.filter(([binary, args]) => binary === "gh" && ["pr", "issue"].includes(args[0]))
+    .every(([, args]) => args.includes("--repo") && args.includes("orobsonn/proj-lainny")));
+  for (const options of [
+    "-R someone/else --add-label harness:done",
+    "--add-label harness:done --add-label harness:done",
+    "--add-label harness:done --remove-label harness:in-progress --remove-label harness:in-progress",
+    "-R orobsonn/proj-lainny --repo orobsonn/proj-lainny --add-label harness:done",
+    "--add-label harness:done --add-label harness:ready",
+    "--add-label harness:done; gh issue close 99",
+    "--add-label harness:done\ntrue",
+    "--add-label harness:done -R $(printf orobsonn/proj-lainny)",
+  ]) assert.equal(verifyPiDoneLabelTransition(`gh issue edit 371 ${options}`, ROOT, run), false, options);
+  assert.equal(verifyPiDoneLabelTransition("gh issue edit 372 -R orobsonn/proj-lainny --add-label harness:done", ROOT, run), false);
+});
+
 test("gh issue create sem label em sessão filha recebe o ROUTINE_ISSUE_ADVISORY", async () => {
   const dir = mkdtempSync(join(tmpdir(), "pi-entry-gate-"));
   try {
