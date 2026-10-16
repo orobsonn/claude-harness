@@ -135,18 +135,27 @@ export function isWritingHandRole(role) {
  * riding along with the verified `done` transition. */
 export function verifyPiDoneLabelTransition(command, projectRoot, run = execFileSync) {
   if (typeof command !== "string" || typeof projectRoot !== "string") return false;
-  const match = /^gh issue edit ([1-9][0-9]*) --add-label harness:done(?: --remove-label harness:in-progress)?$/.exec(command) ??
-    /^gh issue edit ([1-9][0-9]*) --remove-label harness:in-progress --add-label harness:done$/.exec(command);
+  const match = /^gh issue edit ([1-9][0-9]*)((?: (?:--add-label harness:done|--remove-label harness:in-progress|(?:-R|--repo) [A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)){1,3})$/.exec(command);
   if (!match) return false;
+  const optionsText = match[2];
+  const repositories = [...optionsText.matchAll(/ (?:-R|--repo) ([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)/g)];
+  if ((optionsText.match(/ --add-label /g) ?? []).length !== 1 ||
+      (optionsText.match(/ --remove-label /g) ?? []).length > 1 || repositories.length > 1) return false;
   try {
     const options = { cwd: projectRoot, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 10000 };
+    const repository = repositories[0]?.[1];
+    if (repository) {
+      const current = JSON.parse(run("gh", ["repo", "view", "--json", "nameWithOwner"], options));
+      if (current.nameWithOwner?.toLowerCase() !== repository.toLowerCase()) return false;
+    }
+    const repoArgs = repository ? ["--repo", repository] : [];
     const branch = run("git", ["symbolic-ref", "--quiet", "--short", "HEAD"], options).trim();
     if (!branch || branch.startsWith("-")) return false;
-    const pr = JSON.parse(run("gh", ["pr", "view", branch, "--json", "state,mergedAt,closingIssuesReferences,headRefName"], options));
+    const pr = JSON.parse(run("gh", ["pr", "view", branch, ...repoArgs, "--json", "state,mergedAt,closingIssuesReferences,headRefName"], options));
     if (pr.state !== "MERGED" || !pr.mergedAt || pr.headRefName !== branch ||
         !Array.isArray(pr.closingIssuesReferences) ||
         !pr.closingIssuesReferences.some((issue) => issue?.number === Number(match[1]))) return false;
-    const issue = JSON.parse(run("gh", ["issue", "view", match[1], "--json", "state"], options));
+    const issue = JSON.parse(run("gh", ["issue", "view", match[1], ...repoArgs, "--json", "state"], options));
     return issue.state === "CLOSED";
   } catch { return false; }
 }

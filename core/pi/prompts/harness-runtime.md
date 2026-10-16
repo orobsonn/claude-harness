@@ -564,6 +564,10 @@ com o `expected_head` da task, `no_product_obligation: true` e motivo factual.
 O host revalida o histórico; não converte uma mão `BLOCKED` em aprovação nem
 descarta parecer negativo. Mudança real de produto/teste exige a recuperação
 normal, não abandono. Olhos finais invalidados continuam precisando de revisão.
+Uma reconciliação de agregado que mudou somente a ancestralidade também pode
+ser abandonada: o host verifica a árvore Git idêntica, o journal completo e todos
+os pareceres atuais, preservando merges, tentativas e a mão bloqueada. Não peça
+escritor cosmético nem repita capturas para satisfazer esse caso operacional.
 
 Merge limpo: envie `resolutions: []`. Se os conflitos forem somente `MEMORY.md`,
 `CONTEXT.md` ou `kaizen.md`, resolva cada um com patch literal pequeno vinculado ao

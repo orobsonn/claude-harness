@@ -347,6 +347,76 @@ test("coordinator-only resume can retain its original captured hand without a ne
   assert.equal(inspected.proof.launch_count, 2);
 });
 
+function ancestryOnlyResumeFixture() {
+  const f = abandonedResumeFixture({ separateParent: true });
+  run(f.entry.parent_root, "git", "commit", "--allow-empty", "-m", "parent ancestry only");
+  const parent = run(f.entry.parent_root, "git", "rev-parse", "HEAD");
+  run(f.root, "git", "fetch", "--quiet", f.entry.parent_root, parent);
+  const preview = taskMergePreview(f.root, f.head, parent);
+  run(f.root, "git", "merge", "--no-ff", "--no-edit", parent);
+  const merged = run(f.root, "git", "rev-parse", "HEAD");
+  f.entry.reconciliations = [{ written_by: "host-task-reconciliation", kind: "aggregate-refresh",
+    task_id: TASK, attempt_id: ATTEMPT, scope_base_sha: f.base, pre_child_head: f.head,
+    parent_head: parent, merged_head: merged, tree: preview.tree, launch_count: f.result.launches.length,
+    upstreams: [], source_integration_sha256: hashTaskReceipt(f.integration) }];
+  const registryPath = path.join(f.entry.parent_root, ".pi/harness/state", PARENT, "task-runs/index.json");
+  const registry = { version: 1, parent_session_id: PARENT, feature_id: FEATURE,
+    plan_sha256: f.entry.plan_sha256, spec_sha256: f.entry.spec_sha256, tasks: { [TASK]: f.entry } };
+  write(registryPath, registry);
+  write(f.handPath, { ...JSON.parse(fs.readFileSync(f.handPath)), freezeCommitSha: merged });
+  appendImplementationReviews(f);
+  const state = JSON.parse(fs.readFileSync(f.statePath));
+  for (const receipt of [state.task_adversary_evidence[`${FEATURE}/${TASK}`],
+    ...Object.values(state.task_review_evidence[`${FEATURE}/${TASK}`])]) {
+    receipt.reviewed_head_sha = merged;
+    receipt.input_digest = "e".repeat(64);
+  }
+  write(f.statePath, state);
+  f.dependencies.captureReviewInputFn = () => ({ ok: true, snapshot: { head_sha: merged, input_digest: "e".repeat(64) } });
+  return { ...f, parent, merged, registryPath, registry };
+}
+
+test("ancestry-only aggregate refresh can abandon a no-op blocked hand without rewriting captured evidence", () => {
+  const f = ancestryOnlyResumeFixture();
+  const before = fs.readFileSync(f.handPath, "utf8");
+  const checked = inspectTaskResumeAbandonment(f.entry, { headSha: f.parent }, f.dependencies);
+  assert.equal(checked.ok, true, checked.reason);
+  assert.deepEqual(checked.result, f.result);
+  assert.deepEqual(checked.integration, f.integration);
+  assert.equal(checked.proof.child_current_head, f.merged);
+  assert.equal(checked.proof.review_input_digest, DIGEST, "the original capture remains sealed");
+  assert.equal(checked.proof.current_review_input_digest, "e".repeat(64), "renewed accepted eyes are separately sealed");
+  assert.equal(checked.proof.reconciliations_sha256, hashTaskReceipt(f.entry.reconciliations));
+  assert.deepEqual(checked.inspectionEntry.reconciliations, []);
+  assert.equal(f.entry.reconciliations.length, 1, "the full host journal survives");
+  assert.equal(fs.readFileSync(f.handPath, "utf8"), before, "BLOCKED remains BLOCKED");
+  assert.equal(inspectTaskRun(f.entry, f.dependencies).ok, false, "no capture is fabricated");
+});
+
+test("ancestry-only abandonment rejects changed trees, journals, dirty work and negative current eyes", () => {
+  for (const scenario of ["tree", "journal", "dirty", "negative", "new-head", "fidelity"]) {
+    const f = ancestryOnlyResumeFixture();
+    if (scenario === "tree") {
+      write(path.join(f.root, "src/task.mjs"), "export const actual = 2;\n");
+      const changed = commit(f.root, "real product correction");
+      f.entry.reconciliations[0].merged_head = changed;
+    }
+    if (scenario === "journal") f.entry.reconciliations[0].tree = "0".repeat(40);
+    if (scenario === "dirty") write(path.join(f.root, "src/task.mjs"), "dirty\n");
+    if (scenario === "new-head") run(f.root, "git", "commit", "--allow-empty", "-m", "unproven ancestry");
+    if (scenario === "negative") {
+      const state = JSON.parse(fs.readFileSync(f.statePath));
+      state.task_review_evidence[`${FEATURE}/${TASK}`].security.accepted = false;
+      write(f.statePath, state);
+    }
+    if (scenario === "fidelity") fs.appendFileSync(f.entry.launches.at(-1).events_path,
+      event("tool_execution_start", { toolCallId: "new-author", toolName: "subagent",
+        args: { subagent_type: "harness-test-author" } }) + "\n");
+    const checked = inspectTaskResumeAbandonment(f.entry, { headSha: f.parent }, f.dependencies);
+    assert.equal(checked.ok, false, scenario);
+  }
+});
+
 test("an explicitly abandoned blocked writer does not become the producer of later real test-only recovery", () => {
   const f = abandonedResumeFixture();
   const abandoned = inspectTaskResumeAbandonment(f.entry, { headSha: f.head }, f.dependencies);
@@ -380,8 +450,8 @@ test("an explicitly abandoned blocked writer does not become the producer of lat
 });
 
 function restoredResumeFixture(options = {}) {
-  const f = abandonedResumeFixture(options);
-  const inspected = inspectTaskResumeAbandonment(f.entry, { headSha: f.head }, f.dependencies);
+  const f = options.ancestryOnly ? ancestryOnlyResumeFixture() : abandonedResumeFixture(options);
+  const inspected = inspectTaskResumeAbandonment(f.entry, { headSha: f.parent ?? f.head }, f.dependencies);
   assert.equal(inspected.ok, true, inspected.reason);
   const grant = f.dependencies.readTaskRunBindingFn().grant;
   f.entry.grant = { ...grant, version: 1, kind: "task-run",
@@ -402,10 +472,21 @@ function restoredResumeFixture(options = {}) {
       role: "harness-plan-reviewer", status: "completed", verdict: "APPROVE", dispatch_call_id: "plan-call",
       child_session_id: "plan-child", agent_id: "plan-agent", plan_sha256: f.entry.plan_sha256, spec_sha256: f.entry.spec_sha256 },
   });
-  const input = { projectRoot: f.entry.parent_root, sessionId: PARENT, featureId: FEATURE, taskId: TASK, headSha: f.head };
+  const input = { projectRoot: f.entry.parent_root, sessionId: PARENT, featureId: FEATURE, taskId: TASK, headSha: f.parent ?? f.head };
   const readEvidence = () => readIntegratedTaskEvidence(input, f.dependencies);
   return { ...f, registry, registryPath, input, readEvidence };
 }
+
+test("restored ancestry-only evidence binds the full retained reconciliation and blocked-hand history", () => {
+  const f = restoredResumeFixture({ ancestryOnly: true });
+  const restored = f.readEvidence();
+  assert.equal(restored.ok, true, restored.reason);
+  assert.equal(restored.entry.reconciliations.length, 1);
+  assert.equal(run(f.root, "git", "rev-parse", "HEAD"), f.merged);
+  f.entry.abandoned_resumes[0].proof.reconciliations_sha256 = "0".repeat(64);
+  write(f.registryPath, f.registry);
+  assert.equal(f.readEvidence().ok, false, "a forged reconciliation seal cannot restore evidence");
+});
 
 test("restored evidence reads retain all launches and reject changed abandonment proof or later negative reviews", () => {
   const f = restoredResumeFixture();
