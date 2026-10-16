@@ -5,6 +5,14 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [3.9.3](https://github.com/orobsonn/claude-harness/compare/v3.9.2...v3.9.3) (2026-10-16)
+
+
+### Bug Fixes
+
+* **pi:** keep harness development tests out of consumer runtime ([#1150](https://github.com/orobsonn/claude-harness/issues/1150)) ([11c5d79](https://github.com/orobsonn/claude-harness/commit/11c5d7958e961d9a780b1aa00281be0e479b6845))
+* **pi:** recover no-op reconciliations and finish verified deliveries ([#1148](https://github.com/orobsonn/claude-harness/issues/1148)) ([ad99a19](https://github.com/orobsonn/claude-harness/commit/ad99a19be535272eb59f75cfa15a0691d935c655))
+
 ## [3.9.2](https://github.com/orobsonn/claude-harness/compare/v3.9.1...v3.9.2) (2026-10-15)
 
 
