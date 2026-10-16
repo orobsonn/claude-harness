@@ -14,7 +14,7 @@ const SHIPPER_TOOLS = Object.freeze(["read", "grep", "find", "ls", "bash"]);
  * lane OC tem via `edit: allow`. O plan-write-gate nega a esse papel qualquer outro alvo
  * ("planner may author only canonical execution plans"), então a tool a mais não é escopo a mais.
  */
-const PLANNER_TOOLS = Object.freeze(["read", "grep", "find", "ls", "write", ...PLANNING_TOOLS]);
+const PLANNER_TOOLS = Object.freeze(["read", "grep", "find", "ls", "write", "edit", ...PLANNING_TOOLS]);
 
 export const EYE_ROLES = Object.freeze([
   "harness-planner",

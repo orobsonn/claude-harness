@@ -10,7 +10,7 @@ const ROOT = new URL("../../../", import.meta.url).pathname;
 const EYE_TOOLS = ["read", "grep", "find", "ls"];
 const HAND_TOOLS = ["read", "grep", "find", "ls", "bash", "edit", "write"];
 const SHIPPER_TOOLS = ["read", "grep", "find", "ls", "bash"];
-const PLANNER_TOOLS = ["read", "grep", "find", "ls", "write", ...PLANNING_TOOLS];
+const PLANNER_TOOLS = ["read", "grep", "find", "ls", "write", "edit", ...PLANNING_TOOLS];
 
 test("only namespaced harness roles are canonical", () => {
   assert.equal(CANONICAL_ROLES.length, 11);
@@ -67,8 +67,8 @@ test("role policies preserve the harness split between eyes and hands", () => {
 test("only the planner escapes the eye tool set, and only to author the canonical plan", () => {
   assert.deepEqual(rolePolicy("harness-planner").tools, PLANNER_TOOLS);
   assert.equal(rolePolicy("harness-planner").kind, "eye");
-  // Nenhum olho escreve código: nem `edit` nem `bash` entram no planner.
-  assert.equal(rolePolicy("harness-planner").tools.includes("edit"), false);
+  // Write/Edit compartilham a autoridade de plano; Bash continua indisponível.
+  assert.equal(rolePolicy("harness-planner").tools.includes("edit"), true);
   assert.equal(rolePolicy("harness-planner").tools.includes("bash"), false);
 });
 

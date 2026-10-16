@@ -49,7 +49,7 @@ function ctxOf(cwd, { child = false } = {}) {
 
 const planPathOf = (root) => join(root, ".pi", "harness", "plans", FEATURE, "execution-plan.json");
 
-test("filha com identidade de planner escreve o plano canônico", () => {
+for (const toolName of ["write", "edit"]) test(`filha com identidade de planner altera o plano canônico via ${toolName}`, () => {
   const f = fixture();
   try {
     assert.equal(
@@ -57,7 +57,7 @@ test("filha com identidade de planner escreve o plano canônico", () => {
       true,
     );
     const decision = toolCallHandler()(
-      { toolName: "write", toolCallId: "w1", input: { path: planPathOf(f.root) } },
+      { toolName, toolCallId: "w1", input: { path: planPathOf(f.root) } },
       ctxOf(f.root, { child: true }),
     );
 
@@ -67,12 +67,12 @@ test("filha com identidade de planner escreve o plano canônico", () => {
   }
 });
 
-test("a mesma identidade de planner não autoriza nenhum outro alvo", () => {
+for (const toolName of ["write", "edit"]) test(`planner não altera produto via ${toolName}`, () => {
   const f = fixture();
   try {
     writePiChildIdentity(f.root, { parentSessionId: PARENT, childSessionId: CHILD, role: "harness-planner", callId: "c1" });
     const decision = toolCallHandler()(
-      { toolName: "write", toolCallId: "w2", input: { path: join(f.root, "src", "app.ts") } },
+      { toolName, toolCallId: "w2", input: { path: join(f.root, "src", "app.ts") } },
       ctxOf(f.root, { child: true }),
     );
 
@@ -86,11 +86,11 @@ test("a mesma identidade de planner não autoriza nenhum outro alvo", () => {
   }
 });
 
-test("sem identidade provada o plano canônico continua negado", () => {
+for (const toolName of ["write", "edit"]) test(`sem identidade provada o plano continua negado via ${toolName}`, () => {
   const f = fixture();
   try {
     const decision = toolCallHandler()(
-      { toolName: "write", toolCallId: "w3", input: { path: planPathOf(f.root) } },
+      { toolName, toolCallId: "w3", input: { path: planPathOf(f.root) } },
       ctxOf(f.root, { child: true }),
     );
 
@@ -182,17 +182,18 @@ test("bash roda só a fricção literal: muta estado do harness → deny; leitur
   }
 });
 
-test("gate-state.json nunca é escrito por write/edit, nem por uma filha com identidade", () => {
+for (const role of ["harness-executor", "harness-planner"])
+for (const toolName of ["write", "edit"]) test(`${role} não altera gate-state.json via ${toolName}`, () => {
   const f = fixture();
   try {
-    writePiChildIdentity(f.root, { parentSessionId: PARENT, childSessionId: CHILD, role: "harness-executor", callId: "c1" });
+    writePiChildIdentity(f.root, { parentSessionId: PARENT, childSessionId: CHILD, role, callId: "c1" });
     const decision = toolCallHandler()(
-      { toolName: "write", toolCallId: "w7", input: { path: join(f.root, ".pi", "harness", "state", PARENT, "gate-state.json") } },
+      { toolName, toolCallId: "w7", input: { path: join(f.root, ".pi", "harness", "state", PARENT, "gate-state.json") } },
       ctxOf(f.root, { child: true }),
     );
 
     assert.equal(decision.block, true);
-    assert.match(decision.reason, /written ONLY by harness markers/);
+    assert.match(decision.reason, role === "harness-planner" ? /planner may author only canonical execution plans/ : /written ONLY by harness markers/);
   } finally {
     f.close();
   }
