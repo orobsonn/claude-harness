@@ -5,6 +5,13 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [3.9.5](https://github.com/orobsonn/claude-harness/compare/v3.9.4...v3.9.5) (2026-10-16)
+
+
+### Bug Fixes
+
+* **pi:** keep advisory planning reads free of writer leases ([#1153](https://github.com/orobsonn/claude-harness/issues/1153)) ([28f9b83](https://github.com/orobsonn/claude-harness/commit/28f9b83b6f56671ad574e653766733d98f3ac574))
+
 ## [3.9.4](https://github.com/orobsonn/claude-harness/compare/v3.9.3...v3.9.4) (2026-10-16)
 
 
