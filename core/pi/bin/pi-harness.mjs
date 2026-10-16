@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { providerTraceEnvironment } from "../lib/provider-http-trace.mjs";
-import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
@@ -328,7 +328,20 @@ export function materializeRuntime(root, runtimeDir, stateDir = harnessStateDir(
     // Agents are locked harness assets. Unlike operator settings, stale copies
     // change workflow behavior across a launcher restart, so refresh them on
     // every launch. They never contain auth or user-owned runtime state.
-    if (name === "agents") cpSync(source, target, { recursive: true, force: true });
+    if (name === "agents") {
+      if (existsSync(target) && (!lstatSync(target).isDirectory() || lstatSync(target).isSymbolicLink()))
+        throw new Error("Pi runtime agents must be a real directory");
+      cpSync(source, target, { recursive: true, force: true, filter: (file) => !file.endsWith(".test.mjs") });
+      // External source launches previously copied these harness development
+      // tests into consumers, where product Vitest discovered node:test suites.
+      // Remove only those known generated artifacts, including on vendored
+      // launches whose source correctly contains no development tests.
+      for (const file of ["harness-planner.test.mjs", "harness-plan-reviewer.test.mjs",
+        "memory-context-isolation.test.mjs", "reviewer-context-isolation.test.mjs"]) {
+        const artifact = join(target, file);
+        if (existsSync(artifact) && lstatSync(artifact).isFile() && !lstatSync(artifact).isSymbolicLink()) rmSync(artifact);
+      }
+    }
     else if (!existsSync(target)) cpSync(source, target, { recursive: true });
   }
   // The Pi model catalog follows the admitted session profile. Old immutable
