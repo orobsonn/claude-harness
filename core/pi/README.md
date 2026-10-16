@@ -266,6 +266,10 @@ invalida a evidência anterior; na task, vale a preservação seletiva descrita 
 obrigatória com `final_review.security: true`; adversary e compliance são sempre exigidos.
 
 A fila é simples e vive na sessão; os recibos existentes são a autoridade de retomada.
+Consultas nativas e as cinco ferramentas consultivas do planner (`harness_complexity`,
+`harness_plan_analysis`, `mv_recall`, `mv_get_note`, `mp_retrieve`) não adquirem lease de
+escrita e podem continuar durante outra consulta ou revisão. Isso não altera os papéis
+autorizados a usá-las nem libera o adaptador MCP geral ou shell como consulta.
 Cancelar o pai fecha a fila, aborta os filhos e aguarda sua execução efetiva terminar.
 Uma morte forçada continua sujeita ao lock e à recuperação do launcher descritos acima.
 A captura inicial não suporta submódulos: ela bloqueia explicitamente para não aprovar

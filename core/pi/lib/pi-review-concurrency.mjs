@@ -1,12 +1,13 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { parseTaskDispatchIdentity } from "../../opencode/lib/task-dispatch-identity.mjs";
 import { isParallelReviewRole, isRuntimeRole, isSupportRole } from "./roles.mjs";
+import { PLANNING_TOOLS } from "./planning-tools.mjs";
 
 const CHILD_SESSION_CREATED = "subagents:child:session-created";
 const CHILD_BOUND = "subagents:child:bound";
 const CHILD_BIND = "harness:child-bind";
 const SUBAGENTS_SERVICE_KEY = Symbol.for("@gotgenes/pi-subagents:service");
-const PARENT_READ_TOOLS = new Set(["read", "grep", "find", "ls", "get_result", "get_subagent_result", "harness_reviews"]);
+const PARENT_READ_TOOLS = new Set(["read", "grep", "find", "ls", "get_result", "get_subagent_result", "harness_reviews", ...PLANNING_TOOLS]);
 const callIdentity = new AsyncLocalStorage();
 
 /** True only inside the async chain of a native subagent tool execution. */
