@@ -567,7 +567,7 @@ function prepareIntegrationConflict(entry, task, owner, persist) {
 }
 // Explicit recapture against an already reconciled aggregate. This imports the
 // parent's bytes without turning those bytes into task-owned writes.
-function previewAggregateRefresh(entry, task, owner, params) {
+async function previewAggregateRefresh(entry, task, owner, params, deps) {
   if (params.reconcile_head === undefined) return null;
   if (!/^[a-f0-9]{40}$/.test(params.reconcile_head) ||
       git(owner.root, "rev-parse", "HEAD") !== params.reconcile_head)
@@ -586,7 +586,17 @@ function previewAggregateRefresh(entry, task, owner, params) {
       !params.instruction?.trim())
     throw new Error("aggregate refresh requires an integrated task and a concrete correction instruction; finish pending dependency recovery first");
   const head = git(entry.worktree, "rev-parse", "HEAD");
-  if (head !== entry.integration.child_head ||
+  let abandonedSource;
+  if (head !== entry.integration.child_head) {
+    const abandoned = entry.abandoned_resumes?.at(-1);
+    if (abandoned?.proof?.child_current_head === head) {
+      const checked = await deps.inspectResumeAbandonment(entry, { headSha: abandoned.proof.parent_head });
+      if (checked.ok && hashTaskReceipt(checked.proof) === hashTaskReceipt(abandoned.proof) &&
+          hashTaskReceipt(checked.integration) === hashTaskReceipt(entry.integration))
+        abandonedSource = hashTaskReceipt(abandoned);
+    }
+  }
+  if ((head !== entry.integration.child_head && !abandonedSource) ||
       !isAncestor(owner.root, entry.integration.integrated_head, params.reconcile_head))
     throw new Error("aggregate refresh requires the task's exact historical integration in current parent ancestry");
   if (isAncestor(entry.worktree, params.reconcile_head, head)) return null;
@@ -603,6 +613,7 @@ function previewAggregateRefresh(entry, task, owner, params) {
     pre_child_head: head, parent_head: params.reconcile_head, tree: preview.tree,
     launch_count: entry.launches.length, upstreams: [],
     source_integration_sha256: hashTaskReceipt(entry.integration),
+    ...(abandonedSource ? { source_abandonment_sha256: abandonedSource } : {}),
     ...(preview.conflicts.length ? { conflicts: preview.conflicts } : {}) };
 }
 function applyAggregateRefresh(entry, intent, task, persist) {
@@ -1227,7 +1238,7 @@ export async function executeTaskAction(params, context = {}, injected = {}) {
       if (entry.launches.some((launch) => !deps.readProcess(launch).terminal))
         throw new Error("task is still running; use status or wait to observe it before resume");
       const task = artifacts.plan.tasks.find((task) => task.id === entry.task_id);
-      const aggregateRefresh = previewAggregateRefresh(entry, task, owner, params);
+      const aggregateRefresh = await previewAggregateRefresh(entry, task, owner, params, deps);
       const affected = descendants(artifacts.plan, entry.task_id).filter(
         (id) => registry.tasks[id],
       );

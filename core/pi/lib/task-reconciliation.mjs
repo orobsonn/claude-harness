@@ -89,7 +89,7 @@ export function taskScopeBase(entry, root, head, scopes) {
   let base = entry.base_sha;
   let priorHead = base;
   const authority = entry.reconciliations?.length ? reconciliationAuthority(entry) : null;
-  for (const proof of entry.reconciliations ?? []) {
+  for (const [proofIndex, proof] of (entry.reconciliations ?? []).entries()) {
     if (proof?.written_by !== "host-task-reconciliation" || proof.task_id !== entry.task_id ||
         proof.attempt_id !== entry.attempt_id || proof.scope_base_sha !== base ||
         ![proof.pre_child_head, proof.parent_head, proof.merged_head, proof.tree].every((value) => sha.test(value ?? "")) ||
@@ -100,8 +100,17 @@ export function taskScopeBase(entry, root, head, scopes) {
     if (proof.kind === "aggregate-refresh") {
       const current = authority.registry.tasks?.[entry.task_id];
       const receipt = current?.integration_history?.find((item) => hashTaskReceipt(item) === proof.source_integration_sha256);
+      const abandoned = proof.source_abandonment_sha256 && current?.abandoned_resumes?.find((item) =>
+        hashTaskReceipt(item) === proof.source_abandonment_sha256);
+      const equivalentSource = abandoned?.written_by === "host-task-resume-abandonment" &&
+        abandoned.no_product_obligation === true && typeof abandoned.reason === "string" && abandoned.reason.trim() &&
+        abandoned.proof?.integration_sha256 === proof.source_integration_sha256 &&
+        abandoned.proof?.result_sha256 === receipt?.result_sha256 &&
+        abandoned.proof?.child_head === receipt?.child_head && abandoned.proof?.child_current_head === proof.pre_child_head &&
+        abandoned.proof?.reconciliations_sha256 === hashTaskReceipt(entry.reconciliations.slice(0, proofIndex)) &&
+        git(root, "rev-parse", `${receipt.child_head}^{tree}`) === git(root, "rev-parse", `${proof.pre_child_head}^{tree}`);
       if (proof.upstreams.length || !receipt || receipt.task_id !== entry.task_id ||
-          receipt.attempt_id !== entry.attempt_id || receipt.child_head !== proof.pre_child_head ||
+          receipt.attempt_id !== entry.attempt_id || (receipt.child_head !== proof.pre_child_head && !equivalentSource) ||
           hashTaskReceipt(current.result_history?.[receipt.result_sha256] ?? null) !== receipt.result_sha256)
         throw new Error("aggregate refresh lacks the task's historical integration and result");
       ancestor(entry.parent_root, receipt.child_head, receipt.integrated_head);

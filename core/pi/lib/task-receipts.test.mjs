@@ -6,7 +6,7 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 import test from "node:test";
 
-import { taskMergePreview } from "./task-reconciliation.mjs";
+import { taskMergePreview, taskScopeBase } from "./task-reconciliation.mjs";
 import { hashTaskReceipt } from "./task-contract.mjs";
 import { createPiMarkerAuthority } from "./marker-authority.mjs";
 import { inspectTaskRun, readIntegratedTaskEvidence, inspectTaskResumeAbandonment } from "./task-receipts.mjs";
@@ -415,6 +415,34 @@ test("ancestry-only abandonment rejects changed trees, journals, dirty work and 
     const checked = inspectTaskResumeAbandonment(f.entry, { headSha: f.parent }, f.dependencies);
     assert.equal(checked.ok, false, scenario);
   }
+});
+
+test("a later material aggregate refresh retains the exact ancestry-only abandonment source", () => {
+  const f = ancestryOnlyResumeFixture();
+  const checked = inspectTaskResumeAbandonment(f.entry, { headSha: f.parent }, f.dependencies);
+  assert.equal(checked.ok, true, checked.reason);
+  const abandoned = { written_by: "host-task-resume-abandonment", no_product_obligation: true,
+    reason: "No product delta", proof: checked.proof };
+  f.entry.abandoned_resumes = [abandoned];
+  write(path.join(f.entry.parent_root, "src/task.mjs"), "export const actual = 2;\n");
+  const parent = commit(f.entry.parent_root, "next real aggregate correction");
+  run(f.root, "git", "fetch", "--quiet", f.entry.parent_root, parent);
+  const preview = taskMergePreview(f.root, f.merged, parent);
+  run(f.root, "git", "merge", "--no-ff", "--no-edit", parent);
+  const head = run(f.root, "git", "rev-parse", "HEAD");
+  const proof = { written_by: "host-task-reconciliation", kind: "aggregate-refresh", task_id: TASK,
+    attempt_id: ATTEMPT, scope_base_sha: f.parent, pre_child_head: f.merged, parent_head: parent,
+    merged_head: head, tree: preview.tree, launch_count: f.entry.launches.length, upstreams: [],
+    source_integration_sha256: hashTaskReceipt(f.integration), source_abandonment_sha256: hashTaskReceipt(abandoned) };
+  f.entry.reconciliations.push(proof);
+  write(f.registryPath, f.registry);
+  assert.equal(taskScopeBase(f.entry, f.root, head), parent);
+  delete proof.source_abandonment_sha256;
+  assert.throws(() => taskScopeBase(f.entry, f.root, head), /historical integration/);
+  proof.source_abandonment_sha256 = hashTaskReceipt(abandoned);
+  abandoned.proof.child_current_head = f.head;
+  write(f.registryPath, f.registry);
+  assert.throws(() => taskScopeBase(f.entry, f.root, head), /historical integration/);
 });
 
 test("an explicitly abandoned blocked writer does not become the producer of later real test-only recovery", () => {
