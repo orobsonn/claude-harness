@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { classifyPiReviewDispatch } from "./pi-review-concurrency.mjs";
+import { PLANNING_TOOLS } from "./planning-tools.mjs";
 
 const IMPLEMENTATION_URL = new URL("./pi-review-concurrency.mjs", import.meta.url);
 
@@ -596,6 +597,43 @@ test("regression: three prepared reviews share the reader lease while parent rea
   const finalWrite = { ...earlyWrite, toolCallId: "write-after-all-eyes" };
   assert.equal(await prepareToolCall(handlers, finalWrite), undefined, "the mutation may retry after every reader ends");
   await finishToolCall(handlers, finalWrite);
+});
+
+test("regression: advisory planning reads never acquire writer leases or block each other", async () => {
+  const { handlers } = installBridge({ maxParallelEyes: 3 }, () => {});
+  const calls = PLANNING_TOOLS.map(toolName => ({
+    type: "tool_call", toolName, toolCallId: `planning-${toolName}`, input: {},
+  }));
+  assert.deepEqual(await Promise.all(calls.map(event => prepareToolCall(handlers, event))),
+    calls.map(() => undefined), "independent read-only planning evidence can share a prepared batch");
+  const writer = { type: "tool_call", toolName: "edit", toolCallId: "planner-write", input: { path: "plan.md" } };
+  assert.equal(await prepareToolCall(handlers, writer), undefined, "completed or prepared advisory reads do not hold a mutation lease");
+  for (const event of [...calls, writer]) await finishToolCall(handlers, event);
+});
+
+test("regression: planning retrieval remains readable during a writer or final review without releasing its lease", async t => {
+  for (const owner of [
+    { toolName: "edit", input: { path: "plan.md" } },
+    { toolName: "subagent", input: { subagent_type: "harness-compliance", prompt: "[HARNESS_FINAL_REVIEW] inspect snapshot" } },
+  ]) await t.test(owner.toolName, async () => {
+    const { handlers } = installBridge({ maxParallelEyes: 3 }, () => {});
+    const active = { type: "tool_call", toolCallId: "active-owner", ...owner };
+    assert.equal(await prepareToolCall(handlers, active), undefined);
+    for (const toolName of PLANNING_TOOLS) {
+      const read = { type: "tool_call", toolName, toolCallId: `advisory-${toolName}`, input: {} };
+      assert.equal(await prepareToolCall(handlers, read), undefined, `${toolName} is a read even while ${owner.toolName} owns a lease`);
+      await finishToolCall(handlers, read);
+    }
+    for (const toolName of ["write", "bash", "mcp", "mp_code", "mv_write"]) {
+      const mutation = { type: "tool_call", toolName, toolCallId: `blocked-${toolName}`, input: {} };
+      assert.equal((await prepareToolCall(handlers, mutation))?.block, true, `${toolName} cannot inherit retrieval privileges or release the owner's lease`);
+      await finishToolCall(handlers, mutation, { isError: true });
+    }
+    await finishToolCall(handlers, active);
+    const write = { type: "tool_call", toolName: "write", toolCallId: "write-after-owner", input: {} };
+    assert.equal(await prepareToolCall(handlers, write), undefined);
+    await finishToolCall(handlers, write);
+  });
 });
 
 test("regression: turn_end drops a prepared lease left behind by an aborted tool batch", async () => {
