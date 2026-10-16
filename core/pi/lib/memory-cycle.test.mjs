@@ -243,6 +243,36 @@ test("global reconcile requires one exact bounded patch per product conflict hun
   assert.match(readFileSync(join(root, "product.txt"), "utf8"), /resolved-0[\s\S]*resolved-1/);
 });
 
+test("global reconcile binds ordered hunk digests without retransmitting literal preimages", (t) => {
+  const { root, git, ...input } = parallelDelivery(t, { productConflict: true,
+    multipleProductHunks: true, memoryConflict: false, beforeFinalReview: true });
+  const preview = memoryCycle.reconcileMemoryDelivery(root, SESSION, input);
+  const product = preview.conflicts.find((entry) => entry.path === "product.txt");
+  const hunks = [...product.content.matchAll(/^<<<<<<<[^\n]*\n[\s\S]*?^>>>>>>>[^\n]*\n/gm)].map((match) => match[0]);
+  assert.deepEqual(product.hunk_sha256, hunks.map((hunk) => createHash("sha256").update(hunk).digest("hex")));
+  const valid = { path: product.path, before_sha256: product.sha256,
+    patches: product.hunk_sha256.map((hunk_sha256, index) => ({ hunk_sha256, new_text: `resolved-${index}` })) };
+  for (const invalid of [
+    { ...valid, before_sha256: "0".repeat(64) },
+    { ...valid, patches: [...valid.patches].reverse() },
+    { ...valid, patches: [{ ...valid.patches[0], hunk_sha256: "0".repeat(64) }, valid.patches[1]] },
+    { ...valid, patches: [{ ...valid.patches[0], old_text: hunks[0] }, valid.patches[1]] },
+    { ...valid, patches: [{ new_text: "missing binding\n" }, valid.patches[1]] },
+    { ...valid, patches: valid.patches.slice(0, 1) },
+    { ...valid, patches: [{ ...valid.patches[0], new_text: "<<<<<<< bad\n" }, valid.patches[1]] },
+  ]) {
+    assert.throws(() => memoryCycle.reconcileMemoryDelivery(root, SESSION, { ...input, resolutions: [invalid] }),
+      /stale|invalid|hunk|bounded|patch|hash/i);
+    assert.equal(git("rev-parse", "HEAD"), input.expected_head);
+    assert.equal(git("status", "--porcelain"), "");
+  }
+  const merged = memoryCycle.reconcileMemoryDelivery(root, SESSION, { ...input, resolutions: [valid] });
+  assert.equal(merged.applied, true);
+  assert.match(readFileSync(join(root, "product.txt"), "utf8"), /resolved-0[\s\S]*resolved-1/);
+  assert.match(readFileSync(join(root, "product.txt"), "utf8"), /resolved-0\n/,
+    "a missing final LF must not join the next unchanged line to the replacement");
+});
+
 test("global reconcile accepts a large single-line product hunk within the existing file limit", (t) => {
   const { root, git, ...input } = parallelDelivery(t, { productConflict: true,
     memoryConflict: false, beforeFinalReview: true });

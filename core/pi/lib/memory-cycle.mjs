@@ -329,6 +329,7 @@ export function reconcileMemoryDelivery(projectRoot, sessionId, { expected_head,
   });
   const result = { ok: true, applied: false, expected_head, base_sha, tree, changed_paths: changed };
   if (resolutions === undefined) return { ...result, conflicts: conflicts.map((entry) => ({ ...entry,
+    hunk_sha256: [...entry.content.matchAll(/^<<<<<<<[^\n]*\n[\s\S]*?^>>>>>>>[^\n]*\n/gm)].map((match) => sha(match[0])),
     content: entry.content.slice(0, 24576), truncated: entry.content.length > 24576 })) };
   if (!Array.isArray(resolutions) || resolutions.length !== conflicts.length ||
       new Set(resolutions.map((entry) => entry?.path)).size !== conflicts.length)
@@ -462,13 +463,19 @@ function applyProductConflictPatches(original, patches) {
   for (const [index, patch] of patches.entries()) {
     // A single-line JSON artifact can put the whole file in one Git hunk.
     // Use the same bound as the resolved file, retaining exact hash/preimage checks.
-    if (!patch || Object.keys(patch).sort().join(",") !== "new_text,old_text" ||
-        patch.old_text !== hunks[index] || typeof patch.new_text !== "string" ||
+    const keys = patch && Object.keys(patch).sort().join(",");
+    const bound = keys === "new_text,old_text" ? patch.old_text === hunks[index] :
+      keys === "hunk_sha256,new_text" && patch.hunk_sha256 === sha(hunks[index]);
+    if (!bound || typeof patch.new_text !== "string" ||
         Buffer.byteLength(patch.new_text) > 1024 * 1024 || patch.new_text.includes("\0") ||
         /^(?:<{7}|={7}|>{7}|\|{7})(?:\s|$)/m.test(patch.new_text))
       throw new Error("Product patch must replace its exact conflict hunk with bounded resolved text");
-    if (!content.includes(patch.old_text)) throw new Error("Product conflict preimage changed");
-    content = content.replace(patch.old_text, () => patch.new_text);
+    if (!content.includes(hunks[index])) throw new Error("Product conflict preimage changed");
+    // Hunks cover complete lines, including their terminating newline. Keep
+    // that boundary when a JSON string omits its final LF; never join the next
+    // unchanged line to the replacement's last statement or Markdown paragraph.
+    const replacement = patch.new_text && !patch.new_text.endsWith("\n") ? `${patch.new_text}\n` : patch.new_text;
+    content = content.replace(hunks[index], () => replacement);
   }
   if (Buffer.byteLength(content) > 1024 * 1024) throw new Error("Resolved product file exceeds size limit");
   return content;

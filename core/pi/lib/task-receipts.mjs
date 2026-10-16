@@ -789,7 +789,8 @@ export function inspectTaskRun(entry, dependencies = {}) {
           onlyRecoveryChanges(entry, worktree, reconciliation.merged_head, head, binding.task, binding.plan)) {
         const historicalIntegration = entry.integration_history?.at(-1);
         const historicalResult = object(entry.result_history)?.[historicalIntegration?.result_sha256];
-        if (historicalResult?.child_head === reconciliation.pre_child_head &&
+        if ((historicalResult?.child_head === reconciliation.pre_child_head ||
+            reconciliation.source_abandonment_sha256 && recoveryReconciliationMatches(reconciliation, historicalIntegration)) &&
             historicalResult.launches?.length <= reconciliation.launch_count) {
           const historicalHand = historicalResult.hand_capture;
           const historicalCallId = historicalHand?.agent === "harness-test-author"
@@ -1076,7 +1077,7 @@ function validateIntegration(entry, integration, { projectRoot, sessionId, featu
         reconciliation.merged_head !== recoveryOrigin.head_sha ||
         recoveryOrigin.reconciliation_sha256 !== taskReconciliationDigest(entry) ||
         !priorResult || hashTaskReceipt(priorResult) !== priorIntegration.result_sha256 ||
-        priorResult.child_head !== reconciliation.pre_child_head ||
+        (priorResult.child_head !== reconciliation.pre_child_head && !reconciliation.source_abandonment_sha256) ||
         priorResult.launches?.length > reconciliation.launch_count ||
         priorOrigin?.producer_call_id !== recoveryOrigin.producer_call_id ||
         priorOrigin?.producer_launch_index !== recoveryOrigin.producer_launch_index)

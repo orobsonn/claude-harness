@@ -579,6 +579,9 @@ um patch literal por bloco completo `<<<<<<<`…`>>>>>>>` do preview, na mesma o
 vinculado ao hash do arquivo. Resolva o comportamento dos dois lados, teste o merge
 e obtenha olhos finais atuais. Paths fora do plano exigem nova autoridade; a
 reconciliação os recusa sem alterar a worktree.
+Para não retransmitir blocos grandes, cada patch de produto pode usar
+`{hunk_sha256, new_text}` com o digest retornado pelo preview, na mesma ordem,
+em vez de `{old_text, new_text}`. As duas formas vinculam o mesmo bloco exato.
 Conflito de produto interrompe a operação antes de modificar arquivos: diagnostique
 a obrigação afetada, sem tentar integração global dentro da task.
 

@@ -140,7 +140,9 @@ export default function harnessMemory(pi: ExtensionAPI) {
       expected_head: Type.Optional(Type.String()), base_sha: Type.Optional(Type.String()),
       resolutions: Type.Optional(Type.Array(Type.Object({ path: Type.String(), before_sha256: Type.String(),
         patch: Type.Optional(Type.Object({ old_text: Type.String(), new_text: Type.String() })),
-        patches: Type.Optional(Type.Array(Type.Object({ old_text: Type.String(), new_text: Type.String() }))) }))),
+        patches: Type.Optional(Type.Array(Type.Object({ old_text: Type.Optional(Type.String()),
+          hunk_sha256: Type.Optional(Type.String({ description: "Exact hunk digest from reconcile preview, instead of repeating old_text. Supply exactly one of old_text or hunk_sha256, in preview order." })),
+          new_text: Type.String() }))) }))),
     }),
     executionMode: "sequential",
     async execute(_callId, params, _signal, _update, ctx) {

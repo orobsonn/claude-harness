@@ -417,7 +417,7 @@ test("ancestry-only abandonment rejects changed trees, journals, dirty work and 
   }
 });
 
-test("a later material aggregate refresh retains the exact ancestry-only abandonment source", () => {
+function materialRefreshAfterAbandonment() {
   const f = ancestryOnlyResumeFixture();
   const checked = inspectTaskResumeAbandonment(f.entry, { headSha: f.parent }, f.dependencies);
   assert.equal(checked.ok, true, checked.reason);
@@ -436,6 +436,12 @@ test("a later material aggregate refresh retains the exact ancestry-only abandon
     source_integration_sha256: hashTaskReceipt(f.integration), source_abandonment_sha256: hashTaskReceipt(abandoned) };
   f.entry.reconciliations.push(proof);
   write(f.registryPath, f.registry);
+  return { ...f, head, proof, parent, abandoned };
+}
+
+test("a later material aggregate refresh retains the exact ancestry-only abandonment source", () => {
+  const f = materialRefreshAfterAbandonment();
+  const { head, proof, parent, abandoned } = f;
   assert.equal(taskScopeBase(f.entry, f.root, head), parent);
   delete proof.source_abandonment_sha256;
   assert.throws(() => taskScopeBase(f.entry, f.root, head), /historical integration/);
@@ -443,6 +449,33 @@ test("a later material aggregate refresh retains the exact ancestry-only abandon
   abandoned.proof.child_current_head = f.head;
   write(f.registryPath, f.registry);
   assert.throws(() => taskScopeBase(f.entry, f.root, head), /historical integration/);
+});
+
+test("a real frozen-test correction after abandonment keeps imported product and the original implementation", () => {
+  const f = materialRefreshAfterAbandonment();
+  const previous = f.entry.launches.at(-1);
+  const runId = "material-test-recovery";
+  const dir = path.join(f.entry.job_dir, runId);
+  const launch = { ...previous, run_id: runId, events_path: path.join(dir, "events.jsonl"),
+    process_path: path.join(dir, "process.json"), result_path: path.join(dir, "result.json") };
+  write(launch.events_path, event("session", { id: CHILD }) + "\n");
+  for (const field of ["process_path", "result_path"]) write(launch[field], {
+    ...JSON.parse(fs.readFileSync(previous[field], "utf8")), run_id: runId,
+  });
+  f.entry.launches.push(launch);
+  const state = JSON.parse(fs.readFileSync(f.statePath));
+  for (const receipt of [state.task_adversary_evidence[`${FEATURE}/${TASK}`],
+    ...Object.values(state.task_review_evidence[`${FEATURE}/${TASK}`])]) receipt.input_digest = DIGEST;
+  write(f.statePath, state);
+  const repaired = testOnlyRecovery({ fixture: f, capturedImplementation: false });
+  appendImplementationReviews(repaired);
+  const inspected = inspectTaskRun(repaired.entry, repaired.dependencies);
+  assert.equal(inspected.ok, true, inspected.reason);
+  assert.equal(inspected.result.hand_capture.agent, "harness-test-author");
+  assert.equal(inspected.result.hand_capture.recovery_origin.derived_from, "host-reconciliation");
+  assert.equal(inspected.result.hand_capture.recovery_origin.head_sha, f.head);
+  assert.equal(inspected.result.hand_capture.recovery_origin.producer_call_id, "producer");
+  assert.equal(run(f.root, "git", "show", "HEAD:src/task.mjs"), "export const actual = 2;");
 });
 
 test("an explicitly abandoned blocked writer does not become the producer of later real test-only recovery", () => {
