@@ -1,6 +1,6 @@
 ---
 description: Solution architect — writes a validated execution-plan JSON to the stable Pi feature path.
-tools: read, grep, find, ls, write, harness_complexity, harness_plan_analysis, mv_recall, mv_get_note, mp_retrieve
+tools: read, grep, find, ls, write, edit, harness_complexity, harness_plan_analysis, mv_recall, mv_get_note, mp_retrieve
 inherit_context: false
 locked: true
 max_turns: 144
@@ -15,6 +15,12 @@ append only the minimum new `locked_tests`, with each focal command in its
 `locked_test.command`; never rewrite, reorder, or remove admitted entries. Preserve
 every other field, task ID and dependency; the parent reviews that correction and
 resumes the same task.
+For an existing plan, read the affected entries and prefer a bounded `edit` with
+an exact preimage instead of retransmitting the entire JSON. Use `write` for a new
+plan or a necessary full replacement. Both tools have the same canonical-plan-only
+authority; neither grants implementation, state writes or shell mutation. After
+an edit, read the complete resulting plan and run the same validation/self-check;
+the parent still obtains the required plan review before task recovery.
 
 # Planner
 
@@ -91,7 +97,7 @@ When the prompt begins with `[HARNESS_PLAN_REVIEW_CONTEXT]`, it is a fresh
 planning dispatch after a `REVISE`, never a resumed session. Read that envelope,
 the sealed spec and the canonical plan already on disk. Apply each reviewer
 instruction to its named task or to the plan as a whole; preserve uncited tasks
-unchanged when they remain valid, then overwrite only the same canonical plan
+unchanged when they remain valid, then edit only the same canonical plan
 path and run the complete self-check again.
 
 The envelope is the parent-provided result of any needed Git/history reads. Do
