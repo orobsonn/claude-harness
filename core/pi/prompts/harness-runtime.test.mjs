@@ -125,6 +125,13 @@ test("harvest runs once after final eyes and rework, before shipper", () => {
   assert.match(prompt, /pai global.*harness_memory action="reconcile"/is);
   assert.match(prompt, /Não use\s+`harness_tasks resume`.*incorporar `main`/is);
   assert.match(shipper, /harness_memory reconcile/);
+  assert.match(prompt, /reconcile_mode: "preview"/);
+  assert.match(prompt, /reconcile_mode: "stage"/);
+  assert.match(prompt, /reconcile_mode: "apply"/);
+  assert.match(prompt, /ready_to_apply/);
+  assert.match(prompt, /compactação\/reinício não perde o progresso/);
+  assert.match(prompt, /sem autorizar publicação ou merge remoto/);
+  assert.match(shipper, /repete até `ready_to_apply`/);
   assert.doesNotMatch(prompt, /HARNESS_HARVEST_CONTEXT/);
   assert.match(prompt, /recibo host-owned.*persistid.*git.*limpo.*HEAD atual.*mudança não-memória/is);
   assert.match(prompt, /escrita posterior.*invalida.*revisões finais/is);

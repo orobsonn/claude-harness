@@ -75,12 +75,18 @@ Se o merge falhar por conflito com a base, não altere produto, não chame plann
 proponha uma tarefa nova. Retorne `Status: BLOCKED` com o HEAD revisado, o SHA atual da
 base e a evidência de conflito disponível. O pai reconcilia paths já pertencentes ao plano
 pela operação global `harness_memory reconcile`, antes de decidir se existe retrabalho
-real de produto. Não encaminhe incorporação de `main` a uma task ou writer.
+real de produto. O pai continua com `reconcile_mode=preview`, resolve e salva cada
+`next_hunk` com `stage`, repete até `ready_to_apply` e usa `apply` para o merge local.
+Não transformar quantidade de hunks ou a montagem de um JSON grande em trabalho
+humano: o host preserva as propostas parciais e permite leitura paginada. Não
+encaminhe incorporação de `main` a uma task ou writer. Essa recuperação não concede
+autorização de merge remoto; respeite o limite de entrega definido pelo operador.
 Conflitos em `MEMORY.md`, `CONTEXT.md` e `kaizen.md` são anotações do integrador,
 não escopo novo: o pai resolve preservando os dois lados, como no Claude/Orca.
 O pai também pode resolver conflitos de produto já cobertos pelo plano revisado
 com patches literais vinculados ao preview, seguidos de testes e olhos finais atuais.
-Conflitos fora do plano não são autorizados por essa operação.
+Paths compartilhados importados da base não exigem uma task artificial só para
+combinar as entregas. Comportamento novo fora das duas versões não é reconciliação.
 Esse merge pode também incorporar produto sem conflito; o pai revalida o input final,
 refaz harvest após os olhos atuais e só então volta ao shipper. Produto novo fora do
 plano exige outra entrega, não uma task inventada no fechamento.

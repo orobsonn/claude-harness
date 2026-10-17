@@ -126,12 +126,17 @@ test("native memory surface exposes reconcile but rejects delegated children and
   const api = register();
   assert.ok(api.tool.parameters.properties.action.enum.includes("reconcile"));
   assert.ok(api.tool.parameters.properties.resolutions);
+  assert.deepEqual(api.tool.parameters.properties.reconcile_mode.enum, ["preview", "stage", "apply"]);
+  assert.ok(api.tool.parameters.properties.conflict_path);
+  assert.ok(api.tool.parameters.properties.hunk_index);
+  assert.ok(api.tool.parameters.properties.preview_offset);
   const root = makeRoot(t);
   mkdirSync(join(root, ".pi/harness/state", SESSION), { recursive: true });
   writeFileSync(gateStatePath(root), JSON.stringify({ session_id: SESSION, final_review_done: true, task_run: { task_id: "task-one" } }));
   const params = { action: "reconcile", expected_head: "a".repeat(40), base_sha: "b".repeat(40), resolutions: [] };
-  for (const runtime of [ctx(root), ctx(root, { child: true })]) {
-    const result = await api.execute(params, runtime);
+  for (const runtime of [ctx(root), ctx(root, { child: true })]) for (const mode of [undefined, "preview", "stage", "apply"]) {
+    const input = mode ? { ...params, resolutions: undefined, reconcile_mode: mode } : params;
+    const result = await api.execute(input, runtime);
     assert.equal(result.isError, true);
     assert.match(resultText(result), /global parent|parent-only/i);
   }
@@ -322,6 +327,40 @@ test("harness-memory: falha chega ao modelo como erro nativo do Pi com ação e 
   assert.equal(result.isError, true);
   assert.match(resultText(result), /harness-memory:finalize/i);
   assert.match(resultText(result), /parent-only/i);
+});
+
+test("native Pi loop can preview, stage, resume and apply a conflict without a bulk JSON package", async t => {
+  const root = makeRoot(t); initGit(root);
+  const git = (...args) => execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+  git("config", "user.name", "Pi Memory"); git("config", "user.email", "pi-memory@example.test");
+  git("branch", "next-base");
+  writeFileSync(join(root, "MEMORY.md"), "existing knowledge\nlocal knowledge\n");
+  git("add", "MEMORY.md"); git("commit", "-qm", "docs: local learning");
+  const expected_head = git("rev-parse", "HEAD"); git("checkout", "-q", "next-base");
+  writeFileSync(join(root, "MEMORY.md"), "existing knowledge\nupstream knowledge\n");
+  git("add", "MEMORY.md"); git("commit", "-qm", "docs: upstream learning");
+  const base_sha = git("rev-parse", "HEAD"); git("checkout", "-q", "--detach", expected_head);
+  mkdirSync(join(root, ".pi/harness/state", SESSION), { recursive: true });
+  writeFileSync(gateStatePath(root), JSON.stringify({ session_id: SESSION, feature_id: FEATURE }));
+  const call = async (api, extra) => {
+    const { result } = await runNativeToolCall({ tool: api.tool, hooks: api.handlers, ctx: ctx(root),
+      input: { action: "reconcile", expected_head, base_sha, ...extra } });
+    assert.notEqual(result.isError, true, resultText(result));
+    return JSON.parse(resultText(result));
+  };
+  const api = register();
+  const preview = await call(api, { reconcile_mode: "preview" });
+  const hunk = preview.next_hunk;
+  const staged = await call(api, { reconcile_mode: "stage", resolutions: [{ path: hunk.path,
+    before_sha256: hunk.before_sha256, patches: [{ hunk_index: hunk.hunk_index,
+      hunk_sha256: hunk.hunk_sha256, new_text: "local knowledge\nupstream knowledge\n" }] }] });
+  assert.equal(staged.ready_to_apply, true);
+  assert.equal(git("rev-parse", "HEAD"), expected_head);
+  const resumed = register();
+  assert.equal((await call(resumed, { reconcile_mode: "preview" })).resolved_hunks, 1);
+  assert.equal((await call(resumed, { reconcile_mode: "apply" })).applied, true);
+  assert.equal(readFileSync(join(root, "MEMORY.md"), "utf8"), "existing knowledge\nlocal knowledge\nupstream knowledge\n");
+  assert.deepEqual(git("rev-list", "--parents", "-1", "HEAD").split(" ").slice(1), [expected_head, base_sha]);
 });
 
 test("harness-memory: tool_result nativo confirma harvest sem apagar a saída do agente", async (t) => {
