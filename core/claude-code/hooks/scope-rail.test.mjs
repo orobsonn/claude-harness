@@ -261,3 +261,24 @@ test("stamp active-scope: a SUBAGENT-origin marker (own agent_id) is ignored —
     );
   });
 });
+
+// Claude Code's Write/Edit always carry an ABSOLUTE file_path (spike 2026-10-10 §4): the rail must
+// compare it relative to the project root, or every in-scope hand write on the Agent path is denied.
+test("scope rail: an absolute in-scope path under the project root is allowed; outside the project is denied", () => {
+  withTempDir(() => {
+    const root = fs.realpathSync(process.cwd());
+    const deps = { readGateStateFn: () => EXECUTOR_SCOPE };
+    const saved = process.env.CLAUDE_PROJECT_DIR;
+    process.env.CLAUDE_PROJECT_DIR = root;
+    try {
+      assert.equal(planDecide(makeSubagentWrite(path.join(root, "src/a.ts"), "executor"), deps).allow, true);
+      assert.equal(planDecide(makeSubagentWrite(path.join(root, "docs/notes.md"), "executor"), deps).allow, true);
+      assert.equal(planDecide(makeSubagentWrite(path.join(root, "src/b.ts"), "executor"), deps).allow, false);
+      assert.equal(planDecide(makeSubagentWrite("/etc/src/a.ts", "executor"), deps).allow, false, "an outside path never matches a relative scope");
+      assert.equal(planDecide(makeSubagentWrite(path.join(root, "src/../src/a.ts"), "executor"), deps).allow, true);
+    } finally {
+      if (saved === undefined) delete process.env.CLAUDE_PROJECT_DIR;
+      else process.env.CLAUDE_PROJECT_DIR = saved;
+    }
+  });
+});

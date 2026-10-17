@@ -1,4 +1,6 @@
 {
+  "model": "sonnet",
+  "includeCoAuthoredBy": false,
   "permissions": {
     "allow": [
       "Edit",
@@ -113,6 +115,10 @@
           {
             "type": "command",
             "command": "node ${CLAUDE_PROJECT_DIR}/.claude/hooks/entry-gate.mjs"
+          },
+          {
+            "type": "command",
+            "command": "node ${CLAUDE_PROJECT_DIR}/.claude/hooks/task-plan-review.mjs"
           }
         ]
       },
@@ -146,6 +152,19 @@
             "command": "node ${CLAUDE_PROJECT_DIR}/.claude/hooks/plan-write-gate.mjs"
           }
         ]
+      },
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ${CLAUDE_PROJECT_DIR}/.claude/hooks/task-gate.mjs"
+          },
+          {
+            "type": "command",
+            "command": "node ${CLAUDE_PROJECT_DIR}/.claude/hooks/task-ledger.mjs"
+          }
+        ]
       }
     ],
     "PostToolUse": [
@@ -176,6 +195,10 @@
           {
             "type": "command",
             "command": "node ${CLAUDE_PROJECT_DIR}/.claude/hooks/agent-idle-nudge.mjs"
+          },
+          {
+            "type": "command",
+            "command": "node ${CLAUDE_PROJECT_DIR}/.claude/hooks/task-plan-review.mjs"
           }
         ]
       },
@@ -185,6 +208,15 @@
           {
             "type": "command",
             "command": "node ${CLAUDE_PROJECT_DIR}/.claude/hooks/obs-plan-write.mjs"
+          }
+        ]
+      },
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ${CLAUDE_PROJECT_DIR}/.claude/hooks/task-ledger.mjs"
           }
         ]
       }
@@ -209,6 +241,59 @@
           {
             "type": "command",
             "command": "node ${CLAUDE_PROJECT_DIR}/.claude/hooks/version-check.mjs"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ${CLAUDE_PROJECT_DIR}/.claude/hooks/task-ledger.mjs"
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ${CLAUDE_PROJECT_DIR}/.claude/hooks/task-ledger.mjs"
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ${CLAUDE_PROJECT_DIR}/.claude/hooks/task-ledger.mjs"
+          },
+          {
+            "type": "command",
+            "command": "node ${CLAUDE_PROJECT_DIR}/.claude/hooks/task-plan-review.mjs"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ${CLAUDE_PROJECT_DIR}/.claude/hooks/task-continuation.mjs"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ${CLAUDE_PROJECT_DIR}/.claude/hooks/task-continuation.mjs"
           }
         ]
       }

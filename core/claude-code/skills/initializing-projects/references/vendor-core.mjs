@@ -188,6 +188,13 @@ export const FRESH_NATIVE_PATHS = {
     ".claude/skills/creating-issues/SKILL.md",
     ".claude/rules/creating-issues.md",
     ".github/ISSUE_TEMPLATE/harness-task.yml",
+    // Parallel task lanes: the host CLI, the lane gate/ledger, the launcher and the lane prompt.
+    ".claude/hooks/tasks.mjs",
+    ".claude/hooks/task-gate.mjs",
+    ".claude/hooks/task-ledger.mjs",
+    ".claude/hooks/lib/task-launcher.mjs",
+    ".claude/shared/lib/task-worker.mjs",
+    ".claude/skills/orchestrating-delivery/references/task-runtime.md",
   ],
   codex: [
     ".codex/agents/planner.toml",
@@ -1084,6 +1091,7 @@ function collectDestinationTree(src, destination, entries) {
     if (name.startsWith("._")) continue;
     const child = join(src, name);
     if (statSync(child).isFile() && name.endsWith(".test.mjs")) continue;
+    if (name === "__fixtures__" && statSync(child).isDirectory()) continue;
     collectDestinationTree(child, join(destination, name), entries);
   }
 }
@@ -2261,14 +2269,14 @@ function readVersion(repoDir) {
 /**
  * @description Pure predicate for the framework-owned copy filter.
  * Returns true when the given source path should be included in the vendor copy,
- * false when it should be excluded. Only `.test.mjs` files are excluded — all other
- * files (including `settings.json` in hand-config/) survive the filter and reach
- * consumer projects.
+ * false when it should be excluded. Test artifacts are excluded — `.test.mjs` files and
+ * anything under a `__fixtures__/` directory (e.g. the parallel-task e2e fakes); all other
+ * files (including `settings.json` in hand-config/) survive the filter and reach consumer projects.
  * @param {string} src - Absolute or relative source file path.
  * @returns {boolean} True = include, false = exclude.
  */
 export function isFrameworkCopyIncluded(src) {
-  return !src.endsWith(".test.mjs");
+  return !src.endsWith(".test.mjs") && !String(src).split(/[\\/]/).includes("__fixtures__");
 }
 
 /** @description Copies framework-owned dirs/files into .claude/, overwriting. */
@@ -2807,13 +2815,56 @@ function mergePermissionArray(path, existingArr, newArr, ledgerByPath, projectGe
   return { value: result, owned: shipped, report };
 }
 
+function isHookArrayPath(path) {
+  return path.length === 2 && path[0] === "hooks";
+}
+
+/**
+ * Merges one `hooks.<Event>` array. Untouched harness wiring (equal to the manifest's owned value)
+ * is replaced by the new generation; a customized array keeps every operator group and hook, and
+ * every hook the new generation ships is ADDED when missing — keyed by (matcher, command) — into the
+ * group with the same matcher (or a new group). Without this, a consumer that ever touched a hook
+ * array would never receive new harness wiring (e.g. the parallel-lane gate and ledger, which the
+ * host refuses to run without). Nothing is ever removed here: there is no ledger of retired hook
+ * wiring to arbitrate a removal.
+ */
+function mergeHookArray(path, existingArr, newArr, ownedArr) {
+  if (existingArr === undefined) return { value: newArr, owned: newArr, report: [{ path, action: "added", value: newArr }] };
+  if (deepEqualValue(existingArr, newArr)) return { value: existingArr, owned: newArr, report: [] };
+  if (ownedArr !== undefined && deepEqualValue(existingArr, ownedArr)) {
+    return { value: newArr, owned: newArr, report: [{ path, action: "updated", from: existingArr, to: newArr }] };
+  }
+  if (!Array.isArray(existingArr) || !Array.isArray(newArr)) return { value: existingArr, owned: undefined, report: [{ path, action: "kept-custom", value: existingArr }] };
+  const matcherOf = (group) => (isPlainObject(group) && typeof group.matcher === "string" ? group.matcher : "");
+  const merged = existingArr.map((group) => (isPlainObject(group) && Array.isArray(group.hooks) ? { ...group, hooks: [...group.hooks] } : group));
+  const report = [];
+  for (const shippedGroup of newArr) {
+    if (!isPlainObject(shippedGroup) || !Array.isArray(shippedGroup.hooks)) continue;
+    const matcher = matcherOf(shippedGroup);
+    const sameMatcher = merged.filter((group) => isPlainObject(group) && Array.isArray(group.hooks) && matcherOf(group) === matcher);
+    for (const hook of shippedGroup.hooks) {
+      const present = sameMatcher.some((group) => group.hooks.some((existing) => isPlainObject(existing) && existing.command === hook?.command));
+      if (present) continue;
+      if (sameMatcher.length) sameMatcher[0].hooks.push(hook);
+      else {
+        const group = { ...shippedGroup, hooks: [hook] };
+        merged.push(group);
+        sameMatcher.push(group);
+      }
+      report.push({ path, action: "added", value: { matcher, command: hook?.command } });
+    }
+  }
+  if (!report.length) report.push({ path, action: "kept-custom", value: existingArr });
+  return { value: merged, owned: undefined, report };
+}
+
 /**
  * Recursively merges one node of the settings tree. Mirrors `mergeNode` in
  * core/shared/lib/opencode-config-migration.mjs, adapted for settings.json's shape: a
  * `permissions.{allow,deny,ask}` path gets set-union array treatment (`mergePermissionArray`);
- * every other array (e.g. a `hooks.*` entry) is an opaque leaf, replaced only when the existing
- * value still equals what the manifest recorded as harness-owned — never force-overwritten,
- * since there is no ledger of retired hook wiring to arbitrate a diverged value.
+ * a `hooks.<Event>` array gets a hook-level union (`mergeHookArray`); every other array is an
+ * opaque leaf, replaced only when the existing value still equals what the manifest recorded as
+ * harness-owned — never force-overwritten.
  */
 function mergeSettingsNode(path, existingNode, newNode, ownedNode, ledgerByPath, projectGeneration) {
   if (isPermissionArrayPath(path)) {
@@ -2822,6 +2873,7 @@ function mergeSettingsNode(path, existingNode, newNode, ownedNode, ledgerByPath,
     // would invite a future "restore the owned check as a shortcut" regression of issue #487.
     return mergePermissionArray(path, existingNode, newNode, ledgerByPath, projectGeneration);
   }
+  if (isHookArrayPath(path)) return mergeHookArray(path, existingNode, newNode, ownedNode);
 
   const existingIsMissingOrObject = existingNode === undefined || isPlainObject(existingNode);
   if (isPlainObject(newNode) && existingIsMissingOrObject) {

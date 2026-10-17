@@ -22,6 +22,22 @@ The operator is a non-technical product manager. He approves the **spec** (produ
 
 ---
 
+## Parallel by default
+
+Parallel lanes are the default delivery. A plan with `"parallel": false` must give a `serial_reason` that holds
+(ollama hand family, scopes that truly cannot be split); otherwise ask for the parallel shape. A single task is not a reason: it runs in a lane too.
+A parallel plan that only stays valid by chaining every task with `depends_on` is a decomposition finding.
+
+---
+
+## Scope correction after task admission
+
+When the plan is a correction of admitted parallel tasks, review only the appended scope against the existing task
+and the spec. The accepted decomposition and frozen contracts stay: do not restart planning for work that remains
+valid, and never ask to remove or reorder an admitted locked test.
+
+---
+
 ## What to audit
 
 ### 1. Decomposition soundness
