@@ -162,6 +162,8 @@ test("saved conflict resolutions continue across partial summaries and reload; i
   assert.notEqual(after.key, before.key, "saved hunks are progress even while Git HEAD is unchanged");
   assert.match(after.content, /next pending hunk.*repeat until ready_to_apply/);
   assert.match(after.content, /no remote merge\/deploy authority/);
+  assert.match(after.content, /harness-support for one complete hunk/);
+  assert.match(after.content, /never shorten a resolution by dropping coverage/);
   const c = controller({ readPending: pending }); c.ctx.cwd = root;
   assert.equal(await c.end(stopped, c.ctx), true);
   assert.equal(await c.end(stopped, c.ctx), true);

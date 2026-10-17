@@ -583,6 +583,11 @@ vincula o bloco inteiro. O host guarda as propostas por sessão, HEAD, base, pla
 proposta antiga válida para inputs novos. Não reenvie todos os trechos concluídos,
 não copie um preview truncado e não peça a um helper que reconstrua um pacote
 completo sem os bytes necessários. Havendo mais conflitos, continue o mesmo loop.
+Se um trecho exigir análise adicional, um `harness-support` pode ajudar em leitura:
+entregue **um hunk completo**, contexto e os paths/HEAD/base/árvore exatos para consultar
+as duas versões. Peça a resolução desse trecho, não o pacote inteiro. O pai confere
+e salva pelo `stage`. Não reduza o texto descartando asserts; relato de status ou de
+próximo passo não substitui a execução dessa recuperação disponível.
 Isso resolve o merge **local**, sem autorizar publicação ou merge remoto de PR;
 respeite qualquer limite definido pelo operador para essa entrega.
 
