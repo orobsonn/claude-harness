@@ -553,3 +553,33 @@ na Victor. As suítes também expuseram fixture dependente de UTC/BRT e um teste
 concentrava dezoito requisições no mesmo timeout. Esses casos exigem correção no
 produto ou nos testes consumidores e nova evidência; remover o review, ignorar o
 teste ou editar o estado para marcar sucesso não resolve a causa.
+
+### Resolver conflitos com a base sem encerrar a run
+
+Na investigação de Lainny #372, #374 e #375 (2026-10-17), o preview legado tinha
+151–201 KB e 30–33 hunks em 8–10 arquivos. A saída truncava antes de mostrar todos
+os bytes necessários, mas a aplicação exigia resolver tudo em uma única chamada.
+Isso levou a pacotes incompletos, tentativas idênticas e helpers sem contexto.
+Conflito textual entre entregas existentes é trabalho do integrador global.
+
+O pai usa `harness_memory action="reconcile"`, sempre com `expected_head` e
+`base_sha` completos, e continua neste ciclo:
+
+1. `reconcile_mode: "preview"` mostra contagens e um `next_hunk`, incluindo hashes,
+   índice e contexto. As propostas concluídas não voltam na resposta.
+2. Após compreender e combinar os dois lados, `reconcile_mode: "stage"` salva
+   `resolutions: [{path, before_sha256, patches: [{hunk_index, hunk_sha256, new_text}]}]`.
+   Pode resolver um hunk por chamada; isso não muda arquivos, index ou HEAD do Git.
+3. A resposta aponta o próximo pendente. Para um hunk grande, `conflict_path`,
+   `hunk_index` e `preview_offset` permitem ler todas as páginas até `next_offset: null`.
+4. Com `ready_to_apply: true`, `reconcile_mode: "apply"` aplica e commita o merge
+   local. A operação recusa aplicação incompleta, hashes antigos e marcadores restantes.
+5. O pai verifica o produto resultante, renova somente evidência invalidada, obtém
+   os pareceres finais atuais e continua até a fronteira autorizada pelo operador.
+
+As propostas são vinculadas à sessão, projeto, HEAD, base, plano e árvore Git do
+preview. Reiniciar/compactar não perde o progresso; inputs novos usam outro registro
+e preservam o anterior. Proposta não é recibo de aprovação. Continuam recusados
+filhos, caminhos de runtime/segredos, arquivos inseguros e worktrees sujas. Merge
+local não concede autorização para merge remoto do PR. O formato legado continua
+compatível, mas não é necessário reenviar todos os hunks em cada tentativa.

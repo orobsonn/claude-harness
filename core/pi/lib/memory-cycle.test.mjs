@@ -273,6 +273,120 @@ test("global reconcile binds ordered hunk digests without retransmitting literal
     "a missing final LF must not join the next unchanged line to the replacement");
 });
 
+test("incremental reconciliation resumes partial work and only integrates complete resolutions", async t => {
+  const { root, git, ...input } = parallelDelivery(t, { productConflict: true, multipleProductHunks: true });
+  const statePath = join(root, ".pi/harness/state", SESSION, "gate-state.json");
+  const stateBefore = readFileSync(statePath, "utf8");
+  let preview = memoryCycle.reconcileMemoryDelivery(root, SESSION, { ...input, reconcile_mode: "preview" });
+  assert.equal(preview.total_hunks, 3);
+  assert.equal(preview.resolved_hunks, 0);
+  assert.equal(preview.conflicts.some(entry => "content" in entry), false);
+  const first = preview.next_hunk;
+  const stage = (api, focus, new_text) => api.reconcileMemoryDelivery(root, SESSION, { ...input,
+    reconcile_mode: "stage", resolutions: [{ path: focus.path, before_sha256: focus.before_sha256,
+      patches: [{ hunk_index: focus.hunk_index, hunk_sha256: focus.hunk_sha256, new_text }] }] });
+  preview = stage(memoryCycle, first, "Local learning.\nUpstream learning.\n");
+  assert.equal(preview.resolved_hunks, 1);
+  assert.equal(git("rev-parse", "HEAD"), input.expected_head);
+  assert.equal(git("status", "--porcelain"), "");
+  assert.throws(() => memoryCycle.reconcileMemoryDelivery(root, SESSION, { ...input, reconcile_mode: "apply" }), /pending hunks/);
+  const resumed = await import(`./memory-cycle.mjs?resume=${Date.now()}`);
+  preview = resumed.reconcileMemoryDelivery(root, SESSION, { ...input, reconcile_mode: "preview" });
+  assert.equal(preview.resolved_hunks, 1, "progress survives a fresh host module");
+  preview = stage(resumed, preview.next_hunk, "local-a\nupstream-a");
+  preview = stage(resumed, preview.next_hunk, "local-b\nupstream-b");
+  assert.equal(preview.ready_to_apply, true);
+  assert.equal(preview.next_hunk, null);
+  const merged = resumed.reconcileMemoryDelivery(root, SESSION, { ...input, reconcile_mode: "apply" });
+  assert.equal(merged.applied, true);
+  assert.deepEqual(git("rev-list", "--parents", "-1", "HEAD").split(" ").slice(1), [input.expected_head, input.base_sha]);
+  assert.match(readFileSync(join(root, "product.txt"), "utf8"), /local-a\nupstream-a\n[\s\S]*local-b\nupstream-b\nend/);
+  assert.match(readFileSync(join(root, "MEMORY.md"), "utf8"), /Local learning.\nUpstream learning./);
+  assert.equal(readFileSync(statePath, "utf8"), stateBefore, "a staged proposal never promotes review/task receipts");
+  assert.throws(() => checkMemoryShipperReady(root, SESSION), /review|harvest|changed/i);
+});
+
+test("incremental preview exposes every byte of a conflict beyond the old 24 KiB excerpt", t => {
+  const { root, git, ...input } = parallelDelivery(t, { productConflict: true, memoryConflict: false });
+  git("checkout", "-q", "parallel-main");
+  writeFileSync(join(root, "product.txt"), "upstream".repeat(5000) + "\n");
+  git("add", "product.txt"); git("commit", "-qm", "feat: large upstream hunk");
+  input.base_sha = git("rev-parse", "HEAD"); git("checkout", "-q", "--detach", input.expected_head);
+  const legacy = memoryCycle.reconcileMemoryDelivery(root, SESSION, input).conflicts[0];
+  assert.equal(legacy.truncated, true);
+  let offset = 0, text = "", page;
+  do {
+    page = memoryCycle.reconcileMemoryDelivery(root, SESSION, { ...input, reconcile_mode: "preview", preview_offset: offset }).next_hunk;
+    assert.ok(page.content.length <= 8192);
+    text += page.content; offset = page.next_offset;
+  } while (offset !== null);
+  assert.equal(createHash("sha256").update(text).digest("hex"), page.hunk_sha256);
+  assert.ok(text.includes("upstream".repeat(5000)));
+  assert.equal(git("status", "--porcelain"), "");
+});
+
+test("incremental proposals reject stale identities, unsafe patches and symlinks without changing Git", t => {
+  const { root, git, ...input } = parallelDelivery(t, { productConflict: true, memoryConflict: false });
+  const initial = memoryCycle.reconcileMemoryDelivery(root, SESSION, { ...input, reconcile_mode: "preview" });
+  const focus = initial.next_hunk;
+  const valid = { path: focus.path, before_sha256: focus.before_sha256,
+    patches: [{ hunk_index: focus.hunk_index, hunk_sha256: focus.hunk_sha256, new_text: "both sides\n" }] };
+  for (const invalid of [
+    { ...valid, path: "../escape" }, { ...valid, before_sha256: "0".repeat(64) },
+    { ...valid, patches: [{ ...valid.patches[0], hunk_sha256: "0".repeat(64) }] },
+    { ...valid, patches: [{ ...valid.patches[0], hunk_index: 99 }] },
+    { ...valid, patches: [{ ...valid.patches[0], new_text: "<<<<<<< still unresolved\n" }] },
+    { ...valid, patches: [{ ...valid.patches[0], new_text: "nul\0" }] },
+  ]) {
+    assert.throws(() => memoryCycle.reconcileMemoryDelivery(root, SESSION, { ...input, reconcile_mode: "stage", resolutions: [invalid] }), /exact|stale|ambiguous|bounded/);
+    assert.equal(git("status", "--porcelain"), "");
+    assert.equal(git("rev-parse", "HEAD"), input.expected_head);
+  }
+  memoryCycle.reconcileMemoryDelivery(root, SESSION, { ...input, reconcile_mode: "stage", resolutions: [valid] });
+  git("commit", "--allow-empty", "-qm", "chore: change head");
+  assert.throws(() => memoryCycle.reconcileMemoryDelivery(root, SESSION, { ...input, reconcile_mode: "apply" }), /HEAD is stale/);
+  const fresh = { ...input, expected_head: git("rev-parse", "HEAD") };
+  assert.equal(memoryCycle.reconcileMemoryDelivery(root, SESSION, { ...fresh, reconcile_mode: "preview" }).resolved_hunks, 0);
+  assert.throws(() => memoryCycle.reconcileMemoryDelivery(root, SESSION, { ...fresh, reconcile_mode: "apply" }), /pending hunks/);
+  const victim = join(root, ".pi/harness/state", SESSION, "victim.txt"); writeFileSync(victim, "keep");
+  rmSync(initial.staging_path); symlinkSync(victim, initial.staging_path);
+  git("checkout", "-q", "--detach", input.expected_head);
+  assert.throws(() => memoryCycle.reconcileMemoryDelivery(root, SESSION, { ...input, reconcile_mode: "preview" }), /Unsafe memory file/);
+  assert.equal(readFileSync(victim, "utf8"), "keep");
+});
+
+test("eight concurrent files with 32 hunks resolve progressively without replaying a giant payload", t => {
+  const { root, git } = parallelDelivery(t, { memoryConflict: false, beforeFinalReview: true });
+  const files = Array.from({ length: 8 }, (_, i) => `shared-${i}.txt`);
+  const lines = Array.from({ length: 4 }, (_, i) => [`base-${i}`, ...Array.from({ length: 12 }, (_, j) => `context-${i}-${j}`)]).flat();
+  for (const file of files) writeFileSync(join(root, file), lines.join("\n") + "\n");
+  git("add", "--", ...files); git("commit", "-qm", "test: shared baseline"); git("branch", "many-main");
+  const writeSide = side => {
+    for (const file of files) writeFileSync(join(root, file), lines.map(line => line.startsWith("base-") ? `${side}-${line}` : line).join("\n") + "\n");
+    git("add", "--", ...files); git("commit", "-qm", `test: ${side} changes`);
+    return git("rev-parse", "HEAD");
+  };
+  const expected_head = writeSide("local"); git("checkout", "-q", "many-main");
+  const base_sha = writeSide("upstream"); git("checkout", "-q", "--detach", expected_head);
+  const call = options => memoryCycle.reconcileMemoryDelivery(root, SESSION, { expected_head, base_sha, ...options });
+  let preview = call({ reconcile_mode: "preview" });
+  assert.equal(preview.conflicts.length, 8); assert.equal(preview.total_hunks, 32);
+  for (let i = 0; i < 32; i++) {
+    const hunk = preview.next_hunk;
+    const new_text = hunk.content.split("\n").filter(line => !/^(?:<<<<<<<|=======|>>>>>>>)/.test(line)).join("\n");
+    preview = call({ reconcile_mode: "stage", resolutions: [{ path: hunk.path, before_sha256: hunk.before_sha256,
+      patches: [{ hunk_index: hunk.hunk_index, hunk_sha256: hunk.hunk_sha256, new_text }] }] });
+    assert.equal(preview.resolved_hunks, i + 1);
+    assert.ok(JSON.stringify(preview).length < 7000, "each response is bounded independently of completed proposal bodies");
+    assert.equal(git("rev-parse", "HEAD"), expected_head);
+    assert.equal(git("status", "--porcelain"), "");
+  }
+  assert.equal(preview.ready_to_apply, true);
+  assert.equal(call({ reconcile_mode: "apply" }).applied, true);
+  for (const file of files) for (let i = 0; i < 4; i++)
+    assert.match(readFileSync(join(root, file), "utf8"), new RegExp(`local-base-${i}\\nupstream-base-${i}`));
+});
+
 test("global reconcile accepts a large single-line product hunk within the existing file limit", (t) => {
   const { root, git, ...input } = parallelDelivery(t, { productConflict: true,
     memoryConflict: false, beforeFinalReview: true });

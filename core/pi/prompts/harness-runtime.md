@@ -549,8 +549,8 @@ writer só para obter frescor; recupere apenas a evidência que o host invalidou
 Se o merge do shipper encontrar conflito, ele termina `BLOCKED` com o HEAD revisado, a
 nova base observada e a evidência de conflito disponível. Primeiro diagnostique no
 **pai global** com `harness_memory action="reconcile"`, `expected_head` e `base_sha`
-completos, depois de buscar a base observada com `git fetch`; sem `resolutions`,
-a operação apenas mostra o merge previsto. Não use
+completos, depois de buscar a base observada com `git fetch`. Use o fluxo incremental
+abaixo para resolver, sem encerrar a run só porque existem vários conflitos. Não use
 `harness_tasks resume` nem executor/sniper para incorporar `main`: essa operação
 não é reconciliação de dependência entre tasks. Nunca peça merge/rebase/cherry-pick
 ao filho. No Claude/Orca, o integrador resolve as anotações; no Pi, o host aplica
@@ -569,16 +569,36 @@ ser abandonada: o host verifica a árvore Git idêntica, o journal completo e to
 os pareceres atuais, preservando merges, tentativas e a mão bloqueada. Não peça
 escritor cosmético nem repita capturas para satisfazer esse caso operacional.
 
-Merge limpo: envie `resolutions: []`. Se os conflitos forem somente `MEMORY.md`,
+Prefira `reconcile_mode: "preview"`: a resposta mostra progresso e `next_hunk`, com
+path, hash do arquivo, índice, hash do bloco e contexto adjacente. Resolva o comportamento
+dos dois lados e envie `reconcile_mode: "stage"` com
+`resolutions: [{path, before_sha256, patches: [{hunk_index, hunk_sha256, new_text}]}]`.
+Pode salvar um trecho por chamada; os demais continuam pendentes, sem tocar Git.
+Repita sobre o próximo `next_hunk` até `ready_to_apply: true`, então chame
+`reconcile_mode: "apply"` sem `resolutions`. Merge limpo também usa esse apply.
+Para reler um trecho, informe `conflict_path` e `hunk_index`. Se `next_offset` não
+for null, leia as páginas seguintes com `preview_offset` antes de resolver; o hash
+vincula o bloco inteiro. O host guarda as propostas por sessão, HEAD, base, plano e
+árvore do preview: uma compactação/reinício não perde o progresso nem torna uma
+proposta antiga válida para inputs novos. Não reenvie todos os trechos concluídos,
+não copie um preview truncado e não peça a um helper que reconstrua um pacote
+completo sem os bytes necessários. Havendo mais conflitos, continue o mesmo loop.
+Isso resolve o merge **local**, sem autorizar publicação ou merge remoto de PR;
+respeite qualquer limite definido pelo operador para essa entrega.
+
+A interface legada também permanece disponível. Merge limpo: envie `resolutions: []`.
+Se os conflitos forem somente `MEMORY.md`,
 `CONTEXT.md` ou `kaizen.md`, resolva cada um com patch literal pequeno vinculado ao
 hash do preview. Preserve os aprendizados válidos de ambos os lados e leia a prosa
 resultante; não peça revisão humana de rotina nem substitua o documento a partir
 de excerpt. Memória de entrega não é path sem dono nem tarefa de produto.
-Para conflito de produto em path já coberto pelo plano revisado, envie em `patches`
+Para conflito textual de produto entre as entregas, envie em `patches`
 um patch literal por bloco completo `<<<<<<<`…`>>>>>>>` do preview, na mesma ordem,
 vinculado ao hash do arquivo. Resolva o comportamento dos dois lados, teste o merge
-e obtenha olhos finais atuais. Paths fora do plano exigem nova autoridade; a
-reconciliação os recusa sem alterar a worktree.
+e obtenha olhos finais atuais. Um path compartilhado alterado pela base não vira
+uma tarefa nova só por estar fora do scope original de uma task: o integrador
+combina as duas entregas sob o plano aprovado e os olhos finais sobre o agregado.
+Isso não é autorização para inventar comportamento novo fora das duas versões.
 Para não retransmitir blocos grandes, cada patch de produto pode usar
 `{hunk_sha256, new_text}` com o digest retornado pelo preview, na mesma ordem,
 em vez de `{old_text, new_text}`. As duas formas vinculam o mesmo bloco exato.

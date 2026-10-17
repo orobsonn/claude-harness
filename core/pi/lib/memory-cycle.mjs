@@ -255,7 +255,12 @@ function cleanTree(root) {
  * remain untouched. Conflicts with concurrent work can occur outside task scopes;
  * their resolution is checked against the exact Git preview and reviewed again.
  * Omit resolutions to preview. An explicit array (including []) applies the merge. */
-export function reconcileMemoryDelivery(projectRoot, sessionId, { expected_head, base_sha, resolutions } = {}) {
+export function reconcileMemoryDelivery(projectRoot, sessionId, options = {}) {
+  let { expected_head, base_sha, resolutions, reconcile_mode } = options;
+  if (reconcile_mode !== undefined && !["preview", "stage", "apply"].includes(reconcile_mode))
+    throw new Error("Use reconcile_mode preview, stage or apply");
+  if (reconcile_mode && reconcile_mode !== "stage" && resolutions !== undefined)
+    throw new Error("Only stage accepts resolutions in incremental reconciliation");
   const paths = memoryPaths(projectRoot, sessionId);
   const root = paths.root;
   const state = JSON.parse(readSmall(join(paths.directory, "gate-state.json"), 1024 * 1024) ?? "null");
@@ -328,6 +333,11 @@ export function reconcileMemoryDelivery(projectRoot, sessionId, { expected_head,
     return { path: file, sha256: sha(content), content, truncated: false };
   });
   const result = { ok: true, applied: false, expected_head, base_sha, tree, changed_paths: changed };
+  if (reconcile_mode) {
+    const incremental = incrementalReconciliation(paths, state, result, conflicts, options);
+    if (reconcile_mode !== "apply") return incremental;
+    resolutions = incremental.resolutions;
+  }
   if (resolutions === undefined) return { ...result, conflicts: conflicts.map((entry) => ({ ...entry,
     hunk_sha256: [...entry.content.matchAll(/^<<<<<<<[^\n]*\n[\s\S]*?^>>>>>>>[^\n]*\n/gm)].map((match) => sha(match[0])),
     content: entry.content.slice(0, 24576), truncated: entry.content.length > 24576 })) };
@@ -338,7 +348,7 @@ export function reconcileMemoryDelivery(projectRoot, sessionId, { expected_head,
     const resolution = resolutions.find((item) => item?.path === entry.path);
     if (!resolution || resolution.before_sha256 !== entry.sha256 || Object.hasOwn(resolution, "content"))
       throw new Error("Conflict resolution is stale or invalid; use patches bound to the preview hash");
-    const isMemory = DURABLE_MEMORY_FILES.includes(entry.path);
+    const isMemory = !reconcile_mode && DURABLE_MEMORY_FILES.includes(entry.path);
     if (isMemory ? !resolution.patch || Object.hasOwn(resolution, "patches") :
       !Array.isArray(resolution.patches) || Object.hasOwn(resolution, "patch"))
       throw new Error("Use one literal patch for memory or one patch per product conflict hunk");
@@ -383,6 +393,96 @@ export function reconcileMemoryDelivery(projectRoot, sessionId, { expected_head,
   cleanTree(root);
   return { ...result, applied: true, head: gitMemory(root, ["rev-parse", "HEAD"]),
     next: "Inspect the incorporated delta and run affected verification. Preserve valid task receipts; if a frozen test changed with the base, resume and integrate each affected exact task/attempt sequentially to renew its parent proof before final eyes. Do not invent a writer delta or replace task receipts with global reviews. Then obtain current final eyes, harvest and ship." };
+}
+
+function conflictHunks(content) {
+  return [...content.matchAll(/^<<<<<<<[^\n]*\n[\s\S]*?^>>>>>>>[^\n]*\n/gm)];
+}
+
+/** A resumable proposal, never a task/review receipt. Each call rechecks the real
+ * Git preview; only apply can touch product and still needs every exact hunk. */
+function incrementalReconciliation(paths, state, result, conflicts, options) {
+  const binding = { project_root: paths.root, session_id: state.session_id,
+    feature_id: state.feature_id, plan_sha256: state.plan_review_evidence?.plan_sha256 ?? null,
+    expected_head: result.expected_head, base_sha: result.base_sha, tree: result.tree,
+    conflicts: conflicts.map(entry => ({ path: entry.path, sha256: entry.sha256 })) };
+  // Separate drafts preserve prior work if HEAD, base, plan or preview changes.
+  const draftPath = join(paths.directory, `reconciliation-${sha(stable(binding))}.json`);
+  const raw = readSmall(draftPath, 32 * 1024 * 1024);
+  const draft = raw === null ? { written_by: "host-reconciliation-proposal", binding, resolutions: [] } : JSON.parse(raw);
+  if (draft?.written_by !== "host-reconciliation-proposal" || stable(draft.binding) !== stable(binding) ||
+      !Array.isArray(draft.resolutions)) throw new Error("Invalid staged reconciliation identity");
+  const entries = new Map(conflicts.map(entry => [entry.path, { ...entry, hunks: conflictHunks(entry.content) }]));
+  const staged = new Map();
+  const add = (resolution, saved = false) => {
+    const entry = entries.get(resolution?.path);
+    if (!entry || resolution.before_sha256 !== entry.sha256 ||
+        Object.keys(resolution).sort().join(",") !== "before_sha256,patches,path" ||
+        !Array.isArray(resolution.patches) || !resolution.patches.length)
+      throw new Error("Stage patches for an exact conflict path and before_sha256 from the preview");
+    for (const patch of resolution.patches) {
+      const keys = patch && Object.keys(patch).sort().join(",");
+      if (!["hunk_index,hunk_sha256,new_text", "hunk_sha256,new_text"].includes(keys))
+        throw new Error("Stage requires {hunk_sha256, new_text} and optional hunk_index");
+      const matching = entry.hunks.flatMap((hunk, index) => sha(hunk[0]) === patch.hunk_sha256 ? [index] : []);
+      const index = patch.hunk_index ?? (matching.length === 1 ? matching[0] : -1);
+      if (!Number.isInteger(index) || !matching.includes(index))
+        throw new Error("Staged hunk is stale or ambiguous; use its exact hunk_index and hunk_sha256");
+      applyProductConflictPatches(entry.hunks[index][0], [{ hunk_sha256: patch.hunk_sha256, new_text: patch.new_text }]);
+      const key = `${entry.path}\0${index}`;
+      if (saved && staged.has(key)) throw new Error("Duplicate staged conflict hunk");
+      staged.set(key, { hunk_index: index, hunk_sha256: patch.hunk_sha256, new_text: patch.new_text });
+    }
+  };
+  for (const resolution of draft.resolutions) add(resolution, true);
+  if (options.reconcile_mode === "stage") {
+    if (!Array.isArray(options.resolutions) || !options.resolutions.length)
+      throw new Error("Stage at least one resolved hunk; use preview to inspect the next pending hunk");
+    for (const resolution of options.resolutions) add(resolution);
+  }
+  const all = conflicts.flatMap(entry => entries.get(entry.path).hunks.map((hunk, index) => ({
+    entry, hunk, index, resolved: staged.has(`${entry.path}\0${index}`),
+  })));
+  if (conflicts.some(entry => !entries.get(entry.path).hunks.length))
+    throw new Error("Conflict has no textual Git hunks; inspect its type before resolving");
+  const resolutions = conflicts.map(entry => ({ path: entry.path, before_sha256: entry.sha256,
+    patches: entries.get(entry.path).hunks.flatMap((_hunk, index) => {
+      const patch = staged.get(`${entry.path}\0${index}`);
+      return patch ? [patch] : [];
+    }) }));
+  let focus;
+  if (options.conflict_path !== undefined || options.hunk_index !== undefined) {
+    focus = all.find(item => item.entry.path === options.conflict_path && item.index === (options.hunk_index ?? 0));
+    if (!focus) throw new Error("Unknown conflict_path or hunk_index in current preview");
+  } else focus = all.find(item => !item.resolved);
+  const offset = options.preview_offset ?? 0;
+  if (!Number.isSafeInteger(offset) || offset < 0 || (focus && offset > focus.hunk[0].length))
+    throw new Error("Invalid preview_offset for the selected conflict hunk");
+  if (options.reconcile_mode === "stage") {
+    const serialized = JSON.stringify({ ...draft, resolutions: resolutions.filter(entry => entry.patches.length) });
+    if (Buffer.byteLength(serialized) > 32 * 1024 * 1024) throw new Error("Staged reconciliation exceeds size limit");
+    atomicWrite(draftPath, serialized);
+  }
+  if (options.reconcile_mode === "apply") {
+    if (all.some(item => !item.resolved))
+      throw new Error(`Reconciliation has ${all.filter(item => !item.resolved).length} pending hunks; stage them before apply`);
+    return { resolutions: resolutions.map(entry => ({ ...entry,
+      patches: entry.patches.map(({ hunk_index: _index, ...patch }) => patch) })) };
+  }
+  const chunk = focus?.hunk[0].slice(offset, offset + 8192);
+  return { ...result, reconcile_mode: options.reconcile_mode, staging_path: draftPath,
+    total_hunks: all.length, resolved_hunks: staged.size, ready_to_apply: staged.size === all.length,
+    conflicts: conflicts.map(entry => ({ path: entry.path, sha256: entry.sha256,
+      total_hunks: entries.get(entry.path).hunks.length,
+      resolved_hunks: all.filter(item => item.entry.path === entry.path && item.resolved).length })),
+    next_hunk: focus ? { path: focus.entry.path, before_sha256: focus.entry.sha256,
+      hunk_index: focus.index, hunk_sha256: sha(focus.hunk[0]), resolved: focus.resolved,
+      content: chunk, preview_offset: offset, content_length: focus.hunk[0].length,
+      next_offset: offset + chunk.length < focus.hunk[0].length ? offset + chunk.length : null,
+      context_before: focus.entry.content.slice(0, focus.hunk.index).split("\n").slice(-7).join("\n").slice(-2048),
+      context_after: focus.entry.content.slice(focus.hunk.index + focus.hunk[0].length).split("\n").slice(0, 6).join("\n").slice(0, 2048) } : null,
+    next: staged.size === all.length ? "Use reconcile_mode=apply with the same SHAs; then verify the merged product and obtain current final reviews."
+      : "Resolve next_hunk preserving both sides, stage its {path,before_sha256,patches:[{hunk_index,hunk_sha256,new_text}]}; repeat until ready_to_apply. Use conflict_path/hunk_index/preview_offset for bounded reads. Do not stop just because other hunks are still pending." };
 }
 
 function snapshotPlan(paths, featureId) {
