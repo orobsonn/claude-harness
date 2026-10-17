@@ -591,3 +591,8 @@ digest das propostas são revalidados pelo host; uma nova resolução pode acord
 uma continuação antes esgotada, inclusive após reinício. Regravar a mesma proposta,
 mudar timestamps ou manter um registro de outra base não renova tentativas.
 Pausa explícita e proibição de merge remoto continuam prevalecendo.
+Se um apoio de leitura produziu um hunk grande, `support_agent_id` pode substituir
+`new_text` no patch de `stage`. A origem precisa ser um `harness-support` concluído
+com chamada, resultado e registro presentes na branch da mesma sessão; o texto
+deve ser somente a substituição exata, sem fences. O host ainda confere os hashes
+atuais e todas as validações antes de salvar/aplicar; a proposta não é aprovação.

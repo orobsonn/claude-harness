@@ -342,8 +342,10 @@ test("native Pi loop can preview, stage, resume and apply a conflict without a b
   const base_sha = git("rev-parse", "HEAD"); git("checkout", "-q", "--detach", expected_head);
   mkdirSync(join(root, ".pi/harness/state", SESSION), { recursive: true });
   writeFileSync(gateStatePath(root), JSON.stringify({ session_id: SESSION, feature_id: FEATURE }));
+  let supportEntries = [];
+  const runtime = ctx(root); runtime.sessionManager.getBranch = () => supportEntries;
   const call = async (api, extra) => {
-    const { result } = await runNativeToolCall({ tool: api.tool, hooks: api.handlers, ctx: ctx(root),
+    const { result } = await runNativeToolCall({ tool: api.tool, hooks: api.handlers, ctx: runtime,
       input: { action: "reconcile", expected_head, base_sha, ...extra } });
     assert.notEqual(result.isError, true, resultText(result));
     return JSON.parse(resultText(result));
@@ -356,6 +358,33 @@ test("native Pi loop can preview, stage, resume and apply a conflict without a b
       hunk_sha256: hunk.hunk_sha256, new_text: "local knowledge\nupstream knowledge\n" }] }] });
   assert.equal(staged.ready_to_apply, true);
   assert.equal(git("rev-parse", "HEAD"), expected_head);
+  supportEntries = [
+    { type: "message", message: { role: "assistant", stopReason: "toolUse", content: [{ type: "toolCall",
+      id: "support-call", name: "subagent", arguments: { subagent_type: "harness-support" } }] } },
+    { type: "custom", customType: "subagents:record", data: { id: "support-proposal", type: "harness-support",
+      status: "completed", result: "local knowledge\nupstream knowledge\n" } },
+    { type: "message", message: { role: "toolResult", toolName: "subagent", toolCallId: "support-call",
+      details: { agentId: "support-proposal", subagentType: "harness-support", status: "completed" } } },
+  ];
+  const byReference = { reconcile_mode: "stage", resolutions: [{ path: hunk.path,
+    before_sha256: hunk.before_sha256, patches: [{ hunk_index: hunk.hunk_index,
+      hunk_sha256: hunk.hunk_sha256, support_agent_id: "support-proposal" }] }] };
+  assert.equal((await call(api, byReference)).proposal_sha256, staged.proposal_sha256,
+    "reusing native support is exactly the same proposal, not new progress or approval");
+  for (const damage of [
+    () => { supportEntries[2].message.isError = true; },
+    () => { supportEntries[1].data.type = "harness-sniper"; },
+    () => { supportEntries[2].message.details.status = "aborted"; },
+    () => { supportEntries[0].message.content[0].arguments.subagent_type = "harness-executor"; },
+  ]) {
+    const saved = structuredClone(supportEntries); damage();
+    const result = await api.execute({ action: "reconcile", expected_head, base_sha, ...byReference }, runtime);
+    assert.equal(result.isError, true); assert.match(resultText(result), /completed native harness-support/);
+    assert.equal(git("rev-parse", "HEAD"), expected_head); supportEntries = saved;
+  }
+  supportEntries = [];
+  const foreign = await api.execute({ action: "reconcile", expected_head, base_sha, ...byReference }, runtime);
+  assert.equal(foreign.isError, true, "an ID outside the current session branch is not a proposal source");
   const resumed = register();
   assert.equal((await call(resumed, { reconcile_mode: "preview" })).resolved_hunks, 1);
   assert.equal((await call(resumed, { reconcile_mode: "apply" })).applied, true);

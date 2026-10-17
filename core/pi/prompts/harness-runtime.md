@@ -586,7 +586,10 @@ completo sem os bytes necessários. Havendo mais conflitos, continue o mesmo loo
 Se um trecho exigir análise adicional, um `harness-support` pode ajudar em leitura:
 entregue **um hunk completo**, contexto e os paths/HEAD/base/árvore exatos para consultar
 as duas versões. Peça a resolução desse trecho, não o pacote inteiro. O pai confere
-e salva pelo `stage`. Não reduza o texto descartando asserts; relato de status ou de
+e salva pelo `stage`. Para não retranscrever uma proposta grande, peça ao apoio
+somente o texto exato, sem fences/comentários, e use `support_agent_id` em vez de
+`new_text` no patch. O host lê a proposta concluída da própria sessão e mantém os
+mesmos hashes e validações; apoio não substitui aprovação. Não reduza o texto descartando asserts; relato de status ou de
 próximo passo não substitui a execução dessa recuperação disponível.
 Isso resolve o merge **local**, sem autorizar publicação ou merge remoto de PR;
 respeite qualquer limite definido pelo operador para essa entrega.
