@@ -6,6 +6,7 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { registerPiCommandEvidence } from "./pi-command-evidence.mjs";
 import { installDeliveryContinuation, readDeliveryContinuation } from "./delivery-continuation.mjs";
+import { reconcileMemoryDelivery } from "./memory-cycle.mjs";
 
 function controller(options = {}) {
   const handlers = new Map(), entries = [], messages = [], notifications = [];
@@ -41,6 +42,18 @@ test("ordinary tools cannot arm a new workflow; a native task result can", async
   assert.equal(await f.end(stopped, f.ctx), false);
   f.handlers.get("tool_result")({ toolName: "harness_tasks", details: { ok: true, tasks: [{ status: "running" }] } }, f.ctx);
   assert.equal(await f.end(stopped, f.ctx), true);
+});
+
+test("native reconciliation arms continuation but never overrides an explicit pause", async () => {
+  const f = controller({ local: false });
+  const event = { toolName: "harness_memory", input: { action: "reconcile" },
+    details: { ok: true, reconcile_mode: "stage", resolved_hunks: 1 } };
+  assert.equal(await f.end(stopped, f.ctx), false);
+  f.handlers.get("tool_result")(event, f.ctx);
+  assert.equal(await f.end(stopped, f.ctx), true);
+  f.handlers.get("input")({ source: "interactive", text: "pare agora" }, f.ctx);
+  f.handlers.get("tool_result")(event, f.ctx);
+  assert.equal(await f.end(stopped, f.ctx), false);
 });
 
 test("unchanged obligation receives diagnosis before yielding, without an infinite retry or approval", async () => {
@@ -118,6 +131,52 @@ test("real run states move from waiting to final review to shipping, but stop at
   assert.equal(readDeliveryContinuation(f.ctx, { hasCurrentFinalReviews: () => true }).stage, "shipping", "stale shipment is not completion");
   f.write("memory-shipment.json", { written_by: "host-subagent-completion", session_id: "parent", feature_id: "issue-22", head: f.head, status: "completed" });
   assert.equal(readDeliveryContinuation(f.ctx), null, "draft delivery does not auto-merge");
+});
+
+test("saved conflict resolutions continue across partial summaries and reload; identical proposals cannot spin", async t => {
+  const f = fixture(t);
+  const root = f.ctx.cwd;
+  const git = (...args) => execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+  git("config", "user.name", "Test"); git("config", "user.email", "test@example.invalid");
+  fs.writeFileSync(path.join(root, ".gitignore"), ".pi/\n");
+  const lines = ["base-a", ...Array(12).fill("unchanged context"), "base-b"];
+  fs.writeFileSync(path.join(root, "MEMORY.md"), lines.join("\n") + "\n");
+  git("add", ".gitignore", "MEMORY.md"); git("commit", "-qm", "docs: baseline"); git("branch", "new-base");
+  const side = name => {
+    fs.writeFileSync(path.join(root, "MEMORY.md"), lines.map(s => s.startsWith("base-") ? `${name}-${s}` : s).join("\n") + "\n");
+    git("add", "MEMORY.md"); git("commit", "-qm", `docs: ${name}`); return git("rev-parse", "HEAD");
+  };
+  const expected_head = side("local"); git("checkout", "-q", "new-base");
+  const base_sha = side("upstream"); git("checkout", "-q", "--detach", expected_head);
+  f.registry.tasks.one.status = "integrated"; f.write("task-runs/index.json", f.registry);
+  const pending = () => readDeliveryContinuation(f.ctx);
+  const before = pending();
+  const call = extra => reconcileMemoryDelivery(root, "parent", { expected_head, base_sha, ...extra });
+  const stage = (focus, text) => call({ reconcile_mode: "stage", resolutions: [{ path: focus.path,
+    before_sha256: focus.before_sha256, patches: [{ hunk_index: focus.hunk_index,
+      hunk_sha256: focus.hunk_sha256, new_text: text }] }] });
+  const first = call({ reconcile_mode: "preview" }).next_hunk;
+  let preview = stage(first, "local-a\nupstream-a");
+  const after = pending();
+  assert.equal(after.stage, "reconciliation", "do not send an unresolved merge to shipping/final review");
+  assert.notEqual(after.key, before.key, "saved hunks are progress even while Git HEAD is unchanged");
+  assert.match(after.content, /next pending hunk.*repeat until ready_to_apply/);
+  assert.match(after.content, /no remote merge\/deploy authority/);
+  const c = controller({ readPending: pending }); c.ctx.cwd = root;
+  assert.equal(await c.end(stopped, c.ctx), true);
+  assert.equal(await c.end(stopped, c.ctx), true);
+  assert.equal(await c.create()(stopped, c.ctx), false, "no-progress diagnosis remains bounded after reload");
+  preview = stage(first, "local-a\nupstream-a");
+  assert.equal(pending().key, after.key, "restaging identical bytes is not progress");
+  preview = stage(preview.next_hunk, "local-b\nupstream-b");
+  assert.equal(preview.ready_to_apply, true);
+  assert.notEqual(pending().key, after.key);
+  assert.equal(await c.create()(stopped, c.ctx), true, "new native proposal progress wakes a previously exhausted diagnosis");
+  const stateBefore = fs.readFileSync(path.join(f.directory, "gate-state.json"), "utf8");
+  assert.equal(call({ reconcile_mode: "apply" }).applied, true);
+  assert.equal(pending().stage, "final-review", "applied/stale proposals cannot keep reopening reconciliation");
+  assert.equal(fs.readFileSync(path.join(f.directory, "gate-state.json"), "utf8"), stateBefore);
+  assert.equal(git("status", "--porcelain"), "");
 });
 
 test("unknown/mismatched authority and corrupted state never auto-start work", t => {

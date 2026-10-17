@@ -471,6 +471,7 @@ function incrementalReconciliation(paths, state, result, conflicts, options) {
   }
   const chunk = focus?.hunk[0].slice(offset, offset + 8192);
   return { ...result, reconcile_mode: options.reconcile_mode, staging_path: draftPath,
+    proposal_sha256: sha(stable(resolutions)),
     total_hunks: all.length, resolved_hunks: staged.size, ready_to_apply: staged.size === all.length,
     conflicts: conflicts.map(entry => ({ path: entry.path, sha256: entry.sha256,
       total_hunks: entries.get(entry.path).hunks.length,
@@ -483,6 +484,29 @@ function incrementalReconciliation(paths, state, result, conflicts, options) {
       context_after: focus.entry.content.slice(focus.hunk.index + focus.hunk[0].length).split("\n").slice(0, 6).join("\n").slice(0, 2048) } : null,
     next: staged.size === all.length ? "Use reconcile_mode=apply with the same SHAs; then verify the merged product and obtain current final reviews."
       : "Resolve next_hunk preserving both sides, stage its {path,before_sha256,patches:[{hunk_index,hunk_sha256,new_text}]}; repeat until ready_to_apply. Use conflict_path/hunk_index/preview_offset for bounded reads. Do not stop just because other hunks are still pending." };
+}
+
+/** Advisory continuation signal from a revalidated native proposal, not approval.
+ * Ignore stale drafts; unchanged bytes never buy another continuation. */
+export function readPendingReconciliation(projectRoot, sessionId, head) {
+  const paths = memoryPaths(projectRoot, sessionId);
+  const candidates = readdirSync(paths.directory).filter(name => /^reconciliation-[a-f0-9]{64}\.json$/.test(name))
+    .map(name => ({ name, modified: stat(join(paths.directory, name))?.mtimeMs ?? 0 }))
+    .sort((a, b) => b.modified - a.modified);
+  for (const candidate of candidates) {
+    try {
+      const draft = JSON.parse(readSmall(join(paths.directory, candidate.name), 32 * 1024 * 1024));
+      if (draft?.binding?.project_root !== paths.root || draft.binding.session_id !== sessionId ||
+          draft.binding.expected_head !== head) continue;
+      const preview = reconcileMemoryDelivery(paths.root, sessionId, { expected_head: head,
+        base_sha: draft.binding.base_sha, reconcile_mode: "preview" });
+      if (preview.staging_path !== join(paths.directory, candidate.name) || !preview.total_hunks) continue;
+      return { expected_head: head, base_sha: preview.base_sha, tree: preview.tree,
+        total_hunks: preview.total_hunks, resolved_hunks: preview.resolved_hunks,
+        ready_to_apply: preview.ready_to_apply, proposal_sha256: preview.proposal_sha256 };
+    } catch { /* Corrupt/stale proposals cannot grant progress or authority. */ }
+  }
+  return null;
 }
 
 function snapshotPlan(paths, featureId) {

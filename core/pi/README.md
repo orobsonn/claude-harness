@@ -583,3 +583,11 @@ e preservam o anterior. Proposta não é recibo de aprovação. Continuam recusa
 filhos, caminhos de runtime/segredos, arquivos inseguros e worktrees sujas. Merge
 local não concede autorização para merge remoto do PR. O formato legado continua
 compatível, mas não é necessário reenviar todos os hunks em cada tentativa.
+
+Propostas parciais também são progresso para o mecanismo de continuação. Enquanto
+há hunks salvos para os inputs atuais, o pai continua na fase `reconciliation`,
+em vez de confundir um resumo parcial com a fronteira de PR draft. A contagem e o
+digest das propostas são revalidados pelo host; uma nova resolução pode acordar
+uma continuação antes esgotada, inclusive após reinício. Regravar a mesma proposta,
+mudar timestamps ou manter um registro de outra base não renova tentativas.
+Pausa explícita e proibição de merge remoto continuam prevalecendo.
