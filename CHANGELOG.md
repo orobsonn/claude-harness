@@ -5,6 +5,13 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [3.9.9](https://github.com/orobsonn/claude-harness/compare/v3.9.8...v3.9.9) (2026-10-18)
+
+
+### Bug Fixes
+
+* **pi:** recover admitted scope after stale delivery finalization ([#1161](https://github.com/orobsonn/claude-harness/issues/1161)) ([8d8def0](https://github.com/orobsonn/claude-harness/commit/8d8def025747b3a6284ab4e434208965b8e2f82b))
+
 ## [3.9.8](https://github.com/orobsonn/claude-harness/compare/v3.9.7...v3.9.8) (2026-10-18)
 
 
