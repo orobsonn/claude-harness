@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
-import { registerPiCommandEvidence } from "./pi-command-evidence.mjs";
+import { checkPiFinalCommands, registerPiCommandEvidence } from "./pi-command-evidence.mjs";
 import { installDeliveryContinuation, readDeliveryContinuation } from "./delivery-continuation.mjs";
 import { reconcileMemoryDelivery } from "./memory-cycle.mjs";
 
@@ -65,6 +65,23 @@ test("unchanged obligation receives diagnosis before yielding, without an infini
   assert.equal(await f.create()(stopped, f.ctx), false, "unchanged diagnosis survives reload and cannot spin");
   assert.equal(f.messages.length, 2);
   assert.ok(f.entries.every(e => e.customType === "harness-delivery-continuation"));
+});
+
+test("an unattempted verification gets one concrete execution reminder after diagnosis, persisted across reload", async () => {
+  const f = controller();
+  f.set({ sessionId: "parent", stage: "final-review", key: "corrected-head", content: "Execute npm test on the repaired HEAD.",
+    nextAction: { key: "current-head-npm-test", command: "npm test", head: "a".repeat(40) } });
+  assert.equal(await f.end(stopped, f.ctx), true);
+  assert.equal(await f.end(stopped, f.ctx), true);
+  assert.match(f.messages[1].message.content, /still unattempted/);
+  assert.equal(await f.create()(stopped, f.ctx), true, "a summary is not a verification attempt");
+  assert.match(f.messages[2].message.content, /Execute the next authorized native bash call now/);
+  assert.equal(await f.create()(stopped, f.ctx), false, "ignored reminders cannot loop across restarts");
+  assert.equal(f.messages.length, 3);
+  const paused = controller();
+  paused.set({ sessionId: "parent", stage: "final-review", key: "new-head", nextAction: { key: "new-check" } });
+  paused.handlers.get("input")({ source: "interactive", text: "pare agora" }, paused.ctx);
+  assert.equal(await paused.end(stopped, paused.ctx), false);
 });
 
 test("abort, provider error, explicit pause and nested agents do not trigger continuation", async () => {
@@ -463,4 +480,68 @@ test("an old final-review flag cannot route a changed aggregate straight to ship
   f.state.final_review_done = true; f.write("gate-state.json", f.state);
   assert.equal(readDeliveryContinuation(f.ctx).stage, "final-review", "current native final receipts are still required");
   assert.equal(readDeliveryContinuation(f.ctx, { hasCurrentFinalReviews: () => true }).stage, "shipping");
+});
+
+test("native Pi executes verification of a repaired HEAD after summary-only stops; old failure is not a current blocker", { timeout: 30000 }, async t => {
+  const sdk = await import("@earendil-works/pi-coding-agent");
+  const { fauxProvider, fauxAssistantMessage } = await import("@earendil-works/pi-ai");
+  const f = fixture(t), root = f.ctx.cwd;
+  const git = (...args) => execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+  fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ scripts: { test: "node verify.cjs" } }));
+  fs.writeFileSync(path.join(root, "verify.cjs"), "require('node:assert/strict').equal(require('./product.cjs'), 2);\n");
+  fs.writeFileSync(path.join(root, "product.cjs"), "module.exports = 1;\n");
+  git("add", "package.json", "verify.cjs", "product.cjs");
+  git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "product with regression");
+  f.registry.tasks.one.status = "integrated";
+  const manager = sdk.SessionManager.inMemory(root), sessionId = manager.getSessionId();
+  f.ctx.sessionManager = manager;
+  f.state.session_id = sessionId; f.registry.parent_session_id = sessionId;
+  f.write("gate-state.json", f.state); f.write("task-runs/index.json", f.registry);
+  fs.renameSync(f.directory, path.join(root, ".pi/harness/state", sessionId));
+  const plan = path.join(root, ".pi/harness/plans/issue-22/execution-plan.json");
+  fs.mkdirSync(path.dirname(plan), { recursive: true });
+  fs.writeFileSync(plan, JSON.stringify({ final_review: { verification_commands: ["npm test"] } }));
+  const handlers = new Map();
+  registerPiCommandEvidence({ on: (name, handler) => handlers.set(name, handler) });
+  const failed = { toolName: "bash", toolCallId: "old-implementation", input: { command: "npm test" } };
+  handlers.get("tool_execution_start")({ ...failed, args: failed.input }, f.ctx);
+  let output;
+  try { execFileSync("npm", ["test"], { cwd: root, stdio: ["ignore", "pipe", "pipe"] }); assert.fail("old implementation must fail"); }
+  catch (error) { assert.equal(error.status, 1); output = `${error.stdout}${error.stderr}\nCommand exited with code 1`; }
+  await handlers.get("tool_result")({ ...failed, isError: true, content: [{ type: "text", text: output }] }, f.ctx);
+  assert.equal(readDeliveryContinuation(f.ctx).nextAction, undefined, "a current-input failure requires diagnosis");
+  fs.writeFileSync(path.join(root, "product.cjs"), "module.exports = 2;\n");
+  assert.equal(readDeliveryContinuation(f.ctx).nextAction, undefined, "dirty aggregate is not ready for final preparation");
+  git("add", "product.cjs"); git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "repair regression");
+  assert.equal(readDeliveryContinuation(f.ctx).stage, "final-review", "repair is integrated and ready for aggregate verification");
+  const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-verification-agent-"));
+  t.after(() => fs.rmSync(agentDir, { recursive: true, force: true }));
+  const faux = fauxProvider();
+  faux.setResponses([
+    fauxAssistantMessage("Tasks integrated; verification is pending."),
+    fauxAssistantMessage("The old test failed; I still need to verify the new HEAD."),
+    fauxAssistantMessage("The next legitimate action is npm test."),
+    fauxAssistantMessage([{ type: "toolCall", id: "verify-repair", name: "bash", arguments: { command: "npm test", timeout: 20 } }], { stopReason: "toolUse" }),
+    fauxAssistantMessage("Verification passed; final reviews remain a separate obligation."),
+  ]);
+  const check = () => checkPiFinalCommands({ projectRoot: root, sessionId, commands: ["npm test"] });
+  const loader = new sdk.DefaultResourceLoader({ cwd: root, agentDir, noExtensions: true, noSkills: true,
+    noPromptTemplates: true, noThemes: true, extensionFactories: [pi => {
+      registerPiCommandEvidence(pi);
+      pi.on("agent_end", installDeliveryContinuation(pi, { local: true,
+        readPending: ctx => check().ok ? null : readDeliveryContinuation(ctx) }));
+    }] });
+  await loader.reload(); assert.deepEqual(loader.getExtensions().errors, []);
+  const runtime = await sdk.ModelRuntime.create({ authPath: path.join(agentDir, "auth.json"), modelsPath: null,
+    modelsStorePath: path.join(agentDir, "models-store.json"), refreshOnCreate: false, allowModelNetwork: false });
+  runtime.registerNativeProvider(faux.provider);
+  const { session } = await sdk.createAgentSession({ cwd: root, agentDir, resourceLoader: loader,
+    modelRuntime: runtime, model: faux.getModel(), sessionManager: manager, settingsManager: sdk.SettingsManager.inMemory() });
+  try {
+    await session.bindExtensions({}); await session.prompt("Finish verification of this repaired aggregate.");
+    assert.equal(check().ok, true, "actual native bash execution must create valid current-input evidence");
+    assert.equal(session.messages.filter(message => message.role === "user").length, 1);
+    assert.equal(session.messages.filter(message => message.role === "toolResult" && message.toolName === "bash").length, 1);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(root, ".pi/harness/state", sessionId, "gate-state.json"))).final_review_done, undefined);
+  } finally { session.dispose(); }
 });

@@ -147,7 +147,7 @@ export function readDeliveryContinuation(ctx, { readBinding = readTaskRunBinding
     if (stage !== "tasks" && reconciliation) stage = "reconciliation";
     const harvest = read(root, `${directory}/memory-harvest.json`);
     if (stage === "final-review" && verificationCommands.length)
-      finalPreparation = checkPiFinalCommands({ projectRoot: root, sessionId, commands: verificationCommands });
+      finalPreparation = checkPiFinalCommands({ projectRoot: root, sessionId, commands: verificationCommands, includeAttempts: true });
     progress = { head, tasks, final: state.final_review_done, harvest: harvest?.apply_status,
       ...(reconciliation ? { reconciliation } : {}),
       reviews: Object.fromEntries(Object.entries(state.final_review_evidence ?? {}).map(([role, r]) => [role, [r.status, r.accepted, r.report_digest, r.reviewed_head_sha]])) };
@@ -169,11 +169,17 @@ export function readDeliveryContinuation(ctx, { readBinding = readTaskRunBinding
       .filter(e => e?.head_sha === head && e.worktree_dirty === false && e.original_status?.exit_code === 0)
       .map(e => e.command).filter(c => typeof c === "string" && verificationCommands.includes(c));
   } catch { /* Evidence is advisory; absence never waives a gate. */ }
+  const nextCommand = finalPreparation?.ok === false && finalPreparation.attempted_commands?.length === 0
+    ? finalPreparation.unattempted_commands?.[0] : undefined;
+  const nextAction = nextCommand ? { command: nextCommand, head,
+    key: hash({ sessionId, feature, head, command: nextCommand }) } : undefined;
   const content = instructions[stage] + (finalPreparation ? finalPreparation.ok
     ? " Native final verification preparation is already satisfied for current application inputs. Reuse that evidence; do not rerun the full suite for an empty/peripheral reconciliation commit. Continue with the missing final reviews."
-    : ` Native preparation requires only these commands: ${JSON.stringify(finalPreparation.commands ?? [])}. Inspect the latest failure before executing a missing command; a failure requires diagnosis and a concrete correction or justified operational recovery, not another unchanged full-suite attempt. Use harness_reviews phase=final for current preparation diagnostics.`
+    : ` Native preparation requires only these commands: ${JSON.stringify(finalPreparation.commands ?? [])}. A failure requires diagnosis against the SAME application inputs and a concrete correction or justified operational recovery before retrying. A failure on an older implementation does not block testing the corrected HEAD. Use harness_reviews phase=final for current preparation diagnostics.`
     : "");
-  return { sessionId, stage, liveTasks, key: hash({ sessionId, feature, stage, progress, commands: [...new Set(commands)].sort() }), content };
+  return { sessionId, stage, liveTasks, ...(nextAction ? { nextAction } : {}),
+    key: hash({ sessionId, feature, stage, progress, commands: [...new Set(commands)].sort() }),
+    content: content + (nextAction ? ` The next authorized action is the native bash tool with command=${JSON.stringify(nextCommand)} on HEAD ${head}. It has NOT been attempted on these application inputs. Execute it now; missing verification is work to perform, not an external blocker or a prerequisite for running that very verification. Do not substitute another task-status call or a summary of the next step. Preserve normal policy and evidence hooks; no gate or review is waived.` : "") };
 }
 
 /** Progress-sensitive continuation, then diagnosis; neither repeats for unchanged input. */
@@ -183,6 +189,7 @@ export function installDeliveryContinuation(pi, { readPending = readDeliveryCont
   let waiting;
   const seen = new Set();
   const diagnosed = new Set();
+  const executionReminded = new Set();
   const owned = ctx => !isChildSession(ctx) && isSafeSessionId(piSessionId(ctx));
   const restore = ctx => {
     for (const e of ctx.sessionManager?.getBranch?.() ?? []) {
@@ -190,6 +197,7 @@ export function installDeliveryContinuation(pi, { readPending = readDeliveryCont
         if (e.data.active === true || e.data.key || e.data.diagnosticKey) active = true;
         if (e.data.key) seen.add(e.data.key);
         if (e.data.diagnosticKey) diagnosed.add(e.data.diagnosticKey);
+        if (e.data.executionKey) executionReminded.add(e.data.executionKey);
         if (e.data.paused !== undefined) paused = e.data.paused;
       }
     }
@@ -197,7 +205,7 @@ export function installDeliveryContinuation(pi, { readPending = readDeliveryCont
   const reset = (_event, ctx) => {
     if (!owned(ctx)) return;
     waiting?.abort();
-    active = local; paused = false; seen.clear(); diagnosed.clear(); restore(ctx);
+    active = local; paused = false; seen.clear(); diagnosed.clear(); executionReminded.clear(); restore(ctx);
   };
   pi.on("session_start", reset);
   pi.on("session_tree", reset);
@@ -261,10 +269,23 @@ export function installDeliveryContinuation(pi, { readPending = readDeliveryCont
       }
       const diagnostic = seen.has(pending.key);
       if (diagnostic && diagnosed.has(pending.key)) {
+        // One concrete execution reminder after generic diagnosis was exhausted.
+        // It is tied to an unattempted current-input command, not a retry of a
+        // failed test. Persist its identity so reloads cannot create a loop.
+        if (pending.nextAction && !executionReminded.has(pending.nextAction.key)) {
+          await pi.sendMessage({ customType: ENTRY, content:
+            "The previous response only described pending verification. No attempt of this command was observed on the current application inputs. Execute the next authorized native bash call now, before another status report. This is verification of the repaired aggregate, not repetition of a failed old implementation.\n" + pending.content,
+            display: true }, { deliverAs: "followUp", triggerTurn: true });
+          executionReminded.add(pending.nextAction.key);
+          pi.appendEntry(ENTRY, { sessionId: pending.sessionId, executionKey: pending.nextAction.key, stage: pending.stage });
+          return true;
+        }
         ctx.ui?.notify?.("Harness: obrigação pendente após solicitação de diagnóstico, sem progresso observado. A causa não foi classificada pelo runtime; consulte a evidência da sessão. A mesma ação não será repetida automaticamente.", "warning");
         return false;
       }
-      const content = diagnostic
+      const content = diagnostic && pending.nextAction
+        ? "The next verification command is still unattempted on the current application inputs. Execute the native bash action below now; do not diagnose an old failure as if the corrected HEAD had already failed. Do not end by describing the command instead of calling it.\n" + pending.content
+        : diagnostic
         ? "The authorized delivery obligation remains pending, but no new progress was observed. Diagnose instead of repeating the same failed action. Read the current native status, exact failure and existing hand/reviewer evidence. A task status of blocked is not by itself an external blocker. If a safe existing recovery is available, execute it in the owning task and preserve valid work and reviews. Retain every unresolved material concern in the next brief, or explain its inapplicability against the approved contract. If the cause is unclear, use focused read-only investigation rather than another writer. Ask the operator only for a concrete missing decision, authority or resource; explain what was checked and why autonomous recovery cannot proceed. Do not manufacture a receipt, relax a test or repeat an unchanged command to create progress. This diagnosis grants no new authority.\nPending obligation: " + pending.content
         : pending.content;
       await pi.sendMessage({ customType: ENTRY, content, display: true }, { deliverAs: "followUp", triggerTurn: true });

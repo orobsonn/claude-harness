@@ -466,12 +466,14 @@ function packageScopedFinalCommands(root, sessionId, commands) {
 }
 
 /** Read existing native output for declared final checks; never execute or approve a command. */
-export function checkPiFinalCommands({ projectRoot, sessionId, commands, exactHead = false } = {}) {
+export function checkPiFinalCommands({ projectRoot, sessionId, commands, exactHead = false, includeAttempts = false } = {}) {
   const validated = validatePiVerificationCommands(commands, { optional: true });
   if (!validated.ok) return validated;
   commands = validated.commands;
   if (!commands.length) return { ok: true };
   const missing = new Set(commands);
+  const latest = new Map();
+  let worktreeReady = false;
   try {
     const identity = worktreeIdentity(projectRoot, commands);
     if (identity.worktree_identity_status !== "available" || identity.worktree_dirty) throw new Error("clean HEAD required");
@@ -482,8 +484,8 @@ export function checkPiFinalCommands({ projectRoot, sessionId, commands, exactHe
         applicationTree(identity.worktree_root, record.observed_head_sha, commands) === currentTree);
     const aliases = packageScopedFinalCommands(identity.worktree_root, sessionId, commands);
     const declaredForActual = new Map(commands.map((command) => [aliases.get(command) ?? command, command]));
+    worktreeReady = true;
     const directory = evidenceDirectory(projectRoot, sessionId, false);
-    const latest = new Map();
     for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
       if (!entry.isFile() || !/^[0-9a-f-]{36}\.json$/.test(entry.name)) continue;
       try {
@@ -508,7 +510,12 @@ export function checkPiFinalCommands({ projectRoot, sessionId, commands, exactHe
       } catch { /* unreadable latest output cannot fall back to an older success */ }
     }
   } catch { /* missing native evidence is reported with the exact next commands */ }
-  return missing.size ? { ok: false, commands: [...missing], reason:
+  return missing.size ? { ok: false, commands: [...missing], ...(includeAttempts ? {
+    // Advisory only: these entries have the same committed application inputs.
+    // A failure from an older implementation is not an attempt of the repair.
+    unattempted_commands: worktreeReady ? [...missing].filter(command => !latest.has(command)) : [],
+    attempted_commands: [...missing].filter(command => latest.has(command)),
+  } : {}), reason:
     `Run the pending final verification commands on the current committed application input before final eyes: ${JSON.stringify([...missing])}. Reuse passing evidence for identical application inputs; fix failures before retrying. This does not approve reviews or shipping.` } : { ok: true };
 }
 

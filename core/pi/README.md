@@ -516,10 +516,17 @@ implementação, testes ou entrega.
 | Filtro, env arbitrário ou alteração de lifecycle | Não equivalem à suíte completa; não são admitidos pela exceção de shards. |
 | Commit vazio/documental após testes | Preparação final usa a prova nativa compatível com os inputs da aplicação. Mudanças no runner efetivamente consumido ou no produto exigem nova validação. |
 | Falha de suíte | Focal isolado é diagnóstico, não aprovação agregada. Não repetir suíte inalterada sem causa e recuperação concreta. |
+| Verificação após correção | Falha de outra implementação não bloqueia testar o HEAD corrigido. O host distingue comando pendente já tentado de comando ainda não executado nos inputs atuais e indica a próxima chamada Bash exata. |
 | Nova implementação/escopo/frozen test | Continuam exigindo contrato aprovado, fidelidade, produtor/captura nativos e olhos aplicáveis. Nenhuma correção desta auditoria amplia paths por prosa. |
 | Provider, processo ou observação indisponível | Abort/erro não vira sucesso. Preservar evidência e informar erro exato; não fabricar recibos ou repetir indefinidamente uma falha inalterada. |
 | Flag antiga de final-review | O encaminhamento para shipping exige recibos finais atuais, incluindo o carry documental nativo; o booleano sozinho não basta. |
 | Harvest/shipping/finalização | Reutilizar apenas recibos compatíveis; entrega não infere autorização de merge, deploy ou release. Pausa e fronteira de entrega concluída continuam sendo paradas válidas. |
+
+Se o pai apenas descrever a preparação pendente após o diagnóstico, um lembrete
+de execução concreto é permitido uma vez por HEAD/comando ainda não tentado.
+Esse lembrete persiste após recarga, respeita pausa e não repete teste que já
+falhou nos mesmos inputs. A execução segue pelo Bash nativo e seus recibos;
+o acompanhamento não aprova testes, reviews ou shipping.
 
 Cobertura: `delivery-continuation`, `harness-reviews`, `policy`, `pi-final-checks`,
 `task-coordinator`, `task-receipts`, `harness-entry-gate`, `harness-command-evidence`
