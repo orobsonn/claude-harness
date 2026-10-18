@@ -123,6 +123,12 @@ Sessões novas LIGHT/FULL usam a pipeline por tarefa. Depois de a spec estar sel
 - `harness_tasks integrate` recebe `task_id`, `attempt_id` e `expected_head`, faz merge daquele SHA exato e grava o recibo global. O tip posterior da branch nunca substitui esse argumento.
 - `harness_tasks resume` reabre a mesma tentativa e sessão pai local após comprovar que o processo anterior terminou. Feedback volta para a task que produziu a mudança; resultado e validação antigos deixam de liberar integração enquanto a correção está ativa. Para corrigir uma dependência compartilhada, os descendentes já admitidos precisam estar integrados; uma barreira pausa novos dispatches e outras integrações até o novo recibo da dependência.
 
+Um recibo de shipping ou finalização fecha o input entregue. Se uma reconciliação
+avançar o HEAD, o recibo ancestral não impede corrigir o escopo de uma task já
+admitida pelo planner e plan-reviewer. O mesmo HEAD finalizado continua fechado;
+recibos de outra sessão, feature ou história Git não liberam essa recuperação.
+Ela não aprova captura, testes, olhos finais ou outro shipping automaticamente.
+
 Quando a reconciliação global com `main` invalidar uma evidência produzida por
 uma task integrada, retome a dona com `harness_tasks resume`, `task_id`,
 `attempt_id`, `instruction` descrevendo o finding e `reconcile_head` igual ao SHA
