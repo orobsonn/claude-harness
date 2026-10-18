@@ -730,10 +730,8 @@ export function inspectTaskRun(entry, dependencies = {}) {
         if (!previous.ok) return previous;
         recoveryOrigin = previous.origin;
       }
-      let captureAttemptedBeforeAuthor = false;
       if (!recoveryOrigin) for (const event of native.events.slice(implementationIndex + 1, firstAuthorIndex)) {
         if (event.tool !== "mark" || event.args?.action !== "capture-verified" || event.args?.task_id !== entry.task_id) continue;
-        captureAttemptedBeforeAuthor = true;
         if (!markerSucceeded(event)) continue;
         const firstAuthor = native.events[firstAuthorIndex];
         if (event.launchIndex === firstAuthor.launchIndex && event.endLine >= firstAuthor.line) continue;
@@ -780,11 +778,13 @@ export function inspectTaskRun(entry, dependencies = {}) {
       // A dependency correction or aggregate refresh can import product through a
       // host-owned merge while this task only repairs its frozen test. The merge
       // is the product baseline in that case: require its exact validated Git
-      // HEAD, the immediately previous integration and a test-only delta. A
+      // HEAD, the immediately previous integration and a test-only delta. Later
+      // test-author attempts may start at a descendant freeze; the complete Git
+      // delta from this host baseline must still contain only frozen tests. A
       // completed but non-writing implementation call cannot replace this proof.
       if ((!recoveryOrigin || !onlyRecoveryChanges(entry, worktree, recoveryOrigin.head_sha, head, binding.task, binding.plan, replayHand)) &&
-          !captureAttemptedBeforeAuthor && recoveryReconciliationMatches(reconciliation, entry.integration_history?.at(-1)) &&
-          hand.freezeCommitSha === reconciliation.merged_head &&
+          recoveryReconciliationMatches(reconciliation, entry.integration_history?.at(-1)) &&
+          ancestor(worktree, reconciliation.merged_head, hand.freezeCommitSha) &&
           native.events[producerIndex].launchIndex >= reconciliation.launch_count &&
           onlyRecoveryChanges(entry, worktree, reconciliation.merged_head, head, binding.task, binding.plan)) {
         const historicalIntegration = entry.integration_history?.at(-1);

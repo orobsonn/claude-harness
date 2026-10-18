@@ -169,6 +169,20 @@ function fixture(t, { dependent = false, complexity = "low" } = {}) {
   return { root, git, planPath, specPath, grantPath, grant, dependency, save };
 }
 
+test("a task can request locked read-only diagnostic support without gaining coordination authority", () => {
+  const binding = { ok: true, grant: { task_id: "task-one" }, task: {} };
+  const prompt = '[HARNESS_TASK_CONTEXT]{"task_id":"task-one"}[/HARNESS_TASK_CONTEXT]\nDiagnose the failed fidelity marker without changing files.';
+  const dispatch = (role, text = prompt) => decideTaskRunTool(binding, { toolName: "subagent",
+    input: { subagent_type: role, prompt: text } });
+  assert.equal(dispatch("harness-support").block, false);
+  assert.equal(dispatch("harness-support", prompt.replace("task-one", "task-other")).block, true);
+  for (const role of ["harness-planner", "harness-plan-reviewer", "harness-shipper", "Explore"])
+    assert.equal(dispatch(role).block, true, role);
+  const support = fs.readFileSync(new URL("../runtime/agents/harness-support.md", import.meta.url), "utf8");
+  assert.match(support, /^tools: read, grep, find, ls$/m);
+  assert.match(support, /^locked: true$/m);
+});
+
 test("fixture repair preserves tracked, staged and new product work through the same task", (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-fixture-preservation-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -555,6 +569,7 @@ test("task prompt exposes gate-derived dispatch routes consumable at every task 
   const roles = [
     "harness-test-author", "harness-executor", "harness-sniper",
     "harness-test-reviewer", "harness-compliance", "harness-adversary", "harness-security",
+    "harness-support",
   ];
   for (const complexity of ["low", "medium", "high", "max"]) {
     const f = fixture(t, { complexity });

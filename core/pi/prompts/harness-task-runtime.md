@@ -26,6 +26,10 @@ Não consulte o routing do Codex em `model-routing.mjs` nesta lane, incluindo
 Test-author, executor e sniper são sequenciais. Execute também as chamadas de `bash`
 em série nesta lane, inclusive git, testes e typecheck: cada chamada usa um lease
 exclusivo. Aguarde o resultado de uma verificação antes de iniciar a próxima.
+Para diagnosticar uma falha concreta, pode usar `harness-support` com o mesmo
+`[HARNESS_TASK_CONTEXT]` da task. Ele é bloqueado em leitura (`read`, `grep`,
+`find`, `ls`), sem shell, escrita ou aprovação. Use seu diagnóstico para executar
+a recuperação existente; não transfira a ele os markers, o plano ou a coordenação.
 Em LIGHT, não despache olhos de implementação por task. Em FULL, despache
 `harness-compliance`; `harness-adversary` somente quando
 `contract.task.adversarial.enabled` for `true`; `harness-security` somente por

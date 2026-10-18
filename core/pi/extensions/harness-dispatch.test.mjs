@@ -97,7 +97,7 @@ test("discussion refuses unreadable ceremony state or a missing session identity
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-test("support is a fixed-route global reader, available headless but not recursive or task-local", () => {
+test("support is a fixed-route reader for the global or admitted task parent, without recursion", () => {
   const root = mkdtempSync(join(tmpdir(), "pi-support-dispatch-"));
   const input = { subagent_type: "harness-support", model: "openai-codex/gpt-6.1-sol", thinking: "high", prompt: "Diagnose contract boundary", inherit_context: false };
   const context = { ...ctx({ hasUI: false }), cwd: root };
@@ -111,6 +111,13 @@ test("support is a fixed-route global reader, available headless but not recursi
     assert.equal(handler()({ toolName: "subagent", input }, { ...ctx({ child: true }), cwd: root })?.block, true);
     writeFileSync(file, JSON.stringify({ mode: "FULL", task_run: { task_id: "one" } }));
     assert.equal(handler()({ toolName: "subagent", input }, context)?.block, true);
+    const taskInput = { ...input, prompt: `${MARKER}\nDiagnose this task's failed capture.` };
+    const taskHandler = handler({ readTaskRunBindingFn: () => ({ ok: true, grant: { task_id: "task-1" } }) });
+    assert.equal(taskHandler({ toolName: "subagent", input: taskInput }, context), undefined);
+    assert.equal(taskHandler({ toolName: "subagent", input }, context)?.block, true);
+    assert.equal(taskHandler({ toolName: "subagent", input: { ...taskInput,
+      prompt: taskInput.prompt.replace("task-1", "task-other") } }, context)?.block, true);
+    assert.equal(taskHandler({ toolName: "subagent", input: taskInput }, { ...ctx({ child: true }), cwd: root })?.block, true);
     writeFileSync(file, "broken");
     assert.equal(handler()({ toolName: "subagent", input }, context)?.block, true);
   } finally { rmSync(root, { recursive: true, force: true }); }

@@ -37,6 +37,7 @@ const TASK_ROLES = new Set([
   "harness-compliance",
   "harness-adversary",
   "harness-security",
+  "harness-support",
 ]);
 const TASK_WRITING_ROLES = new Set(["harness-test-author", "harness-executor", "harness-sniper"]);
 const TASK_MARKERS = new Set(["fidelity", "hand-finished", "capture-verified", "regate-pending", "regate-passed"]);
