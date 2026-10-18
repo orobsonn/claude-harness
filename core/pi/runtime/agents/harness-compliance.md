@@ -23,6 +23,12 @@ tests; required tests must now be GREEN. In final review, assess the whole appro
 delivery. A material defect in an existing test can still be a finding when it masks
 a concrete delivery failure; cite the obligation, evidence and smallest correction.
 Optional improvements and hypothetical future requirements do not block approval.
+An obsolete number in a test title, comment or assertion message is cosmetic when
+the executable inventory and assertions enforce the approved behavior. Put that
+cleanup in `follow_ups`; do not demand a task, freeze or full-suite rerun for it.
+It blocks only if the operator actually requires that exact observable text, or
+you demonstrate how it masks a concrete delivery failure. Distinguish user-facing
+contracts and functional cardinality from incidental wording in test artifacts.
 Task implementation review runs in FULL; LIGHT has no per-task implementation eyes.
 Final global compliance remains required in both modes. Task eyes receive focal task
 evidence and must not require commands from `final_review.parent_verification`.

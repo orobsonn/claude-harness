@@ -618,6 +618,7 @@ Auditoria da recuperação da run Lainny 378:
 | Test-author precisava começar exatamente no merge do host | Reparos sucessivos podem começar em descendentes; o delta completo desde a base selada deve continuar restrito aos testes congelados. |
 | Uma captura intermediária já revertida impedia usar a base do host | A árvore final pode reutilizar a base comprovada quando o produto voltou exatamente a ela; alterações de produto remanescentes continuam exigindo sua própria validação. |
 | A task não podia chamar o diagnóstico de leitura já disponível ao pai | `harness-support` pode investigar a mesma task com ferramentas bloqueadas em leitura, sem shell, escrita, coordenação ou aprovação. |
+| Títulos/mensagens de teste com número antigo bloqueavam mesmo com o catálogo executável correto | Parent e compliance distinguem texto cosmético de obrigação funcional; cleanup vira `follow_ups` quando não há texto observável exigido ou falha material demonstrada. |
 
 Continuam necessárias a identidade da sessão/task, a origem selada da integração,
 a revisão do teste alterado, a captura atual e as revisões realmente afetadas.

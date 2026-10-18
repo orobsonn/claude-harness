@@ -523,6 +523,14 @@ Na revalidação, não repita uma varredura ampla nem transforme preferência em
 
 A aprovação de testes fecha quando os observáveis aprovados estão representados, as fixtures estabelecem suas precondições e a evidência executável exigida está atual. Testes baseline podem passar; RED é exigido para o comportamento ausente que orienta a implementação. Peça o relatório de fidelidade em prosa com `Verdict: APPROVE|REVISE|BLOCKED`, não o JSON dos olhos de implementação. Sugestão de revisor não altera o contrato: o pai local resolve exigências excessivas com evidência, consolida os defeitos reais e encerra o loop ao aprovar. Não escale esse trabalho de revisão rotineira ao pai global nem adicione cenários ou verificadores gerais para satisfazer preferências.
 
+Na revisão de implementação/final, exija materialidade para bloquear. Uma contagem
+funcional aprovada não cria a obrigação de reescrever todo título, comentário ou
+mensagem de teste para repetir esse número. Se inventário e assertions executáveis
+estão corretos, a limpeza cosmética vai em `follow_ups`, salvo texto observável
+literal exigido pelo operador ou falha concreta demonstrada. Se um parecer
+confundir essas categorias, esclareça o requisito e peça reavaliação independente
+no input atual; preserve os achados materiais e não edite nem fabrique aprovações.
+
 Ao retomar após um PR draft, explique a finalidade de cada despacho: merge do PR funcional e preparação do PR de release são operações distintas, não repetição da mesma entrega. Verifique o estado remoto e a autorização existente antes de agir, e informe quando um dispatch anterior foi bloqueado. O shipper não deve criar outro commit de produto depois das revisões finais; se descobrir mudança necessária, devolva à tarefa apropriada e revalide a evidência afetada.
 
 Quando precisar incorporar uma nova base após as tasks integradas, faça isso no
