@@ -5,6 +5,14 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [3.9.10](https://github.com/orobsonn/claude-harness/compare/v3.9.9...v3.9.10) (2026-10-18)
+
+
+### Bug Fixes
+
+* **pi:** keep cosmetic test wording out of blocking reviews ([#1165](https://github.com/orobsonn/claude-harness/issues/1165)) ([6cd4785](https://github.com/orobsonn/claude-harness/commit/6cd478551d0d2d3b83fe89674b731f8db3d30f7d))
+* **pi:** remover barreiras redundantes da recuperação de tasks ([#1163](https://github.com/orobsonn/claude-harness/issues/1163)) ([61901bf](https://github.com/orobsonn/claude-harness/commit/61901bfff4899a51fd5b4b388b77a0a50a7534e9))
+
 ## [3.9.9](https://github.com/orobsonn/claude-harness/compare/v3.9.8...v3.9.9) (2026-10-18)
 
 
