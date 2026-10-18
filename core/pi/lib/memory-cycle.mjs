@@ -217,13 +217,24 @@ export function finalizationStarted(projectRoot, sessionId) {
     (state?.session_id === sessionId && state.final_review_done === true);
 }
 
-/** An admitted task may gain reviewed scope after an early harvest, but never after shipping. */
+/** Admitted scope may recover until the current delivery input has been shipped.
+ * An ancestral completion cannot permanently close newly reconciled work. This
+ * permits planning only; plan review, task capture and final eyes still apply. */
 export function canRecoverTaskScopeDuringFinalization(projectRoot, sessionId) {
   const paths = memoryPaths(projectRoot, sessionId);
-  if (readSmall(paths.shipment, 8192) !== null || readSmall(paths.finalized, 8192) !== null) return false;
   const state = JSON.parse(readSmall(join(paths.directory, "gate-state.json"), 1024 * 1024) ?? "null");
   if (state?.session_id !== sessionId || state.task_pipeline_version !== TASK_PIPELINE_VERSION ||
       !isSafeFeatureId(state.feature_id)) return false;
+  const head = gitMemory(paths.root, ["rev-parse", "HEAD"]);
+  for (const [file, writer] of [[paths.shipment, "host-subagent-completion"], [paths.finalized, "host-memory-finalize"]]) {
+    const receipt = JSON.parse(readSmall(file, 8192) ?? "null");
+    if (receipt === null) continue;
+    if (receipt.written_by !== writer || receipt.session_id !== sessionId || receipt.feature_id !== state.feature_id ||
+        !/^[a-f0-9]{40}$/.test(receipt.head ?? "") || receipt.head === head) return false;
+    try {
+      gitMemory(paths.root, ["merge-base", "--is-ancestor", receipt.head, head]);
+    } catch { return false; }
+  }
   const runs = join(paths.directory, "task-runs");
   const directory = stat(runs);
   if (!directory || !directory.isDirectory() || directory.isSymbolicLink()) return false;

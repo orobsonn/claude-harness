@@ -73,7 +73,7 @@ export default function harnessMemory(pi: ExtensionAPI) {
       const sessionId = identity(ctx);
       if (isLatePlanner && finalizationStarted(ctx.cwd, sessionId) &&
           !canRecoverTaskScopeDuringFinalization(ctx.cwd, sessionId))
-        throw new Error("Finalization cannot dispatch planner or plan-reviewer after shipping or outside an admitted task scope correction");
+        throw new Error("Finalization cannot dispatch planner or plan-reviewer after shipping the current input or outside an admitted task scope correction");
       if (isShipper) checkMemoryShipperReady(ctx.cwd, sessionId);
       if (isHarvest) {
         if (!/^\[HARNESS_HARVEST\](?:\r?\n|$)/.test(input.prompt ?? "")) throw new Error("Start harvester prompt with [HARNESS_HARVEST]");

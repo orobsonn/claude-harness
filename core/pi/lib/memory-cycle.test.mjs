@@ -139,6 +139,54 @@ test("clean delivery merge requires explicit application and does not invent a m
   assert.equal(memoryCycle.reconcileMemoryDelivery(root, SESSION, { ...input, expected_head: merged.head, resolutions: [] }).already_incorporated, true);
 });
 
+test("a finalized draft does not lock admitted scope after a real base reconciliation", t => {
+  const { root, git, ...input } = parallelDelivery(t, { memoryConflict: false });
+  const directory = join(root, ".pi/harness/state", SESSION);
+  const statePath = join(directory, "gate-state.json");
+  const state = JSON.parse(readFileSync(statePath, "utf8"));
+  state.task_pipeline_version = 1;
+  state.spec_sha256 = state.reviewed_spec_sha256;
+  writeFileSync(statePath, JSON.stringify(state));
+  mkdirSync(join(directory, "task-runs"));
+  const registryPath = join(directory, "task-runs/index.json");
+  const registry = { version: 1, parent_session_id: SESSION, feature_id: FEATURE,
+    plan_sha256: state.plan_review_evidence.plan_sha256, spec_sha256: state.spec_sha256,
+    tasks: { "task-one": { task_id: "task-one", status: "integrated" } } };
+  writeFileSync(registryPath, JSON.stringify(registry));
+  memoryCycle.completeMemoryShipment({ project_root: root, session_id: SESSION,
+    head: input.expected_head }, "Draft published.\nStatus: DONE", "native-shipper");
+  memoryCycle.finalizeMemory(root, SESSION);
+  const finalizedPath = join(directory, "memory-finalized.json");
+  const finalizedBefore = readFileSync(finalizedPath, "utf8");
+  const registryBefore = readFileSync(registryPath, "utf8");
+  assert.equal(memoryCycle.canRecoverTaskScopeDuringFinalization(root, SESSION), false,
+    "the exact finalized input remains closed");
+
+  const merged = memoryCycle.reconcileMemoryDelivery(root, SESSION, { ...input, resolutions: [] });
+  assert.notEqual(merged.head, input.expected_head);
+  assert.equal(memoryCycle.canRecoverTaskScopeDuringFinalization(root, SESSION), true,
+    "newly incorporated tests must be correctable through planner and plan-reviewer");
+  assert.equal(readFileSync(finalizedPath, "utf8"), finalizedBefore);
+  assert.equal(readFileSync(registryPath, "utf8"), registryBefore);
+  assert.deepEqual(missingPiReviewRoles({ projectRoot: root, sessionId: SESSION, featureId: FEATURE,
+    phase: "final", roles: ["harness-adversary", "harness-compliance"] }), ["harness-adversary", "harness-compliance"]);
+  assert.throws(() => checkMemoryShipperReady(root, SESSION), /review|harvest|changed/i);
+
+  for (const invalid of [
+    { ...JSON.parse(finalizedBefore), head: merged.head },
+    { ...JSON.parse(finalizedBefore), session_id: "ses-other" },
+    { ...JSON.parse(finalizedBefore), feature_id: "other-feature" },
+    { ...JSON.parse(finalizedBefore), written_by: "model" },
+    { ...JSON.parse(finalizedBefore), head: "f".repeat(40) },
+  ]) {
+    writeFileSync(finalizedPath, JSON.stringify(invalid));
+    assert.equal(memoryCycle.canRecoverTaskScopeDuringFinalization(root, SESSION), false);
+  }
+  writeFileSync(finalizedPath, finalizedBefore);
+  writeFileSync(registryPath, JSON.stringify({ ...registry, parent_session_id: "ses-other" }));
+  assert.equal(memoryCycle.canRecoverTaskScopeDuringFinalization(root, SESSION), false);
+});
+
 test("clean base integration accepts the first durable note created by another run", (t) => {
   const { root, git, ...input } = parallelDelivery(t, { memoryConflict: false });
   git("checkout", "-q", "parallel-main");
