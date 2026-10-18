@@ -609,3 +609,17 @@ Se um apoio de leitura produziu um hunk grande, `support_agent_id` pode substitu
 com chamada, resultado e registro presentes na branch da mesma sessão; o texto
 deve ser somente a substituição exata, sem fences. O host ainda confere os hashes
 atuais e todas as validações antes de salvar/aplicar; a proposta não é aprovação.
+
+Auditoria da recuperação da run Lainny 378:
+
+| Exigência que bloqueava trabalho disponível | Comportamento corrigido |
+| --- | --- |
+| Finalização antiga impedia ampliar escopo após incorporar a main | O recibo fecha seu próprio input; recuperação de escopo admitido volta a planner/reviewer após avanço ancestral comprovado. |
+| Test-author precisava começar exatamente no merge do host | Reparos sucessivos podem começar em descendentes; o delta completo desde a base selada deve continuar restrito aos testes congelados. |
+| Uma captura intermediária já revertida impedia usar a base do host | A árvore final pode reutilizar a base comprovada quando o produto voltou exatamente a ela; alterações de produto remanescentes continuam exigindo sua própria validação. |
+| A task não podia chamar o diagnóstico de leitura já disponível ao pai | `harness-support` pode investigar a mesma task com ferramentas bloqueadas em leitura, sem shell, escrita, coordenação ou aprovação. |
+
+Continuam necessárias a identidade da sessão/task, a origem selada da integração,
+a revisão do teste alterado, a captura atual e as revisões realmente afetadas.
+Essas condições distinguem um reparo de teste de uma mudança de produto sem prova;
+nenhuma delas exige outra mão de implementação apenas para produzir um HEAD novo.

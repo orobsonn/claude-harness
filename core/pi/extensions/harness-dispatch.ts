@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import { validateOcCaptureEligibleHandRecord } from "../../opencode/lib/hand-records.mjs";
+import { parseTaskDispatchIdentity } from "../../opencode/lib/task-dispatch-identity.mjs";
 import { isCaptureEligibleHandRecord, recordViolations } from "../../shared/lib/real-file-capture-rail.mjs";
 import { findShadowedCanonicalRoles, validateSubagentDispatch } from "../lib/dispatch-rail.mjs";
 import { loadModelProfileFromEnv, profilePrompt } from "../lib/model-profile.mjs";
@@ -109,9 +110,13 @@ export default function harnessDispatch(pi: ExtensionAPI, injected: {
     }
     if (isSupportRole(role)) {
       const loaded: any = loadPiGateStateFromDisk(ctx.cwd, { sessionId: piSessionId(ctx) });
-      if (isChildSession(ctx) || loaded?.ok !== true || loaded.state?.task_run ||
+      const binding: any = loaded?.state?.task_run ? readTaskBinding(ctx.cwd, piSessionId(ctx) ?? "") : null;
+      const marker = parseTaskDispatchIdentity(event.input?.prompt);
+      const invalidTask = loaded?.state?.task_run &&
+        (binding?.ok !== true || !marker.ok || marker.taskId !== binding.grant?.task_id);
+      if (isChildSession(ctx) || loaded?.ok !== true || invalidTask ||
           !/^(LIGHT|FULL)$/i.test(String(loaded.state?.mode ?? ""))) {
-        return { block: true, reason: "harness support requires the global LIGHT/FULL parent; no recursive support dispatch" };
+        return { block: true, reason: "harness support requires a LIGHT/FULL global or admitted task parent with its exact task header; no recursive support dispatch" };
       }
     }
     let canonicalTask: unknown = null;

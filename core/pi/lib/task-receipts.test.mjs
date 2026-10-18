@@ -1124,6 +1124,73 @@ test("aggregate refresh with imported product admits a reviewed test-only repair
   }
 });
 
+test("repeated test-only repairs before integration keep the sealed host product baseline", () => {
+  for (const aggregateRefresh of [false, true]) {
+    let f = reconciledTestRecovery({ productDelta: true, memoryDelta: true, aggregateRefresh });
+    const baseline = f.entry.reconciliations[0].merged_head;
+    assert.equal(inspectTaskRun(f.entry, f.dependencies).ok, true);
+    for (let index = 0; index < 2; index++) {
+      f = testOnlyRecovery({ fixture: f, capturedImplementation: false, suffix: `-before-integration-${index}` });
+      const inspected = inspectTaskRun(f.entry, f.dependencies);
+      assert.equal(inspected.ok, true, inspected.reason);
+      assert.equal(inspected.result.hand_capture.recovery_origin.head_sha, baseline);
+      assert.equal(inspected.result.hand_capture.recovery_origin.derived_from, "host-reconciliation");
+    }
+    if (aggregateRefresh) {
+      const sealed = archiveInspectedIntegration(f);
+      persistRecoveryIntegration(f, sealed);
+      const evidence = readIntegratedTaskEvidence({ projectRoot: f.root, sessionId: PARENT,
+        featureId: FEATURE, taskId: TASK, headSha: f.head });
+      assert.equal(evidence.ok, true, evidence.reason);
+    }
+    const drift = testOnlyRecovery({ fixture: f, capturedImplementation: false, productDelta: true,
+      suffix: "-unreviewed-product" });
+    assert.equal(inspectTaskRun(drift.entry, drift.dependencies).ok, false,
+      "a repeated author cannot adopt its own product change as a host baseline");
+  }
+});
+
+test("a reverted captured experiment cannot veto an otherwise exact host-baseline test repair", () => {
+  for (const restore of [false, true]) {
+    let f = reconciledTestRecovery({ productDelta: true, aggregateRefresh: true });
+    const product = path.join(f.root, "src/task.mjs");
+    const original = fs.readFileSync(product, "utf8");
+    write(product, "export const actual = 'temporary experiment';\n");
+    run(f.root, "git", "add", "src/task.mjs");
+    run(f.root, "git", "commit", "-m", "temporary product experiment");
+    const experiment = run(f.root, "git", "rev-parse", "HEAD");
+    const prompt = '[HARNESS_TASK_CONTEXT]{"task_id":"' + TASK + '"}[/HARNESS_TASK_CONTEXT]';
+    fs.appendFileSync(f.entry.launches.at(-1).events_path, [
+      event("tool_execution_start", { toolCallId: "experiment", toolName: "subagent",
+        args: { subagent_type: "harness-sniper", prompt } }),
+      event("tool_execution_end", { toolCallId: "experiment", toolName: "subagent", isError: false,
+        result: { content: [{ type: "text", text: "Experiment complete.\nStatus: DONE" }], details: { status: "completed" } } }),
+      event("tool_execution_start", { toolCallId: "experiment-capture", toolName: "mark",
+        args: { action: "capture-verified", task_id: TASK } }),
+      event("tool_execution_end", { toolCallId: "experiment-capture", toolName: "mark", isError: false,
+        result: { details: { ok: true, capture_origin: { task_id: TASK, producer_call_id: "experiment",
+          head_sha: experiment, worktree_clean: true } } } }), "",
+    ].join("\n"));
+    if (restore) {
+      write(product, original);
+      run(f.root, "git", "add", "src/task.mjs");
+      run(f.root, "git", "commit", "-m", "restore the exact host product");
+    } else {
+      write(product, "export const actual = 'unverified change after capture';\n");
+      run(f.root, "git", "add", "src/task.mjs");
+      run(f.root, "git", "commit", "-m", "unverified product drift after capture");
+    }
+    f.head = run(f.root, "git", "rev-parse", "HEAD");
+    f = testOnlyRecovery({ fixture: f, capturedImplementation: false, suffix: "-after-experiment" });
+    const inspected = inspectTaskRun(f.entry, f.dependencies);
+    assert.equal(inspected.ok, restore, inspected.reason);
+    if (restore) {
+      assert.equal(inspected.result.hand_capture.recovery_origin.head_sha, f.entry.reconciliations[0].merged_head);
+      assert.equal(inspected.result.hand_capture.recovery_origin.derived_from, "host-reconciliation");
+    }
+  }
+});
+
 test("aggregate test-only recovery rejects child product drift and invalid source or merge proofs", () => {
   const drift = reconciledTestRecovery({ productDelta: true, childProductDelta: true, aggregateRefresh: true });
   assert.equal(inspectTaskRun(drift.entry, drift.dependencies).ok, false);

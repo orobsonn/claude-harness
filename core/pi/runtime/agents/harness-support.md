@@ -1,5 +1,5 @@
 ---
-description: Read-only diagnostic support for the global coordinator; never an approval or writer.
+description: Read-only diagnostic support for the global coordinator or admitted task parent; never an approval or writer.
 tools: read, grep, find, ls
 inherit_context: false
 locked: true
