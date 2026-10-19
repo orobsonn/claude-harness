@@ -23,7 +23,9 @@ export function ensureClaudeTrust(parentRoot, env = process.env) {
     : path.join(env.HOME || os.homedir(), ".claude.json");
   // A dotfile manager may symlink the config: write the real file, never replace the link.
   const file = fs.existsSync(declared) ? fs.realpathSync(declared) : declared;
-  const trusted = (config) => [mainRoot, parentRoot].some((key) => config?.projects?.[key]?.hasTrustDialogAccepted === true);
+  // The main repository's trust is what covers sibling linked worktrees (an Orca child): trust
+  // recorded only for a linked parent worktree is not enough.
+  const trusted = (config) => config?.projects?.[mainRoot]?.hasTrustDialogAccepted === true;
   for (let attempt = 0; attempt < 3; attempt += 1) {
     let config = {};
     let mode = 0o600;

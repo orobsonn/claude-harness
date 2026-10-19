@@ -8,6 +8,10 @@ import path from "node:path";
 import { spawn, execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 
+// `ps -o lstart` is locale-formatted (macOS): a fixed locale keeps a start identity comparable
+// between the recorder and any later observer, whatever their LANG/LC_*.
+const PS_ENV = { ...process.env, LC_ALL: "C", LANG: "C" };
+
 /** Atomic private JSON write: unpredictable tmp created exclusively (`wx`, 0600) + rename. */
 export function writeTaskJson(file, value) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -35,7 +39,7 @@ export function taskProcessIdentity(pid) {
     const output = execFileSync(
       "ps",
       ["-p", String(pid), "-o", "pgid=,stat=,lstart="],
-      { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
+      { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], env: PS_ENV },
     ).trim();
     const fields = output.split(/\s+/);
     return output
@@ -98,7 +102,7 @@ export function taskDescendants(rootPid) {
       .map(taskProcessIdentity)
       .filter((item) => item && !item.unknown && Number.isInteger(item.parent));
   } else {
-    table = execFileSync("ps", ["-axo", "pid=,ppid=,pgid=,stat=,lstart="], { encoding: "utf8" })
+    table = execFileSync("ps", ["-axo", "pid=,ppid=,pgid=,stat=,lstart="], { encoding: "utf8", env: PS_ENV })
       .trim()
       .split("\n")
       .map((line) => {

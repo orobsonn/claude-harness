@@ -57,8 +57,11 @@ export function missingLaneHooks(root) {
   } catch {
     return REQUIRED_LANE_HOOKS.map(([event, script]) => `${event}:${script}`);
   }
+  // Same identity as vendor-core's hook merge: the `.claude/hooks/<script>` a command runs (quoting
+  // or reformatting allowed), in a group that matches every tool ("*", "" or no matcher).
+  const runs = (command, script) => typeof command === "string" && command.match(/\.claude\/hooks\/([A-Za-z0-9._/-]+\.mjs)/)?.[1] === script;
   return REQUIRED_LANE_HOOKS.filter(([event, script]) => !(settings?.hooks?.[event] ?? []).some((group) =>
-    (group?.matcher ?? "*") === "*" && (group.hooks ?? []).some((hook) => typeof hook?.command === "string" && hook.command.endsWith(`/.claude/hooks/${script}`))))
+    ["*", ""].includes(group?.matcher ?? "*") && (group.hooks ?? []).some((hook) => runs(hook?.command, script))))
     .map(([event, script]) => `${event}:${script}`);
 }
 

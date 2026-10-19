@@ -165,8 +165,21 @@ test("lane writes: orchestrator only run buffers; hands only their authorized pa
   assert.equal(run(payload("Edit", { file_path: path.join(lane.worktree, ".claude/hooks/task-gate.mjs") }, { agent_id: "a", agent_type: "sniper" })).deny, true);
 });
 
+test("before fidelity, a test-author re-brief keeps its own new stub; a tracked product edit still blocks it", (t) => {
+  const { run, payload, lane } = admittedLane(t);
+  const testAuthor = () => run(payload("Agent", { subagent_type: "test-author", model: "sonnet", prompt: marker() }));
+  fs.mkdirSync(path.join(lane.worktree, "src/a"), { recursive: true });
+  fs.writeFileSync(path.join(lane.worktree, "src/a/index.mjs"), "export function a() { throw new Error(\"not implemented\"); }\n");
+  assert.equal(testAuthor().deny, false, "the uncommitted stub is the test-author's own pre-fidelity output");
+  git(lane.worktree, "add", "src/a/index.mjs");
+  git(lane.worktree, "commit", "-qm", "base");
+  fs.writeFileSync(path.join(lane.worktree, "src/a/index.mjs"), "export const a = 2;\n");
+  assert.match(testAuthor().reason, /Preserve the existing task implementation/, "a tracked product edit is never a stub");
+});
+
 test("a test-author repair or a discard with an uncommitted product delta is denied", (t) => {
   const { run, payload, lane } = admittedLane(t);
+  stampFidelity(lane);
   fs.mkdirSync(path.join(lane.worktree, "src/a"), { recursive: true });
   fs.writeFileSync(path.join(lane.worktree, "src/a/impl.mjs"), "export const x = 1;\n");
   assert.match(run(payload("Agent", { subagent_type: "test-author", model: "sonnet", prompt: marker() })).reason, /Preserve the existing task implementation/);
@@ -292,10 +305,14 @@ test("parent gate: a project's own tasks.mjs, task-ledger mentions and harness s
     "cat .claude/hooks/task-ledger.mjs",
     'git commit -m "fix task-ledger flake"',
     "grep -rn task-admission docs/",
+    "git add .claude/hooks/tasks.mjs",
+    "git diff -- .claude/hooks/tasks.mjs",
+    'git commit -m "bump .claude/hooks/tasks.mjs"',
   ]) assert.equal(parent(command).deny, false, command);
   for (const command of [
     "CLAUDE_CODE_SESSION_ID=x node .claude/hooks/tasks.mjs status",
     "cd /tmp && node /repo/.claude/hooks/tasks.mjs dispatch",
+    "X=1 ./.claude/hooks/tasks.mjs status",
     `cat ${project.root}/.claude/plans/.state/${project.sessionId}/task-runs/index.json`,
     "rm .claude/plans/.state/x/task-admission/a.json",
   ]) assert.equal(parent(command).deny, true, command);

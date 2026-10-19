@@ -193,7 +193,7 @@ export function laneBashDenyReason(rawCommand, identity) {
   if (HARNESS_STATE_WORDS.test(command)) return "harness task state is host-owned; do not read or write it from the lane";
   const planRefs = [...command.matchAll(/\.claude\/plans\/([^\s'"]*)/g)].map((match) => match[1]);
   if (planRefs.some((rest) => !(rest === `${identity.featureId}/run` || rest.startsWith(`${identity.featureId}/run/`)))) {
-    return `the canonical plan, spec and harness state are read-only for the lane; use the Read tool, and keep scratch files under .claude/plans/${identity.featureId}/run/`;
+    return `the canonical plan, spec and harness state are read-only for the lane; use the Read tool, and keep scratch files in contract.run_dir (outside the repository)`;
   }
   if (identity.parentRoot && command.includes(identity.parentRoot)) {
     return "the global parent worktree is outside this task; work only inside the lane worktree";
@@ -273,17 +273,20 @@ export function parseEyeVerdict(role, text) {
     const verdict = matches.at(-1)[1].toLowerCase();
     return { verdict, positive: verdict === "pass" };
   }
+  // Arming-blind: a lane cannot park an UNARMED finding (no tracked issue), so an eye's own
+  // UNARMED label or SECURE verdict never clears a high/medium issue (unarmed-defects rule).
+  const blockingIssues = (issues) => issues.filter((issue) => ["high", "medium"].includes(String(issue?.severity).toLowerCase()));
   if (role === "security") {
     const report = lastJsonBlock(text, (block) => ["SECURE", "UNSAFE"].includes(block.verdict) && Array.isArray(block.issues));
     if (!report) return null;
-    return { verdict: report.verdict, positive: report.verdict === "SECURE", issues: report.issues.length };
+    const blocking = blockingIssues(report.issues).length;
+    return { verdict: report.verdict, positive: report.verdict === "SECURE" && blocking === 0, issues: report.issues.length, blocking };
   }
   if (role === "adversary") {
     const report = lastJsonBlock(text, (block) => Array.isArray(block.issues));
     if (!report) return null;
-    const blocking = report.issues.filter((issue) => ["high", "medium"].includes(String(issue?.severity).toLowerCase()) &&
-      !/^\s*UNARMED\b/.test(String(issue?.description ?? "")));
-    return { verdict: blocking.length ? "BLOCKING" : "CLEAR", positive: blocking.length === 0, blocking: blocking.length };
+    const blocking = blockingIssues(report.issues).length;
+    return { verdict: blocking ? "BLOCKING" : "CLEAR", positive: blocking === 0, blocking };
   }
   return null;
 }

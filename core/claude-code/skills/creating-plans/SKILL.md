@@ -305,7 +305,8 @@ the whole plan into one chain (a single task still runs in a lane). Parallel tur
 into validator rules:
 - every task declares `depends_on` (`[]` for none);
 - tasks with no `depends_on` ancestry between them must have **disjoint literal scopes**: `scope_paths`,
-  each locked `test_path` and every `fixture_paths` entry all count, compared by whole path
+  every `allowed_writes` entry, each locked `test_path` and every `fixture_paths` entry all count
+  (two independent tasks that both touch `package.json` must be ordered with `depends_on`), compared by whole path
   component (`src/a` and `src/ab` are disjoint; `src/a` and `src/a/x.ts` overlap; `.` overlaps
   everything). Share a path only by ordering the tasks with `depends_on`;
 - no globs (`*`, `?`, `{a,b}`, `{1..3}`), no `..`, no absolute paths, no `\` — literals such as

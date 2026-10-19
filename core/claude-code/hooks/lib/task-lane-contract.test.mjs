@@ -186,11 +186,15 @@ test("verdict parsers read the agents' canonical blocks", () => {
   assert.equal(parseEyeVerdict("adversary", adv([])).positive, true);
   assert.equal(parseEyeVerdict("adversary", adv([{ severity: "low", description: "ARMED · x" }])).positive, true);
   assert.equal(parseEyeVerdict("adversary", adv([{ severity: "high", description: "ARMED · x" }])).positive, false);
-  assert.equal(parseEyeVerdict("adversary", adv([{ severity: "medium", description: "UNARMED · x" }])).positive, true);
+  assert.equal(parseEyeVerdict("adversary", adv([{ severity: "medium", description: "UNARMED · x" }])).positive, false, "a lane cannot park: UNARMED never clears");
+  assert.equal(parseEyeVerdict("adversary", adv([{ severity: "low", description: "UNARMED · x" }])).positive, true);
   assert.equal(parseEyeVerdict("adversary", "no json"), null);
   const sec = (verdict) => `\`\`\`json\n${JSON.stringify({ verdict, issues: [] })}\n\`\`\``;
   assert.equal(parseEyeVerdict("security", sec("SECURE")).positive, true);
   assert.equal(parseEyeVerdict("security", sec("UNSAFE")).positive, false);
+  const secWith = (verdict, issues) => `\`\`\`json\n${JSON.stringify({ verdict, issues })}\n\`\`\``;
+  assert.equal(parseEyeVerdict("security", secWith("SECURE", [{ severity: "high", description: "ARMED · x" }])).positive, false, "SECURE with a high issue is not positive");
+  assert.equal(parseEyeVerdict("security", secWith("SECURE", [{ severity: "low", description: "x" }])).positive, true);
   assert.equal(parseHandStatus("## Status: DONE\n### Arquivos"), "DONE");
   assert.equal(parseHandStatus("Status: BLOCKED"), "BLOCKED");
   assert.equal(parseHandStatus("## Status: DONE_WITH_CONCERNS"), "DONE_WITH_CONCERNS");

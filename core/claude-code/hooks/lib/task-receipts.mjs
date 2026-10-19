@@ -296,7 +296,7 @@ export function inspectTaskRun(entry, dependencies = {}) {
       ...(native.finalText.trim() ? { task_report: { session_id: sessionId, run_id: entry.launches.at(-1).run_id, head_sha: head, ...clip(native.finalText) } } : {}),
     };
     const dirty = [
-      ...splitZero(git(worktree, ["diff", "--name-only", "-z", "HEAD", "--"])),
+      ...splitZero(git(worktree, ["diff", "--no-renames", "--name-only", "-z", "HEAD", "--"])),
       ...splitZero(git(worktree, ["ls-files", "--others", "--exclude-standard", "-z"])),
     ].filter((file) => !isVolatileHarnessPath(file));
     if (dirty.length) return failure("task worktree must be clean before inspection", { ...diagnostics, worktree_changes: { task_id: entry.task_id, worktree, ...clip(dirty.join("\n")) } });
@@ -304,8 +304,8 @@ export function inspectTaskRun(entry, dependencies = {}) {
     const scopes = laneTaskScope(task);
     const frozen = laneFrozenPaths(task);
     const scopeBase = taskScopeBase(entry, worktree, head, scopes);
-    const changedPaths = splitZero(git(worktree, ["diff", "--name-only", "-z", entry.base_sha, head]));
-    const outside = splitZero(git(worktree, ["diff", "--name-only", "-z", scopeBase, head])).filter((file) => !pathInScope(file, scopes));
+    const changedPaths = splitZero(git(worktree, ["diff", "--no-renames", "--name-only", "-z", entry.base_sha, head]));
+    const outside = splitZero(git(worktree, ["diff", "--no-renames", "--name-only", "-z", scopeBase, head])).filter((file) => !pathInScope(file, scopes));
     if (outside.length) return failure("task changed paths outside its canonical scope", { ...diagnostics, worktree_changes: { task_id: entry.task_id, worktree, ...clip(outside.join("\n")) } });
 
     const state = (() => { try { return readJsonIn(gateStateFile(worktree, sessionId), worktree); } catch { return {}; } })();
@@ -516,7 +516,7 @@ export function readIntegratedTaskEvidence({ projectRoot, sessionId, featureId, 
     } else if (parents.length !== 2 || parents[1] !== result.child_head) {
       return failure("task integration is not a two-parent merge of the task HEAD");
     }
-    const actualChanged = splitZero(git(root, ["diff", "--name-only", "-z", result.base_sha, result.child_head]));
+    const actualChanged = splitZero(git(root, ["diff", "--no-renames", "--name-only", "-z", result.base_sha, result.child_head]));
     if (JSON.stringify(actualChanged) !== JSON.stringify(result.changed_paths)) return failure("task inspection changed-path receipt no longer matches Git");
     for (const [file, expected] of Object.entries(result.frozen_blobs)) {
       const parentDigest = frozenParent?.blobs?.[file];

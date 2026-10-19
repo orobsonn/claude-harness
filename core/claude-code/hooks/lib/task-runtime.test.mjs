@@ -56,3 +56,20 @@ test("a worktree whose settings do not wire the lane gate and ledger cannot host
   fs.writeFileSync(path.join(root, ".claude/settings.json"), JSON.stringify({ hooks: { PreToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command: "node custom.mjs" }] }] } }));
   assert.throws(() => captureTaskRuntime(root), /does not wire the task lane hooks \(PreToolUse:task-gate\.mjs, PreToolUse:task-ledger\.mjs, PostToolUse:task-ledger\.mjs, PostToolUseFailure:task-ledger\.mjs, SessionStart:task-ledger\.mjs, Stop:task-continuation\.mjs\)/);
 });
+
+test("lane hooks wired with a quoted command or an empty matcher still count", (t) => {
+  const root = runtimeTree(t);
+  const file = path.join(root, ".claude/settings.json");
+  const settings = JSON.parse(fs.readFileSync(file, "utf8"));
+  for (const groups of Object.values(settings.hooks)) {
+    for (const group of groups) {
+      if (group.matcher === "*") group.matcher = "";
+      for (const hook of group.hooks) hook.command = hook.command.replace("node ${CLAUDE_PROJECT_DIR}/", 'node "${CLAUDE_PROJECT_DIR}"/');
+    }
+  }
+  fs.writeFileSync(file, JSON.stringify(settings));
+  assert.doesNotThrow(() => captureTaskRuntime(root));
+  settings.hooks.PreToolUse[0].matcher = "Bash";
+  fs.writeFileSync(file, JSON.stringify(settings));
+  assert.throws(() => captureTaskRuntime(root), /does not wire the task lane hooks/, "a narrower matcher does not cover every tool");
+});

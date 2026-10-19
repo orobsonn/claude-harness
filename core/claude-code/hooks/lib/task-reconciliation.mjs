@@ -17,7 +17,7 @@ const git = (root, ...args) => execFileSync("git", args, {
 }).trim();
 const ancestor = (root, before, after) => git(root, "merge-base", "--is-ancestor", before, after);
 function scoped(root, base, head, scopes) {
-  const changed = git(root, "diff", "--name-only", "-z", base, head).split("\0").filter(Boolean);
+  const changed = git(root, "diff", "--no-renames", "--name-only", "-z", base, head).split("\0").filter(Boolean);
   if (checkScope(changed, scopes).length) throw new Error("task changed paths outside canonical scope");
 }
 

@@ -53,8 +53,9 @@ When the JSON contains a single quote, use `--json-file .claude/plans/<feature>/
    re-inspects, refuses conflicts before touching your branch (then `resume` resolves them in the
    lane), keeps frozen tests intact and writes the integration receipt. Then dispatch its dependents.
 5. **Corrections after integration**: `resume` an integrated task opens a correction barrier. New
-   dispatches and other tasks wait, delivery is blocked and final review and demo are invalidated.
-   Reintegrate it. A dependent that is not yet integrated is reconciled by the host (it merges the
+   dispatches and other tasks wait and delivery is blocked. A final review or demo you ran before the
+   correction no longer counts: run them again on the corrected aggregate HEAD (the host does not
+   track them; it only blocks delivery while the barrier is open). Reintegrate it. A dependent that is not yet integrated is reconciled by the host (it merges the
    corrected aggregate into the lane, or opens the conflict for the lane's sniper). An integrated
    dependent is reconciled when you `resume` it. To refresh an integrated task on the current
    aggregate, `resume` with `"reconcile_head":"<current HEAD>"` and an instruction. If a correction
@@ -88,6 +89,14 @@ Nothing is cleaned up automatically. The registry and job logs under
 `.claude/plans/.state/<session>/task-runs/`, and the lane worktrees and branches (outside the repo, in
 `~/.local/state/claude-harness/task-worktrees/` or `$CLAUDE_HARNESS_TASK_WORKTREES_DIR`), are kept for
 audit and resume.
+
+## When lanes cannot run
+
+Lanes need a local `claude` CLI that can start top-level sessions and Git worktrees outside the
+repository. Where that is not available (no `claude` on PATH, a restricted or cloud host), the
+lane fails and `status` reports the launch failure in its diagnostics; nothing falls back on its own. Re-plan with
+`"execution": {"parallel": false, "serial_reason": "<why lanes cannot run here>"}` and deliver
+serially (Phase 2 serial).
 
 ## Host configuration (operator env, never set per command)
 

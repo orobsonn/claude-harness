@@ -264,6 +264,25 @@ test("stamp active-scope: a SUBAGENT-origin marker (own agent_id) is ignored —
 
 // Claude Code's Write/Edit always carry an ABSOLUTE file_path (spike 2026-10-10 §4): the rail must
 // compare it relative to the project root, or every in-scope hand write on the Agent path is denied.
+test("scope rail: a write into a NEW directory under a symlinked project root is compared against the real root", () => {
+  withTempDir(() => {
+    const real = fs.realpathSync(process.cwd());
+    const link = path.join(path.dirname(real), `${path.basename(real)}-link`);
+    fs.symlinkSync(real, link);
+    const deps = { readGateStateFn: () => ({ active_dispatch: { ...EXECUTOR_SCOPE.active_dispatch, scope_paths: ["src/new"] } }) };
+    const saved = process.env.CLAUDE_PROJECT_DIR;
+    process.env.CLAUDE_PROJECT_DIR = link;
+    try {
+      assert.equal(planDecide(makeSubagentWrite(path.join(link, "src/new/deep/x.ts"), "executor"), deps).allow, true);
+      assert.equal(planDecide(makeSubagentWrite(path.join(link, "src/other/x.ts"), "executor"), deps).allow, false);
+    } finally {
+      fs.unlinkSync(link);
+      if (saved === undefined) delete process.env.CLAUDE_PROJECT_DIR;
+      else process.env.CLAUDE_PROJECT_DIR = saved;
+    }
+  });
+});
+
 test("scope rail: an absolute in-scope path under the project root is allowed; outside the project is denied", () => {
   withTempDir(() => {
     const root = fs.realpathSync(process.cwd());

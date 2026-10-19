@@ -2830,6 +2830,9 @@ function isHookArrayPath(path) {
  * harness wiring (e.g. the parallel-lane gate and ledger, which the host refuses to run without).
  */
 const HOOK_SCRIPT = /\.claude\/hooks\/([A-Za-z0-9._/-]+\.mjs)/;
+// Hook scripts first shipped with the parallel task lanes: a customized array with no owned baseline
+// still receives these (the host refuses to dispatch lanes without them); nothing older is re-added.
+const UNBASELINED_HOOK_ADDITIONS = new Set(["task-gate.mjs", "task-ledger.mjs", "task-continuation.mjs", "task-plan-review.mjs"]);
 function hookIdentity(matcher, hook) {
   const command = isPlainObject(hook) && typeof hook.command === "string" ? hook.command : "";
   const script = command.match(HOOK_SCRIPT)?.[1];
@@ -2864,7 +2867,11 @@ function mergeHookArray(path, existingArr, newArr, ownedArr) {
       const coveredElsewhere = merged.some((group) => isPlainObject(group) && Array.isArray(group.hooks) && covers(matcherOf(group), matcher) &&
         group.hooks.some((existingHook) => scriptOf(existingHook) === scriptOf(hook)));
       if (coveredElsewhere) continue;
-      if (previouslyOwned.has(id)) {
+      // Without a previous owned baseline (older manifests dropped it for any customized array), an
+      // absent shipped hook may be an operator removal: only the hooks this generation introduced
+      // are added, and every other absence is kept as the operator left it.
+      const unbaselined = !Array.isArray(ownedArr) && !UNBASELINED_HOOK_ADDITIONS.has(scriptOf(hook));
+      if (previouslyOwned.has(id) || unbaselined) {
         report.push({ path, action: "kept-removed", value: { matcher, command: hook?.command } });
         continue;
       }

@@ -3373,6 +3373,35 @@ test("vendor-core: quoted hook commands never duplicate and an operator-removed 
   }
 });
 
+test("vendor-core: without an owned baseline (old or missing manifest) a removed hook stays removed; only the lane hooks are added", async () => {
+  const target = mkdtempSync(join(tmpdir(), "vendor-hook-unbaselined-"));
+  try {
+    mkdirSync(join(target, ".claude"), { recursive: true });
+    writeFileSync(join(target, ".claude", "settings.json"), "{}");
+    const vendor = () => spawnSync(process.execPath, [vendorCoreScript, "--source", harnessRoot, "--target", target, "--runtime", "claude"], { encoding: "utf8" });
+    assert.equal(vendor().status, 0);
+    const file = join(target, ".claude", "settings.json");
+    const settings = JSON.parse(readFileSync(file, "utf8"));
+    const bash = settings.hooks.PreToolUse.find((group) => group.matcher === "Bash");
+    bash.hooks = bash.hooks.filter((hook) => !/lavish-command-gate\.mjs/.test(hook.command));
+    // An older generation: no lane hooks yet, and a manifest that never recorded the customized arrays.
+    for (const event of Object.keys(settings.hooks)) {
+      settings.hooks[event] = settings.hooks[event].map((group) => ({ ...group, hooks: group.hooks.filter((hook) => !/task-(?:gate|ledger|continuation|plan-review)\.mjs/.test(hook.command)) }))
+        .filter((group) => group.hooks.length);
+    }
+    writeFileSync(file, JSON.stringify(settings, null, 2));
+    rmSync(join(target, ".claude", ".harness-config-manifest.json"), { force: true });
+    assert.equal(vendor().status, 0);
+    const after = JSON.parse(readFileSync(file, "utf8"));
+    const bashAfter = after.hooks.PreToolUse.filter((group) => group.matcher === "Bash").flatMap((group) => group.hooks.map((hook) => hook.command));
+    assert.ok(!bashAfter.some((command) => /lavish-command-gate\.mjs/.test(command)), "the operator removal survives a missing baseline");
+    const { missingLaneHooks } = await import(pathToFileURL(join(target, ".claude/hooks/lib/task-runtime.mjs")).href);
+    assert.deepEqual(missingLaneHooks(target), [], "the lane hooks the host requires are added");
+  } finally {
+    rmSync(target, { recursive: true, force: true });
+  }
+});
+
 test("vendor-core: an operator matcher that widens the shipped one (Agent → Agent|Task) never duplicates its hooks", () => {
   const target = mkdtempSync(join(tmpdir(), "vendor-hook-matcher-"));
   try {

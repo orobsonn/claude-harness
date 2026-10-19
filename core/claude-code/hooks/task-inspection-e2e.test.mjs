@@ -9,7 +9,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { git, planTask } from "./lib/__fixtures__/task-fixture.mjs";
-import { laneSteps, marker, runScenarioProject } from "./lib/__fixtures__/task-e2e.mjs";
+import { createVendoredTaskProject, laneSteps, marker, runScenarioProject, tasksCli, waitSettled, writeFakeClaude } from "./lib/__fixtures__/task-e2e.mjs";
 
 const FEATURE = "demo-feature";
 const mark = (taskId, action, extra = "") => ({ bash: `node .claude/hooks/mark.mjs ${action} --feature-id ${FEATURE} --task-id ${taskId}${extra}` });
@@ -175,4 +175,35 @@ test("inspection matrix: the host derives ready/blocked from native evidence", {
 
   // The parent never moved: inspection is read-only.
   for (const run of runs) assert.equal(git(run.project.root, "status", "--porcelain", "--untracked-files=no"), "");
+});
+
+test("a rename from outside the scope is a change outside the scope (no rename detection)", { timeout: 300_000 }, async (t) => {
+  const [a] = tasksABD();
+  const project = createVendoredTaskProject(t, { tasks: [a] });
+  fs.mkdirSync(path.join(project.root, "lib"), { recursive: true });
+  fs.writeFileSync(path.join(project.root, "lib/outside.mjs"), "export const shared = 1;\n// owned by another team\n// do not move\n");
+  git(project.root, "add", "lib/outside.mjs");
+  git(project.root, "commit", "-qm", "chore: shared module");
+  const steps = laneSteps({ task: a, skip: new Set(["commit"]) });
+  steps.splice(byLabel(steps, (s) => s.bash?.includes("capture-verified")), 0,
+    { bash: `git mv lib/outside.mjs src/a/moved.mjs && git add src/a/index.mjs && git commit -qm "feat(task-a): implement"` });
+  const { bin } = writeFakeClaude(project, { tasks: { "task-a": { launches: [{ steps }] } } });
+  assert.equal(tasksCli(project, "dispatch", { task_ids: ["task-a"] }, { claudeBin: bin }).ok, true);
+  waitSettled(project, bin);
+  const [task] = tasksCli(project, "status", {}, { claudeBin: bin }).tasks;
+  assert.equal(task.status, "blocked", "the deleted source path is outside src/a");
+  assert.ok(fs.existsSync(path.join(project.root, "lib/outside.mjs")), "nothing was integrated");
+});
+
+test("the host triage is the floor of a lane's mode: a light plan under a FULL triage still needs FULL reviews", { timeout: 300_000 }, async (t) => {
+  const [a] = tasksABD();
+  const project = createVendoredTaskProject(t, { tasks: [a], mode: "light", triageMode: "FULL" });
+  const { bin } = writeFakeClaude(project, { tasks: { "task-a": { launches: [{ steps: laneSteps({ task: a, mode: "LIGHT" }) }] } } });
+  const dispatched = tasksCli(project, "dispatch", { task_ids: ["task-a"] }, { claudeBin: bin });
+  assert.equal(dispatched.ok, true, dispatched.reason);
+  waitSettled(project, bin);
+  const registry = JSON.parse(fs.readFileSync(path.join(project.root, ".claude/plans/.state", project.sessionId, "task-runs/index.json"), "utf8"));
+  assert.equal(registry.tasks["task-a"].grant.mode, "FULL");
+  const [task] = tasksCli(project, "status", {}, { claudeBin: bin }).tasks;
+  assert.equal(task.status, "blocked", "a lane without the FULL eyes is not ready");
 });

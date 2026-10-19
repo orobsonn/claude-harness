@@ -102,10 +102,14 @@ function checkScopeRail(payload, readGateStateFn) {
     const root = process.env.CLAUDE_PROJECT_DIR || payload.cwd || process.cwd();
     let realRoot = root;
     try { realRoot = fs.realpathSync(root); } catch { /* keep the given root */ }
+    // Canonicalize through the nearest existing ancestor, so a write into a new directory under a
+    // symlinked root (macOS /tmp, /var) still compares against the real root.
     let target = path.resolve(filePath);
-    try { target = path.join(fs.realpathSync(path.dirname(target)), path.basename(target)); } catch { /* new dir */ }
+    let probe = target;
+    while (!fs.existsSync(probe) && path.dirname(probe) !== probe) probe = path.dirname(probe);
+    try { target = path.join(fs.realpathSync(probe), path.relative(probe, target)); } catch { /* keep the given path */ }
     const fromRoot = path.relative(realRoot, target);
-    relativePath = fromRoot.startsWith("..") || path.isAbsolute(fromRoot) ? null : fromRoot;
+    relativePath = fromRoot === "" || fromRoot === ".." || fromRoot.startsWith(`..${path.sep}`) || path.isAbsolute(fromRoot) ? null : fromRoot;
   }
   const normPathLower = relativePath === null
     ? null

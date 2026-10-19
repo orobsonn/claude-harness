@@ -214,7 +214,7 @@ function reconcileMerge(owner, registry, persist) {
     }
     if (merging) {
       const untracked = git(owner.root, "ls-files", "--others", "--exclude-standard", "-z").split("\0").filter(Boolean).filter((name) => !isVolatileHarnessPath(name));
-      if (merging !== intent.child_head || git(owner.root, "write-tree") !== intent.tree || git(owner.root, "diff", "--name-only") || untracked.length) {
+      if (merging !== intent.child_head || git(owner.root, "write-tree") !== intent.tree || git(owner.root, "diff", "--no-renames", "--name-only") || untracked.length) {
         throw new Error("interrupted merge has additional changes; preserve the journal and reconcile this worktree");
       }
       git(owner.root, "merge", "--abort");
@@ -238,7 +238,11 @@ function reconcileMerge(owner, registry, persist) {
   persist();
 }
 
-/** Any later correction invalidates the parent's aggregate approval (final review, demo). */
+/**
+ * Any later correction invalidates the parent's aggregate approval. Claude Code does not gate the
+ * final review or demo on these keys (Pi does); clearing them keeps the shared state honest, and the
+ * correction barrier is what blocks delivery here.
+ */
 function invalidateAggregate(owner, registry, persist) {
   const file = gateStateFile(owner.root, owner.sessionId);
   let state = {};
@@ -268,7 +272,7 @@ function beginConflictMerge(entry) {
     try { merging = git(entry.worktree, "rev-parse", "--verify", "-q", "MERGE_HEAD"); } catch { merging = undefined; }
     if (merging !== intent.parent_head) throw error;
   }
-  const unresolved = git(entry.worktree, "diff", "--name-only", "--diff-filter=U", "-z").split("\0").filter(Boolean).sort();
+  const unresolved = git(entry.worktree, "diff", "--no-renames", "--name-only", "--diff-filter=U", "-z").split("\0").filter(Boolean).sort();
   if (JSON.stringify(unresolved) !== JSON.stringify(intent.conflicts)) throw new Error("task conflict merge differs from its preview; preserve worktree and journal");
 }
 
@@ -294,7 +298,7 @@ function reconcileDependentMerge(entry, persist, scopes) {
     }
     if (merging) {
       const untracked = git(root, "ls-files", "--others", "--exclude-standard", "-z").split("\0").filter(Boolean).filter((name) => !isVolatileHarnessPath(name));
-      if (merging !== intent.parent_head || git(root, "write-tree") !== intent.tree || git(root, "diff", "--name-only") || untracked.length) {
+      if (merging !== intent.parent_head || git(root, "write-tree") !== intent.tree || git(root, "diff", "--no-renames", "--name-only") || untracked.length) {
         throw new Error("interrupted dependent merge has additional changes; preserve the journal and reconcile this worktree");
       }
       git(root, "merge", "--abort");
@@ -335,7 +339,7 @@ async function reconcileDependent(entry, task, owner, registry, persist, deps) {
   delete prior.reconciliation_required;
   const scopes = scopeOf(task);
   const base = taskScopeBase(prior, entry.worktree, head, scopes);
-  const changed = git(entry.worktree, "diff", "--name-only", "-z", base, head).split("\0").filter(Boolean);
+  const changed = git(entry.worktree, "diff", "--no-renames", "--name-only", "-z", base, head).split("\0").filter(Boolean);
   if (checkScope(changed, scopes).length) throw new Error("dependent changed paths outside canonical scope before reconciliation");
   const parentHead = git(owner.root, "rev-parse", "HEAD");
   if (!isAncestor(owner.root, base, parentHead)) throw new Error("dependent scope base is not ancestral to parent HEAD");
@@ -355,7 +359,7 @@ async function reconcileDependent(entry, task, owner, registry, persist, deps) {
   }
   if (!upstreams.length) throw new Error("corrected dependency identity is missing from the recovery request");
   const { tree, conflicts } = taskMergePreview(entry.worktree, head, parentHead);
-  const mergedChanges = git(entry.worktree, "diff", "--name-only", "-z", parentHead, tree).split("\0").filter(Boolean);
+  const mergedChanges = git(entry.worktree, "diff", "--no-renames", "--name-only", "-z", parentHead, tree).split("\0").filter(Boolean);
   if (checkScope([...mergedChanges, ...conflicts], scopes).length) throw new Error("dependent merge changes paths outside canonical scope");
   entry.reconciliation_intent = {
     written_by: "host-task-reconciliation", task_id: entry.task_id, attempt_id: entry.attempt_id,
@@ -383,7 +387,7 @@ function prepareIntegrationConflict(entry, task, owner, persist) {
   if (!fs.existsSync(`${entry.grant_path}.claim`)) throw new Error("complete initial task admission before resolving integration conflicts");
   const scopes = scopeOf(task);
   const base = taskScopeBase(entry, entry.worktree, head, scopes);
-  const changed = git(entry.worktree, "diff", "--name-only", "-z", parentHead, preview.tree).split("\0").filter(Boolean);
+  const changed = git(entry.worktree, "diff", "--no-renames", "--name-only", "-z", parentHead, preview.tree).split("\0").filter(Boolean);
   if (checkScope([...preview.conflicts, ...changed], scopes).length) throw new Error("task merge conflicts outside canonical scope; fold the path into the plan deliberately (planner append-only scope correction, fresh plan-reviewer APPROVE) and resume this task");
   entry.reconciliation_intent = {
     written_by: "host-task-reconciliation", kind: "integration-conflict",
@@ -420,7 +424,7 @@ function previewAggregateRefresh(entry, task, owner, params) {
   const scopes = scopeOf(task);
   const base = taskScopeBase(entry, entry.worktree, head, scopes);
   const preview = taskMergePreview(entry.worktree, head, params.reconcile_head);
-  const changed = git(entry.worktree, "diff", "--name-only", "-z", params.reconcile_head, preview.tree).split("\0").filter(Boolean);
+  const changed = git(entry.worktree, "diff", "--no-renames", "--name-only", "-z", params.reconcile_head, preview.tree).split("\0").filter(Boolean);
   if (checkScope([...changed, ...preview.conflicts], scopes).length) throw new Error("aggregate refresh changes paths outside canonical task scope");
   return { written_by: "host-task-reconciliation", kind: "aggregate-refresh",
     task_id: entry.task_id, attempt_id: entry.attempt_id, scope_base_sha: base,
@@ -911,7 +915,8 @@ export async function executeTaskAction(params, context = {}, injected = {}) {
           run_dir: runDir,
           branch,
           base_sha: base,
-          mode: artifacts.plan.mode.toUpperCase(),
+          // The host triage is the floor: a plan may raise a lane to FULL, never lower it.
+          mode: owner.mode === "FULL" || String(artifacts.plan.mode).toUpperCase() === "FULL" ? "FULL" : "LIGHT",
           plan_sha256: artifacts.plan_sha256,
           spec_sha256: artifacts.spec_sha256,
           ...(contexts.has(task.id) ? { context_handoff: contexts.get(task.id) } : {}),

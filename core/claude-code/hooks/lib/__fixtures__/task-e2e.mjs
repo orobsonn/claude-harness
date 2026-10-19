@@ -178,8 +178,8 @@ export async function waitSettledAsync(project, claudeBin, attempts = 10) {
 }
 
 /** Dispatch every scenario task of one project at once and return the settled status. */
-export async function runScenarioProject(t, { tasks, mode = "full", lanes, prepare }) {
-  const project = createVendoredTaskProject(t, { tasks, mode });
+export async function runScenarioProject(t, { tasks, mode = "full", triageMode = mode.toUpperCase(), lanes, prepare }) {
+  const project = createVendoredTaskProject(t, { tasks, mode, triageMode });
   if (prepare) prepare(project);
   const { bin } = writeFakeClaude(project, { tasks: Object.fromEntries(Object.entries(lanes).map(([id, launches]) => [id, { launches }])) });
   const dispatched = await tasksCliAsync(project, "dispatch", { task_ids: Object.keys(lanes) }, { claudeBin: bin });

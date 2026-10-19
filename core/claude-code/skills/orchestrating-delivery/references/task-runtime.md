@@ -49,8 +49,9 @@ siga a ordem abaixo de forma que a evidência nativa a comprove.
    Bash: não peça que rode testes. Inclua no brief a memória de runner/fixture do projeto, se houver.
 2. **RED executável**: rode o teste travado e guarde a saída e o exit code. Falha de infraestrutura
    (import quebrado, zero testes coletados, erro de fixture) não é RED. Para módulo de produção
-   ainda inexistente, o test-author entrega um stub **novo** que lança `not implemented`, dentro do
+   ainda inexistente, peça no brief do test-author um stub **novo** que lança `not implemented`, dentro do
    escopo, para o teste coletar e ficar RED de verdade (ele não altera arquivo de produto existente).
+   O stub entra no freeze commit junto com os testes.
 3. **Fidelidade**: `compliance` (`dispatch_routes.compliance`) com a linha `[HARNESS_TASK_FIDELITY]`
    antes do marcador de contexto. Entregue a task canônica, os paths de teste e fixture e a saída do
    RED com o exit code. Ele confere se o arquivo transcreve **todas** as asserções aprovadas e
@@ -91,8 +92,10 @@ não autoriza esse caminho; só o contrato canônico autoriza.
   e os olhos: o host só aceita revisões feitas sobre um HEAD commitado, com a árvore limpa (ver
   Correções para o que vale depois de um fix).
 - Formatos: compliance `## Veredito: pass|partial|fail` (só `pass` é positivo); adversary um bloco
-  ```json `{"issues":[…]}` (positivo sem issue `high`/`medium` ARMED); security ```json
-  `{"verdict":"SECURE|UNSAFE","issues":[…]}`.
+  ```json `{"issues":[…]}` (positivo só sem nenhuma issue `high`/`medium`); security ```json
+  `{"verdict":"SECURE|UNSAFE","issues":[…]}` (positivo só com `SECURE` e sem issue `high`/`medium`).
+  Na lane o rótulo `UNARMED` não libera nada: a lane não estaciona finding (não abre issue), então
+  todo `high`/`medium` é corrigido aqui ou vira `BLOCKED` para o pai global.
 
 ## Correções
 
@@ -113,9 +116,11 @@ não autoriza esse caminho; só o contrato canônico autoriza.
 - Reabra o test-author só quando o próprio teste ou fixture travado estiver errado, ou quando um
   observável aprovado estiver de fato sem cobertura. Antes disso, faça um **commit seletivo de
   checkpoint** do produto já implementado e o `capture-verified` com a árvore limpa (o gate nega o
-reparo com produto não commitado ou não capturado). Depois
-  repita fidelidade → freeze só dos testes → `fidelity-pass`, e então sniper se ainda houver
-  defeito de produto, com commit e captura. Nunca remova produto para fabricar RED.
+  reparo com produto não commitado). Depois repita fidelidade → freeze só dos testes →
+  `fidelity-pass` → `capture-verified` no novo HEAD, e então sniper se ainda houver defeito de
+  produto, com commit e captura. Na fidelidade desse reparo o teste pode já estar GREEN: entregue ao
+  compliance a saída atual e a prova concreta do erro do teste anterior. Nunca remova produto para
+  fabricar RED.
 - Se a correção exigir arquivo de outra task, retorne `BLOCKED` com finding, arquivo, task dona,
   HEAD e evidência. O pai global corrige a dona e retoma esta task.
 - Se a correção exigir um arquivo fora de `scope_paths` que não é de outra task, retorne `BLOCKED`
@@ -129,8 +134,9 @@ Despache o sniper para resolver **somente** os arquivos indicados, combinando o 
 task com o que o pai já integrou. Adicione os arquivos resolvidos e commite o merge existente. Não
 inicie outro merge, rebase ou cherry-pick, e não altere arquivos sem conflito nesse commit. Depois:
 testes, `capture-verified` e os olhos afetados no novo HEAD. Se o host disser que já mergeou uma
-correção de dependência ou um refresh do agregado, reaproveite a evidência válida e refaça só as
-obrigações afetadas.
+correção de dependência ou um refresh do agregado, o HEAD mudou: a captura anterior não vale mais.
+Rode os testes e o `capture-verified` no novo HEAD, reaproveite as revisões que continuam válidas e
+refaça só as obrigações afetadas.
 
 ## Retomada
 
@@ -144,8 +150,8 @@ Mantenha em `<contract.run_dir>/shared_context.md` (até 8 KiB) só descobertas
 verificadas, a evidência delas e a condição de revalidação, sem segredos. O host devolve esse diário
 ao pai global quando a task fica pronta.
 
-Antes de encerrar, confirme: árvore de produto limpa, último `capture-verified` depois do último
-executor ou sniper, olhos aplicáveis positivos no HEAD final e `regate-passed` para todo
+Antes de encerrar, confirme: árvore de produto limpa, último `capture-verified` no HEAD final, depois
+da última mão escritora (test-author, executor ou sniper) e sem commit depois dele, olhos aplicáveis positivos no HEAD final e `regate-passed` para todo
 `regate-pending`. Então retorne ao pai global, curto e em pt-br: SHAs completos de freeze,
 implementação e correções (`git log -1 --format=%H`, nunca abreviados por inferência), comandos e
 resultados dos testes, vereditos dos olhos, como os findings foram resolvidos, e qualquer `BLOCKED`
