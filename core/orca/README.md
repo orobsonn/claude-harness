@@ -266,6 +266,16 @@ orca worktree create ... --base-branch "origin/$baseBranch"
 **O `fetch` sozinho não resolve** — o branch local continua parado. A base precisa ser pedida pelo
 nome **remoto**. E `clonePath` é obrigatório de propósito: com default, o bug volta calado.
 
+## Trust do Claude Code (agente `claude`)
+
+Com `agent: "claude"` (o padrão), cada tick marca o repositório principal do `clonePath` como
+confiável no config global do Claude Code (`~/.claude.json`, ou `$CLAUDE_CONFIG_DIR/.claude.json`):
+`projects[<repo>].hasTrustDialogAccepted = true`. Sem isso o TUI numa worktree nova do Orca para no
+prompt "trust this folder?" e a run fica parada até o deadline. A escrita é atômica (arquivo
+temporário + rename), preserva o resto do config e o modo do arquivo, segue symlink de dotfile
+manager e só acontece quando o trust ainda não está registrado. Se você não quer isso, aceite o
+trust uma vez abrindo o Claude Code no clone: a partir daí o tick não escreve nada.
+
 ## Revisão de PR + merge condicional
 
 **O prompt é versionado aqui** (`review-prompt.md`) — substitua `<OWNER/REPO>` e `<BASE>` e instale

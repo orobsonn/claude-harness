@@ -2689,3 +2689,15 @@ test("LOCKED #808 §6.1-h: decide() wires isRoutineFn into the advisory too — 
 // The spec is explicit that these are accepted, not silently missed — see spec §1.5 point 4 and
 // correction 3's final paragraph.
 // ---------------------------------------------------------------------------
+
+test("inside a task lane the executor fidelity precondition is delegated to the lane gate", () => {
+  const payload = { session_id: "lane-1", tool_name: "Agent", tool_input: { subagent_type: "executor", model: "haiku" } };
+  const deps = {
+    readTriage: () => ({ mode: "FULL", feature_id: "demo" }),
+    readGateStateFn: () => ({}),
+    readActiveHandFamilyFn: () => ({ family: "claude" }),
+    isHeadlessFn: () => false,
+  };
+  assert.equal(decide(payload, { ...deps, isTaskLaneFn: () => false }).allow, false, "outside a lane the fidelity rail still applies");
+  assert.equal(decide(payload, { ...deps, isTaskLaneFn: () => true }).allow, true);
+});

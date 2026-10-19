@@ -188,6 +188,13 @@ export const FRESH_NATIVE_PATHS = {
     ".claude/skills/creating-issues/SKILL.md",
     ".claude/rules/creating-issues.md",
     ".github/ISSUE_TEMPLATE/harness-task.yml",
+    // Parallel task lanes: the host CLI, the lane gate/ledger, the launcher and the lane prompt.
+    ".claude/hooks/tasks.mjs",
+    ".claude/hooks/task-gate.mjs",
+    ".claude/hooks/task-ledger.mjs",
+    ".claude/hooks/lib/task-launcher.mjs",
+    ".claude/shared/lib/task-worker.mjs",
+    ".claude/skills/orchestrating-delivery/references/task-runtime.md",
   ],
   codex: [
     ".codex/agents/planner.toml",
@@ -1084,6 +1091,7 @@ function collectDestinationTree(src, destination, entries) {
     if (name.startsWith("._")) continue;
     const child = join(src, name);
     if (statSync(child).isFile() && name.endsWith(".test.mjs")) continue;
+    if (name === "__fixtures__" && statSync(child).isDirectory()) continue;
     collectDestinationTree(child, join(destination, name), entries);
   }
 }
@@ -2261,14 +2269,14 @@ function readVersion(repoDir) {
 /**
  * @description Pure predicate for the framework-owned copy filter.
  * Returns true when the given source path should be included in the vendor copy,
- * false when it should be excluded. Only `.test.mjs` files are excluded — all other
- * files (including `settings.json` in hand-config/) survive the filter and reach
- * consumer projects.
+ * false when it should be excluded. Test artifacts are excluded — `.test.mjs` files and
+ * anything under a `__fixtures__/` directory (e.g. the parallel-task e2e fakes); all other
+ * files (including `settings.json` in hand-config/) survive the filter and reach consumer projects.
  * @param {string} src - Absolute or relative source file path.
  * @returns {boolean} True = include, false = exclude.
  */
 export function isFrameworkCopyIncluded(src) {
-  return !src.endsWith(".test.mjs");
+  return !src.endsWith(".test.mjs") && !String(src).split(/[\\/]/).includes("__fixtures__");
 }
 
 /** @description Copies framework-owned dirs/files into .claude/, overwriting. */
@@ -2807,13 +2815,86 @@ function mergePermissionArray(path, existingArr, newArr, ledgerByPath, projectGe
   return { value: result, owned: shipped, report };
 }
 
+function isHookArrayPath(path) {
+  return path.length === 2 && path[0] === "hooks";
+}
+
+/**
+ * Merges one `hooks.<Event>` array. Untouched harness wiring (equal to the manifest's owned value)
+ * is replaced by the new generation. A customized array keeps every operator group and hook; a hook
+ * the new generation ships is ADDED (into the group with its matcher, or a new group) only when it is
+ * genuinely new — absent from the previous generation's owned wiring. A shipped hook that WAS owned
+ * before and is gone now was removed by the operator and stays removed. Identity is (matcher, the
+ * `.claude/hooks/<script>` the command runs), so an operator who quoted or reformatted a command never
+ * gets a duplicate. Without this, a consumer that ever touched a hook array would never receive new
+ * harness wiring (e.g. the parallel-lane gate and ledger, which the host refuses to run without).
+ */
+const HOOK_SCRIPT = /\.claude\/hooks\/([A-Za-z0-9._/-]+\.mjs)/;
+// Hook scripts first shipped with the parallel task lanes: a customized array with no owned baseline
+// still receives these (the host refuses to dispatch lanes without them); nothing older is re-added.
+const UNBASELINED_HOOK_ADDITIONS = new Set(["task-gate.mjs", "task-ledger.mjs", "task-continuation.mjs", "task-plan-review.mjs"]);
+function hookIdentity(matcher, hook) {
+  const command = isPlainObject(hook) && typeof hook.command === "string" ? hook.command : "";
+  const script = command.match(HOOK_SCRIPT)?.[1];
+  return `${matcher}\u0000${script ?? command.trim()}`;
+}
+
+function mergeHookArray(path, existingArr, newArr, ownedArr) {
+  if (existingArr === undefined) return { value: newArr, owned: newArr, report: [{ path, action: "added", value: newArr }] };
+  if (deepEqualValue(existingArr, newArr)) return { value: existingArr, owned: newArr, report: [] };
+  if (ownedArr !== undefined && deepEqualValue(existingArr, ownedArr)) {
+    return { value: newArr, owned: newArr, report: [{ path, action: "updated", from: existingArr, to: newArr }] };
+  }
+  if (!Array.isArray(existingArr) || !Array.isArray(newArr)) return { value: existingArr, owned: undefined, report: [{ path, action: "kept-custom", value: existingArr }] };
+  const matcherOf = (group) => (isPlainObject(group) && typeof group.matcher === "string" ? group.matcher : "");
+  const identities = (groups) => new Set((Array.isArray(groups) ? groups : []).flatMap((group) =>
+    isPlainObject(group) && Array.isArray(group.hooks) ? group.hooks.map((hook) => hookIdentity(matcherOf(group), hook)) : []));
+  const previouslyOwned = identities(ownedArr);
+  // An operator matcher that already covers the shipped one ("Agent|Task" ⊇ "Agent", "*" ⊇ all)
+  // counts as present, so widening a matcher never installs the harness hook twice.
+  const tokens = (matcher) => (matcher === "" || matcher === "*" ? null : new Set(matcher.split("|").map((item) => item.trim())));
+  const covers = (existing, shipped) => { const outer = tokens(existing); const inner = tokens(shipped); return outer === null || (inner !== null && [...inner].every((item) => outer.has(item))); };
+  const scriptOf = (hook) => (isPlainObject(hook) && typeof hook.command === "string" ? hook.command.match(HOOK_SCRIPT)?.[1] ?? hook.command.trim() : "");
+  const merged = existingArr.map((group) => (isPlainObject(group) && Array.isArray(group.hooks) ? { ...group, hooks: [...group.hooks] } : group));
+  const present = identities(merged);
+  const report = [];
+  for (const shippedGroup of newArr) {
+    if (!isPlainObject(shippedGroup) || !Array.isArray(shippedGroup.hooks)) continue;
+    const matcher = matcherOf(shippedGroup);
+    for (const hook of shippedGroup.hooks) {
+      const id = hookIdentity(matcher, hook);
+      if (present.has(id)) continue;
+      const coveredElsewhere = merged.some((group) => isPlainObject(group) && Array.isArray(group.hooks) && covers(matcherOf(group), matcher) &&
+        group.hooks.some((existingHook) => scriptOf(existingHook) === scriptOf(hook)));
+      if (coveredElsewhere) continue;
+      // Without a previous owned baseline (older manifests dropped it for any customized array), an
+      // absent shipped hook may be an operator removal: only the hooks this generation introduced
+      // are added, and every other absence is kept as the operator left it.
+      const unbaselined = !Array.isArray(ownedArr) && !UNBASELINED_HOOK_ADDITIONS.has(scriptOf(hook));
+      if (previouslyOwned.has(id) || unbaselined) {
+        report.push({ path, action: "kept-removed", value: { matcher, command: hook?.command } });
+        continue;
+      }
+      const target = merged.find((group) => isPlainObject(group) && Array.isArray(group.hooks) && matcherOf(group) === matcher);
+      if (target) target.hooks.push(hook);
+      else merged.push({ ...shippedGroup, hooks: [hook] });
+      present.add(id);
+      report.push({ path, action: "added", value: { matcher, command: hook?.command } });
+    }
+  }
+  if (!report.length) report.push({ path, action: "kept-custom", value: existingArr });
+  // The shipped generation becomes the owned baseline, so the next upgrade can tell an operator
+  // removal (owned before, missing now) from a hook that is new again.
+  return { value: merged, owned: newArr, report };
+}
+
 /**
  * Recursively merges one node of the settings tree. Mirrors `mergeNode` in
  * core/shared/lib/opencode-config-migration.mjs, adapted for settings.json's shape: a
  * `permissions.{allow,deny,ask}` path gets set-union array treatment (`mergePermissionArray`);
- * every other array (e.g. a `hooks.*` entry) is an opaque leaf, replaced only when the existing
- * value still equals what the manifest recorded as harness-owned — never force-overwritten,
- * since there is no ledger of retired hook wiring to arbitrate a diverged value.
+ * a `hooks.<Event>` array gets a hook-level union (`mergeHookArray`); every other array is an
+ * opaque leaf, replaced only when the existing value still equals what the manifest recorded as
+ * harness-owned — never force-overwritten.
  */
 function mergeSettingsNode(path, existingNode, newNode, ownedNode, ledgerByPath, projectGeneration) {
   if (isPermissionArrayPath(path)) {
@@ -2822,6 +2903,7 @@ function mergeSettingsNode(path, existingNode, newNode, ownedNode, ledgerByPath,
     // would invite a future "restore the owned check as a shortcut" regression of issue #487.
     return mergePermissionArray(path, existingNode, newNode, ledgerByPath, projectGeneration);
   }
+  if (isHookArrayPath(path)) return mergeHookArray(path, existingNode, newNode, ownedNode);
 
   const existingIsMissingOrObject = existingNode === undefined || isPlainObject(existingNode);
   if (isPlainObject(newNode) && existingIsMissingOrObject) {

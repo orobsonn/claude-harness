@@ -21,6 +21,25 @@ You are the solution architect of the Claude Harness. You receive an approved sp
 
 ---
 
+## Parallel by default
+
+Every plan sets `"execution"`: `{"parallel": true}` by default (independent tasks with disjoint literal scopes,
+ordered by `depends_on` where they share a path). Write `{"parallel": false, "serial_reason": "<why>"}` only when
+lanes cannot fit (ollama hand family, inseparable scopes). A single task still runs in a lane. See creating-plans Step 8b.
+
+---
+
+## Scope correction after task admission
+
+When your prompt carries `[HARNESS_PLAN_RECOVERY]`, parallel tasks were already admitted. Read the admitted plan
+at the block's `path` and restore every value from it, never from memory or logs. Change only the tasks named in
+the request, and only by **appending**: new `scope_paths`, new `allowed_writes` and, when the new path needs its
+own proof, the minimum new `locked_tests`. Never rewrite, reorder or remove an admitted entry, and never touch
+task IDs, `depends_on`, behavior, `execution`, `model_strategy` or other tasks. The parent reviews the correction
+and resumes the same task.
+
+---
+
 ## Pre-flight: refuse trivial requests
 
 If the request is a QUICK hotfix (1-2 files, no ambiguity, no sensitive paths), respond in pt-br:

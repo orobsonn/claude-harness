@@ -87,6 +87,36 @@ function recognizeRunnerOrNode(cmd) {
 }
 
 /**
+ * @description Recognizes a monorepo workspace fan-out of a test script — `pnpm -r|--recursive [run]
+ * test…`, `npm test|run test… --workspaces|-ws`, `yarn workspaces [foreach …] run test…`,
+ * `turbo run test…` — which runs every package's own test script. Monorepos declare their CI tests
+ * this way (`"test": "pnpm -r run test"`), and treating it as "not a test runner" made the delivery
+ * gate find zero CI commands (seen on a real app-rc run). Returns the command or null.
+ * @param {string} cmd
+ * @returns {string|null}
+ */
+function recognizeWorkspaceTestFanOut(cmd) {
+  const tokens = cmd.split(/\s+/).filter(Boolean);
+  const isTestScript = (name) => typeof name === "string" && /^test(?:[:.-]|$)/.test(name);
+  const head = tokens[0];
+  if (head === "pnpm" && tokens.some((t) => t === "-r" || t === "--recursive")) {
+    const rest = tokens.slice(1).filter((t) => !t.startsWith("-"));
+    const name = rest[0] === "run" ? rest[1] : rest[0];
+    return isTestScript(name) ? cmd : null;
+  }
+  if (head === "npm" && tokens.some((t) => t === "--workspaces" || t === "-ws")) {
+    if (tokens[1] === "test") return cmd;
+    return (tokens[1] === "run" || tokens[1] === "run-script") && isTestScript(tokens[2]) ? cmd : null;
+  }
+  if (head === "yarn" && tokens[1] === "workspaces") {
+    const run = tokens.indexOf("run");
+    return run > 0 && isTestScript(tokens[run + 1]) ? cmd : null;
+  }
+  if (head === "turbo" && tokens[1] === "run" && isTestScript(tokens[2])) return cmd;
+  return null;
+}
+
+/**
  * @description Extracts the package.json script name from an `npm`/`yarn`/`pnpm` test-script call
  * (RJ-1 script-indirection branch), or null when the command is not such a call. Recognized forms:
  * `npm test`, `npm run <name>`, `npm run-script <name>`, `yarn <name>`, `yarn run <name>`,
@@ -254,7 +284,9 @@ function classifyCommand(raw, source, scripts, commands, unresolved, seen) {
 
   const resolved = resolveScript(cmd, scripts);
   if (resolved !== null) {
-    const recognized = recognizeRunnerOrNode(resolved);
+    // A workspace fan-out is kept in its resolved form so `pnpm test` (CI) and the
+    // `pnpm -r run test` script itself dedupe to one command.
+    const recognized = recognizeRunnerOrNode(resolved) ?? recognizeWorkspaceTestFanOut(resolved);
     if (recognized && UNSPLIT_SHELL_METACHARACTERS.test(recognized)) {
       unresolved.push({ command: recognized, source });
       return;
@@ -266,7 +298,7 @@ function classifyCommand(raw, source, scripts, commands, unresolved, seen) {
     return;
   }
 
-  const recognized = recognizeRunnerOrNode(stripLauncher(cmd));
+  const recognized = recognizeRunnerOrNode(stripLauncher(cmd)) ?? recognizeWorkspaceTestFanOut(cmd);
   if (recognized && UNSPLIT_SHELL_METACHARACTERS.test(recognized)) {
     unresolved.push({ command: recognized, source });
     return;

@@ -30,8 +30,9 @@ import {
   hashTaskReceipt,
   taskAdmissionPath,
   taskRegistryPath,
-  unsupportedTaskScopePattern,
 } from "./task-contract.mjs";
+import { taskScopeOf, taskScopesOverlap } from "../../shared/lib/task-contract.mjs";
+import { requireCleanTaskWorktree } from "../../shared/lib/task-git.mjs";
 import {
   captureTaskRuntime,
   verifyTaskRuntime,
@@ -71,65 +72,10 @@ const volatile = (name) =>
   name.startsWith("node_modules/") ||
   /^\.pi\/\.harness-version-check-cache(?:\.tmp)?$/.test(name);
 function requireClean(root, label = "parent") {
-  const changes = [
-    ...git(root, "diff", "--name-only", "-z", "--").split("\0"),
-    ...git(root, "diff", "--cached", "--name-only", "-z", "--").split("\0"),
-  ].filter(Boolean);
-  const untracked = git(
-    root,
-    "ls-files",
-    "--others",
-    "--exclude-standard",
-    "-z",
-  )
-    .split("\0")
-    .filter(Boolean);
-  const pending = [...new Set([...changes, ...untracked])].filter((name) => !volatile(name));
-  if (pending.length)
-    throw new Error(
-      `${label} worktree must be clean before task admission or integration: ${root}; pending paths: ${JSON.stringify(pending).slice(0, 2000)}. Preserve the changes and resolve this task’s reported blocker before retrying.`,
-    );
+  requireCleanTaskWorktree(root, volatile, label);
 }
-function scopeOf(task) {
-  const entries = [
-    ...task.scope_paths,
-    ...(Array.isArray(task.allowed_writes) ? task.allowed_writes : []),
-    ...(task.locked_tests ?? []).flatMap((test) => [
-      test.path,
-      ...(test.fixture_paths ?? []),
-    ]),
-  ];
-  return entries.map((entry) => {
-    if (
-      typeof entry !== "string" ||
-      !entry ||
-      path.posix.isAbsolute(entry) ||
-      entry.includes("\\") ||
-      entry.includes("\0") ||
-      entry.split("/").includes("..")
-    )
-      throw new Error("task scope must use safe repo-relative paths");
-    if (unsupportedTaskScopePattern(entry))
-      throw new Error(
-        `task scope ${JSON.stringify(entry)} uses unsupported glob syntax; use an explicit file or directory path`,
-      );
-    const normalized = path.posix.normalize(entry).replace(/\/$/, "");
-    if (normalized === ".") return "";
-    return normalized;
-  });
-}
-export function taskScopesOverlap(a, b) {
-  return scopeOf(a).some((left) =>
-    scopeOf(b).some(
-      (right) =>
-        !left ||
-        !right ||
-        left === right ||
-        left.startsWith(`${right}/`) ||
-        right.startsWith(`${left}/`),
-    ),
-  );
-}
+const scopeOf = taskScopeOf;
+export { taskScopesOverlap };
 function admission(context) {
   const root = fs.realpathSync(context.projectRoot);
   if (context.isChild || !isSafeSessionId(context.sessionId))

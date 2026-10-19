@@ -46,6 +46,7 @@ import {
   writeSettings,
   installRepoFiles,
   assertFreshNativeInstall,
+  findMissingFreshNativePaths,
   OC_RETIRED_FILES,
   pruneOcRetiredFiles,
   preflightCodexVendor,
@@ -1526,6 +1527,13 @@ test("vendor-core: no *.test.mjs files are copied to hooks", async (t) => {
 });
 
 // locked_test — hand-config filter predicate (AC v2.3)
+test("isFrameworkCopyIncluded: test fixtures under __fixtures__ are EXCLUDED", () => {
+  assert.equal(isFrameworkCopyIncluded("/core/claude-code/hooks/lib/__fixtures__/fake-claude.mjs"), false);
+  assert.equal(isFrameworkCopyIncluded("/core/claude-code/hooks/lib/__fixtures__"), false);
+  assert.equal(isFrameworkCopyIncluded("/core/claude-code/hooks/lib/task-launcher.mjs"), true);
+  assert.equal(isFrameworkCopyIncluded("/core/claude-code/hooks/lib/fixtures-helper.mjs"), true);
+});
+
 test("isFrameworkCopyIncluded: settings.json in hand-config is INCLUDED (returns true)", () => {
   const src =
     "skills/orchestrating-delivery/references/hand-config/settings.json";
@@ -3244,5 +3252,173 @@ test("writeSettings: a malformed manifest.owned degrades gracefully and never bl
     assert.equal(readFileSync(join(claudeDir, "settings.json"), "utf8"), originalConfig);
   } finally {
     rmSync(claudeDir, { recursive: true, force: true });
+  }
+});
+
+test("vendor-core: parallel task lanes are vendored whole, wired and import-clean, without test fixtures", () => {
+  const target = mkdtempSync(join(tmpdir(), "vendor-task-lanes-"));
+  try {
+    mkdirSync(join(target, ".claude"), { recursive: true });
+    // A consumer with its own settings (no customized hook arrays): its keys survive, ours are merged in.
+    writeFileSync(join(target, ".claude", "settings.json"), JSON.stringify({ env: { CONSUMER_FLAG: "1" } }, null, 2));
+    const harnessStatus = () => spawnSync("git", ["status", "--porcelain", "--untracked-files=all", "--", ".", ":(exclude)node_modules"], { cwd: harnessRoot, encoding: "utf8" }).stdout;
+    const before = harnessStatus();
+    const result = spawnSync(process.execPath, [vendorCoreScript, "--source", harnessRoot, "--target", target, "--runtime", "claude"], { encoding: "utf8" });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    assert.match(result.stdout, /vendored imports resolved/);
+    assert.deepEqual(findMissingFreshNativePaths(target, "claude"), []);
+    for (const rel of [
+      ".claude/hooks/tasks.mjs", ".claude/hooks/task-gate.mjs", ".claude/hooks/task-ledger.mjs", ".claude/hooks/task-plan-review.mjs",
+      ".claude/hooks/lib/task-admission.mjs", ".claude/hooks/lib/task-coordinator.mjs", ".claude/hooks/lib/task-events.mjs",
+      ".claude/hooks/lib/task-lane-contract.mjs", ".claude/hooks/lib/task-launcher.mjs", ".claude/hooks/lib/task-paths.mjs",
+      ".claude/hooks/lib/task-receipts.mjs", ".claude/hooks/lib/task-reconciliation.mjs", ".claude/hooks/lib/task-runtime.mjs",
+      ".claude/hooks/lib/task-worker.mjs", ".claude/shared/lib/task-contract.mjs", ".claude/shared/lib/task-context.mjs",
+      ".claude/shared/lib/task-git.mjs", ".claude/shared/lib/task-process.mjs", ".claude/shared/lib/task-worker.mjs",
+      ".claude/shared/lib/file-lock.mjs", ".claude/skills/orchestrating-delivery/references/task-runtime.md",
+      ".claude/skills/orchestrating-delivery/references/parallel-tasks.md",
+    ]) {
+      assert.ok(existsSync(join(target, rel)), `${rel} vendored`);
+    }
+    assert.equal(existsSync(join(target, ".claude/hooks/lib/__fixtures__")), false, "test fixtures are never vendored");
+    assert.equal(existsSync(join(target, ".claude/hooks/task-e2e.test.mjs")), false);
+    const settings = JSON.parse(readFileSync(join(target, ".claude", "settings.json"), "utf8"));
+    const commands = (event, matcher) => (settings.hooks[event] ?? []).filter((group) => (group.matcher ?? "*") === matcher).flatMap((group) => group.hooks.map((hook) => hook.command));
+    assert.equal(settings.env.CONSUMER_FLAG, "1", "the consumer's own settings survive the merge");
+    assert.ok(commands("PreToolUse", "*").some((command) => command.endsWith("/.claude/hooks/task-gate.mjs")));
+    assert.ok(commands("PreToolUse", "*").some((command) => command.endsWith("/.claude/hooks/task-ledger.mjs")));
+    for (const event of ["PostToolUse", "PostToolUseFailure", "SubagentStop"]) {
+      assert.ok(commands(event, "*").some((command) => command.endsWith("/.claude/hooks/task-ledger.mjs")), `${event} ledger`);
+    }
+    assert.ok(commands("PostToolUse", "Agent").some((command) => command.endsWith("/.claude/hooks/task-plan-review.mjs")));
+    // Lane state lives under .claude/plans/ (task-runs/, worktrees, jobs), which the vendored ignore covers.
+    assert.match(readFileSync(join(target, ".claude", ".gitignore"), "utf8"), /^plans\/$/m);
+    // The vendored CLI and launcher load in the consumer layout.
+    for (const entry of [".claude/hooks/tasks.mjs", ".claude/hooks/lib/task-launcher.mjs", ".claude/hooks/lib/task-worker.mjs", ".claude/hooks/task-gate.mjs"]) {
+      const loaded = spawnSync(process.execPath, ["--input-type=module", "-e", `await import(${JSON.stringify(join(target, entry))});`], { encoding: "utf8" });
+      assert.equal(loaded.status, 0, `${entry}: ${loaded.stderr}`);
+    }
+    assert.equal(harnessStatus(), before, "vendoring never writes into the harness repository");
+    // AGENTS.md: the harness is never vendored at the repository root (test state under a
+    // gitignored .claude/plans/ may exist there; vendored artifacts may not).
+    for (const forbidden of [".claude/hooks", ".claude/settings.json", ".claude/shared", ".codex/hooks.json", ".opencode/plugin", ".pi/harness"]) {
+      assert.equal(existsSync(join(harnessRoot, forbidden)), false, `${forbidden} at the repo root`);
+    }
+  } finally {
+    rmSync(target, { recursive: true, force: true });
+  }
+});
+
+test("vendor-core: a consumer with customized hook arrays still receives the parallel-lane wiring, once", async () => {
+  const target = mkdtempSync(join(tmpdir(), "vendor-hook-union-"));
+  try {
+    mkdirSync(join(target, ".claude"), { recursive: true });
+    // An older harness generation's wiring plus one operator hook, with no manifest (an update in place).
+    const custom = { type: "command", command: "node scripts/my-audit.mjs" };
+    writeFileSync(join(target, ".claude", "settings.json"), JSON.stringify({ hooks: {
+      PreToolUse: [
+        { matcher: "Bash", hooks: [{ type: "command", command: "node ${CLAUDE_PROJECT_DIR}/.claude/hooks/entry-gate.mjs" }, custom] },
+        { matcher: "Write|Edit", hooks: [{ type: "command", command: "node ${CLAUDE_PROJECT_DIR}/.claude/hooks/plan-write-gate.mjs" }] },
+      ],
+      PostToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command: "node ${CLAUDE_PROJECT_DIR}/.claude/hooks/stamp-triage.mjs" }] }],
+      SessionStart: [{ matcher: "startup", hooks: [{ type: "command", command: "node ${CLAUDE_PROJECT_DIR}/.claude/hooks/reinject-state.mjs" }] }],
+    } }, null, 2));
+    const vendor = () => spawnSync(process.execPath, [vendorCoreScript, "--source", harnessRoot, "--target", target, "--runtime", "claude"], { encoding: "utf8" });
+    const first = vendor();
+    assert.equal(first.status, 0, first.stderr || first.stdout);
+    const { missingLaneHooks } = await import(pathToFileURL(join(target, ".claude/hooks/lib/task-runtime.mjs")).href);
+    assert.deepEqual(missingLaneHooks(target), [], "the host would run lanes in this consumer");
+    const settings = () => JSON.parse(readFileSync(join(target, ".claude", "settings.json"), "utf8"));
+    const bash = settings().hooks.PreToolUse.find((group) => group.matcher === "Bash").hooks.map((hook) => hook.command);
+    assert.ok(bash.includes(custom.command), "the operator's own hook survives");
+    const afterFirst = JSON.stringify(settings());
+    assert.equal(vendor().status, 0);
+    assert.equal(JSON.stringify(settings()), afterFirst, "a second vendor adds nothing (no duplicate hooks)");
+    const all = settings().hooks.PreToolUse.flatMap((group) => group.hooks.map((hook) => `${group.matcher}|${hook.command}`));
+    assert.equal(new Set(all).size, all.length);
+  } finally {
+    rmSync(target, { recursive: true, force: true });
+  }
+});
+
+test("vendor-core: quoted hook commands never duplicate and an operator-removed hook stays removed", () => {
+  const target = mkdtempSync(join(tmpdir(), "vendor-hook-identity-"));
+  try {
+    mkdirSync(join(target, ".claude"), { recursive: true });
+    writeFileSync(join(target, ".claude", "settings.json"), JSON.stringify({}, null, 2));
+    const vendor = () => spawnSync(process.execPath, [vendorCoreScript, "--source", harnessRoot, "--target", target, "--runtime", "claude"], { encoding: "utf8" });
+    const settingsFile = join(target, ".claude", "settings.json");
+    const read = () => JSON.parse(readFileSync(settingsFile, "utf8"));
+    assert.equal(vendor().status, 0);
+    // The operator quotes every command (paths with spaces) and removes one harness hook.
+    const quoted = read();
+    for (const groups of Object.values(quoted.hooks)) {
+      for (const group of groups) for (const hook of group.hooks) hook.command = hook.command.replace("node ${CLAUDE_PROJECT_DIR}/", 'node "${CLAUDE_PROJECT_DIR}"/');
+    }
+    const bash = quoted.hooks.PreToolUse.find((group) => group.matcher === "Bash");
+    const removed = bash.hooks.find((hook) => /lavish-command-gate\.mjs/.test(hook.command));
+    assert.ok(removed, "the harness ships lavish-command-gate on PreToolUse Bash");
+    bash.hooks = bash.hooks.filter((hook) => hook !== removed);
+    writeFileSync(settingsFile, JSON.stringify(quoted, null, 2));
+    assert.equal(vendor().status, 0);
+    const after = read();
+    for (const [event, groups] of Object.entries(after.hooks)) {
+      const ids = groups.flatMap((group) => group.hooks.map((hook) => `${group.matcher ?? ""}|${hook.command.match(/\.claude\/hooks\/([A-Za-z0-9._/-]+\.mjs)/)?.[1] ?? hook.command}`));
+      assert.equal(new Set(ids).size, ids.length, `${event}: no hook is installed twice`);
+    }
+    const bashAfter = after.hooks.PreToolUse.find((group) => group.matcher === "Bash").hooks.map((hook) => hook.command);
+    assert.ok(!bashAfter.some((command) => /lavish-command-gate\.mjs/.test(command)), "a hook the operator removed is not reinstated");
+    assert.ok(bashAfter.every((command) => command.includes('"${CLAUDE_PROJECT_DIR}"')), "the operator's quoting is kept");
+  } finally {
+    rmSync(target, { recursive: true, force: true });
+  }
+});
+
+test("vendor-core: without an owned baseline (old or missing manifest) a removed hook stays removed; only the lane hooks are added", async () => {
+  const target = mkdtempSync(join(tmpdir(), "vendor-hook-unbaselined-"));
+  try {
+    mkdirSync(join(target, ".claude"), { recursive: true });
+    writeFileSync(join(target, ".claude", "settings.json"), "{}");
+    const vendor = () => spawnSync(process.execPath, [vendorCoreScript, "--source", harnessRoot, "--target", target, "--runtime", "claude"], { encoding: "utf8" });
+    assert.equal(vendor().status, 0);
+    const file = join(target, ".claude", "settings.json");
+    const settings = JSON.parse(readFileSync(file, "utf8"));
+    const bash = settings.hooks.PreToolUse.find((group) => group.matcher === "Bash");
+    bash.hooks = bash.hooks.filter((hook) => !/lavish-command-gate\.mjs/.test(hook.command));
+    // An older generation: no lane hooks yet, and a manifest that never recorded the customized arrays.
+    for (const event of Object.keys(settings.hooks)) {
+      settings.hooks[event] = settings.hooks[event].map((group) => ({ ...group, hooks: group.hooks.filter((hook) => !/task-(?:gate|ledger|continuation|plan-review)\.mjs/.test(hook.command)) }))
+        .filter((group) => group.hooks.length);
+    }
+    writeFileSync(file, JSON.stringify(settings, null, 2));
+    rmSync(join(target, ".claude", ".harness-config-manifest.json"), { force: true });
+    assert.equal(vendor().status, 0);
+    const after = JSON.parse(readFileSync(file, "utf8"));
+    const bashAfter = after.hooks.PreToolUse.filter((group) => group.matcher === "Bash").flatMap((group) => group.hooks.map((hook) => hook.command));
+    assert.ok(!bashAfter.some((command) => /lavish-command-gate\.mjs/.test(command)), "the operator removal survives a missing baseline");
+    const { missingLaneHooks } = await import(pathToFileURL(join(target, ".claude/hooks/lib/task-runtime.mjs")).href);
+    assert.deepEqual(missingLaneHooks(target), [], "the lane hooks the host requires are added");
+  } finally {
+    rmSync(target, { recursive: true, force: true });
+  }
+});
+
+test("vendor-core: an operator matcher that widens the shipped one (Agent → Agent|Task) never duplicates its hooks", () => {
+  const target = mkdtempSync(join(tmpdir(), "vendor-hook-matcher-"));
+  try {
+    mkdirSync(join(target, ".claude"), { recursive: true });
+    writeFileSync(join(target, ".claude", "settings.json"), "{}");
+    const vendor = () => spawnSync(process.execPath, [vendorCoreScript, "--source", harnessRoot, "--target", target, "--runtime", "claude"], { encoding: "utf8" });
+    assert.equal(vendor().status, 0);
+    const file = join(target, ".claude", "settings.json");
+    const settings = JSON.parse(readFileSync(file, "utf8"));
+    for (const event of ["PreToolUse", "PostToolUse"]) for (const group of settings.hooks[event]) if (group.matcher === "Agent") group.matcher = "Agent|Task";
+    writeFileSync(file, JSON.stringify(settings, null, 2));
+    assert.equal(vendor().status, 0);
+    const after = JSON.parse(readFileSync(file, "utf8"));
+    for (const event of ["PreToolUse", "PostToolUse"]) {
+      assert.equal(after.hooks[event].filter((group) => group.matcher === "Agent").length, 0, `${event}: no second "Agent" group next to "Agent|Task"`);
+    }
+  } finally {
+    rmSync(target, { recursive: true, force: true });
   }
 });

@@ -173,6 +173,72 @@ triaging-requests
 
 > **`brainstorming` não é vendored no Claude Code.** A sessão usa `superpowers:brainstorming` **se o plugin do marketplace estiver instalado**; se não estiver, brainstorma inline com você. De qualquer forma o `planner` só é liberado depois do carimbo de brainstorm — o portão não depende do plugin.
 
+
+### 5.1 Tasks paralelas em worktrees (padrão)
+
+A entrega paralela é o padrão: o planner gera `"execution": {"parallel": true}` sempre que o plano
+cabe em lanes, e só gera um plano serial com `serial_reason` (família ollama ou escopos inseparáveis; uma task só
+também roda em lane). Com o plano paralelo, tasks independentes rodam em paralelo,
+cada uma numa **lane**: uma worktree git própria (`harness/task-<id>-<attempt>`) com uma sessão
+`claude -p` de topo que roda o laço por task só daquela task. O pai global coordena pelo CLI do host:
+
+```bash
+node .claude/hooks/tasks.mjs dispatch --json '{"task_ids":["task-1","task-2"]}'
+node .claude/hooks/tasks.mjs wait --json '{"compact":true}'      # espera no host, até 540 s
+node .claude/hooks/tasks.mjs status
+node .claude/hooks/tasks.mjs integrate --json '{"task_id":"task-1","attempt_id":"…","expected_head":"…"}'
+node .claude/hooks/tasks.mjs resume --json '{"task_id":"task-1","attempt_id":"…","instruction":"…"}'
+```
+
+O que você precisa saber:
+
+- **Quem aprova é o host.** A task só fica `ready` quando o host prova, pelo stream nativo da lane,
+  pelo ledger dos hooks e pelo Git, a ordem TDD, o freeze só com testes, a implementação, a captura e
+  os olhos no HEAD final. A integração é sempre `git merge --no-ff`, com recibo. Texto do agente
+  nunca aprova nada.
+- **Pré-requisitos:** a família de mãos `claude` (padrão), o `.claude/` vendorizado commitado e
+  um plan-reviewer com APPROVE gravado pelo hook. Plano, spec e classificação ficam congelados
+  depois da primeira admissão.
+- **Limites:** até 3 tasks por lote e rodando ao mesmo tempo. O prazo é de 2 h por lane, configurável
+  até 24 h. Nada é apagado. Registro e logs ficam em `.claude/plans/.state/<sessão>/task-runs/`. As
+  worktrees ficam **fora do repo**, em `~/.local/state/claude-harness/task-worktrees/` (ou em
+  `CLAUDE_HARNESS_TASK_WORKTREES_DIR`), porque o Claude Code recusa escrita headless sob `.claude/`.
+- **Recuperação:** `blocked` traz o motivo e os diagnósticos. Corrija com `resume` na mesma
+  task. Um conflito de merge é aberto pelo host na própria lane, para o sniper resolver. Corrigir uma
+  task já integrada abre uma barreira (entrega e novas tasks esperam) e o host reconcilia os
+  dependentes. A entrega (`git push`, `gh pr create`, shipper) só libera com todos os recibos
+  válidos no HEAD.
+- **Orquestrador em Sonnet:** o `settings.json` do harness define `"model": "sonnet"` para a sessão
+  principal (o orquestrador, pai ou serial). Mãos e olhos seguem as rotas do plano, e a lane usa o próprio
+  `--model` (`CLAUDE_HARNESS_LANE_MODEL`, padrão `sonnet`). Um projeto que já define `model` mantém o seu;
+  numa sessão, `/model` troca.
+- **VPS:** rode o pai dentro de `tmux`. As lanes são processos destacados e sobrevivem à queda da
+  sessão. `CLAUDE_HARNESS_MAX_PARALLEL_TASKS` (1–3), `CLAUDE_HARNESS_TASK_TIMEOUT_MS`,
+  `CLAUDE_HARNESS_LANE_MODEL` e `CLAUDE_HARNESS_CLAUDE_BIN` ajustam o host. Cada lane usa cerca
+  de 350 MB de RAM no pico, com os subagentes. O limite prático é a quota da conta. Medida LIVE
+  (2026-10-11): 3 lanes LIGHT triviais em 50 s, ~1 GB somado, US$ 1,16.
+
+- **Orca:** se a sessão do pai roda dentro de um workspace do Orca (`ORCA_WORKTREE_ID`), cada lane vira
+  uma worktree filha desse workspace, criada pelo Orca na base exata, e abre o Claude Code interativo
+  (TUI) num terminal do Orca. O `wait` do pai usa a espera nativa do Orca (`orca terminal wait`) e só
+  cai para a observação local quando falta handle. A pasta é marcada como confiável por padrão. Os hooks de status do Orca entram na lane, então ela aparece como agente
+  no ADE. O host continua decidindo `ready`, integrando e gravando os recibos. Depois que o registro
+  fixa o workspace do Orca, `resume` e `dispatch` só rodam de dentro dele: não há fallback local
+  silencioso. A lane no terminal usa as credenciais do shell do Orca; só o `CLAUDE_CONFIG_DIR` do pai
+  atravessa, sem segredo no job. `CLAUDE_HARNESS_ORCA_CLI` aponta outro binário do `orca`.
+- **Correção de escopo:** se uma task precisa de um arquivo fora de `scope_paths`, o pai despacha o
+  planner com o bloco `[HARNESS_PLAN_RECOVERY]` que o gate entrega e só acrescenta escopo. Depois vem
+  um APPROVE novo do plan-reviewer e o `resume` da mesma task. Não precisa de sessão nova.
+- **Config do Git mudou?** Se `.git/config`, `.git/hooks` ou `.git/info/attributes` mudarem com
+  lanes ativas, o host para e não age (uma lane pode ter plantado código que roda no pai). Revise as
+  mudanças e, se forem suas, rode o comando de novo do **seu** terminal (`! CLAUDE_HARNESS_ACCEPT_GIT_CONTROL_CHANGE=1 node .claude/hooks/tasks.mjs status`).
+  O modelo não consegue setar essa variável.
+- **Limite honesto:** os gates não são sandbox de SO. O Bash da lane roda como o seu usuário. O sandbox
+  nativo do Claude Code não roda em hosts com `kernel.apparmor_restrict_unprivileged_userns=1` (Ubuntu
+  24.04 padrão). Use tasks paralelas só com código e planos em que você confia.
+
+Protocolo completo: `.claude/skills/orchestrating-delivery/references/parallel-tasks.md`.
+
 ---
 
 ## 6. Papéis (agents) — mapa mental
@@ -291,6 +357,12 @@ npx --yes --package=github:orobsonn/claude-harness#<tag> claude-harness init --t
 - Detecta install vs update pela presença do instalador vendored / `.claude/.harness-version`.
 - **Não** use `@latest` do npm (ele atrasa e pode vendorar shell errado/stale).
 - Idempotente: `agents/`, `skills/`, `rules/`, `hooks/` são sobrescritos; **`.claude/memory/`, `.claude/kaizen.md`, `settings.json` e o seu conteúdo no `CLAUDE.md` nunca são clobbados**.
+- O `settings.json` do projeto passa a trazer `"model": "sonnet"` (o orquestrador do harness roda em
+  Sonnet) e `"includeCoAuthoredBy": false`. Settings de projeto vencem as de usuário: se você prefere
+  outro modelo ou o trailer `Co-Authored-By`, defina esses campos no `.claude/settings.local.json` ou
+  edite-os no `settings.json` do projeto (um valor seu é preservado nos próximos updates).
+- Hooks: se você editou ou removeu um hook do harness num evento, o update preserva sua versão e só
+  adiciona hooks realmente novos; um hook removido por você não volta.
 - Ao final roda um **portão de integridade**: se algum hook vendored importar um módulo que não foi espelhado, ele sai com FATAL em vez de entregar um hook que quebra no load. Se isso acontecer, **pare e reporte** — não commite um shell quebrado.
 - **Commite `.claude/`** (cron/cloud só enxerga o repo). O commit é seu — a skill não commita sozinha.
 - **Reinicie a sessão.**

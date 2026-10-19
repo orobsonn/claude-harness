@@ -64,6 +64,7 @@ import { fileURLToPath } from "node:url";
 import { inspectIssueDependencies, nativeBlockersClosed } from "../shared/lib/harness-deps.mjs";
 import { defaultQueuePrompt } from "../shared/lib/orca-queue-prompt.mjs";
 import { interruptedPiSession } from "./pi-restart-recovery.mjs";
+import { ensureClaudeTrust } from "../shared/lib/claude-trust.mjs";
 
 export const LABEL_READY = "harness:ready";
 export const LABEL_IN_PROGRESS = "harness:in-progress";
@@ -267,11 +268,13 @@ export function normalizeConfig(raw) {
  * @param {(args: string[]) => any} deps.orca `orca` CLI seam (returns parsed JSON for `--json` calls)
  * @param {(args: string[]) => any} deps.gh `gh` CLI seam
  * @param {(args: string[]) => any} deps.git `git` CLI seam (used only to freshen the base ref)
+ * @param {(root: string) => void} [deps.trust] records Claude Code's project trust for the clone
+ *   before a `claude` agent is launched (an autonomous run must never wait on the trust prompt)
  * @param {(text: string) => void} [deps.log]
  * @returns {{ok:boolean, dispatched:boolean, reason?:string, issue?:number}}
  */
 export function runTick(deps) {
-  const { config, orca, gh, git, log = () => {} } = deps;
+  const { config, orca, gh, git, trust, log = () => {} } = deps;
 
   // 1) GLOBAL concurrency ceiling, read fresh. Unreadable → skip (never assume "nothing running").
   //    THROWING is the common failure here, not garbage output: the real seam shells out, and a
@@ -388,6 +391,19 @@ export function runTick(deps) {
     return { ok: false, dispatched: false, reason: "fetch-failed" };
   }
   const baseRef = `origin/${config.baseBranch}`;
+
+  // 3.6) An interactive Claude Code agent stops at "Do you trust this folder?" in a repository it
+  //      was never opened in, and an autonomous run would wait there forever. Record the trust for
+  //      the clone's main repository (every Orca worktree of it inherits it) BEFORE the lock; if it
+  //      cannot be recorded, skip the tick with nothing mutated.
+  if (config.agent === "claude" && trust) {
+    try {
+      trust(config.clonePath);
+    } catch (err) {
+      log(`[${config.project}] skip: could not record Claude Code trust for ${config.clonePath} — ${err?.message ?? err}`);
+      return { ok: false, dispatched: false, reason: "trust-failed" };
+    }
+  }
 
   // 4) Take the lock BEFORE any worktree exists.
   try {
@@ -514,6 +530,7 @@ export function main(argv) {
       orca: cliSeam(process.env.ORCA_BIN || "orca"),
       gh: cliSeam(process.env.GH_BIN || "gh"),
       git: cliSeam(process.env.GIT_BIN || "git"),
+      trust: (root) => ensureClaudeTrust(root),
       log: (t) => process.stdout.write(`${t}\n`),
     });
   } catch (err) {
