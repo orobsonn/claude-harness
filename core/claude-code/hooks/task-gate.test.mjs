@@ -159,7 +159,13 @@ test("lane writes: orchestrator only run buffers; hands only their authorized pa
   assert.equal(write("src/a/x.mjs", { agent_id: "a1", agent_type: "test-author" }).deny, false, "a NEW scaffold stub inside the scope");
   fs.mkdirSync(path.join(lane.worktree, "src/a"), { recursive: true });
   fs.writeFileSync(path.join(lane.worktree, "src/a/x.mjs"), "export const x = 1;\n");
-  assert.equal(write("src/a/x.mjs", { agent_id: "a1", agent_type: "test-author" }).deny, true, "never an existing product file");
+  assert.equal(write("src/a/x.mjs", { agent_id: "a1", agent_type: "test-author" }).deny, false, "before fidelity it may rewrite its own untracked stub");
+  git(lane.worktree, "add", "src/a/x.mjs");
+  git(lane.worktree, "commit", "-qm", "product");
+  assert.equal(write("src/a/x.mjs", { agent_id: "a1", agent_type: "test-author" }).deny, true, "never an existing (tracked) product file");
+  fs.writeFileSync(path.join(lane.worktree, "src/a/y.mjs"), "export const y = 1;\n");
+  stampFidelity(lane);
+  assert.equal(write("src/a/y.mjs", { agent_id: "a1", agent_type: "test-author" }).deny, true, "after fidelity an untracked product file is the executor's");
   assert.equal(write("src/b/y.mjs", { agent_id: "a1", agent_type: "test-author" }).deny, true, "never outside the scope");
   assert.equal(run(payload("Write", { file_path: "/etc/passwd", content: "x" }, { agent_id: "a1", agent_type: "executor" })).deny, true);
   assert.equal(run(payload("Edit", { file_path: path.join(lane.worktree, ".claude/hooks/task-gate.mjs") }, { agent_id: "a", agent_type: "sniper" })).deny, true);
@@ -308,11 +314,19 @@ test("parent gate: a project's own tasks.mjs, task-ledger mentions and harness s
     "git add .claude/hooks/tasks.mjs",
     "git diff -- .claude/hooks/tasks.mjs",
     'git commit -m "bump .claude/hooks/tasks.mjs"',
+    "grep -n node .claude/hooks/tasks.mjs",
+    'git commit -m "docs: explain node .claude/hooks/tasks.mjs usage"',
   ]) assert.equal(parent(command).deny, false, command);
   for (const command of [
     "CLAUDE_CODE_SESSION_ID=x node .claude/hooks/tasks.mjs status",
     "cd /tmp && node /repo/.claude/hooks/tasks.mjs dispatch",
     "X=1 ./.claude/hooks/tasks.mjs status",
+    // Obfuscations: quoting, repeated or `..` segments, shell -c, a split env name.
+    "CLAUDE_CODE_SESSION_ID=other node .claude/hooks//tasks.mjs status --json '{}'",
+    'CLAUDE_CODE_SESSION_ID=other node .claude/hooks/"tasks.mjs" status',
+    "CLAUDE_CODE_SESSION_ID=other node .claude/hooks/../hooks/tasks.mjs status",
+    "bash -c 'node .claude/hooks/tasks.mjs status'",
+    `env CLAUDE_HARNESS_ACCEPT_GIT_CONTROL_CHANG""E=1 node .claude/hooks/tasks.mjs status --json '{}'`,
     `cat ${project.root}/.claude/plans/.state/${project.sessionId}/task-runs/index.json`,
     "rm .claude/plans/.state/x/task-admission/a.json",
   ]) assert.equal(parent(command).deny, true, command);

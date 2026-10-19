@@ -842,6 +842,9 @@ export async function executeTaskAction(params, context = {}, injected = {}) {
           new Set(params.task_ids).size !== params.task_ids.length || params.task_ids.some((id) => !isSafeTaskId(id))) {
         throw new Error(`dispatch requires one to ${limit} distinct safe task_ids`);
       }
+      // Before anything is admitted: a host that cannot launch lanes must leave the session free to
+      // re-plan serially (an admitted task pins the parent gate).
+      resolveClaudeBin(deps);
       const requested = params.task_ids.map((id) => artifacts.plan.tasks.find((task) => task.id === id));
       if (requested.some((task) => !task)) throw new Error("unknown task");
       const contexts = new Map();

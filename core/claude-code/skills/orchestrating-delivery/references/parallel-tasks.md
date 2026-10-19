@@ -48,7 +48,13 @@ When the JSON contains a single quote, use `--json-file .claude/plans/<feature>/
 3. **Read the result** in `status`. `ready` carries `child_head` and, outside `compact`, the lane
    diary as `context_return`; curate that into your own `shared_context.md` by hand. `blocked` carries
    `reason` and `diagnostics` (review findings, the lane's report, the launch failure, a dirty tree).
-   Fix through `resume` on the same task and attempt, with a concrete `instruction`.
+   Fix through `resume` on the same task and attempt, with a concrete `instruction`. Lanes never
+   park a finding (their eyes are arming-blind): a high/medium the lane cannot fix inside its scope
+   comes back `BLOCKED`. If the fix needs a path outside the scope, correct the scope (step 7). If
+   the defect is pre-existing and outside this feature, park it yourself, as in serial delivery
+   (tracked issue), and `resume` the task with that context for its eyes. There is no lane-side
+   park: if the re-review still reports it as high/medium, the task stays `blocked` and that
+   delivery continues serially in a new session (known limitation; Pi has a `follow_ups` channel).
 4. **Integrate** each ready task with its exact `attempt_id` and `expected_head`. The host
    re-inspects, refuses conflicts before touching your branch (then `resume` resolves them in the
    lane), keeps frozen tests intact and writes the integration receipt. Then dispatch its dependents.
@@ -93,8 +99,10 @@ audit and resume.
 ## When lanes cannot run
 
 Lanes need a local `claude` CLI that can start top-level sessions and Git worktrees outside the
-repository. Where that is not available (no `claude` on PATH, a restricted or cloud host), the
-lane fails and `status` reports the launch failure in its diagnostics; nothing falls back on its own. Re-plan with
+repository. Without a `claude` CLI on PATH (or `CLAUDE_HARNESS_CLAUDE_BIN`) the `dispatch` is refused
+with that reason before any task is admitted, so the session stays free; nothing falls back on its
+own. On a host where `claude` exists but lanes still fail to launch, the task is admitted and blocked
+with the launch failure in its `reason`: deliver from a new session. Re-plan with
 `"execution": {"parallel": false, "serial_reason": "<why lanes cannot run here>"}` and deliver
 serially (Phase 2 serial).
 

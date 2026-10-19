@@ -7,6 +7,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
+import { execFileSync } from "node:child_process";
 
 import { git, planTask } from "./lib/__fixtures__/task-fixture.mjs";
 import { createVendoredTaskProject, laneSteps, marker, runScenarioProject, tasksCli, waitSettled, writeFakeClaude } from "./lib/__fixtures__/task-e2e.mjs";
@@ -206,4 +207,19 @@ test("the host triage is the floor of a lane's mode: a light plan under a FULL t
   assert.equal(registry.tasks["task-a"].grant.mode, "FULL");
   const [task] = tasksCli(project, "status", {}, { claudeBin: bin }).tasks;
   assert.equal(task.status, "blocked", "a lane without the FULL eyes is not ready");
+});
+
+test("a host without the claude CLI refuses the dispatch before admitting anything (the session can re-plan serially)", { timeout: 120_000 }, async (t) => {
+  const [a] = tasksABD();
+  const project = createVendoredTaskProject(t, { tasks: [a] });
+  const bare = fs.mkdtempSync(path.join(fs.realpathSync(project.lanes), "..", "bare-path-"));
+  t.after(() => fs.rmSync(bare, { recursive: true, force: true }));
+  const git = execFileSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).trim();
+  fs.symlinkSync(git, path.join(bare, "git"));
+  const dispatched = tasksCli(project, "dispatch", { task_ids: ["task-a"] }, { env: { PATH: bare } });
+  assert.equal(dispatched.ok, false);
+  assert.match(dispatched.reason, /claude CLI was not found on PATH/);
+  const registryFile = path.join(project.root, ".claude/plans/.state", project.sessionId, "task-runs/index.json");
+  const tasks = fs.existsSync(registryFile) ? Object.keys(JSON.parse(fs.readFileSync(registryFile, "utf8")).tasks ?? {}) : [];
+  assert.deepEqual(tasks, [], "nothing was admitted, so the parent gate does not pin the session");
 });

@@ -39,13 +39,27 @@ import {
   laneTaskScope,
   laneWriteDenyReason,
   parseTaskDispatchMarker,
+  normalizeForPolicy,
   pathInScope,
   routeAllows,
 } from "./lib/task-lane-contract.mjs";
 import { ACCEPT_GIT_CONTROL_ENV, TASK_RUN_ENV, parseTaskRunEnv, gateStateFile, isVolatileHarnessPath, planFile, specFile, taskRegistryPath } from "./lib/task-paths.mjs";
 
 const WRITE_TOOLS = new Set(["Write", "Edit", "MultiEdit", "NotebookEdit"]);
-const TASKS_CLI_RUN = /(?:^|[\s;&|(=`])(?:\S*\/)?(?:node|bun|deno|npx|tsx)\b[^\n]*\.claude\/hooks\/tasks\.mjs\b|(?:^|[;&|(`])\s*(?:\S+=\S*\s+)*(?:\.\/)?\.claude\/hooks\/tasks\.mjs\b/;
+// A command position (start, after ; & | ( ` $( or `sh -c`), optional env assignments and wrapper
+// commands, then a JS runtime (or the file itself) running .claude/hooks/tasks.mjs. Matched on
+// policyText(), so quoting, `//` and `..` segments do not hide it. Hardening, not a boundary.
+const TASKS_CLI_RUN = /(?:^|[;&|(`]|\$\(|\b\w*sh\s+(?:-\w+\s+)*-c\s+)\s*(?:\S+=\S*\s+)*(?:(?:env|exec|time|nohup|sudo|command|xargs)\s+(?:-\S+\s+)*(?:\S+=\S*\s+)*)*(?:(?:\S*\/)?(?:node|bun|deno|npx|tsx)\s+(?:-\S+\s+)*)?\S*\.claude\/hooks\/tasks\.mjs\b/;
+
+/** Shell quoting/escapes removed and path segments collapsed, for the parent's word policies. */
+function policyText(command) {
+  let text = normalizeForPolicy(command).replace(/\/{2,}/g, "/").replace(/\/(?:\.\/)+/g, "/");
+  for (let previous = ""; previous !== text;) {
+    previous = text;
+    text = text.replace(/\/(?!\.\.\/)[^/\s;&|()`]+\/\.\.\//g, "/");
+  }
+  return text;
+}
 const TASKS_CLI = /^\s*node\s+(?:\.\/)?\.claude\/hooks\/tasks\.mjs\s+(?:dispatch|status|wait|integrate|resume|abandon-resume)(?:\s+--json\s+'[^']*'|\s+--json-file\s+[A-Za-z0-9_./-]+)?\s*$/;
 const git = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 
@@ -68,6 +82,20 @@ function relativeInside(root, file) {
   const relative = path.relative(root, real);
   if (relative === "" || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) return null;
   return relative.split(path.sep).join("/");
+}
+
+function laneFidelityPassed(root, sessionId, grant) {
+  const fidelity = readLaneGateState(root, sessionId).fidelity_pass;
+  const own = `${grant.feature_id}/${grant.task_id}`;
+  return Array.isArray(fidelity) && fidelity.some((entry) => String(entry).split("@")[0] === own);
+}
+
+function isUntracked(root, relative) {
+  try {
+    return git(root, "ls-files", "--others", "--exclude-standard", "-z", "--", relative).split("\0").includes(relative);
+  } catch {
+    return false;
+  }
 }
 
 /** True when every uncommitted product path is a new, untracked file (no tracked product edit). */
@@ -152,12 +180,11 @@ export function decideLane(payload, env, { readBinding = readTaskRunBinding, hoo
       return deny(`[task-run] use the literal route from contract.dispatch_routes for ${role} (subagent_type and model), got model ${JSON.stringify(input.model)}`);
     }
     if (role === "test-author") {
-      // Before this task's fidelity passes the executor cannot have run, so the only new product
-      // files are the test-author's own throwing stub: a fidelity re-brief may rewrite it.
-      const fidelity = readLaneGateState(root, env.sessionId).fidelity_pass;
-      const own = `${grant.feature_id}/${grant.task_id}`;
-      const fidelityPassed = Array.isArray(fidelity) && fidelity.some((entry) => String(entry).split("@")[0] === own);
-      const stubOnly = !fidelityPassed && onlyNewUntrackedPaths(root, task);
+      // Before this task's fidelity passes the executor cannot have run, so new untracked product
+      // files are normally the test-author's own throwing stub, which a fidelity re-brief may
+      // rewrite. (A pre-fidelity sniper's new files qualify too; they stay safe: a test-author never
+      // overwrites a tracked file, and discards still go through repairPreservation.)
+      const stubOnly = !laneFidelityPassed(root, env.sessionId, grant) && onlyNewUntrackedPaths(root, task);
       const reason = stubOnly ? null : repairPreservation(root, task, "");
       if (reason) return deny(`[task-run] ${reason}`);
     }
@@ -189,11 +216,12 @@ export function decideLane(payload, env, { readBinding = readTaskRunBinding, hoo
     if (!isSubagent && inRun) return allow();
     if (isSubagent && inRun) return deny("[task-run] the run buffers belong to the lane orchestrator");
     const relative = relativeInside(root, target);
-    const reason = laneWriteDenyReason(relative, {
-      role: isSubagent ? bareRole(payload.agent_type) : null,
-      task,
-      exists: relative !== null && fs.existsSync(path.join(root, relative)),
-    });
+    const role = isSubagent ? bareRole(payload.agent_type) : null;
+    let exists = relative !== null && fs.existsSync(path.join(root, relative));
+    // Before fidelity the test-author may rewrite its own untracked stub (a wrong export is an
+    // import failure, not RED); a tracked product file is never a stub.
+    if (exists && role === "test-author" && !laneFidelityPassed(root, env.sessionId, grant) && isUntracked(root, relative)) exists = false;
+    const reason = laneWriteDenyReason(relative, { role, task, exists });
     return reason ? deny(`[task-run] ${reason}`) : allow();
   }
   return allow();
@@ -277,18 +305,19 @@ export function decideParent(payload, { root = hookProjectRoot() } = {}) {
   const tool = payload.tool_name;
   const input = payload.tool_input ?? {};
   const command = tool === "Bash" ? String(input.command ?? "") : "";
-  if (tool === "Bash" && command.includes(ACCEPT_GIT_CONTROL_ENV)) {
+  const policy = policyText(command);
+  if (tool === "Bash" && (policy.includes(ACCEPT_GIT_CONTROL_ENV) || /ACCEPT[\s\S]*GIT_CONTROL|GIT_CONTROL[\s\S]*ACCEPT/.test(policy))) {
     return deny(`[harness-tasks] ${ACCEPT_GIT_CONTROL_ENV} is the operator's acknowledgement of a Git config/hooks change; only the operator sets it, from their own terminal (\`! <command>\`)`);
   }
   // The registry, journals and receipts are host-owned: the parent reads them through the CLI.
   // Anchored to the harness state tree, so a project's own files with similar names
   // (src/tasks.mjs, a "task-ledger" commit message, docs) are never caught.
-  if (tool === "Bash" && /\.claude\/plans\/\.state\/[^\s'"]*(?:task-runs|task-admission|task-ledger)/.test(command) && !TASKS_CLI.test(command)) {
+  if (tool === "Bash" && /\.claude\/plans\/\.state\/[^\s'"]*(?:task-runs|task-admission|task-ledger)/.test(policy) && !TASKS_CLI.test(command)) {
     return deny("[harness-tasks] task state (task-runs/, admissions, ledgers) is host-owned; read it with `node .claude/hooks/tasks.mjs status --json '{}'`");
   }
   // Only a command that RUNS the CLI (its identity is this session); reading, diffing or committing
   // the vendored file is ordinary work.
-  if (tool === "Bash" && TASKS_CLI_RUN.test(command) && !TASKS_CLI.test(command)) {
+  if (tool === "Bash" && TASKS_CLI_RUN.test(policy) && !TASKS_CLI.test(command)) {
     return deny("[harness-tasks] run the task CLI alone, exactly `node .claude/hooks/tasks.mjs <action> --json '<json>'` (or --json-file <path>): no env prefix, cd, chaining or redirection — its identity is this session");
   }
   const sessionId = payload.session_id;
