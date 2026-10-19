@@ -21,6 +21,8 @@ import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
 
+const SAFE_SESSION_ID = /^[A-Za-z0-9_-]+$/; // same rule as gate-lib isSafeSessionId
+
 export const TASK_RUN_ENV = "CLAUDE_HARNESS_TASK_RUN";
 export const MAX_PARALLEL_TASKS = 3;
 export const PARALLEL_LIMIT_ENV = "CLAUDE_HARNESS_MAX_PARALLEL_TASKS";
@@ -93,4 +95,17 @@ export function hostTaskLimits(env = process.env) {
     ? timeout
     : DEFAULT_TASK_TIMEOUT_MS;
   return { maxParallel, timeoutMs };
+}
+
+/** The host-set lane binding env: exactly {cwd, sessionId}, an absolute cwd and a safe session id; null otherwise. */
+export function parseTaskRunEnv(raw) {
+  try {
+    const value = JSON.parse(raw);
+    if (!value || typeof value !== "object" || Array.isArray(value) ||
+        Object.keys(value).sort().join(",") !== "cwd,sessionId" ||
+        typeof value.cwd !== "string" || !path.isAbsolute(value.cwd) || typeof value.sessionId !== "string" || !SAFE_SESSION_ID.test(value.sessionId)) return null;
+    return value;
+  } catch {
+    return null;
+  }
 }

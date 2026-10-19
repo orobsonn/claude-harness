@@ -31,6 +31,7 @@ import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 
 import { bareRole, isSafeFeatureId, isSafeSessionId } from "./lib/gate-lib.mjs";
+import { hookProjectRoot } from "./lib/hook-root.mjs";
 import { writeTaskJson } from "../../shared/lib/task-process.mjs";
 import {
   planFile,
@@ -165,7 +166,7 @@ function handleSubagentStop(payload, { root, now }) {
   });
 }
 
-export function handle(payload, { root = process.cwd(), now = () => new Date().toISOString() } = {}) {
+export function handle(payload, { root = hookProjectRoot(), now = () => new Date().toISOString() } = {}) {
   if (payload && typeof payload === "object" && payload.hook_event_name === "SubagentStop") return handleSubagentStop(payload, { root, now });
   if (!payload || typeof payload !== "object" || payload.tool_name !== "Agent") return { action: "none" };
   if (Object.hasOwn(payload, "agent_id")) return { action: "none" };

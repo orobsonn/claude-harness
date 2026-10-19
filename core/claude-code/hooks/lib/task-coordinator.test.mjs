@@ -292,7 +292,7 @@ test("integrate needs the exact attempt and HEAD and creates a two-parent --no-f
   assert.equal(integrated.ok, true, integrated.reason);
   const mergeHead = git(f.project.root, "rev-parse", "HEAD");
   assert.deepEqual(git(f.project.root, "rev-list", "--parents", "-n", "1", mergeHead).split(" ").slice(1), [before, newer]);
-  assert.equal(git(f.project.root, "log", "-1", "--format=%s"), `Integrate harness task task-a (${entry.attempt_id})`);
+  assert.equal(git(f.project.root, "log", "-1", "--format=%s"), `chore(harness): integrate task task-a (${entry.attempt_id})`);
   const receipt = f.registry().tasks["task-a"].integration;
   assert.equal(receipt.written_by, "host-task-integration");
   assert.equal(receipt.integrated_head, mergeHead);
@@ -380,7 +380,7 @@ test("a crash between merge and receipt is completed by the next action", async 
   const tree = git(f.project.root, "merge-tree", "--write-tree", parentHead, head);
   registry.integration_intent = { task_id: "task-a", attempt_id: entry.attempt_id, parent_head: parentHead, child_head: head, tree, result_sha256: hashTaskReceipt(registry.tasks["task-a"].result) };
   fs.writeFileSync(registryFile, JSON.stringify(registry));
-  git(f.project.root, "merge", "--no-ff", "--no-edit", "-m", `Integrate harness task task-a (${entry.attempt_id})`, head);
+  git(f.project.root, "merge", "--no-ff", "--no-edit", "-m", `chore(harness): integrate task task-a (${entry.attempt_id})`, head);
   const status = await f.run({ action: "status" });
   assert.equal(status.ok, true, status.reason);
   assert.equal(status.tasks[0].status, "integrated");
@@ -593,4 +593,15 @@ test("wait races Orca's native terminal exit; a stale handle retires to local ob
   const fallback = await waitForTasks({ action: "wait" }, f.context, { ...f.deps, pollMs: 20, waitOrca: async () => { staleCalls += 1; throw new Error("terminal_handle_stale"); } });
   assert.equal(fallback.wait, "changed");
   assert.equal(staleCalls, 1, "a retired handle is never awaited again");
+});
+
+test("host merges carry a Conventional Commits message a commit-msg hook (commitlint style) accepts", async (t) => {
+  const f = fixture(t);
+  const { entry, head } = await readyTask(f, "task-a", { "src/a/index.mjs": "1\n" });
+  const hook = path.join(f.project.root, ".git/hooks/commit-msg");
+  fs.writeFileSync(hook, "#!/bin/sh\nhead -1 \"$1\" | grep -Eq '^(feat|fix|chore|docs|test|refactor)(\\([a-z0-9-]+\\))?: [a-z]' || { echo 'commitlint: bad message' >&2; exit 1; }\n", { mode: 0o755 });
+  const accepted = { env: { CLAUDE_HARNESS_ACCEPT_GIT_CONTROL_CHANGE: "1" } };
+  const integrated = await f.run({ action: "integrate", task_id: "task-a", attempt_id: entry.attempt_id, expected_head: head }, accepted);
+  assert.equal(integrated.ok, true, integrated.reason);
+  assert.match(git(f.project.root, "log", "-1", "--format=%s"), /^chore\(harness\): integrate task task-a /);
 });

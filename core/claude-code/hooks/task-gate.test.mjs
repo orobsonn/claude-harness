@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -279,4 +280,56 @@ test("parent gate: the Git-control acknowledgement is the operator's alone; an i
   assert.equal(parent("Agent", boom("subagent_type")).deny, true);
   assert.equal(parent("Bash", boom("command")).deny, true);
   assert.equal(parent("Read", boom("file_path")).deny, false, "reads stay usable");
+});
+
+test("parent gate: a project's own tasks.mjs, task-ledger mentions and harness sources are never caught (no registry)", (t) => {
+  const project = createTaskProject(t);
+  const parent = (command) => decide({ session_id: project.sessionId, tool_name: "Bash", tool_input: { command } }, { env: {}, root: project.root });
+  for (const command of [
+    "git add src/tasks.mjs",
+    "node scripts/cron-tasks.mjs",
+    "npx hardhat --config tasks.mjs",
+    "cat .claude/hooks/task-ledger.mjs",
+    'git commit -m "fix task-ledger flake"',
+    "grep -rn task-admission docs/",
+  ]) assert.equal(parent(command).deny, false, command);
+  for (const command of [
+    "CLAUDE_CODE_SESSION_ID=x node .claude/hooks/tasks.mjs status",
+    "cd /tmp && node /repo/.claude/hooks/tasks.mjs dispatch",
+    `cat ${project.root}/.claude/plans/.state/${project.sessionId}/task-runs/index.json`,
+    "rm .claude/plans/.state/x/task-admission/a.json",
+  ]) assert.equal(parent(command).deny, true, command);
+});
+
+test("parent gate after a Bash cd: the project root comes from CLAUDE_PROJECT_DIR / Git, never the hook cwd", (t) => {
+  const project = createTaskProject(t);
+  writeRegistry(project, { "task-a": { task_id: "task-a", attempt_id: "x", status: "running" } });
+  const sub = path.join(project.root, "src", "deep");
+  fs.mkdirSync(sub, { recursive: true });
+  const run = (extraEnv) => spawnSync(process.execPath, [HOOK], {
+    cwd: sub, encoding: "utf8",
+    input: JSON.stringify({ session_id: project.sessionId, hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command: "git push -u origin HEAD" } }),
+    env: { PATH: process.env.PATH, HOME: process.env.HOME, ...extraEnv },
+  });
+  for (const [label, env] of [["CLAUDE_PROJECT_DIR", { CLAUDE_PROJECT_DIR: project.root }], ["git toplevel", {}]]) {
+    const out = run(env);
+    assert.equal(out.status, 0, label);
+    assert.match(out.stdout, /"permissionDecision":"deny"/, `${label}: delivery stays gated from a subdirectory`);
+  }
+});
+
+test("parent gate: a delivered parallel run (all integrated, HEAD on a remote branch) no longer pins the session", (t) => {
+  const project = createTaskProject(t);
+  const head = git(project.root, "rev-parse", "HEAD");
+  writeRegistry(project, { "task-a": { task_id: "task-a", attempt_id: "x", status: "integrated", integration: { integrated_head: head } } });
+  const parent = (tool_name, tool_input) => decide({ session_id: project.sessionId, tool_name, tool_input }, { env: {}, root: project.root });
+  assert.equal(parent("Bash", { command: "node .claude/hooks/classify.mjs FULL next-feature" }).deny, true, "undelivered: classification stays fixed");
+  const remote = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "cc-gate-remote-")));
+  t.after(() => fs.rmSync(remote, { recursive: true, force: true }));
+  git(remote, "init", "-q", "--bare");
+  git(project.root, "remote", "add", "origin", remote);
+  git(project.root, "push", "-q", "origin", "HEAD:refs/heads/feat");
+  git(project.root, "fetch", "-q", "origin");
+  assert.equal(parent("Bash", { command: "node .claude/hooks/classify.mjs FULL next-feature" }).deny, false, "delivered: a next feature can start");
+  assert.equal(parent("Agent", { subagent_type: "executor", model: "haiku", prompt: "x" }).deny, false);
 });

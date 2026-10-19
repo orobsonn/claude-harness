@@ -59,3 +59,53 @@ test("a lane hook never acts for another session or a malformed binding", (t) =>
   assert.deepEqual(decide({ session_id: project.sessionId, hook_event_name: "Stop" }, { env: { CLAUDE_HARNESS_TASK_RUN: "{" }, cwd: project.root }), {});
   assert.deepEqual(decide(null, { env: {}, cwd: project.root }), {});
 });
+
+import { laneContinuation } from "./task-continuation.mjs";
+
+function laneLedger(t, { mode = "FULL" } = {}) {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "cc-cont-lane-")));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  git(root, "init", "-q");
+  git(root, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "i");
+  const head = git(root, "rev-parse", "HEAD");
+  const session = "55555555-5555-4555-8555-555555555555";
+  const file = path.join(root, ".claude/plans/.state", session, "task-ledger.jsonl");
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  let n = 0;
+  const call = (record) => {
+    n += 1;
+    const base = { v: 1, at: new Date(Date.UTC(2026, 9, 13, 0, 0, n)).toISOString(), session_id: session, agent_id: null, agent_type: null, tool_use_id: `toolu_${n}`, head, dirty: [], merging: false };
+    fs.appendFileSync(file, `${JSON.stringify({ ...base, ...record, event: "pre" })}\n${JSON.stringify({ ...base, ...record, event: "post", status: "ok" })}\n`);
+  };
+  const mark = (action) => call({ tool: "Bash", command: `node .claude/hooks/mark.mjs ${action} --feature-id demo --task-id task-a` });
+  const agent = (subagent_type, report_tail = "") => call({ tool: "Agent", subagent_type, model: "sonnet", report_tail });
+  const binding = { sessionId: session, grant: { feature_id: "demo", task_id: "task-a", mode }, plan: null, task: null };
+  return { root, call, mark, agent, binding };
+}
+
+test("lane: a BLOCKED lane that makes no progress gets the hint once, whatever it runs meanwhile", (t) => {
+  const lane = laneLedger(t);
+  lane.agent("test-author");
+  const first = laneContinuation(lane.root, lane.binding);
+  assert.equal(first.stage, "task-implementation");
+  lane.call({ tool: "Bash", command: "git status" });
+  lane.call({ tool: "Bash", command: "git status" });
+  assert.equal(laneContinuation(lane.root, lane.binding).key, first.key, "diagnostic calls are not progress");
+});
+
+test("lane (FULL): a negative or missing eye never closes the lane; a positive one after the capture does", (t) => {
+  const lane = laneLedger(t);
+  lane.agent("executor", "## Status: DONE");
+  lane.mark("capture-verified");
+  lane.agent("compliance", "## Veredito: fail");
+  assert.equal(laneContinuation(lane.root, lane.binding)?.stage, "task-reviews", "a negative compliance keeps the lane working");
+  lane.agent("compliance", "## Veredito: pass");
+  assert.equal(laneContinuation(lane.root, lane.binding), null, "positive at the final HEAD closes the lane");
+});
+
+test("a casual session (no task registry) never writes continuation state, even on a stop request", (t) => {
+  const project = createTaskProject(t);
+  const dir = path.join(project.root, ".claude/plans/.state", project.sessionId);
+  decide({ session_id: project.sessionId, hook_event_name: "UserPromptSubmit", prompt: "pare tudo" }, { env: {}, cwd: project.root });
+  assert.equal(fs.existsSync(path.join(dir, "continuation.json")), false);
+});

@@ -18,6 +18,9 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { execFileSync } from "node:child_process";
+
+import { acquireLock, releaseLock } from "../../../shared/lib/file-lock.mjs";
 
 export const TUI_JOB_ENV = "CLAUDE_HARNESS_TUI_JOB_FILE";
 const MAX_TRANSCRIPT_BYTES = 64 * 1024 * 1024;
@@ -115,6 +118,18 @@ export function transcriptEvent(entry, sessionId) {
 export function syncTuiEvents(payload, { env = process.env, cwd, start = false } = {}) {
   const tui = readTuiJob({ env, cwd });
   if (!tui) return null;
+  // Parallel tool calls run their hooks concurrently: without the lock two hooks copy the same
+  // transcript chunk (duplicated or reordered events).
+  const lock = acquireLock(tui.offsetPath, { timeoutMs: 5000 });
+  if (!lock.ok) throw new Error("TUI evidence sync is busy");
+  try {
+    return syncLocked(payload, tui, { env, cwd, start });
+  } finally {
+    releaseLock(tui.offsetPath, lock.token);
+  }
+}
+
+function syncLocked(payload, tui, { env, cwd, start }) {
   const transcript = transcriptOf(payload, env);
   const size = fs.existsSync(transcript) ? fs.statSync(transcript).size : 0;
   let offset = readOffset(tui.offsetPath);
@@ -169,8 +184,21 @@ export function finalizeTuiEvents(payload, { env = process.env, cwd } = {}) {
   return tui;
 }
 
-const cmdline = (pid) => fs.readFileSync(`/proc/${pid}/cmdline`, "utf8").split("\0").filter(Boolean);
-const parentOf = (pid) => Number(fs.readFileSync(`/proc/${pid}/stat`, "utf8").replace(/^.*\)\s+\S+\s+/, "").split(/\s+/)[0]);
+// Linux reads /proc; macOS (no procfs) asks ps. ps prints the command line space-joined, so the
+// launcher match there is "contains --child and ends with the job file".
+const PROCFS = fs.existsSync("/proc/self/stat");
+const ps = (pid, field) => execFileSync("ps", ["-o", `${field}=`, "-p", String(pid)], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+const parentOf = (pid) => Number(PROCFS
+  ? fs.readFileSync(`/proc/${pid}/stat`, "utf8").replace(/^.*\)\s+\S+\s+/, "").split(/\s+/)[0]
+  : ps(pid, "ppid"));
+function isLauncherWrapper(pid, jobFile) {
+  if (PROCFS) {
+    const args = fs.readFileSync(`/proc/${pid}/cmdline`, "utf8").split("\0").filter(Boolean);
+    return args.includes("--child") && args.at(-1) === jobFile;
+  }
+  const command = ps(pid, "command");
+  return command.includes(" --child ") && command.endsWith(` ${jobFile}`);
+}
 
 /**
  * The lane launcher of this job: the ancestor of this hook whose parent is the supervisor's
@@ -180,15 +208,14 @@ const parentOf = (pid) => Number(fs.readFileSync(`/proc/${pid}/stat`, "utf8").re
 export function tuiLaunchPid(jobFile, { from = process.pid } = {}) {
   let pid = from;
   for (let depth = 0; depth < 16 && pid > 1; depth += 1) {
-    const parent = parentOf(pid);
-    if (parent <= 1) return null;
     try {
-      const args = cmdline(parent);
-      if (args.includes("--child") && args.at(-1) === jobFile) return pid;
+      const parent = parentOf(pid);
+      if (!(parent > 1)) return null;
+      if (isLauncherWrapper(parent, jobFile)) return pid;
+      pid = parent;
     } catch {
       return null;
     }
-    pid = parent;
   }
   return null;
 }

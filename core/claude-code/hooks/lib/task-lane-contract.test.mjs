@@ -180,6 +180,8 @@ test("verdict parsers read the agents' canonical blocks", () => {
   assert.deepEqual(parseEyeVerdict("compliance", "...\n## Veredito: pass\n"), { verdict: "pass", positive: true });
   assert.equal(parseEyeVerdict("compliance", "## Veredito: partial").positive, false);
   assert.equal(parseEyeVerdict("compliance", "nothing"), null);
+  assert.equal(parseEyeVerdict("compliance", "## Veredito de fidelidade: PASS").positive, true, "the compliance agent's own fidelity format");
+  assert.equal(parseEyeVerdict("compliance", "## Veredito de fidelidade: FAIL").positive, false);
   const adv = (issues) => `\`\`\`json\n${JSON.stringify({ issues })}\n\`\`\``;
   assert.equal(parseEyeVerdict("adversary", adv([])).positive, true);
   assert.equal(parseEyeVerdict("adversary", adv([{ severity: "low", description: "ARMED · x" }])).positive, true);

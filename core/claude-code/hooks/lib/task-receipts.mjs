@@ -350,16 +350,29 @@ export function inspectTaskRun(entry, dependencies = {}) {
     ]);
     const receipts = {};
     const reviewFindings = [];
+    // Pi parity (harness-task-runtime: "um positivo ancestral por task pode manter satisfeita a
+    // obrigação daquele olho após correção de outro finding"): an eye that ever found a problem must
+    // re-review the final HEAD after the last writer; an eye that never did keeps an ancestral
+    // positive, as long as it reviewed the implementation (after the first producer) on a clean,
+    // committed ancestor of the final HEAD. The receipt names the HEAD that eye actually reviewed.
+    const firstProducer = producers[0];
     for (const role of [...required].sort()) {
-      const last = eyeCalls.filter((call) => call.role === role).at(-1);
+      const roleCalls = eyeCalls.filter((call) => call.role === role);
+      const last = roleCalls.at(-1);
       const verdict = last ? parseEyeVerdict(role, last.text) : null;
       if (last && verdict && verdict.positive !== true) reviewFindings.push({ role, dispatch_call_id: last.id, ...clip(last.text) });
-      if (!last || last.seq < lastWriter.seq || last.pre?.head !== head || !Array.isArray(last.pre?.dirty) || last.pre.dirty.length !== 0) {
-        return failure(`a current ${role} review is required: dispatch it after the last writing hand, on the committed final HEAD`, { ...diagnostics, ...handReport, review_findings: reviewFindings });
+      const everNegative = roleCalls.some((call) => parseEyeVerdict(role, call.text)?.positive === false);
+      const cleanReview = Boolean(last) && Array.isArray(last.pre?.dirty) && last.pre.dirty.length === 0 && SHA.test(last.pre?.head ?? "");
+      const current = cleanReview && last.seq > lastWriter.seq && last.pre.head === head;
+      const ancestral = cleanReview && !everNegative && last.seq > firstProducer.seq && ancestor(worktree, last.pre.head, head);
+      if (!last || !(current || ancestral)) {
+        return failure(everNegative
+          ? `a current ${role} review is required: the ${role} found a problem, so it re-reviews the committed final HEAD after the last writing hand`
+          : `a current ${role} review is required: dispatch it after the implementation, on a committed HEAD with a clean tree`, { ...diagnostics, ...handReport, review_findings: reviewFindings });
       }
       if (!verdict) return failure(`the ${role} report has no canonical verdict block`, { ...diagnostics, review_findings: [{ role, dispatch_call_id: last.id, ...clip(last.text) }] });
       if (!verdict.positive) return failure(`the current ${role} review is negative: fix the findings with the sniper and re-run it`, { ...diagnostics, ...handReport, review_findings: reviewFindings });
-      receipts[role] = { dispatch_call_id: last.id, agent_id: last.agentId, model: last.model, reviewed_head_sha: head, verdict: verdict.verdict, report_sha256: sha256(last.text) };
+      receipts[role] = { dispatch_call_id: last.id, agent_id: last.agentId, model: last.model, reviewed_head_sha: last.pre.head, verdict: verdict.verdict, report_sha256: sha256(last.text) };
     }
     const bare = `${entry.feature_id}/${entry.task_id}`;
     const pending = (Array.isArray(state.regate_pending) ? state.regate_pending : []).filter((item) => item === bare);

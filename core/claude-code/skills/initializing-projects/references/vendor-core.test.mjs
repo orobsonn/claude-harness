@@ -3339,3 +3339,57 @@ test("vendor-core: a consumer with customized hook arrays still receives the par
     rmSync(target, { recursive: true, force: true });
   }
 });
+
+test("vendor-core: quoted hook commands never duplicate and an operator-removed hook stays removed", () => {
+  const target = mkdtempSync(join(tmpdir(), "vendor-hook-identity-"));
+  try {
+    mkdirSync(join(target, ".claude"), { recursive: true });
+    writeFileSync(join(target, ".claude", "settings.json"), JSON.stringify({}, null, 2));
+    const vendor = () => spawnSync(process.execPath, [vendorCoreScript, "--source", harnessRoot, "--target", target, "--runtime", "claude"], { encoding: "utf8" });
+    const settingsFile = join(target, ".claude", "settings.json");
+    const read = () => JSON.parse(readFileSync(settingsFile, "utf8"));
+    assert.equal(vendor().status, 0);
+    // The operator quotes every command (paths with spaces) and removes one harness hook.
+    const quoted = read();
+    for (const groups of Object.values(quoted.hooks)) {
+      for (const group of groups) for (const hook of group.hooks) hook.command = hook.command.replace("node ${CLAUDE_PROJECT_DIR}/", 'node "${CLAUDE_PROJECT_DIR}"/');
+    }
+    const bash = quoted.hooks.PreToolUse.find((group) => group.matcher === "Bash");
+    const removed = bash.hooks.find((hook) => /lavish-command-gate\.mjs/.test(hook.command));
+    assert.ok(removed, "the harness ships lavish-command-gate on PreToolUse Bash");
+    bash.hooks = bash.hooks.filter((hook) => hook !== removed);
+    writeFileSync(settingsFile, JSON.stringify(quoted, null, 2));
+    assert.equal(vendor().status, 0);
+    const after = read();
+    for (const [event, groups] of Object.entries(after.hooks)) {
+      const ids = groups.flatMap((group) => group.hooks.map((hook) => `${group.matcher ?? ""}|${hook.command.match(/\.claude\/hooks\/([A-Za-z0-9._/-]+\.mjs)/)?.[1] ?? hook.command}`));
+      assert.equal(new Set(ids).size, ids.length, `${event}: no hook is installed twice`);
+    }
+    const bashAfter = after.hooks.PreToolUse.find((group) => group.matcher === "Bash").hooks.map((hook) => hook.command);
+    assert.ok(!bashAfter.some((command) => /lavish-command-gate\.mjs/.test(command)), "a hook the operator removed is not reinstated");
+    assert.ok(bashAfter.every((command) => command.includes('"${CLAUDE_PROJECT_DIR}"')), "the operator's quoting is kept");
+  } finally {
+    rmSync(target, { recursive: true, force: true });
+  }
+});
+
+test("vendor-core: an operator matcher that widens the shipped one (Agent → Agent|Task) never duplicates its hooks", () => {
+  const target = mkdtempSync(join(tmpdir(), "vendor-hook-matcher-"));
+  try {
+    mkdirSync(join(target, ".claude"), { recursive: true });
+    writeFileSync(join(target, ".claude", "settings.json"), "{}");
+    const vendor = () => spawnSync(process.execPath, [vendorCoreScript, "--source", harnessRoot, "--target", target, "--runtime", "claude"], { encoding: "utf8" });
+    assert.equal(vendor().status, 0);
+    const file = join(target, ".claude", "settings.json");
+    const settings = JSON.parse(readFileSync(file, "utf8"));
+    for (const event of ["PreToolUse", "PostToolUse"]) for (const group of settings.hooks[event]) if (group.matcher === "Agent") group.matcher = "Agent|Task";
+    writeFileSync(file, JSON.stringify(settings, null, 2));
+    assert.equal(vendor().status, 0);
+    const after = JSON.parse(readFileSync(file, "utf8"));
+    for (const event of ["PreToolUse", "PostToolUse"]) {
+      assert.equal(after.hooks[event].filter((group) => group.matcher === "Agent").length, 0, `${event}: no second "Agent" group next to "Agent|Task"`);
+    }
+  } finally {
+    rmSync(target, { recursive: true, force: true });
+  }
+});

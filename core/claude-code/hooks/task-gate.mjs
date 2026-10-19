@@ -22,6 +22,8 @@ import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 import { bareRole, isSafeSessionId } from "./lib/gate-lib.mjs";
+import { hookProjectRoot } from "./lib/hook-root.mjs";
+export { parseTaskRunEnv } from "./lib/task-paths.mjs";
 import { isDeliveryCommand } from "./entry-gate.mjs";
 import { hashTaskReceipt } from "../../shared/lib/task-contract.mjs";
 import { readTaskRunBinding } from "./lib/task-admission.mjs";
@@ -40,7 +42,7 @@ import {
   pathInScope,
   routeAllows,
 } from "./lib/task-lane-contract.mjs";
-import { ACCEPT_GIT_CONTROL_ENV, TASK_RUN_ENV, gateStateFile, isVolatileHarnessPath, planFile, specFile, taskRegistryPath } from "./lib/task-paths.mjs";
+import { ACCEPT_GIT_CONTROL_ENV, TASK_RUN_ENV, parseTaskRunEnv, gateStateFile, isVolatileHarnessPath, planFile, specFile, taskRegistryPath } from "./lib/task-paths.mjs";
 
 const WRITE_TOOLS = new Set(["Write", "Edit", "MultiEdit", "NotebookEdit"]);
 const TASKS_CLI = /^\s*node\s+(?:\.\/)?\.claude\/hooks\/tasks\.mjs\s+(?:dispatch|status|wait|integrate|resume|abandon-resume)(?:\s+--json\s+'[^']*'|\s+--json-file\s+[A-Za-z0-9_./-]+)?\s*$/;
@@ -50,17 +52,6 @@ const deny = (reason) => ({ deny: true, reason });
 const allow = () => ({ deny: false });
 
 /** Parse the host env; anything but `{cwd, sessionId}` with an absolute cwd is malformed. */
-export function parseTaskRunEnv(raw) {
-  try {
-    const value = JSON.parse(raw);
-    if (!value || typeof value !== "object" || Array.isArray(value) ||
-        Object.keys(value).sort().join(",") !== "cwd,sessionId" ||
-        typeof value.cwd !== "string" || !path.isAbsolute(value.cwd) || !isSafeSessionId(value.sessionId)) return null;
-    return value;
-  } catch {
-    return null;
-  }
-}
 
 function relativeInside(root, file) {
   if (typeof file !== "string" || !file) return null;
@@ -253,8 +244,18 @@ export function integrationBlockers(root, registry) {
   return evidence.ok ? [] : [evidence.reason];
 }
 
+function deliveredRegistry(root, registry) {
+  if (registry.correction_barrier || registry.integration_intent) return false;
+  if (!Object.values(registry.tasks).every((entry) => entry?.status === "integrated")) return false;
+  try {
+    return execFileSync("git", ["branch", "-r", "--contains", "HEAD"], { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim().length > 0;
+  } catch {
+    return false;
+  }
+}
+
 /** Parent-mode decision for one PreToolUse payload. */
-export function decideParent(payload, { root = process.cwd() } = {}) {
+export function decideParent(payload, { root = hookProjectRoot() } = {}) {
   const tool = payload.tool_name;
   const input = payload.tool_input ?? {};
   const command = tool === "Bash" ? String(input.command ?? "") : "";
@@ -262,10 +263,12 @@ export function decideParent(payload, { root = process.cwd() } = {}) {
     return deny(`[harness-tasks] ${ACCEPT_GIT_CONTROL_ENV} is the operator's acknowledgement of a Git config/hooks change; only the operator sets it, from their own terminal (\`! <command>\`)`);
   }
   // The registry, journals and receipts are host-owned: the parent reads them through the CLI.
-  if (tool === "Bash" && /task-runs\/|task-admission|task-ledger/.test(command) && !TASKS_CLI.test(command)) {
+  // Anchored to the harness state tree, so a project's own files with similar names
+  // (src/tasks.mjs, a "task-ledger" commit message, docs) are never caught.
+  if (tool === "Bash" && /\.claude\/plans\/\.state\/[^\s'"]*(?:task-runs|task-admission|task-ledger)/.test(command) && !TASKS_CLI.test(command)) {
     return deny("[harness-tasks] task state (task-runs/, admissions, ledgers) is host-owned; read it with `node .claude/hooks/tasks.mjs status --json '{}'`");
   }
-  if (tool === "Bash" && /\btasks\.mjs\b/.test(command) && !TASKS_CLI.test(command)) {
+  if (tool === "Bash" && /\.claude\/hooks\/tasks\.mjs\b/.test(command) && !TASKS_CLI.test(command)) {
     return deny("[harness-tasks] run the task CLI alone, exactly `node .claude/hooks/tasks.mjs <action> --json '<json>'` (or --json-file <path>): no env prefix, cd, chaining or redirection — its identity is this session");
   }
   const sessionId = payload.session_id;
@@ -284,6 +287,9 @@ export function decideParent(payload, { root = process.cwd() } = {}) {
     return restricted ? deny(`[harness-tasks] task registry cannot be read safely (${error.message}); repair it before delivery or new work`) : allow();
   }
   if (!registry || Object.keys(registry.tasks).length === 0) return allow();
+  // A delivered parallel run (every task integrated, nothing journaled, HEAD on a remote branch)
+  // no longer pins the session: a next feature can be classified and delivered normally.
+  if (deliveredRegistry(realRoot, registry)) return allow();
   const isSubagent = Object.hasOwn(payload, "agent_id");
   if ((tool === "Agent" || tool === "Task") && !isSubagent) {
     const role = bareRole(input.subagent_type);

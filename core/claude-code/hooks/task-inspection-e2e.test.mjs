@@ -96,6 +96,22 @@ test("inspection matrix: the host derives ready/blocked from native evidence", {
     return steps;
   })();
 
+  // P8 — two eyes: only the eye that found the problem re-reviews after the sniper (Pi parity);
+  // the other keeps its ancestral positive. Without that re-review the task stays blocked.
+  const adv = planTask("task-a", ["src/a"], { title: "Módulo A", adversarial: { enabled: true, focus: ["edge cases"] } });
+  const advJson = (issues) => `\`\`\`json\n${JSON.stringify({ issues })}\n\`\`\``;
+  const eyesThenFix = (reReview) => laneSteps({ task: adv, skip: new Set(["review"]), extraAfter: [
+    { agent: { subagent_type: "compliance", model: "sonnet", prompt: `${marker("task-a")}\nReview.`, report: "## Veredito: pass" } },
+    { agent: { subagent_type: "adversary", model: "sonnet", prompt: `${marker("task-a")}\nAttack.`, report: advJson([{ severity: "high", description: "ARMED · edge breaks" }]) } },
+    mark("task-a", "regate-pending"),
+    mark("task-a", "active-scope", " --role sniper --scope-paths src/a"),
+    { agent: { subagent_type: "sniper-high", model: "sonnet", prompt: `${marker("task-a")}\nFix the edge.`, writes: [{ path: "src/a/index.mjs", content: "export const value = () => \"task-a-ok\"; // edge\n" }], report: "## Status: DONE" } },
+    { bash: "git add src/a/index.mjs && git commit -qm 'fix(a): edge'" },
+    mark("task-a", "capture-verified"),
+    ...(reReview ? [{ agent: { subagent_type: "adversary", model: "sonnet", prompt: `${marker("task-a")}\nRe-attack.`, report: advJson([]) } }] : []),
+    mark("task-a", "regate-passed"),
+  ] });
+
   // P7 — dispatches that slipped past the lane gate (wrong model, foreign marker, final-review marker).
   const ungated = (agent) => laneSteps({ task: a, extraAfter: [{ agent: { report: "## Veredito: pass", ...agent, ungated: true } }] });
   const wrongRoute = ungated({ subagent_type: "compliance", model: "haiku", prompt: `${marker("task-a")}\nReview.` });
@@ -118,6 +134,9 @@ test("inspection matrix: the host derives ready/blocked from native evidence", {
   const p7 = await Promise.all([wrongRoute, foreignMarker, finalReview].map((steps) =>
     runScenarioProject(t, { tasks: [a], lanes: { "task-a": [{ steps }] } })));
   runs.push(...p7);
+  const p8 = await Promise.all([true, false].map((reReview) =>
+    runScenarioProject(t, { tasks: [adv], lanes: { "task-a": [{ steps: eyesThenFix(reReview) }] } })));
+  runs.push(...p8);
   const [p1, p2, p3, p4, p5, p6] = runs;
   const expectStatus = (run, taskId, status, pattern) => {
     const task = run.byId[taskId];
@@ -151,6 +170,8 @@ test("inspection matrix: the host derives ready/blocked from native evidence", {
   expectStatus(p6, "task-a", "blocked", /freeze commit may only add the locked tests/);
 
   for (const run of p7) expectStatus(run, "task-a", "blocked", /ran outside this task's marker or admitted routes/);
+  expectStatus(p8[0], "task-a", "ready");
+  expectStatus(p8[1], "task-a", "blocked", /the adversary found a problem, so it re-reviews the committed final HEAD/);
 
   // The parent never moved: inspection is read-only.
   for (const run of runs) assert.equal(git(run.project.root, "status", "--porcelain", "--untracked-files=no"), "");

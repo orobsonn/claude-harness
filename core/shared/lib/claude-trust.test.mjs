@@ -29,3 +29,19 @@ test("trust is recorded once for the main repository root, preserving the rest o
   const again = ensureClaudeTrust(repo, env);
   assert.equal(again.changed, false, "already trusted: nothing is written");
 });
+
+test("a symlinked Claude config (dotfile manager) keeps its link; the trust lands in the real file", (t) => {
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "cc-trust-link-")));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const repo = path.join(dir, "repo");
+  fs.mkdirSync(repo);
+  execFileSync("git", ["init", "-q"], { cwd: repo });
+  const cfg = path.join(dir, "cfg");
+  fs.mkdirSync(cfg);
+  const real = path.join(dir, "dotfiles-claude.json");
+  fs.writeFileSync(real, JSON.stringify({ projects: {} }));
+  fs.symlinkSync(real, path.join(cfg, ".claude.json"));
+  ensureClaudeTrust(repo, { CLAUDE_CONFIG_DIR: cfg });
+  assert.ok(fs.lstatSync(path.join(cfg, ".claude.json")).isSymbolicLink(), "the link survives");
+  assert.equal(JSON.parse(fs.readFileSync(real, "utf8")).projects[repo].hasTrustDialogAccepted, true);
+});

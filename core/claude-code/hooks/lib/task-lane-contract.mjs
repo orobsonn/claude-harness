@@ -267,7 +267,8 @@ function lastJsonBlock(text, predicate) {
 /** Reviewer outcome for an eye report: { positive, verdict, blocking } or null when unparseable. */
 export function parseEyeVerdict(role, text) {
   if (role === "compliance") {
-    const matches = [...String(text ?? "").matchAll(/^#*\s*Veredito:\s*(pass|partial|fail)\b/gim)];
+    // Also the compliance agent's fidelity contract: "## Veredito de fidelidade: PASS|FAIL".
+    const matches = [...String(text ?? "").matchAll(/^#*\s*Veredito(?: de fidelidade)?:\s*(pass|partial|fail)\b/gim)];
     if (!matches.length) return null;
     const verdict = matches.at(-1)[1].toLowerCase();
     return { verdict, positive: verdict === "pass" };

@@ -18,9 +18,11 @@ import { execFileSync } from "node:child_process";
 export function ensureClaudeTrust(parentRoot, env = process.env) {
   const common = execFileSync("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], { cwd: parentRoot, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
   const mainRoot = path.basename(common) === ".git" ? path.dirname(common) : parentRoot;
-  const file = env.CLAUDE_CONFIG_DIR && path.isAbsolute(env.CLAUDE_CONFIG_DIR)
+  const declared = env.CLAUDE_CONFIG_DIR && path.isAbsolute(env.CLAUDE_CONFIG_DIR)
     ? path.join(env.CLAUDE_CONFIG_DIR, ".claude.json")
     : path.join(env.HOME || os.homedir(), ".claude.json");
+  // A dotfile manager may symlink the config: write the real file, never replace the link.
+  const file = fs.existsSync(declared) ? fs.realpathSync(declared) : declared;
   const trusted = (config) => [mainRoot, parentRoot].some((key) => config?.projects?.[key]?.hasTrustDialogAccepted === true);
   for (let attempt = 0; attempt < 3; attempt += 1) {
     let config = {};

@@ -22,8 +22,7 @@ import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
-import { parseTaskRunEnv } from "./task-gate.mjs";
-import { TASK_RUN_ENV, isVolatileHarnessPath, laneLedgerFile, sessionStateDir } from "./lib/task-paths.mjs";
+import { TASK_RUN_ENV, isVolatileHarnessPath, laneLedgerFile, sessionStateDir, parseTaskRunEnv } from "./lib/task-paths.mjs";
 import { syncTuiEvents } from "./lib/task-tui-events.mjs";
 
 const LEDGER_TOOLS = new Set(["Bash", "Agent", "Task"]);
@@ -53,6 +52,13 @@ export function parseExitCode(error) {
   return match ? Number(match[1]) : null;
 }
 
+function reportTail(response) {
+  const content = response?.content;
+  const text = typeof content === "string" ? content
+    : Array.isArray(content) ? content.filter((item) => item?.type === "text" && typeof item.text === "string").map((item) => item.text).join("\n") : "";
+  return text.length > 4000 ? text.slice(-4000) : text;
+}
+
 /** Build the ledger record for one hook payload, or null when the event is not ledgered. */
 export function ledgerRecord(payload, facts, now = new Date().toISOString()) {
   const event = payload.hook_event_name;
@@ -73,6 +79,7 @@ export function ledgerRecord(payload, facts, now = new Date().toISOString()) {
         subagent_type: typeof input.subagent_type === "string" ? input.subagent_type : null,
         model: typeof input.model === "string" ? input.model : null,
         prompt_sha256: typeof input.prompt === "string" ? createHash("sha256").update(input.prompt).digest("hex") : null,
+        fidelity: typeof input.prompt === "string" && input.prompt.includes("[HARNESS_TASK_FIDELITY]"),
       };
   const common = { ...base, ...call, tool_use_id: payload.tool_use_id, head: facts.head, dirty: facts.dirty, merging: facts.merging };
   if (event === "PreToolUse") return { ...common, event: "pre" };
@@ -87,6 +94,8 @@ export function ledgerRecord(payload, facts, now = new Date().toISOString()) {
         agent_status: typeof response?.status === "string" ? response.status : null,
         native_agent_id: typeof response?.agentId === "string" ? response.agentId : null,
         is_async: response?.isAsync === true,
+        // The end of the report, so the lane's Stop hook can read an eye's verdict (task-continuation).
+        report_tail: reportTail(response),
       } : {}),
     };
   }

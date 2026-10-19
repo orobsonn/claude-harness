@@ -2821,13 +2821,21 @@ function isHookArrayPath(path) {
 
 /**
  * Merges one `hooks.<Event>` array. Untouched harness wiring (equal to the manifest's owned value)
- * is replaced by the new generation; a customized array keeps every operator group and hook, and
- * every hook the new generation ships is ADDED when missing — keyed by (matcher, command) — into the
- * group with the same matcher (or a new group). Without this, a consumer that ever touched a hook
- * array would never receive new harness wiring (e.g. the parallel-lane gate and ledger, which the
- * host refuses to run without). Nothing is ever removed here: there is no ledger of retired hook
- * wiring to arbitrate a removal.
+ * is replaced by the new generation. A customized array keeps every operator group and hook; a hook
+ * the new generation ships is ADDED (into the group with its matcher, or a new group) only when it is
+ * genuinely new — absent from the previous generation's owned wiring. A shipped hook that WAS owned
+ * before and is gone now was removed by the operator and stays removed. Identity is (matcher, the
+ * `.claude/hooks/<script>` the command runs), so an operator who quoted or reformatted a command never
+ * gets a duplicate. Without this, a consumer that ever touched a hook array would never receive new
+ * harness wiring (e.g. the parallel-lane gate and ledger, which the host refuses to run without).
  */
+const HOOK_SCRIPT = /\.claude\/hooks\/([A-Za-z0-9._/-]+\.mjs)/;
+function hookIdentity(matcher, hook) {
+  const command = isPlainObject(hook) && typeof hook.command === "string" ? hook.command : "";
+  const script = command.match(HOOK_SCRIPT)?.[1];
+  return `${matcher}\u0000${script ?? command.trim()}`;
+}
+
 function mergeHookArray(path, existingArr, newArr, ownedArr) {
   if (existingArr === undefined) return { value: newArr, owned: newArr, report: [{ path, action: "added", value: newArr }] };
   if (deepEqualValue(existingArr, newArr)) return { value: existingArr, owned: newArr, report: [] };
@@ -2836,26 +2844,41 @@ function mergeHookArray(path, existingArr, newArr, ownedArr) {
   }
   if (!Array.isArray(existingArr) || !Array.isArray(newArr)) return { value: existingArr, owned: undefined, report: [{ path, action: "kept-custom", value: existingArr }] };
   const matcherOf = (group) => (isPlainObject(group) && typeof group.matcher === "string" ? group.matcher : "");
+  const identities = (groups) => new Set((Array.isArray(groups) ? groups : []).flatMap((group) =>
+    isPlainObject(group) && Array.isArray(group.hooks) ? group.hooks.map((hook) => hookIdentity(matcherOf(group), hook)) : []));
+  const previouslyOwned = identities(ownedArr);
+  // An operator matcher that already covers the shipped one ("Agent|Task" ⊇ "Agent", "*" ⊇ all)
+  // counts as present, so widening a matcher never installs the harness hook twice.
+  const tokens = (matcher) => (matcher === "" || matcher === "*" ? null : new Set(matcher.split("|").map((item) => item.trim())));
+  const covers = (existing, shipped) => { const outer = tokens(existing); const inner = tokens(shipped); return outer === null || (inner !== null && [...inner].every((item) => outer.has(item))); };
+  const scriptOf = (hook) => (isPlainObject(hook) && typeof hook.command === "string" ? hook.command.match(HOOK_SCRIPT)?.[1] ?? hook.command.trim() : "");
   const merged = existingArr.map((group) => (isPlainObject(group) && Array.isArray(group.hooks) ? { ...group, hooks: [...group.hooks] } : group));
+  const present = identities(merged);
   const report = [];
   for (const shippedGroup of newArr) {
     if (!isPlainObject(shippedGroup) || !Array.isArray(shippedGroup.hooks)) continue;
     const matcher = matcherOf(shippedGroup);
-    const sameMatcher = merged.filter((group) => isPlainObject(group) && Array.isArray(group.hooks) && matcherOf(group) === matcher);
     for (const hook of shippedGroup.hooks) {
-      const present = sameMatcher.some((group) => group.hooks.some((existing) => isPlainObject(existing) && existing.command === hook?.command));
-      if (present) continue;
-      if (sameMatcher.length) sameMatcher[0].hooks.push(hook);
-      else {
-        const group = { ...shippedGroup, hooks: [hook] };
-        merged.push(group);
-        sameMatcher.push(group);
+      const id = hookIdentity(matcher, hook);
+      if (present.has(id)) continue;
+      const coveredElsewhere = merged.some((group) => isPlainObject(group) && Array.isArray(group.hooks) && covers(matcherOf(group), matcher) &&
+        group.hooks.some((existingHook) => scriptOf(existingHook) === scriptOf(hook)));
+      if (coveredElsewhere) continue;
+      if (previouslyOwned.has(id)) {
+        report.push({ path, action: "kept-removed", value: { matcher, command: hook?.command } });
+        continue;
       }
+      const target = merged.find((group) => isPlainObject(group) && Array.isArray(group.hooks) && matcherOf(group) === matcher);
+      if (target) target.hooks.push(hook);
+      else merged.push({ ...shippedGroup, hooks: [hook] });
+      present.add(id);
       report.push({ path, action: "added", value: { matcher, command: hook?.command } });
     }
   }
   if (!report.length) report.push({ path, action: "kept-custom", value: existingArr });
-  return { value: merged, owned: undefined, report };
+  // The shipped generation becomes the owned baseline, so the next upgrade can tell an operator
+  // removal (owned before, missing now) from a hook that is new again.
+  return { value: merged, owned: newArr, report };
 }
 
 /**

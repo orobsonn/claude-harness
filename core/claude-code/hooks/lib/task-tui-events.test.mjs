@@ -61,3 +61,16 @@ test("a tampered job, events file or transcript location is refused", (t) => {
   assert.throws(() => readTuiJob({ env: { ...job.env, CLAUDE_HARNESS_TUI_JOB_FILE: link }, cwd: job.worktree }), /regular non-symlink/);
   assert.equal(readTuiJob({ env: {}, cwd: job.worktree }), null, "not a TUI job");
 });
+
+test("concurrent syncs (parallel tool calls) never duplicate transcript events", async (t) => {
+  const job = tuiJob(t);
+  syncTuiEvents(job.payload, { env: job.env, cwd: job.worktree, start: true });
+  for (let index = 0; index < 50; index += 1) job.append(toolUse(`toolu_${index}`), toolResult(`toolu_${index}`));
+  const { spawn } = await import("node:child_process");
+  const moduleUrl = new URL("./task-tui-events.mjs", import.meta.url).href;
+  const script = `import { syncTuiEvents } from ${JSON.stringify(moduleUrl)}; syncTuiEvents(${JSON.stringify(job.payload)}, { env: ${JSON.stringify(job.env)}, cwd: ${JSON.stringify(job.worktree)} });`;
+  await Promise.all(Array.from({ length: 6 }, () => new Promise((resolve) => spawn(process.execPath, ["--input-type=module", "-e", script], { stdio: "ignore" }).on("close", resolve))));
+  const ids = job.events().filter((event) => event.type === "assistant").map((event) => event.message.content[0].id);
+  assert.equal(ids.length, 50, "each transcript entry is copied once");
+  assert.equal(new Set(ids).size, 50);
+});

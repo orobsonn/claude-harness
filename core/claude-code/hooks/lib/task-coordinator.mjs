@@ -301,7 +301,7 @@ function reconcileDependentMerge(entry, persist, scopes) {
     }
     requireTaskIdentity(entry);
     if (intent.kind === "aggregate-refresh") {
-      git(root, "merge", "--no-ff", "--no-edit", "-m", `Reconcile harness aggregate for ${entry.task_id}`, intent.parent_head);
+      git(root, "merge", "--no-ff", "--no-edit", "-m", `chore(harness): reconcile the aggregate for ${entry.task_id}`, intent.parent_head);
       return reconcileDependentMerge(entry, persist, scopes);
     }
     delete entry.reconciliation_intent;
@@ -367,7 +367,7 @@ async function reconcileDependent(entry, task, owner, registry, persist, deps) {
     beginConflictMerge(entry);
     return;
   }
-  git(entry.worktree, "merge", "--no-ff", "--no-edit", "-m", `Reconcile harness dependency correction for ${entry.task_id}`, parentHead);
+  git(entry.worktree, "merge", "--no-ff", "--no-edit", "-m", `chore(harness): reconcile a dependency correction for ${entry.task_id}`, parentHead);
   reconcileDependentMerge(entry, persist, scopes);
   if (entry.reconciliation_required) throw new Error("dependent reconciliation did not produce the reserved merge; preserve the worktree and journal");
 }
@@ -435,7 +435,7 @@ function applyAggregateRefresh(entry, intent, task, persist) {
   entry.reconciliation_intent = intent;
   persist();
   if (intent.conflicts?.length) return beginConflictMerge(entry);
-  git(entry.worktree, "merge", "--no-ff", "--no-edit", "-m", `Reconcile harness aggregate for ${entry.task_id}`, intent.parent_head);
+  git(entry.worktree, "merge", "--no-ff", "--no-edit", "-m", `chore(harness): reconcile the aggregate for ${entry.task_id}`, intent.parent_head);
   reconcileDependentMerge(entry, persist, scopeOf(task));
 }
 
@@ -537,7 +537,7 @@ function requireGitControl(owner, registry, persist, env) {
     persist();
     return;
   }
-  throw new Error(`the repository's shared Git configuration or hooks (.git/config, .git/hooks, .git/info/attributes) changed while task lanes existed; a lane may have planted code that runs in this session. Review them for anything you did not add (core.fsmonitor, hooks, filters, merge drivers) and then, from your own terminal, re-run this command with ${ACCEPT_GIT_CONTROL_ENV}=1`);
+  throw new Error(`the repository's shared Git configuration or hooks (.git/config, .git/hooks, .git/info/attributes) changed while task lanes existed; a lane may have planted code that runs in this session. Review them for anything you did not add (core.fsmonitor, hooks, filters, merge drivers). If they are yours, accept them from your own terminal in ${owner.root}: CLAUDE_CODE_SESSION_ID=${owner.sessionId} ${ACCEPT_GIT_CONTROL_ENV}=1 node .claude/hooks/tasks.mjs status --json '{}'`);
 }
 
 /** Refuse to copy into a lane path that the lane turned into a symlink. */
@@ -1104,7 +1104,7 @@ export async function executeTaskAction(params, context = {}, injected = {}) {
     };
     persist();
     if (!alreadyAncestral) {
-      git(owner.root, "merge", "--no-ff", "--no-edit", "-m", `Integrate harness task ${entry.task_id} (${entry.attempt_id})`, params.expected_head);
+      git(owner.root, "merge", "--no-ff", "--no-edit", "-m", `chore(harness): integrate task ${entry.task_id} (${entry.attempt_id})`, params.expected_head);
     }
     reconcileMerge(owner, registry, persist);
     return { ok: true, tasks: [summary(entry)] };

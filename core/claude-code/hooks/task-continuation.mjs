@@ -22,12 +22,12 @@ import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 import { isSafeSessionId } from "./lib/gate-lib.mjs";
-import { parseMarkCommand } from "./lib/task-lane-contract.mjs";
+import { hookProjectRoot } from "./lib/hook-root.mjs";
+import { laneDispatchRoutes, parseEyeVerdict, parseMarkCommand } from "./lib/task-lane-contract.mjs";
 import { readLaneLedger } from "./lib/task-events.mjs";
 import { readTaskRunBinding } from "./lib/task-admission.mjs";
 import { finalizeTuiEvents, readTuiJob, tuiLaunchPid } from "./lib/task-tui-events.mjs";
-import { TASK_RUN_ENV, isVolatileHarnessPath, laneLedgerFile, sessionStateDir, taskRegistryPath } from "./lib/task-paths.mjs";
-import { parseTaskRunEnv } from "./task-gate.mjs";
+import { TASK_RUN_ENV, isVolatileHarnessPath, laneLedgerFile, sessionStateDir, taskRegistryPath, parseTaskRunEnv } from "./lib/task-paths.mjs";
 
 const STOP_REQUEST = /^\s*(?:\/abort|\/quit|\/exit|stop|pause|cancel|pare|pausa|cancele|cancelar|n[aã]o continue|do not continue)\b/i;
 const hash = (value) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
@@ -59,29 +59,63 @@ function dirtyPaths(root) {
   ].filter((name) => name && !isVolatileHarnessPath(name)))].sort();
 }
 
-/** Lane hint: null when this task's capture (and FULL closure) is in place at the current HEAD. */
+/**
+ * Lane hint: null when this task's capture (and, in FULL, every required eye positive under the
+ * host inspection's rule, plus the re-gate) is in place at the current HEAD. The key is the
+ * PROGRESS state (HEAD, tree, capture, eye verdicts, re-gate), never the call count: a lane that
+ * keeps reporting the same BLOCKED does not buy another continuation (Pi delivery-continuation).
+ */
 export function laneContinuation(root, binding) {
   const head = git(root, "rev-parse", "HEAD");
   const dirty = dirtyPaths(root);
   const featureId = binding.grant.feature_id;
   const taskId = binding.grant.task_id;
-  const ledger = [...readLaneLedger(laneLedgerFile(root, binding.sessionId)).values()].map((pair) => pair.post).filter(Boolean)
-    .sort((a, b) => String(a.at).localeCompare(String(b.at)));
+  const pairs = [...readLaneLedger(laneLedgerFile(root, binding.sessionId)).values()].filter((pair) => pair.post)
+    .sort((a, b) => String(a.post.at).localeCompare(String(b.post.at)));
+  const role = (record) => String(record.subagent_type ?? "").split(":").pop();
   const markOf = (record, action) => record.tool === "Bash" && record.status === "ok" && record.agent_id === null &&
     (() => { const mark = parseMarkCommand(record.command ?? ""); return mark?.action === action && mark.flags["feature-id"] === featureId && mark.flags["task-id"] === taskId; })();
-  const writer = (record) => record.tool === "Agent" && record.status === "ok" && /^(?:test-author|executor(?:-high)?|sniper(?:-high)?)$/.test(String(record.subagent_type ?? "").split(":").pop());
-  const captureIndex = ledger.findLastIndex((record) => markOf(record, "capture-verified"));
-  const capture = ledger[captureIndex];
+  const isWriter = (record) => record.tool === "Agent" && record.status === "ok" && /^(?:test-author|executor(?:-high)?|sniper(?:-high)?)$/.test(role(record));
+  const isProducer = (record) => record.tool === "Agent" && record.status === "ok" && /^(?:executor(?:-high)?|sniper(?:-high)?)$/.test(role(record));
+  const posts = pairs.map((pair) => pair.post);
+  const captureIndex = posts.findLastIndex((record) => markOf(record, "capture-verified"));
+  const capture = posts[captureIndex];
+  const lastWriterIndex = posts.findLastIndex(isWriter);
+  const firstProducerIndex = posts.findIndex(isProducer);
   const captured = Boolean(capture) && capture.head === head && Array.isArray(capture.dirty) && capture.dirty.length === 0 &&
-    dirty.length === 0 && !ledger.slice(captureIndex + 1).some(writer);
+    dirty.length === 0 && captureIndex > lastWriterIndex;
   const full = binding.grant.mode === "FULL";
-  const eyesAfter = captured ? ledger.slice(captureIndex + 1).filter((record) => record.tool === "Agent" && record.status === "ok" &&
-    /^(?:compliance|adversary|security)$/.test(String(record.subagent_type ?? "").split(":").pop())).length : 0;
-  const pendingIndex = ledger.findLastIndex((record) => markOf(record, "regate-pending"));
-  const regated = pendingIndex < 0 || ledger.slice(pendingIndex + 1).some((record) => markOf(record, "regate-passed"));
-  if (captured && (!full || (eyesAfter > 0 && regated))) return null;
+  let routes = null;
+  try { routes = laneDispatchRoutes(binding.plan, binding.task); } catch { routes = null; }
+  const eyes = pairs.filter((pair) => pair.post.tool === "Agent" && pair.post.status === "ok" && pair.post.fidelity !== true &&
+    /^(?:compliance|adversary|security)$/.test(role(pair.post)));
+  const required = new Set([
+    ...(full ? ["compliance"] : []),
+    ...(full && routes?.adversary?.required ? ["adversary"] : []),
+    ...(full && routes?.security?.required ? ["security"] : []),
+    ...eyes.map((pair) => role(pair.post)),
+  ]);
+  const isAncestor = (sha) => { try { git(root, "merge-base", "--is-ancestor", sha, head); return true; } catch { return false; } };
+  const eyeState = {};
+  let eyesOk = true;
+  for (const name of [...required].sort()) {
+    const mine = eyes.filter((pair) => role(pair.post) === name);
+    const last = mine.at(-1);
+    const verdict = last ? parseEyeVerdict(name, last.post.report_tail ?? "") : null;
+    const everNegative = mine.some((pair) => parseEyeVerdict(name, pair.post.report_tail ?? "")?.positive === false);
+    const index = last ? posts.indexOf(last.post) : -1;
+    const clean = Boolean(last?.pre) && Array.isArray(last.pre.dirty) && last.pre.dirty.length === 0;
+    const current = clean && index > lastWriterIndex && last.pre.head === head;
+    const ancestral = clean && !everNegative && index > firstProducerIndex && firstProducerIndex >= 0 && isAncestor(last.pre.head);
+    const ok = Boolean(verdict?.positive) && (current || ancestral);
+    eyeState[name] = [last?.post.tool_use_id ?? null, verdict?.positive ?? null, ok];
+    if (!ok) eyesOk = false;
+  }
+  const pendingIndex = posts.findLastIndex((record) => markOf(record, "regate-pending"));
+  const regated = pendingIndex < 0 || posts.slice(pendingIndex + 1).some((record) => markOf(record, "regate-passed"));
+  if (captured && eyesOk && regated) return null;
   const stage = captured ? "task-reviews" : "task-implementation";
-  return { stage, key: hash({ lane: binding.sessionId, stage, head, dirty, calls: ledger.length }), content: INSTRUCTIONS[stage] };
+  return { stage, key: hash({ lane: binding.sessionId, stage, head, dirty, captured, eyes: eyeState, regated }), content: INSTRUCTIONS[stage] };
 }
 
 /** Parent hint: null when no task was admitted or the delivery reached a remote branch. */
@@ -105,7 +139,7 @@ function block(reason) {
  * Decide one hook payload. Returns { output?: object, finalize?: { jobFile } } — `output` is the
  * hook's JSON stdout; `finalize` asks the caller to end this TUI lane.
  */
-export function decide(payload, { env = process.env, cwd = process.cwd(), readBinding = readTaskRunBinding } = {}) {
+export function decide(payload, { env = process.env, cwd = hookProjectRoot(env), readBinding = readTaskRunBinding } = {}) {
   if (!payload || typeof payload !== "object" || !isSafeSessionId(payload.session_id)) return {};
   const lane = Object.hasOwn(env, TASK_RUN_ENV) ? parseTaskRunEnv(env[TASK_RUN_ENV]) : null;
   if (Object.hasOwn(env, TASK_RUN_ENV) && (!lane || lane.sessionId !== payload.session_id)) return {};
@@ -114,7 +148,8 @@ export function decide(payload, { env = process.env, cwd = process.cwd(), readBi
   const state = continuationState(dir);
   if (payload.hook_event_name === "UserPromptSubmit") {
     const paused = STOP_REQUEST.test(String(payload.prompt ?? ""));
-    if (paused !== state.paused && (lane || fs.existsSync(dir))) saveContinuation(dir, { ...state, paused });
+    // Only a lane or a parent with admitted tasks keeps continuation state; casual sessions write nothing.
+    if (paused !== state.paused && (lane || fs.existsSync(taskRegistryPath(root, payload.session_id)))) saveContinuation(dir, { ...state, paused });
     return {};
   }
   if (payload.hook_event_name !== "Stop") return {};
