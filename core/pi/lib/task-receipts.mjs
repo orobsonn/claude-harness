@@ -631,7 +631,7 @@ export function inspectTaskRun(entry, dependencies = {}) {
       worktree_changes: { task_id: entry.task_id, worktree,
         status: (tracked || untracked).slice(0, 6000), truncated: (tracked || untracked).length > 6000 },
     });
-    const changed = splitZero(git(worktree, ["diff", "--name-only", "-z", entry.base_sha, head]));
+    const changed = splitZero(git(worktree, ["diff", "--no-renames", "--name-only", "-z", entry.base_sha, head]));
     const scopes = [
       ...(Array.isArray(binding.task?.scope_paths) ? binding.task.scope_paths : []),
       ...(Array.isArray(binding.task?.allowed_writes) ? binding.task.allowed_writes : []),
@@ -642,7 +642,7 @@ export function inspectTaskRun(entry, dependencies = {}) {
       return failure(`task scope ${JSON.stringify(unsupportedScope)} uses unsupported glob syntax`);
     }
     const scopeBase = taskScopeBase(entry, worktree, head, scopes);
-    const scopedChanges = splitZero(git(worktree, ["diff", "--name-only", "-z", scopeBase, head]));
+    const scopedChanges = splitZero(git(worktree, ["diff", "--no-renames", "--name-only", "-z", scopeBase, head]));
     if (scopedChanges.some((item) => !covered(item, scopes))) return failure("task changed paths outside canonical scope", { changed: scopedChanges });
     const implementationObserved = native.events.some((event) => event.tool === "subagent" && ["harness-executor", "harness-sniper"].includes(event.args?.subagent_type) && eventSucceeded(event));
     if (!implementationObserved) return failure("successful native implementation call was not observed", contextDiagnostics);
@@ -853,7 +853,7 @@ export function inspectTaskRun(entry, dependencies = {}) {
             /^\[[^\]\n]+\s+[0-9a-f]{7,40}\]/m.test(eventText(event.end.result)) &&
             commitFromEvent(event, worktree) === hand.freezeCommitSha);
           if (!checkpoint || !ancestor(worktree, hand.freezeCommitSha, head)) continue;
-          const productPaths = splitZero(git(worktree, ["diff", "--name-only", "-z", `${hand.freezeCommitSha}^`, hand.freezeCommitSha]));
+          const productPaths = splitZero(git(worktree, ["diff", "--no-renames", "--name-only", "-z", `${hand.freezeCommitSha}^`, hand.freezeCommitSha]));
           if (!productPaths.length || productPaths.some((file) => !covered(file, scopes) || frozenPaths(binding.task).includes(file))) continue;
           recoveryOrigin = { head_sha: hand.freezeCommitSha, producer_call_id: writer.callId,
             producer_launch_index: writer.launchIndex, derived_from: "pre-author-product-commit" };
@@ -1123,8 +1123,11 @@ function validateIntegration(entry, integration, { projectRoot, sessionId, featu
         result.freeze_sha !== null && !ancestor(projectRoot, result.freeze_sha, result.hand_capture.freeze_sha))) {
     return failure("task receipt freeze and hand capture are not ancestral to the child HEAD");
   }
-  const actualChanged = splitZero(git(projectRoot, ["diff", "--name-only", "-z", result.base_sha, result.child_head]));
-  if (JSON.stringify(actualChanged) !== JSON.stringify(result.changed_paths)) return failure("task inspection changed-path receipt no longer matches Git");
+  const changedPaths = (...flags) => JSON.stringify(splitZero(git(projectRoot, ["diff", ...flags, "--name-only", "-z", result.base_sha, result.child_head])));
+  // Receipts hashed before --no-renames list a rename only by its destination.
+  // Only already-integrated history reaches here; inspection always records both paths.
+  if (JSON.stringify(result.changed_paths) !== changedPaths("--no-renames") &&
+      JSON.stringify(result.changed_paths) !== changedPaths()) return failure("task inspection changed-path receipt no longer matches Git");
   for (const [file, expected] of Object.entries(result.frozen_blobs)) {
     try {
       const digestAt = (revision) => crypto.createHash("sha256").update(
@@ -1308,7 +1311,7 @@ export function inspectTaskResumeAbandonment(entry, { headSha } = {}, dependenci
           ":(exclude).pi/harness/", ":(exclude)node_modules/"])).trim())
       return failure("resume abandonment requires the original clean child HEAD");
     if (result.changed_paths.length && String(git(entry.parent_root,
-      ["diff", "--name-only", result.child_head, headSha, "--", ...result.changed_paths])).trim())
+      ["diff", "--no-renames", "--name-only", result.child_head, headSha, "--", ...result.changed_paths])).trim())
       return failure("original integrated task paths changed on the parent");
     const binding = (dependencies.readTaskRunBindingFn ?? readTaskRunBinding)(worktree, result.session_id);
     if (!binding?.ok || binding.grant.task_id !== entry.task_id || binding.grant.attempt_id !== entry.attempt_id ||

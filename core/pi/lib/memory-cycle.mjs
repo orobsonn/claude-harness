@@ -310,7 +310,7 @@ export function reconcileMemoryDelivery(projectRoot, sessionId, options = {}) {
       expectedSha256: approval.plan_sha256 });
     if (!reviewed.ok) throw new Error(`Product conflict plan changed after approval: ${reviewed.reason}`);
   }
-  const changed = gitMemory(root, ["diff", "--name-only", "-z", expected_head, tree]).split("\0").filter(Boolean);
+  const changed = gitMemory(root, ["diff", "--no-renames", "--name-only", "-z", expected_head, tree]).split("\0").filter(Boolean);
   if ([...changed, ...conflictPaths].some((file) => isPiReviewExcludedPath(root, file) || file.startsWith(".pi/harness/plans/")))
     throw new Error("Base merge would import secrets or ephemeral runtime/plan files; no files were changed");
   const checkedPaths = new Set([...conflictPaths, ...changed.filter((file) => DURABLE_MEMORY_FILES.includes(file))]);
@@ -383,7 +383,7 @@ export function reconcileMemoryDelivery(projectRoot, sessionId, options = {}) {
     return { ...result, head: expected_head, already_incorporated: true };
   if (!pending || gitMemory(root, ["rev-parse", "MERGE_HEAD"]) !== base_sha || gitMemory(root, ["rev-parse", "HEAD"]) !== expected_head)
     throw new Error("Merge identity changed; preserve and inspect the worktree");
-  const unresolved = gitMemory(root, ["diff", "--name-only", "--diff-filter=U", "-z"]).split("\0").filter(Boolean);
+  const unresolved = gitMemory(root, ["diff", "--no-renames", "--name-only", "--diff-filter=U", "-z"]).split("\0").filter(Boolean);
   if (stable([...unresolved].sort()) !== stable([...conflictPaths].sort())) throw new Error("Merge conflicts changed after preview; preserve and inspect the worktree");
   for (const patch of patches) {
     if (readSmall(join(root, patch.path), 1024 * 1024) !== patch.before) throw new Error("Memory preimage changed during merge; preserve and inspect the worktree");
@@ -391,8 +391,8 @@ export function reconcileMemoryDelivery(projectRoot, sessionId, options = {}) {
   for (const patch of patches) atomicWrite(join(root, patch.path), patch.content,
     conflictModes.get(patch.path) === "100755" ? 0o755 : 0o600);
   if (patches.length) gitMemory(root, ["add", "--", ...patches.map((patch) => patch.path)]);
-  const indexDelta = gitMemory(root, ["diff", "--cached", "--name-only", "-z", tree]).split("\0").filter(Boolean);
-  if (indexDelta.some((file) => !conflictPaths.includes(file)) || gitMemory(root, ["diff", "--name-only"]))
+  const indexDelta = gitMemory(root, ["diff", "--cached", "--no-renames", "--name-only", "-z", tree]).split("\0").filter(Boolean);
+  if (indexDelta.some((file) => !conflictPaths.includes(file)) || gitMemory(root, ["diff", "--no-renames", "--name-only"]))
     throw new Error("Merge differs from the preview outside memory resolutions; preserve and inspect the index");
   for (const patch of patches) {
     if (blob("", patch.path) !== patch.content ||
@@ -678,7 +678,7 @@ export function completeHarvest(snapshot, text, agentId) {
 }
 
 function changedWorktreePaths(root) {
-  const tracked = gitMemory(root, ["diff", "--name-only", "HEAD"]).split("\n").filter(Boolean);
+  const tracked = gitMemory(root, ["diff", "--no-renames", "--name-only", "HEAD"]).split("\n").filter(Boolean);
   const untracked = gitMemory(root, ["ls-files", "--others", "--exclude-standard"]).split("\n").filter(Boolean);
   return [...new Set([...tracked, ...untracked])];
 }
@@ -733,7 +733,7 @@ export function checkHarvestReady(projectRoot, sessionId) {
   if (harvest.apply_status !== "applied") throw new Error("Apply the harvest proposal before shipping");
   cleanTree(paths.root);
   gitMemory(paths.root, ["merge-base", "--is-ancestor", harvest.base_head, "HEAD"]);
-  const changed = gitMemory(paths.root, ["diff", "--name-only", harvest.base_head, "HEAD"]).split("\n").filter(Boolean);
+  const changed = gitMemory(paths.root, ["diff", "--no-renames", "--name-only", harvest.base_head, "HEAD"]).split("\n").filter(Boolean);
   const expected = harvest.changes.map((change) => change.path);
   if (changed.some((path) => !expected.includes(path)) || expected.some((path) => !changed.includes(path))) throw new Error("Delivery changed outside the harvest proposal, or memory is not committed; rerun harvest after reconciliation");
   for (const change of harvest.changes) {

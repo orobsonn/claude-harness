@@ -481,7 +481,7 @@ export function piIsLifecycleOnlyMerge(projectRoot) {
     if (owned.size === 0) return false;
     const remoteHead = runGit(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], projectRoot);
     if (!/^origin\/(main|master)$/.test(remoteHead)) return false;
-    const changed = execFileSync("git", ["diff", "--name-only", "-z", `${remoteHead}...HEAD`], {
+    const changed = execFileSync("git", ["diff", "--no-renames", "--name-only", "-z", `${remoteHead}...HEAD`], {
       cwd: projectRoot,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],

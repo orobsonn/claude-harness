@@ -2724,6 +2724,21 @@ test("inspectTaskRun rejects cumulative changes outside the canonical task scope
   assert.match(inspected.reason, /outside canonical scope/i);
 });
 
+test("inspectTaskRun sees the deleted source of a rename into the task scope", () => {
+  const fixture = inspectionFixture();
+  run(fixture.root, "git", "mv", "README.md", "src/moved.md");
+  run(fixture.root, "git", "commit", "-m", "move outside file into scope");
+  const movedHead = run(fixture.root, "git", "rev-parse", "HEAD");
+  const state = JSON.parse(fs.readFileSync(fixture.statePath, "utf8"));
+  for (const receipt of [state.task_adversary_evidence[`${FEATURE}/${TASK}`], ...Object.values(state.task_review_evidence[`${FEATURE}/${TASK}`])]) receipt.reviewed_head_sha = movedHead;
+  write(fixture.statePath, state);
+  fixture.dependencies.captureReviewInputFn = () => ({ ok: true, snapshot: { head_sha: movedHead, input_digest: DIGEST } });
+  const inspected = inspectTaskRun(fixture.entry, fixture.dependencies);
+  assert.equal(inspected.ok, false);
+  assert.match(inspected.reason, /outside canonical scope/i);
+  assert.ok(inspected.details?.changed?.includes("README.md"));
+});
+
 test("inspectTaskRun rejects a forged dependency payload even after binding", () => {
   const fixture = inspectionFixture();
   const dependencyReceipt = {
@@ -2949,6 +2964,27 @@ test("integration accepts the inspected test-author recovery lineage but not pro
     write(f.registryPath, f.registry);
     const checked = readIntegratedTaskEvidence({ projectRoot: f.root, sessionId: PARENT, featureId: FEATURE, taskId: TASK, headSha: head });
     assert.equal(checked.ok, !productDrift, checked.reason);
+  }
+});
+
+test("readIntegratedTaskEvidence keeps a pre-upgrade rename receipt valid but rejects any other path list", () => {
+  for (const scenario of ["no-renames", "legacy-renames", "forged"]) {
+    const f = integratedFixture();
+    run(f.root, "git", "mv", "README.md", "docs.md");
+    run(f.root, "git", "commit", "-m", "rename inside the task");
+    const head = run(f.root, "git", "rev-parse", "HEAD");
+    const result = f.entry.result;
+    result.child_head = head;
+    result.hand_capture.freeze_sha = head;
+    result.hand_capture.capture_marker = `${FEATURE}/${TASK}@${head}`;
+    result.changed_paths = { "no-renames": ["README.md", "docs.md"], "legacy-renames": ["docs.md"], forged: ["README.md"] }[scenario];
+    f.integration.child_head = head;
+    f.integration.integrated_head = head;
+    f.integration.result_sha256 = hashTaskReceipt(result);
+    write(f.registryPath, f.registry);
+    const checked = readIntegratedTaskEvidence({ projectRoot: f.root, sessionId: PARENT, featureId: FEATURE, taskId: TASK, headSha: head });
+    assert.equal(checked.ok, scenario !== "forged", `${scenario}: ${checked.reason}`);
+    if (scenario === "forged") assert.match(checked.reason, /changed-path receipt no longer matches Git/);
   }
 });
 
