@@ -290,7 +290,7 @@ function reconcileMerge(owner, registry, persist) {
       if (
         merging !== intent.child_head ||
         git(owner.root, "write-tree") !== intent.tree ||
-        git(owner.root, "diff", "--name-only") ||
+        git(owner.root, "diff", "--no-renames", "--name-only") ||
         git(owner.root, "ls-files", "--others", "--exclude-standard", "-z")
           .split("\0")
           .filter(Boolean)
@@ -391,7 +391,7 @@ function reconcileDependentMerge(entry, persist, scopes) {
     }
     if (merging) {
       if (merging !== intent.parent_head || git(root, "write-tree") !== intent.tree ||
-          git(root, "diff", "--name-only") || git(root, "ls-files", "--others", "--exclude-standard", "-z")
+          git(root, "diff", "--no-renames", "--name-only") || git(root, "ls-files", "--others", "--exclude-standard", "-z")
             .split("\0").filter(Boolean).some((name) => !volatile(name)))
         throw new Error("interrupted dependent merge has additional changes; preserve the journal and reconcile this worktree");
       git(root, "merge", "--abort");
@@ -433,7 +433,7 @@ async function reconcileDependent(entry, task, owner, registry, persist, deps) {
   delete prior.reconciliation_required;
   const scopes = scopeOf(task);
   const base = taskScopeBase(prior, entry.worktree, head, scopes);
-  const changed = git(entry.worktree, "diff", "--name-only", "-z", base, head).split("\0").filter(Boolean);
+  const changed = git(entry.worktree, "diff", "--no-renames", "--name-only", "-z", base, head).split("\0").filter(Boolean);
   if (checkScope(changed, scopes).length) throw new Error("dependent changed paths outside canonical scope before reconciliation");
   const parentHead = git(owner.root, "rev-parse", "HEAD");
   if (!isAncestor(owner.root, base, parentHead)) throw new Error("dependent scope base is not ancestral to parent HEAD");
@@ -454,7 +454,7 @@ async function reconcileDependent(entry, task, owner, registry, persist, deps) {
   }
   if (!upstreams.length) throw new Error("corrected dependency identity is missing from the recovery request");
   const { tree, conflicts } = taskMergePreview(entry.worktree, head, parentHead);
-  const mergedChanges = git(entry.worktree, "diff", "--name-only", "-z", parentHead, tree).split("\0").filter(Boolean);
+  const mergedChanges = git(entry.worktree, "diff", "--no-renames", "--name-only", "-z", parentHead, tree).split("\0").filter(Boolean);
   if (checkScope([...mergedChanges, ...conflicts], scopes).length) throw new Error("dependent merge changes paths outside canonical scope");
   entry.reconciliation_intent = {
     written_by: "host-task-reconciliation", task_id: entry.task_id, attempt_id: entry.attempt_id,
@@ -481,7 +481,7 @@ function beginConflictMerge(entry) {
     if (git(entry.worktree, "rev-parse", "--verify", "MERGE_HEAD") !== intent.parent_head)
       throw error;
   }
-  const unresolved = git(entry.worktree, "diff", "--name-only", "--diff-filter=U", "-z").split("\0").filter(Boolean).sort();
+  const unresolved = git(entry.worktree, "diff", "--no-renames", "--name-only", "--diff-filter=U", "-z").split("\0").filter(Boolean).sort();
   if (JSON.stringify(unresolved) !== JSON.stringify(intent.conflicts))
     throw new Error("task conflict merge differs from its preview; preserve worktree and journal");
 }
@@ -498,7 +498,7 @@ function prepareIntegrationConflict(entry, task, owner, persist) {
     throw new Error("complete initial task admission before resolving integration conflicts");
   const scopes = scopeOf(task);
   const base = taskScopeBase(entry, entry.worktree, head, scopes);
-  const changed = git(entry.worktree, "diff", "--name-only", "-z", parentHead, preview.tree).split("\0").filter(Boolean);
+  const changed = git(entry.worktree, "diff", "--no-renames", "--name-only", "-z", parentHead, preview.tree).split("\0").filter(Boolean);
   if (checkScope([...preview.conflicts, ...changed], scopes).length)
     throw new Error("task merge conflicts outside canonical scope; correct the reviewed plan before resume");
   entry.reconciliation_intent = {
@@ -551,7 +551,7 @@ async function previewAggregateRefresh(entry, task, owner, params, deps) {
   const scopes = scopeOf(task);
   const base = taskScopeBase(entry, entry.worktree, head, scopes);
   const preview = taskMergePreview(entry.worktree, head, params.reconcile_head);
-  const changed = git(entry.worktree, "diff", "--name-only", "-z", params.reconcile_head, preview.tree).split("\0").filter(Boolean);
+  const changed = git(entry.worktree, "diff", "--no-renames", "--name-only", "-z", params.reconcile_head, preview.tree).split("\0").filter(Boolean);
   if (checkScope([...changed, ...preview.conflicts], scopes).length)
     throw new Error("aggregate refresh changes paths outside canonical task scope");
   return { written_by: "host-task-reconciliation", kind: "aggregate-refresh",

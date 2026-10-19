@@ -2724,6 +2724,21 @@ test("inspectTaskRun rejects cumulative changes outside the canonical task scope
   assert.match(inspected.reason, /outside canonical scope/i);
 });
 
+test("inspectTaskRun sees the deleted source of a rename into the task scope", () => {
+  const fixture = inspectionFixture();
+  run(fixture.root, "git", "mv", "README.md", "src/moved.md");
+  run(fixture.root, "git", "commit", "-m", "move outside file into scope");
+  const movedHead = run(fixture.root, "git", "rev-parse", "HEAD");
+  const state = JSON.parse(fs.readFileSync(fixture.statePath, "utf8"));
+  for (const receipt of [state.task_adversary_evidence[`${FEATURE}/${TASK}`], ...Object.values(state.task_review_evidence[`${FEATURE}/${TASK}`])]) receipt.reviewed_head_sha = movedHead;
+  write(fixture.statePath, state);
+  fixture.dependencies.captureReviewInputFn = () => ({ ok: true, snapshot: { head_sha: movedHead, input_digest: DIGEST } });
+  const inspected = inspectTaskRun(fixture.entry, fixture.dependencies);
+  assert.equal(inspected.ok, false);
+  assert.match(inspected.reason, /outside canonical scope/i);
+  assert.ok(inspected.details?.changed?.includes("README.md"));
+});
+
 test("inspectTaskRun rejects a forged dependency payload even after binding", () => {
   const fixture = inspectionFixture();
   const dependencyReceipt = {

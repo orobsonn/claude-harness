@@ -28,8 +28,8 @@ export function isTaskAncestor(root, ancestor, descendant) {
 /** Tracked, staged and untracked changes outside the host's volatile harness paths. */
 export function pendingTaskChanges(root, isVolatile) {
   const changes = [
-    ...taskGit(root, "diff", "--name-only", "-z", "--").split("\0"),
-    ...taskGit(root, "diff", "--cached", "--name-only", "-z", "--").split("\0"),
+    ...taskGit(root, "diff", "--no-renames", "--name-only", "-z", "--").split("\0"),
+    ...taskGit(root, "diff", "--cached", "--no-renames", "--name-only", "-z", "--").split("\0"),
   ].filter(Boolean);
   const untracked = taskGit(
     root,

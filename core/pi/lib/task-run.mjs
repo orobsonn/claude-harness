@@ -240,7 +240,7 @@ export function inspectTaskAdmission(grantPath, { cwd, sessionId }) {
     if (!isSafeSessionId(sessionId)) return fail("safe local session required");
     const info = inspectGrant(grantPath, cwd);
     if (git(info.root, "rev-parse", "HEAD") !== info.grant.base_sha) return fail("initial base mismatch");
-    if (git(info.root, "diff", "--name-only", "HEAD")) return fail("initial product worktree is dirty");
+    if (git(info.root, "diff", "--no-renames", "--name-only", "HEAD")) return fail("initial product worktree is dirty");
     const untracked = git(info.root, "ls-files", "--others", "--exclude-standard", "-z").split("\0").filter(Boolean);
     if (untracked.some((entry) => !entry.startsWith(".pi/harness/"))) {
       return fail("initial untracked product inputs must be resolved before admission");
@@ -523,7 +523,7 @@ export function validateTaskRepairCheckpoint({ root, task, baseSha, headSha }) {
     git(root, "merge-base", "--is-ancestor", baseSha, headSha);
     const frozen = (task.locked_tests ?? []).flatMap((test) => [test.path, ...(test.fixture_paths ?? [])]);
     const scopes = [...(task.scope_paths ?? []), ...(task.allowed_writes ?? [])];
-    const paths = git(root, "diff", "--no-ext-diff", "--no-textconv", "--name-only", "-z", baseSha, headSha).split("\0").filter(Boolean);
+    const paths = git(root, "diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--name-only", "-z", baseSha, headSha).split("\0").filter(Boolean);
     if (!paths.length || paths.some((file) => frozen.includes(file)) || checkScope(paths, scopes).length) return { ok: false };
     return { ok: true, head: headSha };
   } catch { return { ok: false }; }
@@ -559,8 +559,8 @@ export function checkTaskRepairPreservation(binding, event) {
     const root = binding.root;
     const scopes = [...(binding.task.scope_paths ?? []), ...(binding.task.allowed_writes ?? [])];
     const dirty = [...new Set([
-      ...git(root, "diff", "--no-ext-diff", "--no-textconv", "--name-only", "-z", "--cached", "HEAD", "--").split("\0"),
-      ...git(root, "diff", "--no-ext-diff", "--no-textconv", "--name-only", "-z", "--").split("\0"),
+      ...git(root, "diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--name-only", "-z", "--cached", "HEAD", "--").split("\0"),
+      ...git(root, "diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--name-only", "-z", "--").split("\0"),
       ...git(root, "ls-files", "--others", "--exclude-standard", "-z").split("\0"),
     ].filter((file) => file && !frozen.includes(file) && checkScope([file], scopes).length === 0))];
     if (!dirty.length) return { ok: true };
