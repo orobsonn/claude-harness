@@ -5,6 +5,13 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [3.10.0](https://github.com/orobsonn/claude-harness/compare/v3.9.10...v3.10.0) (2026-10-19)
+
+
+### Features
+
+* **claude-code:** parallel task worktrees ported from Pi ([#1107](https://github.com/orobsonn/claude-harness/issues/1107)) ([da81c8e](https://github.com/orobsonn/claude-harness/commit/da81c8e3076c92e6c3dca8ae7ccfd0b98cd6ab6a))
+
 ## [3.9.10](https://github.com/orobsonn/claude-harness/compare/v3.9.9...v3.9.10) (2026-10-18)
 
 
