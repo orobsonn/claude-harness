@@ -1123,8 +1123,11 @@ function validateIntegration(entry, integration, { projectRoot, sessionId, featu
         result.freeze_sha !== null && !ancestor(projectRoot, result.freeze_sha, result.hand_capture.freeze_sha))) {
     return failure("task receipt freeze and hand capture are not ancestral to the child HEAD");
   }
-  const actualChanged = splitZero(git(projectRoot, ["diff", "--no-renames", "--name-only", "-z", result.base_sha, result.child_head]));
-  if (JSON.stringify(actualChanged) !== JSON.stringify(result.changed_paths)) return failure("task inspection changed-path receipt no longer matches Git");
+  const changedPaths = (...flags) => JSON.stringify(splitZero(git(projectRoot, ["diff", ...flags, "--name-only", "-z", result.base_sha, result.child_head])));
+  // Receipts hashed before --no-renames list a rename only by its destination.
+  // Only already-integrated history reaches here; inspection always records both paths.
+  if (JSON.stringify(result.changed_paths) !== changedPaths("--no-renames") &&
+      JSON.stringify(result.changed_paths) !== changedPaths()) return failure("task inspection changed-path receipt no longer matches Git");
   for (const [file, expected] of Object.entries(result.frozen_blobs)) {
     try {
       const digestAt = (revision) => crypto.createHash("sha256").update(

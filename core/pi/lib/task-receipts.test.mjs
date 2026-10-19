@@ -2967,6 +2967,27 @@ test("integration accepts the inspected test-author recovery lineage but not pro
   }
 });
 
+test("readIntegratedTaskEvidence keeps a pre-upgrade rename receipt valid but rejects any other path list", () => {
+  for (const scenario of ["no-renames", "legacy-renames", "forged"]) {
+    const f = integratedFixture();
+    run(f.root, "git", "mv", "README.md", "docs.md");
+    run(f.root, "git", "commit", "-m", "rename inside the task");
+    const head = run(f.root, "git", "rev-parse", "HEAD");
+    const result = f.entry.result;
+    result.child_head = head;
+    result.hand_capture.freeze_sha = head;
+    result.hand_capture.capture_marker = `${FEATURE}/${TASK}@${head}`;
+    result.changed_paths = { "no-renames": ["README.md", "docs.md"], "legacy-renames": ["docs.md"], forged: ["README.md"] }[scenario];
+    f.integration.child_head = head;
+    f.integration.integrated_head = head;
+    f.integration.result_sha256 = hashTaskReceipt(result);
+    write(f.registryPath, f.registry);
+    const checked = readIntegratedTaskEvidence({ projectRoot: f.root, sessionId: PARENT, featureId: FEATURE, taskId: TASK, headSha: head });
+    assert.equal(checked.ok, scenario !== "forged", `${scenario}: ${checked.reason}`);
+    if (scenario === "forged") assert.match(checked.reason, /changed-path receipt no longer matches Git/);
+  }
+});
+
 test("readIntegratedTaskEvidence rejects current canonical plan or spec drift with unchanged task ids", () => {
   const changedPlan = integratedFixture();
   write(changedPlan.planPath, { feature_id: FEATURE, tasks: [{ id: TASK, changed: true }] });
