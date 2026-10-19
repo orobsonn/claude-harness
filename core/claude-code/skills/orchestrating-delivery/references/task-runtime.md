@@ -33,7 +33,9 @@ siga a ordem abaixo de forma que a evidência nativa a comprove.
   aplicados. Um finding fail-class nunca fica abaixo de `medium`. Rota diferente é negada pelo gate.
 - Test-author, executor e sniper são sequenciais. Rode os Bash em série e espere cada resultado.
 - Antes de cada executor ou sniper, carimbe o escopo:
-  `node .claude/hooks/mark.mjs active-scope --feature-id <feature> --task-id <task> --role executor|sniper --scope-paths <scope_paths separados por vírgula>`.
+  `node .claude/hooks/mark.mjs active-scope --feature-id <feature> --task-id <task> --role executor|sniper --scope-paths <scope_paths separados por vírgula> --allowed-writes <allowed_writes separados por vírgula>`.
+  Omita `--allowed-writes` só quando `contract.task.allowed_writes` estiver vazio: sem ele, o gate nega
+  a escrita da mão nesses paths.
 - Rode cada `mark.mjs` sozinho, sem `&&`, `;`, pipe nem redirecionamento, sempre com o
   `--feature-id` e o `--task-id` desta task. Marcadores permitidos: `fidelity-pass`,
   `hand-finished`, `capture-verified`, `regate-pending`, `regate-passed`, `active-scope`. Nunca passe SHA.
@@ -52,7 +54,7 @@ siga a ordem abaixo de forma que a evidência nativa a comprove.
 3. **Fidelidade**: `compliance` (`dispatch_routes.compliance`) com a linha `[HARNESS_TASK_FIDELITY]`
    antes do marcador de contexto. Entregue a task canônica, os paths de teste e fixture e a saída do
    RED com o exit code. Ele confere se o arquivo transcreve **todas** as asserções aprovadas e
-   termina com `## Veredito: pass|partial|fail`. Só `pass` aprova. Em falha, consolide as
+   termina com `## Veredito: pass|partial|fail` (ou `## Veredito de fidelidade: PASS|FAIL`). Só `pass` aprova. Em falha, consolide as
    correções num único brief ao test-author e revalide. Depois de 2 falhas, escale o diagnóstico ou
    a decisão de contrato; nunca aprove por número de rodadas.
 4. **Freeze commit**: um único Bash que faz `git add` só dos `contract.frozen_paths` (mais o stub
@@ -86,7 +88,8 @@ não autoriza esse caminho; só o contrato canônico autoriza.
     autenticação/autorização, segredos, cliente HTTP externo, entrada externa, entrypoint de serviço,
     dependência nova ou statement de log.
   Espere todos antes de corrigir qualquer coisa. Não abra outra mão escritora entre o HEAD revisado
-  e os olhos: o host só aceita revisões feitas sobre o HEAD final da task, com a árvore limpa.
+  e os olhos: o host só aceita revisões feitas sobre um HEAD commitado, com a árvore limpa (ver
+  Correções para o que vale depois de um fix).
 - Formatos: compliance `## Veredito: pass|partial|fail` (só `pass` é positivo); adversary um bloco
   ```json `{"issues":[…]}` (positivo sem issue `high`/`medium` ARMED); security ```json
   `{"verdict":"SECURE|UNSAFE","issues":[…]}`.
@@ -100,14 +103,17 @@ não autoriza esse caminho; só o contrato canônico autoriza.
 - Depois: `active-scope --role sniper`, sniper no rung da severidade, verificação, commit seletivo
   `fix(<scope>): …` e `capture-verified` com a árvore limpa.
 - Revalide **o olho que produziu o finding**, e qualquer outro cuja obrigação o fix mudou, no novo
-  HEAD. Uma revisão negativa sem uma positiva posterior do mesmo olho bloqueia a task.
+  HEAD. O host exige que todo olho que já deu negativo revise de novo o HEAD final, depois da última
+  mão escritora. Um olho que só deu positivo mantém o positivo feito sobre um HEAD ancestral, limpo e
+  posterior à implementação. Uma revisão negativa sem uma positiva posterior do mesmo olho bloqueia a task.
 - Quando o re-gate sair sem bloqueio:
   `node .claude/hooks/mark.mjs regate-passed --feature-id <feature> --task-id <task>`.
 - Depois de 2 ciclos de sniper/re-gate sem resolver um HIGH, escale ao executor ou à decisão de
   contrato. Nunca aprove automaticamente.
 - Reabra o test-author só quando o próprio teste ou fixture travado estiver errado, ou quando um
   observável aprovado estiver de fato sem cobertura. Antes disso, faça um **commit seletivo de
-  checkpoint** do produto já implementado (o gate nega o reparo com produto não commitado). Depois
+  checkpoint** do produto já implementado e o `capture-verified` com a árvore limpa (o gate nega o
+reparo com produto não commitado ou não capturado). Depois
   repita fidelidade → freeze só dos testes → `fidelity-pass`, e então sniper se ainda houver
   defeito de produto, com commit e captura. Nunca remova produto para fabricar RED.
 - Se a correção exigir arquivo de outra task, retorne `BLOCKED` com finding, arquivo, task dona,

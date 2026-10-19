@@ -357,6 +357,12 @@ npx --yes --package=github:orobsonn/claude-harness#<tag> claude-harness init --t
 - Detecta install vs update pela presença do instalador vendored / `.claude/.harness-version`.
 - **Não** use `@latest` do npm (ele atrasa e pode vendorar shell errado/stale).
 - Idempotente: `agents/`, `skills/`, `rules/`, `hooks/` são sobrescritos; **`.claude/memory/`, `.claude/kaizen.md`, `settings.json` e o seu conteúdo no `CLAUDE.md` nunca são clobbados**.
+- O `settings.json` do projeto passa a trazer `"model": "sonnet"` (o orquestrador do harness roda em
+  Sonnet) e `"includeCoAuthoredBy": false`. Settings de projeto vencem as de usuário: se você prefere
+  outro modelo ou o trailer `Co-Authored-By`, defina esses campos no `.claude/settings.local.json` ou
+  edite-os no `settings.json` do projeto (um valor seu é preservado nos próximos updates).
+- Hooks: se você editou ou removeu um hook do harness num evento, o update preserva sua versão e só
+  adiciona hooks realmente novos; um hook removido por você não volta.
 - Ao final roda um **portão de integridade**: se algum hook vendored importar um módulo que não foi espelhado, ele sai com FATAL em vez de entregar um hook que quebra no load. Se isso acontecer, **pare e reporte** — não commite um shell quebrado.
 - **Commite `.claude/`** (cron/cloud só enxerga o repo). O commit é seu — a skill não commita sozinha.
 - **Reinicie a sessão.**
