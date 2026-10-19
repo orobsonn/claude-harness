@@ -5,6 +5,13 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [3.10.1](https://github.com/orobsonn/claude-harness/compare/v3.10.0...v3.10.1) (2026-10-19)
+
+
+### Bug Fixes
+
+* **pi:** see the deleted source of a rename in task scope checks ([#1167](https://github.com/orobsonn/claude-harness/issues/1167)) ([5ed0019](https://github.com/orobsonn/claude-harness/commit/5ed001946aff143c337598bd28cfd26f52a3144c))
+
 ## [3.10.0](https://github.com/orobsonn/claude-harness/compare/v3.9.10...v3.10.0) (2026-10-19)
 
 
