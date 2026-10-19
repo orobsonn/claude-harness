@@ -177,6 +177,11 @@ test("before fidelity, a test-author re-brief keeps its own new stub; a tracked 
   fs.mkdirSync(path.join(lane.worktree, "src/a"), { recursive: true });
   fs.writeFileSync(path.join(lane.worktree, "src/a/index.mjs"), "export function a() { throw new Error(\"not implemented\"); }\n");
   assert.equal(testAuthor().deny, false, "the uncommitted stub is the test-author's own pre-fidelity output");
+  const ledger = path.join(lane.worktree, ".claude/plans/.state", LANE, "task-ledger.jsonl");
+  fs.mkdirSync(path.dirname(ledger), { recursive: true });
+  fs.writeFileSync(ledger, `${JSON.stringify({ v: 1, event: "pre", tool_use_id: "toolu_s1", tool: "Agent", agent_id: null, subagent_type: "sniper" })}\n`);
+  assert.match(testAuthor().reason, /Preserve the existing task implementation/, "after a sniper ran, untracked files are its product, not a stub");
+  fs.rmSync(ledger);
   git(lane.worktree, "add", "src/a/index.mjs");
   git(lane.worktree, "commit", "-qm", "base");
   fs.writeFileSync(path.join(lane.worktree, "src/a/index.mjs"), "export const a = 2;\n");
@@ -315,6 +320,7 @@ test("parent gate: a project's own tasks.mjs, task-ledger mentions and harness s
     "git diff -- .claude/hooks/tasks.mjs",
     'git commit -m "bump .claude/hooks/tasks.mjs"',
     "grep -n node .claude/hooks/tasks.mjs",
+    'npm test -- --grep "ACCEPT header" && echo GIT_CONTROL_CHAR',
     'git commit -m "docs: explain node .claude/hooks/tasks.mjs usage"',
   ]) assert.equal(parent(command).deny, false, command);
   for (const command of [

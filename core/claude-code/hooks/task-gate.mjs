@@ -28,6 +28,7 @@ import { isDeliveryCommand } from "./entry-gate.mjs";
 import { hashTaskReceipt } from "../../shared/lib/task-contract.mjs";
 import { readTaskRunBinding } from "./lib/task-admission.mjs";
 import { readAllIntegratedTaskEvidence } from "./lib/task-receipts.mjs";
+import { readLaneLedger } from "./lib/task-events.mjs";
 import { planRecoveryBlock, preserveTaskPlanForPlanner } from "./lib/task-plan-recovery.mjs";
 import {
   HAND_ROLES,
@@ -43,7 +44,7 @@ import {
   pathInScope,
   routeAllows,
 } from "./lib/task-lane-contract.mjs";
-import { ACCEPT_GIT_CONTROL_ENV, TASK_RUN_ENV, parseTaskRunEnv, gateStateFile, isVolatileHarnessPath, planFile, specFile, taskRegistryPath } from "./lib/task-paths.mjs";
+import { ACCEPT_GIT_CONTROL_ENV, TASK_RUN_ENV, parseTaskRunEnv, gateStateFile, laneLedgerFile, isVolatileHarnessPath, planFile, specFile, taskRegistryPath } from "./lib/task-paths.mjs";
 
 const WRITE_TOOLS = new Set(["Write", "Edit", "MultiEdit", "NotebookEdit"]);
 // A command position (start, after ; & | ( ` $( or `sh -c`), optional env assignments and wrapper
@@ -88,6 +89,18 @@ function laneFidelityPassed(root, sessionId, grant) {
   const fidelity = readLaneGateState(root, sessionId).fidelity_pass;
   const own = `${grant.feature_id}/${grant.task_id}`;
   return Array.isArray(fidelity) && fidelity.some((entry) => String(entry).split("@")[0] === own);
+}
+
+/** True once an executor or sniper was dispatched in this lane (its new files are product, not a stub). */
+function producerDispatched(root, sessionId) {
+  try {
+    return [...readLaneLedger(laneLedgerFile(root, sessionId)).values()].some((pair) => {
+      const record = pair.pre ?? pair.post;
+      return record?.tool === "Agent" && record.agent_id === null && /^(?:executor|sniper)(?:-high)?$/.test(String(record.subagent_type ?? "").split(":").pop());
+    });
+  } catch {
+    return true;
+  }
 }
 
 function isUntracked(root, relative) {
@@ -180,11 +193,10 @@ export function decideLane(payload, env, { readBinding = readTaskRunBinding, hoo
       return deny(`[task-run] use the literal route from contract.dispatch_routes for ${role} (subagent_type and model), got model ${JSON.stringify(input.model)}`);
     }
     if (role === "test-author") {
-      // Before this task's fidelity passes the executor cannot have run, so new untracked product
-      // files are normally the test-author's own throwing stub, which a fidelity re-brief may
-      // rewrite. (A pre-fidelity sniper's new files qualify too; they stay safe: a test-author never
-      // overwrites a tracked file, and discards still go through repairPreservation.)
-      const stubOnly = !laneFidelityPassed(root, env.sessionId, grant) && onlyNewUntrackedPaths(root, task);
+      // Before this task's fidelity passes and before any executor/sniper was dispatched, new
+      // untracked product files can only be the test-author's own throwing stub, which a fidelity
+      // re-brief may rewrite.
+      const stubOnly = !laneFidelityPassed(root, env.sessionId, grant) && !producerDispatched(root, env.sessionId) && onlyNewUntrackedPaths(root, task);
       const reason = stubOnly ? null : repairPreservation(root, task, "");
       if (reason) return deny(`[task-run] ${reason}`);
     }
@@ -220,7 +232,7 @@ export function decideLane(payload, env, { readBinding = readTaskRunBinding, hoo
     let exists = relative !== null && fs.existsSync(path.join(root, relative));
     // Before fidelity the test-author may rewrite its own untracked stub (a wrong export is an
     // import failure, not RED); a tracked product file is never a stub.
-    if (exists && role === "test-author" && !laneFidelityPassed(root, env.sessionId, grant) && isUntracked(root, relative)) exists = false;
+    if (exists && role === "test-author" && !laneFidelityPassed(root, env.sessionId, grant) && !producerDispatched(root, env.sessionId) && isUntracked(root, relative)) exists = false;
     const reason = laneWriteDenyReason(relative, { role, task, exists });
     return reason ? deny(`[task-run] ${reason}`) : allow();
   }
@@ -306,7 +318,7 @@ export function decideParent(payload, { root = hookProjectRoot() } = {}) {
   const input = payload.tool_input ?? {};
   const command = tool === "Bash" ? String(input.command ?? "") : "";
   const policy = policyText(command);
-  if (tool === "Bash" && (policy.includes(ACCEPT_GIT_CONTROL_ENV) || /ACCEPT[\s\S]*GIT_CONTROL|GIT_CONTROL[\s\S]*ACCEPT/.test(policy))) {
+  if (tool === "Bash" && policy.includes(ACCEPT_GIT_CONTROL_ENV)) {
     return deny(`[harness-tasks] ${ACCEPT_GIT_CONTROL_ENV} is the operator's acknowledgement of a Git config/hooks change; only the operator sets it, from their own terminal (\`! <command>\`)`);
   }
   // The registry, journals and receipts are host-owned: the parent reads them through the CLI.
