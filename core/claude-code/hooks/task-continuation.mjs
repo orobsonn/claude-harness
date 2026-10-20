@@ -24,7 +24,7 @@ import { fileURLToPath } from "node:url";
 import { isSafeSessionId } from "./lib/gate-lib.mjs";
 import { hookProjectRoot } from "./lib/hook-root.mjs";
 import { laneDispatchRoutes, parseEyeVerdict, parseMarkCommand } from "./lib/task-lane-contract.mjs";
-import { readLaneLedger } from "./lib/task-events.mjs";
+import { readLaneLedger, isUnwrittenBlockedLaneWriter } from "./lib/task-events.mjs";
 import { readTaskRunBinding } from "./lib/task-admission.mjs";
 import { finalizeTuiEvents, readTuiJob, tuiLaunchPid } from "./lib/task-tui-events.mjs";
 import { TASK_RUN_ENV, isVolatileHarnessPath, laneLedgerFile, sessionStateDir, taskRegistryPath, parseTaskRunEnv } from "./lib/task-paths.mjs";
@@ -75,8 +75,12 @@ export function laneContinuation(root, binding) {
   const role = (record) => String(record.subagent_type ?? "").split(":").pop();
   const markOf = (record, action) => record.tool === "Bash" && record.status === "ok" && record.agent_id === null &&
     (() => { const mark = parseMarkCommand(record.command ?? ""); return mark?.action === action && mark.flags["feature-id"] === featureId && mark.flags["task-id"] === taskId; })();
-  const isWriter = (record) => record.tool === "Agent" && record.status === "ok" && /^(?:test-author|executor(?:-high)?|sniper(?:-high)?)$/.test(role(record));
-  const isProducer = (record) => record.tool === "Agent" && record.status === "ok" && /^(?:executor(?:-high)?|sniper(?:-high)?)$/.test(role(record));
+  const refusedWriters = new Set(pairs.filter(pair => isUnwrittenBlockedLaneWriter({
+    tool: pair.post.tool, ok: pair.post.status === "ok", role: role(pair.post), agentStatus: pair.post.agent_status,
+    isAsync: pair.post.is_async, text: pair.post.report_tail, pre: pair.pre, post: pair.post,
+  })).map(pair => pair.post));
+  const isWriter = (record) => !refusedWriters.has(record) && record.tool === "Agent" && record.status === "ok" && /^(?:test-author|executor(?:-high)?|sniper(?:-high)?)$/.test(role(record));
+  const isProducer = (record) => !refusedWriters.has(record) && record.tool === "Agent" && record.status === "ok" && /^(?:executor(?:-high)?|sniper(?:-high)?)$/.test(role(record));
   const posts = pairs.map((pair) => pair.post);
   const captureIndex = posts.findLastIndex((record) => markOf(record, "capture-verified"));
   const capture = posts[captureIndex];

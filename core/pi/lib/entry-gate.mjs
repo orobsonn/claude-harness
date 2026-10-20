@@ -44,7 +44,8 @@ import { basename, join, resolve } from "node:path";
 
 import { formatFeatureTaskEntry, matchesAbsolution } from "../../shared/lib/absolution.mjs";
 import { checkFrozen, checkScope } from "../../shared/lib/capture-oracle.mjs";
-import { recordViolations } from "../../shared/lib/real-file-capture-rail.mjs";
+import { isUnwrittenBlockedWriter } from "./native-writer.mjs";
+import { isCaptureEligibleHandRecord, recordViolations } from "../../shared/lib/real-file-capture-rail.mjs";
 import { mergeGateStatePatch } from "../../shared/lib/gate-state-shape.mjs";
 import { computeGitState } from "../../shared/lib/git-state.mjs";
 import {
@@ -1145,7 +1146,7 @@ function removeTaskEntry(entries, bare) {
  * em `.opencode/plans/.state/`. Toda a lógica pura (formatFeatureTaskEntry, checkScope,
  * checkFrozen, mergeGateStatePatch, withGateStateLock) É reusada por import.
  * @param {{projectRoot: string, sessionId: string, featureId: string, taskId: string, role: string,
- *   producerCallId: string, outcome: string, touchedPaths: string[], freezeCommitSha: string|null}} input
+ *   producerCallId: string, outcome: string, touchedPaths: string[], freezeCommitSha: string|null, nativeResult?: object, isError?: boolean}} input
  * @returns {{ok: boolean, recorded: boolean, reason?: string}}
  */
 export function recordPiHandFinished(input) {
@@ -1232,6 +1233,14 @@ export function recordPiHandFinished(input) {
       const scope = checkScope(touched, allowed);
       const frozen = checkFrozen(touched, Array.isArray(producer.frozen_paths) ? producer.frozen_paths : []);
       const effectiveOutcome = scope.length > 0 || frozen.length > 0 ? "BLOCKED" : outcome;
+      if (isUnwrittenBlockedWriter(role, input.nativeResult, input.isError) && effectiveOutcome === "BLOCKED" &&
+          touched.length === 0 && isCaptureEligibleHandRecord(existing) &&
+          existing.featureId === featureId && existing.taskId === taskId && existing.sessionId === sessionId &&
+          existing.writtenBy === "host-hand-finished" && typeof existing.capturedVerifiedAt === "string" && existing.capturedVerifiedAt &&
+          !recordViolations(existing).scope.length && !recordViolations(existing).frozen.length) {
+        outcomeResult = { ok: true, recorded: false, reason: "unwritten blocked dispatch preserved the existing captured hand" };
+        return gateState; // No new hand, capture marker or approval is manufactured.
+      }
       const record = {
         featureId,
         taskId,
@@ -1281,7 +1290,7 @@ export function recordPiHandFinished(input) {
  * @description Normaliza um resultado terminal de subagente do Pi e o persiste pela autoridade do
  * produtor exato. Espelho de recordTaskCompletion (lane OC) com os caminhos da lane Pi.
  * @param {{projectRoot?: string, sessionId?: string, featureId?: string, taskId?: string,
- *   role?: string, producerCallId?: string, outputText?: unknown, background?: boolean}} input
+ *   role?: string, producerCallId?: string, outputText?: unknown, background?: boolean, nativeResult?: object, isError?: boolean}} input
  * @returns {{ok: boolean, terminal: boolean, recorded: boolean, capturePending?: boolean, reason?: string}}
  */
 export function recordPiTaskCompletion(input = {}) {
@@ -1308,6 +1317,8 @@ export function recordPiTaskCompletion(input = {}) {
       role: input.role,
       producerCallId: input.producerCallId,
       outcome,
+      nativeResult: input.nativeResult,
+      isError: input.isError,
       touchedPaths: touched,
       freezeCommitSha: resolvePiHeadSha(projectRoot),
     });

@@ -1637,3 +1637,46 @@ test("mão que não declara status termina BLOCKED e não fica pendente de captu
     f.close();
   }
 });
+
+
+test("native zero-tool refusals preserve an already captured hand without minting another marker", () => {
+  for (const role of ["harness-test-author", "harness-executor", "harness-sniper"]) {
+    for (const variant of ["unchanged", "tools-used", "missing-proof", "actual-delta", "uncaptured"]) {
+      const f = completionFixture();
+      try {
+        const claim = (callId, handRole) => claimPiDispatchForRuntime(f.root, { sessionId: f.sessionId,
+          featureId: f.featureId, taskId: "task-1", callId, role: handRole }, { env: {}, isAncestorFn: () => null });
+        assert.equal(claim("existing-producer", "harness-executor").ok, true);
+        const input = { projectRoot: f.root, sessionId: f.sessionId, featureId: f.featureId, taskId: "task-1" };
+        assert.equal(recordPiTaskCompletion({ ...input, producerCallId: "existing-producer", role: "harness-executor", outputText: "Status: DONE" }).ok, true);
+        const handFile = join(f.root, ".pi/harness/state/hand-records", f.featureId, f.sessionId, "task-1.json");
+        const stateFile = join(f.root, ".pi/harness/state", f.sessionId, "gate-state.json");
+        const existing = JSON.parse(readFileSync(handFile, "utf8"));
+        if (variant !== "uncaptured") existing.capturedVerifiedAt = "2026-10-20T00:00:00.000Z";
+        writeFileSync(handFile, JSON.stringify(existing));
+        assert.equal(claim("refused-producer", role).ok, true);
+        const beforeHand = readFileSync(handFile, "utf8"), beforeState = readFileSync(stateFile, "utf8");
+        if (variant === "actual-delta") writeFileSync(join(f.root, "src/a.ts"), "export const value = 3;\n");
+        const result = { details: { status: "completed", subagentType: role, toolUses: variant === "tools-used" ? 1 : 0 },
+          content: [{ type: "text", text: "Status: BLOCKED" }] };
+        const refusal = { ...input, producerCallId: "refused-producer", role, outputText: "Status: BLOCKED",
+          ...(variant !== "missing-proof" ? { nativeResult: result } : {}) };
+        const outcome = recordPiTaskCompletion(refusal);
+        assert.equal(outcome.ok, true, `${role}/${variant}: ${outcome.reason}`);
+        const hand = JSON.parse(readFileSync(handFile, "utf8"));
+        if (variant === "unchanged") {
+          assert.equal(outcome.recorded, false);
+          assert.equal(outcome.capturePending, false);
+          assert.equal(readFileSync(handFile, "utf8"), beforeHand);
+          assert.equal(readFileSync(stateFile, "utf8"), beforeState);
+          assert.equal(recordPiTaskCompletion(refusal).recorded, false, "duplicate completion preserves the same authority");
+          assert.equal(hand.producerCallId, "existing-producer");
+        } else {
+          assert.equal(outcome.recorded, true, `${role}/${variant}`);
+          assert.equal(hand.producerCallId, "refused-producer");
+          assert.equal(hand.outcome, "BLOCKED");
+        }
+      } finally { f.close(); }
+    }
+  }
+});

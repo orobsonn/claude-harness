@@ -223,3 +223,22 @@ test("a host without the claude CLI refuses the dispatch before admitting anythi
   const tasks = fs.existsSync(registryFile) ? Object.keys(JSON.parse(fs.readFileSync(registryFile, "utf8")).tasks ?? {}) : [];
   assert.deepEqual(tasks, [], "nothing was admitted, so the parent gate does not pin the session");
 });
+
+
+test("native BLOCKED authors preserve fidelity only across unchanged clean ledger boundaries", { timeout: 300_000 }, async t => {
+  const tasks = tasksABD().slice(0, 2);
+  const lanes = Object.fromEntries(tasks.map((task, i) => [task.id, [{ steps: laneSteps({ task, extraAfter: [
+    { agent: { subagent_type: "test-author", model: "sonnet", prompt: `${marker(task.id)}\nInspect requested scope.`,
+      ...(i ? { writes: [{ path: `test/${task.id}.test.mjs`, content: "import { test } from 'node:test';\ntest('changed oracle', () => {});\n" }] } : {}),
+      report: "## Status: BLOCKED\nRequested path is not admitted." } },
+    ...(i ? [{ bash: `git add test/${task.id}.test.mjs && git commit -qm 'test: changed oracle'` }] : [
+      { agent: { subagent_type: "executor", model: "sonnet", prompt: `${marker(task.id)}\nInspect scope; do not write.`, report: "## Status: BLOCKED\nNo work performed." } },
+    ]),
+  ] }) }]]));
+  const result = await runScenarioProject(t, { tasks, lanes });
+  const ready = result.status.tasks.find(task => task.task_id === tasks[0].id);
+  const blocked = result.status.tasks.find(task => task.task_id === tasks[1].id);
+  assert.equal(ready.status, "ready", JSON.stringify(result.status.diagnostics));
+  assert.equal(blocked.status, "blocked");
+  assert.match(result.status.diagnostics[tasks[1].id].reason ?? blocked.reason ?? "", /fidelity|test-author|capture/);
+});

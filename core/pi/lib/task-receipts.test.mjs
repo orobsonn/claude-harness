@@ -3653,3 +3653,73 @@ test("a no-write validation author renews the exact proven freeze without anothe
     assert.equal(inspectTaskRun(f.entry, f.dependencies).ok, false, change);
   }
 });
+
+
+test("native zero-tool BLOCKED authors do not supersede fidelity or writing boundaries", () => {
+  const prepare = (position = "before-producer", patch = {}) => {
+    const f = inspectionFixture(); bindPinnedRuntime(f, { testReviewer: true });
+    const file = f.entry.launches.at(-1).events_path;
+    const rows = fs.readFileSync(file, "utf8").trim().split("\n").map(JSON.parse);
+    const prompt = `[HARNESS_TASK_CONTEXT]{"task_id":"${TASK}"}[/HARNESS_TASK_CONTEXT]`;
+    for (const row of rows) if (row.type === "tool_execution_start" && ["author", "fidelity-eye"].includes(row.toolCallId)) {
+      row.args.prompt = prompt;
+      if (row.toolCallId === "fidelity-eye") row.args.subagent_type = "harness-test-reviewer";
+    }
+    const details = { status: "completed", subagentType: "harness-test-author", toolUses: 0, ...patch };
+    if (patch.toolUses === "missing") delete details.toolUses;
+    const at = rows.findIndex(row => row.type === "tool_execution_start" && row.toolCallId ===
+      (position === "after-author" ? "fidelity-eye" : "producer"));
+    rows.splice(position === "after-producer" ? rows.length : at, 0,
+      JSON.parse(event("tool_execution_start", { toolCallId: "refused-author", toolName: "subagent",
+        args: { subagent_type: "harness-test-author", prompt } })),
+      JSON.parse(event("tool_execution_end", { toolCallId: "refused-author", toolName: "subagent", isError: false,
+        result: { details, content: [{ type: "text", text: `Scope refused; no commands run. Status: ${patch.outcome ?? "BLOCKED"}` }] } })));
+    write(file, rows.map(JSON.stringify).join("\n") + "\n");
+    const entries = rows.flatMap(row => row.type === "tool_execution_start"
+      ? [{ type: "message", message: { role: "assistant", stopReason: "toolUse", content: [
+        { type: "toolCall", id: row.toolCallId, name: row.toolName, arguments: row.args }] } }]
+      : row.type === "tool_execution_end" ? [{ type: "message", message: { role: "toolResult", toolCallId: row.toolCallId,
+        toolName: row.toolName, isError: row.isError, ...row.result } }] : []);
+    return { ...f, file, entries, check: () => validateTaskFidelityFreeze({ projectRoot: f.root, sessionId: CHILD,
+      taskId: TASK, sessionEntries: entries }, { readTaskRunBindingFn: f.dependencies.readTaskRunBindingFn }) };
+  };
+  for (const position of ["after-author", "before-producer", "after-producer"]) {
+    const f = prepare(position), before = fs.readFileSync(f.file);
+    assert.equal(f.check().ok, true, `${position}: ${f.check().reason}`);
+    const replay = inspectTaskRun(f.entry, f.dependencies);
+    assert.equal(replay.ok, true, `${position}: ${replay.reason}`);
+    assert.equal(replay.result.freeze_sha, f.freeze);
+    assert.equal(replay.result.hand_capture.producer_call_id, "producer");
+    assert.deepEqual(fs.readFileSync(f.file), before, "do not rewrite BLOCKED outcomes or history");
+  }
+  for (const patch of [{ toolUses: 1 }, { toolUses: "missing" }, { toolUses: "0" },
+    { subagentType: "other-role" }, { outcome: "DONE" }, { outcome: "NEEDS_CONTEXT" }]) {
+    const f = prepare("after-producer", patch);
+    assert.equal(f.check().ok, false, JSON.stringify(patch));
+    assert.equal(inspectTaskRun(f.entry, f.dependencies).ok, false, JSON.stringify(patch));
+  }
+  const drift = prepare();
+  write(path.join(drift.root, "src/task.spec.mjs"), "export const weakened = true;\n");
+  run(drift.root, "git", "add", "src/task.spec.mjs"); run(drift.root, "git", "commit", "-m", "oracle drift");
+  assert.equal(drift.check().ok, false);
+  assert.equal(inspectTaskRun(drift.entry, drift.dependencies).ok, false);
+});
+
+
+test("a zero-tool BLOCKED implementation refusal cannot supersede a real captured producer", () => {
+  for (const role of ["harness-executor", "harness-sniper"]) {
+    for (const toolUses of [0, 1]) {
+      const f = testOnlyRecovery();
+      const file = f.entry.launches.at(-1).events_path;
+      fs.appendFileSync(file, [
+        event("tool_execution_start", { toolCallId: "refused-implementation", toolName: "subagent",
+          args: { subagent_type: role, prompt: `[HARNESS_TASK_CONTEXT]{"task_id":"${TASK}"}[/HARNESS_TASK_CONTEXT]` } }),
+        event("tool_execution_end", { toolCallId: "refused-implementation", toolName: "subagent", result: {
+          details: { status: "completed", subagentType: role, toolUses }, content: [{ type: "text", text: "Status: BLOCKED" }] } }), "",
+      ].join("\n"));
+      const inspected = inspectTaskRun(f.entry, f.dependencies);
+      assert.equal(inspected.ok, toolUses === 0, `${role} tools=${toolUses}: ${inspected.reason}`);
+      if (inspected.ok) assert.equal(inspected.result.hand_capture.producer_call_id, "correct-author");
+    }
+  }
+});

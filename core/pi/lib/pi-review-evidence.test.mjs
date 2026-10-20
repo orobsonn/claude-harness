@@ -685,3 +685,23 @@ test("task implementation receipts preserve the existing task adversary gate-sta
   const state = JSON.parse(readFileSync(join(root, ".pi", "harness", "state", SESSION, "gate-state.json"), "utf8"));
   assert.equal(state.task_adversary_evidence[`${FEATURE}/${TASK}`].task_id, TASK);
 });
+
+
+test("review ordering requires an actual implementation attempt after a native zero-tool refusal", () => {
+  const entries = [];
+  const call = (id, role) => entries.push({ type: "message", message: { role: "assistant", content: [{
+    type: "toolCall", id, name: "subagent", arguments: { subagent_type: role,
+      prompt: `${role === "harness-compliance" ? "[HARNESS_TASK_REVIEW]\n" : ""}[HARNESS_TASK_CONTEXT]{"task_id":"${TASK}"}[/HARNESS_TASK_CONTEXT]` },
+  }] } });
+  call("refused", "harness-sniper");
+  entries.push({ type: "message", message: { role: "toolResult", toolCallId: "refused", details: {
+    status: "completed", subagentType: "harness-sniper", toolUses: 0 }, content: [{ type: "text", text: "Status: BLOCKED" }] } });
+  call("early-eye", "harness-compliance");
+  const manager = { getEntries: () => entries };
+  assert.equal(subject.observedPiTaskReviewRoles(manager, TASK).get("harness-compliance").afterImplementation, false);
+  call("real-implementation", "harness-executor");
+  entries.push({ type: "message", message: { role: "toolResult", toolCallId: "real-implementation",
+    details: { status: "completed" }, content: [{ type: "text", text: "Status: DONE" }] } });
+  call("current-eye", "harness-compliance");
+  assert.equal(subject.observedPiTaskReviewRoles(manager, TASK).get("harness-compliance").afterImplementation, true);
+});

@@ -8,7 +8,7 @@
  */
 import fs from "node:fs";
 
-import { parseTaskDispatchMarker } from "./task-lane-contract.mjs";
+import { parseTaskDispatchMarker, parseHandStatus, PRODUCER_ROLES } from "./task-lane-contract.mjs";
 
 const MAX_EVENTS_BYTES = 64 * 1024 * 1024;
 const MAX_LEDGER_BYTES = 16 * 1024 * 1024;
@@ -149,4 +149,13 @@ export function attachLedger(calls, ledger) {
     call.post = mainLoop(slot.post);
   }
   return calls;
+}
+
+
+/** A completed scope refusal with unchanged clean host Git boundaries is not authorship. */
+export function isUnwrittenBlockedLaneWriter(call) {
+  return call?.tool === "Agent" && call.ok === true && (call.role === "test-author" || PRODUCER_ROLES.includes(call.role)) &&
+    call.agentStatus === "completed" && call.isAsync !== true && parseHandStatus(call.text) === "BLOCKED" &&
+    call.post?.status === "ok" && /^[a-f0-9]{40}$/.test(call.pre?.head ?? "") && call.pre.head === call.post.head &&
+    [call.pre, call.post].every(boundary => boundary.merging === false && Array.isArray(boundary.dirty) && !boundary.dirty.length);
 }

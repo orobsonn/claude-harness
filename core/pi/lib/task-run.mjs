@@ -8,6 +8,7 @@ import { isSafeSessionId, isSafeTaskId, isSafeFeatureId } from "../../shared/lib
 import { parseReviewReportText, validateReviewReport } from "../../shared/lib/review-report-schema.mjs";
 import { validatePlan } from "../../shared/lib/validate-plan.mjs";
 import { parseTaskDispatchIdentity } from "../../opencode/lib/task-dispatch-identity.mjs";
+import { isUnwrittenBlockedWriter } from "./native-writer.mjs";
 import { parseTestReviewVerdict } from "../../shared/lib/test-review-verdict.mjs";
 import { checkScope } from "../../shared/lib/capture-oracle.mjs";
 import { splitShellSegments } from "../../shared/lib/dangerous-bash-denylist.mjs";
@@ -413,9 +414,10 @@ export function validateTaskFidelityFreeze({ projectRoot, sessionId, taskId, ses
     const forTask = (call) => call.name === "subagent" && parseTaskDispatchIdentity(call.args?.prompt).taskId === taskId;
     const completed = (call) => call?.result && call.result.isError !== true && call.result.details?.status === "completed";
     const text = (call) => (call?.result?.content ?? []).filter((block) => block?.type === "text").map((block) => block.text).join("\n");
-    const author = calls.findLast((call) => forTask(call) && call.args.subagent_type === "harness-test-author");
+    const refused = call => isUnwrittenBlockedWriter(call.args?.subagent_type, call.result, call.result?.isError);
+    const author = calls.findLast((call) => forTask(call) && call.args.subagent_type === "harness-test-author" && !refused(call));
     if (!completed(author)) return fail("fidelity requires the latest native test-author completion");
-    const nextWriter = calls.find((call) => call.index > author.endIndex && forTask(call) && TASK_WRITING_ROLES.has(call.args.subagent_type));
+    const nextWriter = calls.find((call) => call.index > author.endIndex && forTask(call) && TASK_WRITING_ROLES.has(call.args.subagent_type) && !refused(call));
     const boundary = nextWriter?.index ?? Infinity;
     const review = calls.findLast((call) => forTask(call) && call.args.subagent_type === "harness-test-reviewer" &&
       call.index > author.endIndex && call.index < boundary);

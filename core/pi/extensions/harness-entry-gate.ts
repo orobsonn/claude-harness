@@ -561,6 +561,8 @@ export default function harnessEntryGate(pi: ExtensionAPI) {
         // o extrator canônico da lane — String(result) viraria "[object Object]" e o status
         // terminal da mão (DONE/BLOCKED) nunca seria lido.
         outputText: piResultText(event?.result),
+        nativeResult: event?.result,
+        isError: event?.isError,
         background: args.run_in_background === true,
       });
       if (

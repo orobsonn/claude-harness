@@ -5,6 +5,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { execFileSync } from "node:child_process";
 
+import { isUnwrittenBlockedWriter } from "./native-writer.mjs";
 import { matchesAbsolution } from "../../shared/lib/absolution.mjs";
 import { withGateStateLock } from "../../opencode/lib/gate-state.mjs";
 import { parseTaskDispatchIdentity } from "../../opencode/lib/task-dispatch-identity.mjs";
@@ -47,12 +48,13 @@ export function observedPiTaskReviewRoles(sessionManager, taskId, receiptDispatc
   try { entries = sessionManager?.getEntries?.(); } catch { return null; }
   if (!Array.isArray(entries)) return null;
   const observed = new Map();
-  const implementationCalls = new Set();
+  const implementationCalls = new Map();
   let implementationCompleted = false;
   for (const entry of entries) {
     const message = entry?.type === "message" ? entry.message : null;
     if (message?.role === "toolResult" && implementationCalls.has(message.toolCallId) &&
-        message.isError !== true && message.details?.status === "completed") implementationCompleted = true;
+        message.isError !== true && message.details?.status === "completed" &&
+        !isUnwrittenBlockedWriter(implementationCalls.get(message.toolCallId), message, message.isError)) implementationCompleted = true;
     if (message?.role !== "assistant" || !Array.isArray(message.content) ||
         message.stopReason === "aborted" || message.stopReason === "error") continue;
     for (const block of message.content) {
@@ -60,7 +62,7 @@ export function observedPiTaskReviewRoles(sessionManager, taskId, receiptDispatc
           !block.arguments || typeof block.arguments !== "object" || Array.isArray(block.arguments)) continue;
       const review = classifyPiReviewDispatch(block.arguments.subagent_type, block.arguments.prompt);
       if (["harness-executor", "harness-sniper"].includes(block.arguments.subagent_type) &&
-          parseTaskDispatchIdentity(block.arguments.prompt).taskId === taskId) implementationCalls.add(block.id);
+          parseTaskDispatchIdentity(block.arguments.prompt).taskId === taskId) implementationCalls.set(block.id, block.arguments.subagent_type);
       if (review?.phase === "task" && review.taskId === taskId) {
         const expectedCallId = receiptDispatchByRole instanceof Map
           ? receiptDispatchByRole.get(block.arguments.subagent_type)
