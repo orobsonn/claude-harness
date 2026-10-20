@@ -390,6 +390,19 @@ Qualquer escrita posterior fora da proposta exata de memória invalida as revis�
 e exige novos olhos sobre o produto corrigido antes de uma nova colheita. Mudança de
 spec/plano ou parecer negativo novo nunca é dispensado pela colheita.
 
+**Merge após draft.** Um pedido posterior de merge é uma nova operação na mesma
+entrega; o encerramento anterior do draft não comprova seu cumprimento. Encaminhe
+o merge autorizado ao `harness-shipper` pelo subagent nativo, inclusive depois de
+`harness_memory finalize`, para o host acompanhar a tentativa e seu resultado.
+Não encerre o pedido apenas porque `gh pr view` mostrou draft ou `DIRTY`.
+Draft exige ready no fluxo autorizado; conflito com a base exige recuperação pelo
+pai global com `harness_memory reconcile` e sua revalidação. Preserve as provas
+compatíveis e siga até atualizar o PR, conferir CI e concluir o merge autorizado.
+Conflito resolvível não exige que o operador repita o pedido ou resolva os hunks.
+Se `main` avançar novamente antes do merge, reconcilie a nova base; repetir um merge
+inalterado não é progresso. Esta continuidade não autoriza merge quando o escopo
+original limita a entrega ao draft, nem dispensa os checks e os reviews afetados.
+
 **Release após squash.** Ao entrar em `chore/release-X.Y.Z`, tente o shipper e a
 operação de release normalmente. Não reexecute tarefas funcionais só porque o squash
 tirou seus commits antigos da ancestralidade. O host dispensa somente as obrigações
@@ -419,6 +432,13 @@ pai e não houve delta próprio de produto. Não despache autor ou executor sem 
 só porque o merge mudou o SHA; fidelidade, verificações e olhos atuais continuam
 obrigatórios. Se o status rejeitar o replay, diagnostique a proveniência antes de
 pedir waiver ou fabricar uma nova mão.
+
+Se um test-author já inspecionou a importação exata e terminou sem tocar paths,
+não invente alteração nem commit para vinculá-lo. A fidelidade pode congelar o
+HEAD da importação host-owned quando preserva o recibo anterior, o oráculo herdado
+e a aprovação nativa posterior do test-reviewer. Use esses fatos existentes para
+o marcador; isso não cria autoria de produto nem dispensa testes ou olhos atuais.
+Não despache outro autor sem delta só para produzir esse vínculo.
 
 Uma emenda de escopo aprovada pode acrescentar novas decisões em `resolved_judgments`
 e seus marcadores de autoria para explicar a recuperação na base atual. Preserve as

@@ -25,6 +25,43 @@ export function taskReconciliationDigest(entry) {
   return entry.reconciliations?.length ? hashTaskReceipt(entry.reconciliations) : null;
 }
 
+/** Revalidate a read-only oracle inspection after an exact host aggregate import. */
+export function inheritedTaskFidelity({ entry, root, head, task, hand, sessionId, authorCallId, state }) {
+  const proof = entry?.reconciliations?.at(-1);
+  if (proof?.kind !== "aggregate-refresh" || proof.merged_head !== head || proof.conflicts?.length ||
+      task.id !== entry.task_id || state?.session_id !== sessionId || state.feature_id !== entry.feature_id ||
+      entry.worktree !== root || hand?.writtenBy !== "host-hand-finished" || hand.agent !== "harness-test-author" ||
+      hand.sessionId !== sessionId || hand.featureId !== entry.feature_id || hand.taskId !== entry.task_id ||
+      hand.producerCallId !== authorCallId || hand.freezeCommitSha !== head ||
+      !["DONE", "DONE_WITH_CONCERNS"].includes(hand.outcome) ||
+      ![hand.touchedPaths, hand.scopeViolations, hand.frozenViolations].every(a => Array.isArray(a) && !a.length)) return null;
+  const frozen = [...new Set((task.locked_tests ?? []).flatMap(t => [t.path, ...(t.fixture_paths ?? [])]))];
+  if (!frozen.length) return null;
+  taskScopeBase(entry, root, head, [...(task.scope_paths ?? []), ...(task.allowed_writes ?? []), ...frozen]);
+  const integration = entry.integration_history?.find(r => hashTaskReceipt(r) === proof.source_integration_sha256);
+  const original = entry.result_history?.[integration?.result_sha256];
+  if (!original || hashTaskReceipt(original) !== integration.result_sha256 || original.child_head !== proof.pre_child_head ||
+      !sha.test(original.freeze_sha ?? "") || !state?.fidelity_pass?.includes(`${entry.feature_id}/${entry.task_id}@${original.freeze_sha}`) ||
+      JSON.stringify(Object.keys(original.frozen_blobs ?? {}).sort()) !== JSON.stringify([...frozen].sort())) return null;
+  ancestor(root, original.freeze_sha, proof.pre_child_head);
+  if (git(root, "status", "--porcelain", "--untracked-files=all", "--", ".", ":(exclude).pi/harness/", ":(exclude)node_modules/"))
+    throw new Error("inherited fidelity requires the clean host-imported HEAD");
+  const blobs = {};
+  for (const file of frozen) {
+    const before = git(root, "rev-parse", `${proof.pre_child_head}:${file}`);
+    const originalBytes = execFileSync("git", ["show", `${proof.pre_child_head}:${file}`], { cwd: root });
+    if (createHash("sha256").update(originalBytes).digest("hex") !== original.frozen_blobs[file])
+      throw new Error("inherited fidelity original oracle differs from its archived receipt");
+    const current = git(root, "rev-parse", `${head}:${file}`);
+    if (current !== before && current !== git(root, "rev-parse", `${proof.parent_head}:${file}`))
+      throw new Error("inherited fidelity requires exact parent oracle bytes");
+    if (!/^100[0-7]{3} blob /.test(git(root, "ls-tree", head, "--", file)))
+      throw new Error("inherited fidelity oracle must be a regular blob");
+    blobs[file] = createHash("sha256").update(execFileSync("git", ["show", `${head}:${file}`], { cwd: root })).digest("hex");
+  }
+  return { freezeSha: head, frozenPaths: frozen, frozenBlobs: blobs, originalFreezeSha: original.freeze_sha };
+}
+
 function reconciliationAuthority(entry) {
   if (!isSafeFeatureId(entry.feature_id) || !isSafeSessionId(entry.parent_session_id))
     throw new Error("invalid reconciliation owner");

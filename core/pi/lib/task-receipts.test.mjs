@@ -616,7 +616,7 @@ function testOnlyRecovery({ capturedImplementation = true, productDelta = false,
   earlierAuthorProductDrift = false, lateCapture = false, failedWriter = false,
   overlappingCapture = false, dirtyCaptureFirst = false, refusedBeforeCapture = [], refusedAfterCapture = [],
   refusedAfterAuthor = [], originOverride = {},
-  fixture = inspectionFixture(), integrated = false, freshImplementation = false, suffix = "" } = {}) {
+  fixture = inspectionFixture(), integrated = false, freshImplementation = false, suffix = "", readOnlyAuthor = false } = {}) {
   const f = fixture;
   if (integrated) archiveInspectedIntegration(f);
   let baseline = f.head;
@@ -676,7 +676,7 @@ function testOnlyRecovery({ capturedImplementation = true, productDelta = false,
   if (failedWriter) add("failed-sniper", "subagent", { subagent_type: "harness-sniper", prompt }, { details: { status: "failed" } });
   add("correct-author", "subagent", { subagent_type: "harness-test-author", prompt }, { details: { status: "completed" } });
   for (const role of refusedAfterAuthor) refuse(role, "after-author");
-  write(path.join(f.root, "src/task.spec.mjs"), "export const expected = { error: 'invalid_state" + suffix + "' };\n");
+  if (!readOnlyAuthor) write(path.join(f.root, "src/task.spec.mjs"), "export const expected = { error: 'invalid_state" + suffix + "' };\n");
   if (productDelta) {
     write(path.join(f.root, "src/task.mjs"), "export const actual = 'unauthorized drift';\n");
     run(f.root, "git", "add", "src/task.mjs");
@@ -684,10 +684,12 @@ function testOnlyRecovery({ capturedImplementation = true, productDelta = false,
   }
   add("correct-eye", "subagent", { subagent_type: "harness-compliance" }, {
     content: [{ type: "text", text: "Verdict: APPROVE" }], details: { status: "completed" } });
-  run(f.root, "git", "add", "src/task.spec.mjs");
-  run(f.root, "git", "commit", "-m", "correct oracle only");
+  if (!readOnlyAuthor) {
+    run(f.root, "git", "add", "src/task.spec.mjs");
+    run(f.root, "git", "commit", "-m", "correct oracle only");
+  }
   const freeze = run(f.root, "git", "rev-parse", "HEAD");
-  add("correct-freeze", "bash", { command: "git commit -m correct" }, { content: [{ type: "text", text: "[task " + freeze.slice(0, 7) + "] correct" }] });
+  if (!readOnlyAuthor) add("correct-freeze", "bash", { command: "git commit -m correct" }, { content: [{ type: "text", text: "[task " + freeze.slice(0, 7) + "] correct" }] });
   add("correct-fidelity", "mark", { action: "fidelity", task_id: TASK });
   add("correct-capture", "mark", { action: "capture-verified", task_id: TASK });
   if (laterWriter) add("later-writer", "subagent", { subagent_type: "harness-sniper", prompt }, { details: { status: "completed" } });
@@ -701,6 +703,7 @@ function testOnlyRecovery({ capturedImplementation = true, productDelta = false,
   const recordPath = path.join(f.root, ".pi/harness/state/hand-records", FEATURE, CHILD, TASK + ".json");
   const record = JSON.parse(fs.readFileSync(recordPath, "utf8"));
   write(recordPath, { ...record, agent: "harness-test-author", producerCallId: "correct-author" + suffix,
+    ...(readOnlyAuthor ? { writtenBy: "host-hand-finished", touchedPaths: [], scopeViolations: [], frozenViolations: [] } : {}),
     freezeCommitSha: baseline, outcome: "DONE", capturedVerifiedAt: "2026-09-07T00:02:00.000Z" });
   const state = JSON.parse(fs.readFileSync(f.statePath, "utf8"));
   const bare = FEATURE + "/" + TASK;
@@ -939,7 +942,7 @@ test("missing-capture recovery rejects absent commit proof, unresolved review an
   assert.match(inspectTaskRun(expanded.entry, expanded.dependencies).reason, /clean captured implementation/);
 });
 
-function reconciledTestRecovery({ productDelta = false, memoryDelta = false, childProductDelta = false, aggregateRefresh = false,
+function reconciledTestRecovery({ productDelta = false, memoryDelta = false, childProductDelta = false, aggregateRefresh = false, readOnlyAuthor = false, importOwnFrozen = false,
   replayExistingAuthor = false, expandedDependency = false } = {}) {
   const f = replayExistingAuthor ? testOnlyRecovery() : inspectionFixture();
   bindPinnedRuntime(f);
@@ -972,10 +975,11 @@ function reconciledTestRecovery({ productDelta = false, memoryDelta = false, chi
   }
   run(f.root, "git", "checkout", "-b", "upstream-correction", aggregateRefresh ? f.head : f.base);
   write(path.join(f.root, "upstream.spec.mjs"), "export const oracle = 'corrected';\n");
+  if (importOwnFrozen) write(path.join(f.root, "src/task.spec.mjs"), "export const expected = 1;\n// upstream keeps and extends the oracle\n");
   if (productDelta) write(path.join(f.root, "upstream.mjs"), "export const behavior = 'changed';\n");
   if (expandedDependency) write(path.join(f.root, "upstream-extra.mjs"), "export const approvedLater = true;\n");
   if (memoryDelta) write(path.join(f.root, "MEMORY.md"), "Host-harvested lesson.\n");
-  run(f.root, "git", "add", "upstream.spec.mjs", ...(productDelta ? ["upstream.mjs"] : []),
+  run(f.root, "git", "add", "upstream.spec.mjs", ...(importOwnFrozen ? ["src/task.spec.mjs"] : []), ...(productDelta ? ["upstream.mjs"] : []),
     ...(expandedDependency ? ["upstream-extra.mjs"] : []), ...(memoryDelta ? ["MEMORY.md"] : []));
   run(f.root, "git", "commit", "-m", "upstream correction");
   const parent = run(f.root, "git", "rev-parse", "HEAD");
@@ -1022,8 +1026,73 @@ function reconciledTestRecovery({ productDelta = false, memoryDelta = false, chi
     return f;
   }
   return testOnlyRecovery({ fixture: { ...f, head: merged }, capturedImplementation: false,
-    productDelta: childProductDelta });
+    productDelta: childProductDelta, readOnlyAuthor });
 }
+
+test("a reviewed read-only author can revalidate exact aggregate-imported frozen tests without a fake commit", () => {
+  const f = reconciledTestRecovery({ aggregateRefresh: true, readOnlyAuthor: true });
+  const inspected = inspectTaskRun(f.entry, f.dependencies);
+  assert.equal(inspected.ok, true, inspected.reason);
+  assert.equal(inspected.result.freeze_sha, f.head);
+  assert.equal(inspected.result.hand_capture.recovery_origin.producer_call_id, "producer");
+  assert.equal(run(f.root, "git", "rev-list", "--parents", "-n", "1", f.head).split(" ").length, 3);
+});
+
+test("marker and replay agree on read-only inherited fidelity and reject missing authority or own edits", () => {
+  const prepare = () => {
+    const f = reconciledTestRecovery({ aggregateRefresh: true, readOnlyAuthor: true, importOwnFrozen: true });
+    bindPinnedRuntime(f, { testReviewer: true });
+    const file = f.entry.launches.at(-1).events_path;
+    const rows = fs.readFileSync(file, "utf8").split("\n").filter(Boolean).map(JSON.parse);
+    for (const row of rows) if (row.toolCallId === "correct-eye" && row.type === "tool_execution_start") {
+      row.args.subagent_type = "harness-test-reviewer";
+      row.args.prompt = `[HARNESS_TASK_CONTEXT]{"task_id":"${TASK}"}[/HARNESS_TASK_CONTEXT]`;
+    }
+    write(file, rows.map(JSON.stringify).join("\n") + "\n");
+    const history = f.entry.launches.flatMap(launch => fs.readFileSync(launch.events_path, "utf8").split("\n").filter(Boolean).map(JSON.parse));
+    f.entries = history.flatMap(row => row.type === "tool_execution_start"
+      ? [{ type: "message", message: { role: "assistant", stopReason: "toolUse", content: [
+        { type: "toolCall", id: row.toolCallId, name: row.toolName, arguments: row.args }] } }]
+      : row.type === "tool_execution_end" ? [{ type: "message", message: { role: "toolResult", toolCallId: row.toolCallId,
+        toolName: row.toolName, isError: row.isError, ...row.result } }] : []);
+    f.check = () => validateTaskFidelityFreeze({ projectRoot: f.root, sessionId: CHILD, taskId: TASK,
+      sessionEntries: f.entries }, { readTaskRunBindingFn: f.dependencies.readTaskRunBindingFn });
+    return f;
+  };
+  const positive = prepare();
+  assert.equal(positive.check().ok, true, positive.check().reason);
+  assert.equal(positive.check().freezeSha, positive.head);
+  assert.equal(inspectTaskRun(positive.entry, positive.dependencies).ok, true);
+  for (const change of ["missing-history", "missing-original-fidelity", "touched-test", "violation", "wrong-producer", "negative-review", "dirty", "own-commit"]) {
+    const f = prepare();
+    const handPath = path.join(f.root, ".pi/harness/state/hand-records", FEATURE, CHILD, `${TASK}.json`);
+    const hand = JSON.parse(fs.readFileSync(handPath));
+    if (change === "missing-history") f.entry.integration_history = [];
+    if (change === "missing-original-fidelity") {
+      const state = JSON.parse(fs.readFileSync(f.statePath)); state.fidelity_pass = [`${FEATURE}/${TASK}@${f.head}`]; write(f.statePath, state);
+    }
+    if (change === "touched-test") hand.touchedPaths = ["src/task.spec.mjs"];
+    if (change === "violation") hand.frozenViolations = ["src/task.spec.mjs"];
+    if (change === "wrong-producer") hand.producerCallId = "other-author";
+    write(handPath, hand);
+    if (change === "missing-history") {
+      const file = path.join(f.root, ".pi/harness/state", PARENT, "task-runs/index.json");
+      const registry = JSON.parse(fs.readFileSync(file)); registry.tasks[TASK] = f.entry; write(file, registry);
+    }
+    if (change === "negative-review") {
+      const m = f.entries.find(e => e.message.role === "toolResult" && e.message.toolCallId === "correct-eye");
+      m.message.content = [{ type: "text", text: "Verdict: REVISE" }];
+      const file = f.entry.launches.at(-1).events_path;
+      write(file, replaceEventText(fs.readFileSync(file, "utf8"), "correct-eye", "Verdict: REVISE"));
+    }
+    if (["dirty", "own-commit"].includes(change)) {
+      write(path.join(f.root, "src/task.spec.mjs"), "export const weakened = true;\n");
+      if (change === "own-commit") { run(f.root, "git", "add", "src/task.spec.mjs"); run(f.root, "git", "commit", "-m", "own oracle edit"); }
+    }
+    assert.equal(f.check().ok, false, change);
+    assert.equal(inspectTaskRun(f.entry, f.dependencies).ok, false, change);
+  }
+});
 
 test("test-only host reconciliation preserves captured implementation without a no-op writer", () => {
   for (const memoryDelta of [false, true]) {

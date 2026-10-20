@@ -6,7 +6,7 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { checkPiFinalCommands, registerPiCommandEvidence } from "./pi-command-evidence.mjs";
 import { installDeliveryContinuation, readDeliveryContinuation } from "./delivery-continuation.mjs";
-import { reconcileMemoryDelivery } from "./memory-cycle.mjs";
+import { invalidateMemoryAttempt, reconcileMemoryDelivery } from "./memory-cycle.mjs";
 
 function controller(options = {}) {
   const handlers = new Map(), entries = [], messages = [], notifications = [];
@@ -42,6 +42,19 @@ test("ordinary tools cannot arm a new workflow; a native task result can", async
   assert.equal(await f.end(stopped, f.ctx), false);
   f.handlers.get("tool_result")({ toolName: "harness_tasks", details: { ok: true, tasks: [{ status: "running" }] } }, f.ctx);
   assert.equal(await f.end(stopped, f.ctx), true);
+});
+
+test("a native shipper retry arms recovery, including failures, without overriding pause", async () => {
+  const f = controller({ local: false });
+  const start = { toolName: "subagent", args: { subagent_type: "harness-shipper" } };
+  f.handlers.get("tool_execution_start")?.(start, f.ctx);
+  assert.equal(await f.end(stopped, f.ctx), true, "BLOCKED shipping must return to the parent recovery loop");
+  assert.equal(await f.end(stopped, f.ctx), true);
+  f.handlers.get("tool_execution_start")?.(start, f.ctx);
+  assert.equal(await f.create()(stopped, f.ctx), false, "identical failed retries do not renew the loop");
+  f.handlers.get("input")({ source: "interactive", text: "pare agora" }, f.ctx);
+  f.handlers.get("tool_execution_start")?.(start, f.ctx);
+  assert.equal(await f.end(stopped, f.ctx), false);
 });
 
 test("native reconciliation arms continuation but never overrides an explicit pause", async () => {
@@ -148,6 +161,42 @@ test("real run states move from waiting to final review to shipping, but stop at
   assert.equal(readDeliveryContinuation(f.ctx, { hasCurrentFinalReviews: () => true }).stage, "shipping", "stale shipment is not completion");
   f.write("memory-shipment.json", { written_by: "host-subagent-completion", session_id: "parent", feature_id: "issue-22", head: f.head, status: "completed" });
   assert.equal(readDeliveryContinuation(f.ctx), null, "draft delivery does not auto-merge");
+});
+
+test("a failed native shipper after draft finalization cannot reuse that old completion", t => {
+  const f = fixture(t);
+  f.registry.tasks.one.status = "integrated"; f.write("task-runs/index.json", f.registry);
+  f.state.final_review_done = true; f.write("gate-state.json", f.state);
+  f.write("memory-finalized.json", { written_by: "host-memory-finalize", session_id: "parent",
+    feature_id: "issue-22", head: f.head });
+  const readPending = () => readDeliveryContinuation(f.ctx, { hasCurrentFinalReviews: () => true });
+  assert.equal(readPending(), null, "a completed draft still ends at its authorized boundary");
+  const before = fs.readFileSync(path.join(f.directory, "memory-finalized.json"));
+  invalidateMemoryAttempt(f.ctx.cwd, "parent", "shipment");
+  const pending = readPending();
+  assert.equal(pending?.stage, "shipping", "an unfinished new shipping attempt supersedes the old draft boundary");
+  assert.match(pending.content, /DIRTY.*reconcil/i);
+  const key = pending.key;
+  invalidateMemoryAttempt(f.ctx.cwd, "parent", "shipment");
+  assert.equal(readPending().key, key, "retrying without progress cannot buy more continuation");
+  assert.deepEqual(fs.readFileSync(path.join(f.directory, "memory-finalized.json")), before,
+    "preserve the tombstone used to carry existing review authority");
+  f.write("memory-shipment.json", { written_by: "host-subagent-completion", session_id: "parent",
+    feature_id: "issue-22", head: f.head, status: "completed" });
+  assert.equal(readPending(), null, "native completion closes the requested operation");
+});
+
+test("unrelated or malformed pending shipment data cannot reopen a completed draft", t => {
+  const f = fixture(t);
+  f.write("memory-finalized.json", { written_by: "host-memory-finalize", session_id: "parent",
+    feature_id: "issue-22", head: f.head });
+  const pending = { written_by: "host-subagent-start", session_id: "parent", feature_id: "issue-22",
+    head: f.head, status: "pending" };
+  for (const patch of [{ written_by: "assistant" }, { session_id: "other" }, { feature_id: "other" },
+    { head: "0".repeat(40) }, { status: "completed" }]) {
+    f.write("memory-shipment.json", { ...pending, ...patch });
+    assert.equal(readDeliveryContinuation(f.ctx), null);
+  }
 });
 
 test("saved conflict resolutions continue across partial summaries and reload; identical proposals cannot spin", async t => {

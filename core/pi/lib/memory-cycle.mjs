@@ -229,6 +229,9 @@ export function canRecoverTaskScopeDuringFinalization(projectRoot, sessionId) {
   for (const [file, writer] of [[paths.shipment, "host-subagent-completion"], [paths.finalized, "host-memory-finalize"]]) {
     const receipt = JSON.parse(readSmall(file, 8192) ?? "null");
     if (receipt === null) continue;
+    if (file === paths.shipment && receipt.written_by === "host-subagent-start" && receipt.status === "pending" &&
+        receipt.session_id === sessionId && receipt.feature_id === state.feature_id && /^[a-f0-9]{40}$/.test(receipt.head ?? ""))
+      continue; // An attempted shipment is not proof that this input was shipped.
     if (receipt.written_by !== writer || receipt.session_id !== sessionId || receipt.feature_id !== state.feature_id ||
         !/^[a-f0-9]{40}$/.test(receipt.head ?? "") || receipt.head === head) return false;
     try {
@@ -539,6 +542,15 @@ function snapshotPlan(paths, featureId) {
 export function invalidateMemoryAttempt(projectRoot, sessionId, kind) {
   const paths = memoryPaths(projectRoot, sessionId);
   const target = kind === "shipment" ? paths.shipment : paths.harvest;
+  if (kind === "shipment") {
+    const state = JSON.parse(readSmall(join(paths.directory, "gate-state.json"), 1024 * 1024) ?? "null");
+    if (state?.session_id !== sessionId || !isSafeFeatureId(state.feature_id)) throw new Error("Shipment attempt requires this classified session");
+    // Keep the finalized tombstone: it still carries exact review authority.
+    // A new native attempt supersedes its terminality, never its approvals.
+    atomicWrite(target, JSON.stringify({ written_by: "host-subagent-start", session_id: sessionId,
+      feature_id: state.feature_id, head: gitMemory(paths.root, ["rev-parse", "HEAD"]), status: "pending" }));
+    return;
+  }
   if (regularFile(target)) unlinkSync(target);
 }
 
@@ -871,11 +883,14 @@ export function finalizeMemory(projectRoot, sessionId) {
   const reviewed = checkMemoryShipperReady(paths.root, sessionId);
   const { head, featureId } = reviewed;
   const tombstone = JSON.parse(readSmall(paths.finalized, 8192) ?? "null");
+  const shipment = JSON.parse(readSmall(paths.shipment, 8192) ?? "null");
   if (!regularFile(paths.shared) && !regularFile(paths.harvest) && tombstone?.session_id === sessionId && tombstone.feature_id === featureId && tombstone.head === head) {
+    if (shipment && (shipment.status !== "completed" || shipment.written_by !== "host-subagent-completion" ||
+        shipment.session_id !== sessionId || shipment.feature_id !== featureId || shipment.head !== head))
+      throw new Error("Finalize requires successful shipper completion; a pending attempt is not the old completed draft");
     if (regularFile(paths.shipment)) unlinkSync(paths.shipment);
     return { ok: true, path: paths.shared, finalized: true, head };
   }
-  const shipment = JSON.parse(readSmall(paths.shipment, 8192) ?? "null");
   if (shipment?.session_id !== sessionId || shipment?.feature_id !== featureId || shipment?.head !== head || shipment?.status !== "completed" || shipment?.written_by !== "host-subagent-completion") throw new Error("Finalize requires successful shipper completion on the current HEAD");
   if (reviewed.release) {
     if (reviewed.release.phase !== "post-merge" || reviewed.release.publication?.ok !== true) {

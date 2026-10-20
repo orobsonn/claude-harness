@@ -72,7 +72,9 @@ Se falhar o registro após um efeito remoto, consulte primeiro PR/tag/release ex
 não repita publicação cegamente nem confunda falha do recibo com merge não realizado.
 
 Se o merge falhar por conflito com a base, não altere produto, não chame planner e não
-proponha uma tarefa nova. Retorne `Status: BLOCKED` com o HEAD revisado, o SHA atual da
+proponha uma tarefa nova. `DIRTY` é um handoff ao pai global para recuperação, não
+uma solicitação de intervenção humana nem motivo para abandonar o merge autorizado.
+Retorne `Status: BLOCKED` com o HEAD revisado, o SHA atual da
 base e a evidência de conflito disponível. O pai reconcilia paths já pertencentes ao plano
 pela operação global `harness_memory reconcile`, antes de decidir se existe retrabalho
 real de produto. O pai continua com `reconcile_mode=preview`, resolve e salva cada
