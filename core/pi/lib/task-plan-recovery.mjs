@@ -142,6 +142,30 @@ export function readTaskPlanAuthority({ projectRoot, sessionId, featureId, planS
   return { plan, planHash: currentHash, originalPlan, affectedTasks, approval: state.plan_review_evidence };
 }
 
+/** Read-only resume proof; an interrupted scope correction need not be approved yet. */
+export function readTaskPlanAdmission({ projectRoot, sessionId, featureId, specSha256 }) {
+  identity(projectRoot, sessionId, featureId);
+  const registry = read(taskRegistryPath(projectRoot, sessionId));
+  if (registry.version !== 1 || registry.parent_session_id !== sessionId || registry.feature_id !== featureId ||
+      registry.spec_sha256 !== specSha256 || !/^[a-f0-9]{64}$/.test(registry.plan_sha256 ?? ""))
+    throw new Error("task admission identity mismatch");
+  const currentText = readText(planFile(projectRoot, featureId));
+  const snapshot = registry.plan_snapshot;
+  if (snapshot && (snapshot.written_by !== "host-task-plan-snapshot" || typeof snapshot.text !== "string"))
+    throw new Error("original admitted plan snapshot is invalid");
+  const text = snapshot ? snapshot.text : currentText;
+  const approval = snapshot ? snapshot.approval : read(stateFile(projectRoot, sessionId)).plan_review_evidence;
+  if (hash(text) !== registry.plan_sha256 ||
+      !approvalValid(approval, sessionId, featureId, registry.plan_sha256, specSha256))
+    throw new Error("host-confirmed original task admission required");
+  const originalPlan = JSON.parse(text);
+  const plan = JSON.parse(currentText);
+  const affectedTasks = validateTaskScopeRecovery(originalPlan, plan);
+  // This only proves historical admission. Dispatch/integration continue to
+  // require readTaskPlanAuthority's APPROVE for the current canonical bytes.
+  return { originalPlan, plan, affectedTasks };
+}
+
 export function recoveredTaskContractHash(authority, taskId) {
   return authority.affectedTasks.includes(taskId)
     ? hashTaskReceipt(authority.plan.tasks.find((task) => task.id === taskId)) : null;

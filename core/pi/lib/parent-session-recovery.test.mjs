@@ -16,7 +16,7 @@ import { readPiSpecApproval, writePiSpecDraft } from "./spec-approval.mjs";
 import { modelStrategyFromProfile, resolveModelProfile, readModelProfileSnapshot,
   writeModelProfileSnapshot, writeRoutingRecovery } from "./model-profile.mjs";
 import { taskRegistryPath } from "./task-contract.mjs";
-import { preserveTaskPlanForPlanner } from "./task-plan-recovery.mjs";
+import { preserveTaskPlanForPlanner, readTaskPlanAuthority } from "./task-plan-recovery.mjs";
 import { runPiHarnessCli } from "../bin/pi-harness.mjs";
 
 const SESSION = "ses-parent-resume";
@@ -131,6 +131,22 @@ test("a routed admission remains resumable after a native additive scope correct
     const result = recoverPiParentSession(f.root, SESSION);
     assert.equal(result.ok, true, result.reason);
     assert.match(result.context, /admitted-routing-recovery-profile/);
+  } finally { f.cleanup(); }
+});
+
+test("interruption before the corrected plan review can resume without approving dispatch", () => {
+  const f = routedAdmissionFixture();
+  try {
+    preserveTaskPlanForPlanner({ projectRoot: f.root, sessionId: SESSION, featureId: FEATURE });
+    const plan = JSON.parse(fs.readFileSync(f.plan));
+    plan.tasks[0].scope_paths.push("vitest.config.ts");
+    fs.writeFileSync(f.plan, JSON.stringify(plan));
+    const result = recoverPiParentSession(f.root, SESSION);
+    assert.equal(result.ok, true, result.reason);
+    assert.match(result.context, /"plan_approval":"not_verified_by_recovery"/);
+    const registry = JSON.parse(fs.readFileSync(f.registry));
+    assert.throws(() => readTaskPlanAuthority({ projectRoot: f.root, sessionId: SESSION, featureId: FEATURE,
+      planSha256: registry.plan_sha256, specSha256: registry.spec_sha256 }), /current host-confirmed plan-reviewer APPROVE required/);
   } finally { f.cleanup(); }
 });
 

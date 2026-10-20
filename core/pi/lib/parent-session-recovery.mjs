@@ -17,7 +17,7 @@ import { readTaskProcess, taskGroupMembers, exactWorkerPids } from "./task-proce
 import { piExecutionPlanPath, piGateStatePath, piSpecPath, piStateRoot } from "./pi-paths.mjs";
 import { readTaskRunBinding } from "./task-run.mjs";
 import { taskRegistryPath } from "./task-contract.mjs";
-import { readTaskPlanAuthority } from "./task-plan-recovery.mjs";
+import { readTaskPlanAdmission } from "./task-plan-recovery.mjs";
 import { hasSuccessfulAdversaryCompletion } from "./marker-authority.mjs";
 import { modelStrategyFromProfile, resolveModelProfile, readModelProfileSnapshot, readRoutingRecovery } from "./model-profile.mjs";
 
@@ -126,11 +126,11 @@ function hasAdmittedRecoveryPlan(root, sessionId, state, plan) {
         registry.spec_sha256 !== state.spec_sha256 || !/^[a-f0-9]{64}$/.test(registry.plan_sha256 ?? "") ||
         !registry.tasks || Array.isArray(registry.tasks) || typeof registry.tasks !== "object" ||
         Object.keys(registry.tasks).length === 0) return false;
-    // Reuse native approval/admission proof, including the immutable snapshot
+    // Reuse native admission proof, including the immutable snapshot
     // required after additive scope recovery. Neither the plan's own models nor
     // a newly selected, unpersisted recovery flag can supply this authority.
-    const authority = readTaskPlanAuthority({ projectRoot: root, sessionId, featureId: state.feature_id,
-      planSha256: registry.plan_sha256, specSha256: state.spec_sha256 });
+    const authority = readTaskPlanAdmission({ projectRoot: root, sessionId, featureId: state.feature_id,
+      specSha256: state.spec_sha256 });
     return validatePlan(authority.originalPlan, { expect: "full", expectedModelStrategy }).ok;
   } catch { return false; }
 }
