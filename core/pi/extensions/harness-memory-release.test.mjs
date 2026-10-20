@@ -555,7 +555,8 @@ test("native shipper can complete only the exact proven release pre-to-post merg
           git(f.root, ["update-ref", "refs/remotes/origin/main", git(f.root, ["rev-parse", "HEAD"])]);
         }
       });
-      assert.equal(existsSync(shipmentPath(f.root)), outcome === "exact");
+      assert.equal(JSON.parse(readFileSync(shipmentPath(f.root), "utf8")).status,
+        outcome === "exact" ? "completed" : "pending");
       if (outcome === "exact") {
         const receipt = JSON.parse(readFileSync(shipmentPath(f.root), "utf8"));
         assert.equal(receipt.head, mergedHead);

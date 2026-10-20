@@ -902,7 +902,9 @@ test("harness-memory shipment: start/result direto sem revisão final não cria 
   emitHarvest(api, root);
   emitShipper(api, root);
 
-  assert.equal(existsSync(shipmentPath(root)), false);
+  assert.equal(JSON.parse(readFileSync(shipmentPath(root), "utf8")).status, "pending");
+  const finalized = await api.execute({ action: "finalize" }, ctx(root));
+  assert.equal(finalized.details.ok, false);
 });
 
 test("harness-memory shipment: finalize preserva o contexto sem término nativo DONE do shipper", async (t) => {

@@ -21,7 +21,7 @@ import { piGateStatePath, piHandRecordPath } from "./pi-paths.mjs";
 import { readTaskProcess } from "./task-process.mjs";
 import { capturePlanReviewInput, readTaskRunBinding, validateTaskRepairCheckpoint } from "./task-run.mjs";
 import { readPiSpecApproval } from "./spec-approval.mjs";
-import { taskScopeBase, taskReconciliationDigest } from "./task-reconciliation.mjs";
+import { taskScopeBase, taskReconciliationDigest, inheritedTaskFidelity } from "./task-reconciliation.mjs";
 import { DURABLE_MEMORY_FILES } from "./memory-cycle.mjs";
 
 const COMMIT_SHA = /^[0-9a-f]{40}$/;
@@ -386,13 +386,25 @@ function frozenBytesAfterReconciliation(root, freezeSha, head, file, reconciliat
   return current;
 }
 
-function validateFidelity({ events, task, taskId, worktree, head, reviewRole, reconciliations = [] }) {
+function validateFidelity({ events, task, taskId, worktree, head, reviewRole, reconciliations = [], entry, hand, state, sessionId }) {
   const paths = frozenPaths(task);
   if (paths.length === 0) return { ok: true, freezeSha: null, frozenBlobs: {}, markerIndex: -1 };
   const fidelityMarkers = events.filter((event) => event.tool === "mark" && event.args?.action === "fidelity" && event.args?.task_id === taskId && markerSucceeded(event));
   const marker = fidelityMarkers.at(-1);
   if (!marker) return failure("latest successful native fidelity marker required");
   const latestMarkerIndex = events.indexOf(marker);
+  const currentAuthorIndex = events.findLastIndex(event => event.tool === "subagent" &&
+    event.args?.subagent_type === "harness-test-author" && eventSucceeded(event));
+  const currentReviewIndex = events.findLastIndex((event, index) => index > currentAuthorIndex && index < latestMarkerIndex &&
+    event.tool === "subagent" && event.args?.subagent_type === reviewRole && eventSucceeded(event));
+  if (entry && currentAuthorIndex >= 0 && currentAuthorIndex < currentReviewIndex &&
+      fidelityReviewApproved(events[currentReviewIndex], reviewRole) &&
+      fidelityMarkers.some(event => events.indexOf(event) < currentAuthorIndex)) {
+    const inherited = inheritedTaskFidelity({ entry, root: worktree, head, task, hand, state, sessionId,
+      authorCallId: events[currentAuthorIndex].callId });
+    if (inherited) return { ok: true, freezeSha: inherited.freezeSha, frozenBlobs: inherited.frozenBlobs,
+      markerIndex: latestMarkerIndex, authorIndex: currentAuthorIndex };
+  }
   if (events.some((event, index) => index > latestMarkerIndex && event.tool === "subagent" && event.args?.subagent_type === "harness-test-author" && eventSucceeded(event))) {
     return failure("latest test-author work has no subsequent fidelity marker");
   }
@@ -719,6 +731,7 @@ export function inspectTaskRun(entry, dependencies = {}) {
       head,
       reviewRole: fidelityReviewRole(entry.runtime),
       reconciliations: entry.reconciliations,
+      entry, hand, state, sessionId: claim.session_id,
     });
     if (!fidelity.ok) return fidelity;
     let recoveryOrigin = null;

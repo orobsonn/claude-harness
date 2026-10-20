@@ -28,6 +28,8 @@ import {
 
 export { TASK_PIPELINE_VERSION, TASK_RUN_ENV } from "./task-contract.mjs";
 import { readTaskPlanAuthority, recoveredTaskContractHash } from "./task-plan-recovery.mjs";
+import { inheritedTaskFidelity } from "./task-reconciliation.mjs";
+import { piHandRecordPath, piGateStatePath } from "./pi-paths.mjs";
 
 const TASK_ROLES = new Set([
   "harness-test-author",
@@ -419,6 +421,23 @@ export function validateTaskFidelityFreeze({ projectRoot, sessionId, taskId, ses
       call.index > author.endIndex && call.index < boundary);
     if (!completed(review) || parseTestReviewVerdict(text(review))?.verdict !== "APPROVE")
       return fail("fidelity requires native test-author then test-reviewer APPROVE before freeze");
+    // A native author may only inspect exact imported tests. Its approved review
+    // freezes the host merge, not an invented test-only commit or new product.
+    const priorFidelity = calls.some(call => call.index < author.index && call.name === "mark" &&
+      call.args?.action === "fidelity" && call.args?.task_id === taskId && call.result?.isError !== true && call.result?.details?.ok === true);
+    let inheritedHand;
+    if (priorFidelity) {
+      try { inheritedHand = JSON.parse(fs.readFileSync(piHandRecordPath({ projectRoot, sessionId,
+        featureId: binding.grant.feature_id }, taskId).path, "utf8")); } catch { /* Ordinary freeze proof remains required. */ }
+    }
+    if (inheritedHand?.producerCallId === author.id && Array.isArray(inheritedHand.touchedPaths) && !inheritedHand.touchedPaths.length) {
+      const registry = JSON.parse(fs.readFileSync(taskRegistryPath(binding.grant.parent_root, binding.grant.parent_session_id), "utf8"));
+      const inherited = inheritedTaskFidelity({ entry: registry.tasks?.[taskId], root: projectRoot,
+        head: String(gitFn("rev-parse", "HEAD")).trim(), task: binding.task, sessionId, authorCallId: author.id,
+        hand: inheritedHand,
+        state: JSON.parse(fs.readFileSync(piGateStatePath({ projectRoot, sessionId }).path, "utf8")) });
+      if (inherited) return { ok: true, freezeSha: inherited.freezeSha, frozenPaths: inherited.frozenPaths };
+    }
     const nativeCommit = (call) => call.name === "bash" && /\bgit\s+commit\b/.test(call.args?.command ?? "") &&
       call.result && call.result.isError !== true;
     // Prefer the ordinary post-review freeze, including an amended commit. A

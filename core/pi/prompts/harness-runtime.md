@@ -433,6 +433,13 @@ só porque o merge mudou o SHA; fidelidade, verificações e olhos atuais contin
 obrigatórios. Se o status rejeitar o replay, diagnostique a proveniência antes de
 pedir waiver ou fabricar uma nova mão.
 
+Se um test-author já inspecionou a importação exata e terminou sem tocar paths,
+não invente alteração nem commit para vinculá-lo. A fidelidade pode congelar o
+HEAD da importação host-owned quando preserva o recibo anterior, o oráculo herdado
+e a aprovação nativa posterior do test-reviewer. Use esses fatos existentes para
+o marcador; isso não cria autoria de produto nem dispensa testes ou olhos atuais.
+Não despache outro autor sem delta só para produzir esse vínculo.
+
 Uma emenda de escopo aprovada pode acrescentar novas decisões em `resolved_judgments`
 e seus marcadores de autoria para explicar a recuperação na base atual. Preserve as
 decisões admitidas, dependências e provas congeladas; não apague a prosa nova só para
