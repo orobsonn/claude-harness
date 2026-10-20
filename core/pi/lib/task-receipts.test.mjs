@@ -1612,6 +1612,39 @@ test("fidelity derives the reviewed amended freeze instead of an earlier rewritt
   assert.match(rejected.reason, /freeze commit is missing/i);
 });
 
+test("fidelity replay accepts a native test-only commit approved after commit without rewriting receipts", () => {
+  const f = inspectionFixture();
+  bindPinnedRuntime(f, { testReviewer: true });
+  const file = f.entry.launches.at(-1).events_path;
+  const events = fs.readFileSync(file, "utf8").trim().split("\n").map(JSON.parse);
+  for (const e of events) if (e.args?.subagent_type === "harness-compliance") e.args.subagent_type = "harness-test-reviewer";
+  const freeze = events.filter(e => e.toolCallId === "freeze");
+  const reordered = events.filter(e => e.toolCallId !== "freeze");
+  reordered.splice(reordered.findIndex(e => e.toolCallId === "fidelity-eye"), 0, ...freeze);
+  write(file, reordered.map(JSON.stringify).join("\n") + "\n");
+  const before = fs.readFileSync(f.statePath, "utf8");
+  const inspected = inspectTaskRun(f.entry, f.dependencies);
+  assert.equal(inspected.ok, true, inspected.reason);
+  assert.equal(inspected.result.freeze_sha, f.freeze);
+  assert.equal(fs.readFileSync(f.statePath, "utf8"), before);
+  const quiet = structuredClone(reordered);
+  const quietResult = quiet.find(e => e.type === "tool_execution_end" && e.toolCallId === "freeze");
+  quietResult.result = { content: [], details: { command_evidence: {
+    status: "available", original_status: { kind: "success" },
+    started_identity: { head_sha: f.base }, head_sha: f.freeze,
+  } } };
+  write(file, quiet.map(JSON.stringify).join("\n") + "\n");
+  assert.equal(inspectTaskRun(f.entry, f.dependencies).result?.freeze_sha, f.freeze,
+    "replay uses the same host-observed quiet commit identity as marker authority");
+  quietResult.result.details.command_evidence.original_status.kind = "error";
+  write(file, quiet.map(JSON.stringify).join("\n") + "\n");
+  assert.equal(inspectTaskRun(f.entry, f.dependencies).ok, false, "failed command metadata cannot prove a freeze");
+  const preAuthor = reordered.filter(e => e.toolCallId !== "freeze");
+  preAuthor.splice(1, 0, ...freeze);
+  write(file, preAuthor.map(JSON.stringify).join("\n") + "\n");
+  assert.equal(inspectTaskRun(f.entry, f.dependencies).ok, false, "a pre-author commit cannot replace the current freeze");
+});
+
 test("pinned runtimes with the dedicated test reviewer cannot use compliance as new fidelity evidence", () => {
   const fixture = inspectionFixture();
   bindPinnedRuntime(fixture, { testReviewer: true });

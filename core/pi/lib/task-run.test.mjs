@@ -409,6 +409,23 @@ test("task fidelity accepts a reviewed ancestral freeze across executor sniper a
     },
   });
   assert.equal(check(quiet).freezeSha, quietFreeze, "quiet git commit uses host-observed HEAD identity");
+
+  const committedBeforeReview = prepare();
+  const reviewer = committedBeforeReview.entries.splice(2);
+  writeLockedTest(committedBeforeReview);
+  committedBeforeReview.git("add", "--", "test/task-one.test.ts");
+  committedBeforeReview.git("-c", "user.name=Harness", "-c", "user.email=harness@example.invalid", "commit", "-qm", "format locked tests");
+  freezeEvent(committedBeforeReview);
+  committedBeforeReview.entries.push(...reviewer);
+  assert.equal(check(committedBeforeReview).freezeSha, committedBeforeReview.git("rev-parse", "HEAD"),
+    "a native test-only commit reviewed afterward needs no artificial second commit");
+  const beforeAuthor = [...committedBeforeReview.entries.slice(2, 4), ...committedBeforeReview.entries.slice(0, 2), ...reviewer];
+  const acceptedEntries = committedBeforeReview.entries;
+  committedBeforeReview.entries = beforeAuthor;
+  assert.equal(check(committedBeforeReview).ok, false, "a commit before the latest author is not its freeze");
+  committedBeforeReview.entries = acceptedEntries;
+  committedBeforeReview.entries.at(-1).message.content[0].text = "Verdict: REVISE";
+  assert.equal(check(committedBeforeReview).ok, false, "committed tests still require approval");
   for (const role of ["harness-executor", "harness-sniper"]) {
     valid.completed(role, "subagent", { subagent_type: role, prompt: valid.prompt });
     fs.mkdirSync(path.join(valid.root, "src"), { recursive: true });

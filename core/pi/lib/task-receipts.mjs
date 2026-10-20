@@ -124,6 +124,11 @@ function eventSucceeded(event) {
   return event?.end && event.end.isError !== true && event.end.result?.details?.status === "completed";
 }
 
+function eventEndsBefore(event, next) {
+  return Number.isInteger(event?.endLine) && (event.launchIndex < next.launchIndex ||
+    event.launchIndex === next.launchIndex && event.endLine < next.line);
+}
+
 function captureEligibleWriterCompletion(event) {
   if (!eventSucceeded(event)) return false;
   return ["DONE", "DONE_WITH_CONCERNS"].includes(parseHandStatusFromOutput(eventText(event.end.result)));
@@ -228,7 +233,11 @@ function legacyCommitCommand(command) {
 function commitFromEvent(event, worktree) {
   if (event?.tool !== "bash" || !/\bgit\s+commit\b/.test(event.args?.command ?? "") || !event.end || event.end.isError === true) return null;
   const text = eventText(event.end.result);
-  const abbreviated = text.match(/^\[[^\]\n]+\s+([0-9a-f]{7,40})\]/m)?.[1]
+  const evidence = event.end.result?.details?.command_evidence;
+  const observed = evidence?.status === "available" && evidence.original_status?.kind === "success" &&
+    COMMIT_SHA.test(evidence.head_sha ?? "") && COMMIT_SHA.test(evidence.started_identity?.head_sha ?? "") &&
+    evidence.head_sha !== evidence.started_identity.head_sha ? evidence.head_sha : null;
+  const abbreviated = observed ?? text.match(/^\[[^\]\n]+\s+([0-9a-f]{7,40})\]/m)?.[1]
     ?? text.match(/\bcommit\s+([0-9a-f]{7,40})\b/i)?.[1];
   if (!abbreviated) return null;
   try {
@@ -392,14 +401,19 @@ function validateFidelity({ events, task, taskId, worktree, head, reviewRole, re
     event.args?.subagent_type === reviewRole && (reviewRole === "harness-compliance" ? eventSucceeded(event) : true));
   if (authorIndex < 0 || reviewIndex < 0 || !fidelityReviewApproved(events[reviewIndex], reviewRole))
     return failure(`fidelity requires native test-author then ${reviewRole} APPROVE before the freeze commit`);
-  // The marker authority freezes the first commit after the reviewer. Earlier
-  // commits can be rewritten by an amend and must not become the receipt freeze.
-  const commitEvent = events.find((event, index) => index > reviewIndex && index < latestMarkerIndex && commitFromEvent(event, worktree));
+  // Match marker authority: prefer the post-review freeze so amendments cannot
+  // select a rewritten SHA. Otherwise reuse this author's committed tests when
+  // the native commit completed before the approving reviewer started.
+  const commitEvent = events.find((event, index) => index > reviewIndex && index < latestMarkerIndex && commitFromEvent(event, worktree))
+    ?? events.findLast((event, index) => index > authorIndex && index < reviewIndex &&
+      eventEndsBefore(events[authorIndex], event) && eventEndsBefore(event, events[reviewIndex]) && commitFromEvent(event, worktree));
   const commitSha = commitFromEvent(commitEvent, worktree);
   if (!commitSha || !ancestor(worktree, commitSha, head)) return failure("fidelity freeze commit is missing or not ancestral to task HEAD");
+  if (String(git(worktree, ["rev-list", "--parents", "-n", "1", commitSha])).trim().split(/\s+/).length !== 2)
+    return failure("fidelity freeze must be a linear test-only commit");
   const commitIndex = events.indexOf(commitEvent);
-  const markerIndex = events.findIndex((event, index) => index > commitIndex && fidelityMarkers.includes(event));
-  const changed = String(git(worktree, ["diff-tree", "--no-commit-id", "--name-only", "-r", commitSha])).trim().split("\n").filter(Boolean);
+  const markerIndex = events.findIndex((event, index) => index > Math.max(commitIndex, reviewIndex) && fidelityMarkers.includes(event));
+  const changed = String(git(worktree, ["diff-tree", "--no-renames", "--no-commit-id", "--name-only", "-r", commitSha])).trim().split("\n").filter(Boolean);
   if (changed.length === 0 || changed.some((item) => !paths.includes(item))) return failure("fidelity freeze commit must change only canonical frozen files");
   const blobs = {};
   for (const file of paths) {
