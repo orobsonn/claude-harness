@@ -16,8 +16,10 @@ import { compareAndDeleteLock } from "./pi-gate-state.mjs";
 import { readTaskProcess, taskGroupMembers, exactWorkerPids } from "./task-process.mjs";
 import { piExecutionPlanPath, piGateStatePath, piSpecPath, piStateRoot } from "./pi-paths.mjs";
 import { readTaskRunBinding } from "./task-run.mjs";
+import { taskRegistryPath } from "./task-contract.mjs";
+import { readTaskPlanAdmission } from "./task-plan-recovery.mjs";
 import { hasSuccessfulAdversaryCompletion } from "./marker-authority.mjs";
-import { modelStrategyFromProfile, resolveModelProfile } from "./model-profile.mjs";
+import { modelStrategyFromProfile, resolveModelProfile, readModelProfileSnapshot, readRoutingRecovery } from "./model-profile.mjs";
 
 const MAX_FILE_BYTES = 1024 * 1024;
 const RECOVERABLE_MODES = new Set(["LIGHT", "FULL"]);
@@ -107,6 +109,30 @@ function parseJson(text, reason) {
   } catch {
     return { ok: false, reason };
   }
+}
+
+/** A route recovered before first admission may already own the approved plan. */
+function hasAdmittedRecoveryPlan(root, sessionId, state, plan) {
+  try {
+    const admitted = readModelProfileSnapshot(root, sessionId);
+    const recovery = readRoutingRecovery(root, sessionId, admitted);
+    if (!recovery) return false;
+    const expectedModelStrategy = modelStrategyFromProfile(recovery.snapshot);
+    if (!validatePlan(plan, { expect: "full", expectedModelStrategy }).ok) return false;
+    const file = readOwnedFile(root, taskRegistryPath(root, sessionId));
+    if (!file.ok) return false;
+    const registry = JSON.parse(file.text);
+    if (registry.version !== 1 || registry.parent_session_id !== sessionId || registry.feature_id !== state.feature_id ||
+        registry.spec_sha256 !== state.spec_sha256 || !/^[a-f0-9]{64}$/.test(registry.plan_sha256 ?? "") ||
+        !registry.tasks || Array.isArray(registry.tasks) || typeof registry.tasks !== "object" ||
+        Object.keys(registry.tasks).length === 0) return false;
+    // Reuse native admission proof, including the immutable snapshot
+    // required after additive scope recovery. Neither the plan's own models nor
+    // a newly selected, unpersisted recovery flag can supply this authority.
+    const authority = readTaskPlanAdmission({ projectRoot: root, sessionId, featureId: state.feature_id,
+      specSha256: state.spec_sha256 });
+    return validatePlan(authority.originalPlan, { expect: "full", expectedModelStrategy }).ok;
+  } catch { return false; }
 }
 
 function loadExactSessionFile(root, sessionId) {
@@ -267,6 +293,7 @@ export function recoverPiParentSession(projectRoot, sessionId, options = {}) {
     return { ok: false, reason: "resume plan missing" };
   }
   let legacyPlan;
+  let admittedRecoveryPlan = false;
   if (planFile.ok) {
     const parsedPlan = parseJson(planFile.text, "resume plan invalid");
     if (!parsedPlan.ok) return parsedPlan;
@@ -280,7 +307,8 @@ export function recoverPiParentSession(projectRoot, sessionId, options = {}) {
       expect: "full",
       expectedModelStrategy: LEGACY_PI_MODEL_STRATEGY,
     });
-    if ((!currentPlan.ok && !legacyPlan?.ok) || parsedPlan.value.feature_id !== state.feature_id || String(parsedPlan.value.mode).toUpperCase() !== stateMode) {
+    admittedRecoveryPlan = !currentPlan.ok && !legacyPlan?.ok && hasAdmittedRecoveryPlan(root, sessionId, state, parsedPlan.value);
+    if ((!currentPlan.ok && !legacyPlan?.ok && !admittedRecoveryPlan) || parsedPlan.value.feature_id !== state.feature_id || String(parsedPlan.value.mode).toUpperCase() !== stateMode) {
       return { ok: false, reason: "resume plan invalid" };
     }
   }
@@ -300,6 +328,7 @@ export function recoverPiParentSession(projectRoot, sessionId, options = {}) {
       canonical_plan_sha256: sha256(planFile.text),
     } : {}),
     plan_approval: "not_verified_by_recovery",
+    ...(admittedRecoveryPlan ? { model_route_status: "admitted-routing-recovery-profile" } : {}),
     spec_path: path.relative(root, specPath.path),
     gate_state_path: path.relative(root, statePath.path),
     session_file: path.relative(root, transcript.sessionFile),
