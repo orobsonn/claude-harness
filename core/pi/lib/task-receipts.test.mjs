@@ -3591,3 +3591,65 @@ test("restored historical frozen violations admit test repair with current proof
     }
   }
 });
+
+
+test("a no-write validation author renews the exact proven freeze without another test commit", () => {
+  const prepare = () => {
+    const f = testOnlyRecovery();
+    bindPinnedRuntime(f, { testReviewer: true });
+    const file = f.entry.launches.at(-1).events_path;
+    const rows = fs.readFileSync(file, "utf8").trim().split("\n").map(JSON.parse);
+    for (const row of rows) if (row.toolCallId === "correct-eye" && row.type === "tool_execution_start") {
+      row.args.subagent_type = "harness-test-reviewer";
+      row.args.prompt = `[HARNESS_TASK_CONTEXT]{"task_id":"${TASK}"}[/HARNESS_TASK_CONTEXT]`;
+    }
+    const add = (id, toolName, args, result = { details: { ok: true } }) => rows.push(
+      JSON.parse(event("tool_execution_start", { toolCallId: id, toolName, args })),
+      JSON.parse(event("tool_execution_end", { toolCallId: id, toolName, result })));
+    const prompt = `[HARNESS_TASK_CONTEXT]{"task_id":"${TASK}"}[/HARNESS_TASK_CONTEXT]`;
+    add("inspect-author", "subagent", { subagent_type: "harness-test-author", prompt },
+      { details: { status: "completed" }, content: [{ type: "text", text: "Validated unchanged oracle. Status: DONE" }] });
+    add("inspect-review", "subagent", { subagent_type: "harness-test-reviewer", prompt },
+      { details: { status: "completed" }, content: [{ type: "text", text: "Verdict: APPROVE" }] });
+    add("inspect-fidelity", "mark", { action: "fidelity", task_id: TASK });
+    add("inspect-capture", "mark", { action: "capture-verified", task_id: TASK }, { details: { ok: true,
+      capture_origin: { task_id: TASK, producer_call_id: "inspect-author", worktree_clean: true, head_sha: f.head } } });
+    write(file, rows.map(JSON.stringify).join("\n") + "\n");
+    const handPath = path.join(f.root, ".pi/harness/state/hand-records", FEATURE, CHILD, `${TASK}.json`);
+    const hand = { ...JSON.parse(fs.readFileSync(handPath)), writtenBy: "host-hand-finished", producerCallId: "inspect-author",
+      freezeCommitSha: f.head, touchedPaths: [], scopeViolations: [], frozenViolations: [] };
+    write(handPath, hand);
+    const state = JSON.parse(fs.readFileSync(f.statePath));
+    state.capture_verified.push(`${FEATURE}/${TASK}@${f.head}`); write(f.statePath, state);
+    const entries = () => fs.readFileSync(file, "utf8").trim().split("\n").map(JSON.parse).flatMap(row =>
+      row.type === "tool_execution_start" ? [{ type: "message", message: { role: "assistant", stopReason: "toolUse", content: [
+        { type: "toolCall", id: row.toolCallId, name: row.toolName, arguments: row.args }] } }]
+      : [{ type: "message", message: { role: "toolResult", toolCallId: row.toolCallId, toolName: row.toolName,
+        isError: row.isError, ...row.result } }]);
+    return { ...f, file, hand, handPath, check: () => validateTaskFidelityFreeze({ projectRoot: f.root,
+      sessionId: CHILD, taskId: TASK, sessionEntries: entries() }, { readTaskRunBindingFn: f.dependencies.readTaskRunBindingFn }) };
+  };
+  const f = prepare();
+  assert.equal(f.check().ok, true, f.check().reason);
+  assert.equal(f.check().freezeSha, f.head);
+  const replay = inspectTaskRun(f.entry, f.dependencies);
+  assert.equal(replay.ok, true, replay.reason);
+  assert.equal(replay.result.freeze_sha, f.head);
+  for (const change of ["touched", "violation", "producer", "negative-review", "missing-prior-commit", "missing-prior-marker", "dirty", "new-head"]) {
+    const f = prepare();
+    if (change === "touched") f.hand.touchedPaths = ["src/task.spec.mjs"];
+    if (change === "violation") f.hand.frozenViolations = ["src/task.spec.mjs"];
+    if (change === "producer") f.hand.producerCallId = "unrelated";
+    write(f.handPath, f.hand);
+    if (change === "negative-review") write(f.file, replaceEventText(fs.readFileSync(f.file, "utf8"), "inspect-review", "Verdict: REVISE"));
+    if (change === "missing-prior-commit" || change === "missing-prior-marker") write(f.file,
+      fs.readFileSync(f.file, "utf8").trim().split("\n").filter(line => JSON.parse(line).toolCallId !==
+        (change === "missing-prior-commit" ? "correct-freeze" : "correct-fidelity")).join("\n") + "\n");
+    if (["dirty", "new-head"].includes(change)) {
+      write(path.join(f.root, "src/task.spec.mjs"), "export const changed = true;\n");
+      if (change === "new-head") { run(f.root, "git", "add", "src/task.spec.mjs"); run(f.root, "git", "commit", "-m", "different oracle"); }
+    }
+    assert.equal(f.check().ok, false, change);
+    assert.equal(inspectTaskRun(f.entry, f.dependencies).ok, false, change);
+  }
+});

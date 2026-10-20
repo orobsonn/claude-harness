@@ -25,6 +25,21 @@ export function taskReconciliationDigest(entry) {
   return entry.reconciliations?.length ? hashTaskReceipt(entry.reconciliations) : null;
 }
 
+/** Reuse an already proven exact freeze after a host-observed no-write inspection.
+ * The caller must replay the prior native author/reviewer/freeze proof first.
+ */
+export function revalidatedTaskFidelity({ root, head, taskId, featureId, hand, sessionId, authorCallId, state, prior }) {
+  if (!prior?.ok || prior.freezeSha !== head || !sha.test(head ?? "") ||
+      state?.session_id !== sessionId || state.feature_id !== featureId ||
+      !state.fidelity_pass?.includes(`${featureId}/${taskId}@${head}`) ||
+      hand?.writtenBy !== "host-hand-finished" || hand.agent !== "harness-test-author" ||
+      hand.sessionId !== sessionId || hand.featureId !== featureId || hand.taskId !== taskId ||
+      hand.producerCallId !== authorCallId || hand.freezeCommitSha !== head ||
+      !["DONE", "DONE_WITH_CONCERNS"].includes(hand.outcome) ||
+      ![hand.touchedPaths, hand.scopeViolations, hand.frozenViolations].every(a => Array.isArray(a) && !a.length)) return false;
+  return !git(root, "status", "--porcelain", "--untracked-files=all", "--", ".", ":(exclude).pi/harness/", ":(exclude)node_modules/");
+}
+
 /** Revalidate a read-only oracle inspection after an exact host aggregate import. */
 export function inheritedTaskFidelity({ entry, root, head, task, hand, sessionId, authorCallId, state }) {
   const proof = entry?.reconciliations?.at(-1);

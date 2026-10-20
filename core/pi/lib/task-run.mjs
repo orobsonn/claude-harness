@@ -28,7 +28,7 @@ import {
 
 export { TASK_PIPELINE_VERSION, TASK_RUN_ENV } from "./task-contract.mjs";
 import { readTaskPlanAuthority, recoveredTaskContractHash } from "./task-plan-recovery.mjs";
-import { inheritedTaskFidelity } from "./task-reconciliation.mjs";
+import { inheritedTaskFidelity, revalidatedTaskFidelity } from "./task-reconciliation.mjs";
 import { piHandRecordPath, piGateStatePath } from "./pi-paths.mjs";
 
 const TASK_ROLES = new Set([
@@ -431,6 +431,14 @@ export function validateTaskFidelityFreeze({ projectRoot, sessionId, taskId, ses
         featureId: binding.grant.feature_id }, taskId).path, "utf8")); } catch { /* Ordinary freeze proof remains required. */ }
     }
     if (inheritedHand?.producerCallId === author.id && Array.isArray(inheritedHand.touchedPaths) && !inheritedHand.touchedPaths.length) {
+      const priorMarker = calls.findLast(call => call.index < author.index && call.name === "mark" &&
+        call.args?.action === "fidelity" && call.args?.task_id === taskId && call.result?.isError !== true && call.result?.details?.ok === true);
+      const prior = validateTaskFidelityFreeze({ projectRoot, sessionId, taskId,
+        sessionEntries: sessionEntries.slice(0, priorMarker.endIndex + 1) }, dependencies);
+      const currentState = JSON.parse(fs.readFileSync(piGateStatePath({ projectRoot, sessionId }).path, "utf8"));
+      if (revalidatedTaskFidelity({ root: projectRoot, head: String(gitFn("rev-parse", "HEAD")).trim(), taskId,
+        featureId: binding.grant.feature_id, hand: inheritedHand, sessionId, authorCallId: author.id,
+        state: currentState, prior })) return prior;
       const registry = JSON.parse(fs.readFileSync(taskRegistryPath(binding.grant.parent_root, binding.grant.parent_session_id), "utf8"));
       const inherited = inheritedTaskFidelity({ entry: registry.tasks?.[taskId], root: projectRoot,
         head: String(gitFn("rev-parse", "HEAD")).trim(), task: binding.task, sessionId, authorCallId: author.id,
