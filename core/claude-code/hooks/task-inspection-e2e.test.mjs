@@ -231,7 +231,9 @@ test("native BLOCKED authors preserve fidelity only across unchanged clean ledge
     { agent: { subagent_type: "test-author", model: "sonnet", prompt: `${marker(task.id)}\nInspect requested scope.`,
       ...(i ? { writes: [{ path: `test/${task.id}.test.mjs`, content: "import { test } from 'node:test';\ntest('changed oracle', () => {});\n" }] } : {}),
       report: "## Status: BLOCKED\nRequested path is not admitted." } },
-    ...(i ? [{ bash: `git add test/${task.id}.test.mjs && git commit -qm 'test: changed oracle'` }] : []),
+    ...(i ? [{ bash: `git add test/${task.id}.test.mjs && git commit -qm 'test: changed oracle'` }] : [
+      { agent: { subagent_type: "executor", model: "sonnet", prompt: `${marker(task.id)}\nInspect scope; do not write.`, report: "## Status: BLOCKED\nNo work performed." } },
+    ]),
   ] }) }]]));
   const result = await runScenarioProject(t, { tasks, lanes });
   const ready = result.status.tasks.find(task => task.task_id === tasks[0].id);

@@ -118,6 +118,8 @@ test("a clean native BLOCKED author does not reopen a captured reviewed lane", t
   assert.equal(laneContinuation(lane.root, lane.binding), null);
   lane.call({ tool: "Agent", subagent_type: "test-author", agent_status: "completed", report_tail: "## Status: BLOCKED" });
   assert.equal(laneContinuation(lane.root, lane.binding), null, "unchanged clean refusal is not a new writer");
+  lane.call({ tool: "Agent", subagent_type: "executor", agent_status: "completed", report_tail: "## Status: BLOCKED" });
+  assert.equal(laneContinuation(lane.root, lane.binding), null, "an unchanged implementation refusal is not a new producer or writer");
   lane.call({ tool: "Agent", subagent_type: "test-author", agent_status: "completed", report_tail: "## Status: BLOCKED", dirty: ["test/changed.test.mjs"] });
   assert.equal(laneContinuation(lane.root, lane.binding).stage, "task-implementation", "a dirty refusal remains a writing boundary");
 });
