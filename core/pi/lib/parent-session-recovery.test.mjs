@@ -13,7 +13,11 @@ import {
 } from "./parent-session-recovery.mjs";
 import { decidePiDispatchGate } from "./entry-gate.mjs";
 import { readPiSpecApproval, writePiSpecDraft } from "./spec-approval.mjs";
-import { modelStrategyFromProfile, resolveModelProfile } from "./model-profile.mjs";
+import { modelStrategyFromProfile, resolveModelProfile, readModelProfileSnapshot,
+  writeModelProfileSnapshot, writeRoutingRecovery } from "./model-profile.mjs";
+import { taskRegistryPath } from "./task-contract.mjs";
+import { preserveTaskPlanForPlanner } from "./task-plan-recovery.mjs";
+import { runPiHarnessCli } from "../bin/pi-harness.mjs";
 
 const SESSION = "ses-parent-resume";
 const FEATURE = "parent-resume";
@@ -61,6 +65,136 @@ function draftFixture(patch = {}) {
   fs.unlinkSync(f.plan);
   return f;
 }
+
+// A ceremony can recover its route before its first plan is approved/admitted.
+function routedAdmissionFixture() {
+  const f = fixture();
+  writeModelProfileSnapshot(f.root, SESSION, resolveModelProfile({ profile: "baseline" }));
+  writeRoutingRecovery(f.root, SESSION, readModelProfileSnapshot(f.root, SESSION),
+    resolveModelProfile({ profile: "openai-economy-terra" }));
+  const plan = JSON.parse(fs.readFileSync(f.plan, "utf8"));
+  plan.model_strategy = modelStrategyFromProfile(resolveModelProfile({ profile: "openai-economy-terra" }));
+  fs.writeFileSync(f.plan, JSON.stringify(plan));
+  const state = JSON.parse(fs.readFileSync(f.state, "utf8"));
+  state.plan_review_evidence = {
+    written_by: "host-subagent-completion", parent_session_id: SESSION, feature_id: FEATURE,
+    role: "harness-plan-reviewer", status: "completed", verdict: "APPROVE",
+    dispatch_call_id: "native-plan-review", child_session_id: "native-child", agent_id: "native-reviewer",
+    plan_sha256: sha(fs.readFileSync(f.plan)), spec_sha256: state.spec_sha256,
+  };
+  fs.writeFileSync(f.state, JSON.stringify(state));
+  f.registry = taskRegistryPath(f.root, SESSION);
+  fs.mkdirSync(path.dirname(f.registry), { recursive: true });
+  fs.writeFileSync(f.registry, JSON.stringify({ version: 1, parent_session_id: SESSION, feature_id: FEATURE,
+    plan_sha256: state.plan_review_evidence.plan_sha256, spec_sha256: state.spec_sha256,
+    tasks: Object.fromEntries(plan.tasks.map((task) => [task.id, { launches: [], status: "blocked" }])),
+  }));
+  return f;
+}
+
+test("native launcher resumes a plan admitted after routing recovery without rewriting authority", () => {
+  const f = routedAdmissionFixture();
+  try {
+    const files = [f.state, f.plan, f.registry, ...fs.readdirSync(path.join(f.root, ".pi/harness/state/model-profiles"))
+      .map((name) => path.join(f.root, ".pi/harness/state/model-profiles", name))];
+    const before = files.map((file) => fs.readFileSync(file));
+    let prompt;
+    let spawned;
+    const errors = [];
+    const result = runPiHarnessCli(["--harness-resume", SESSION], {
+      cwd: f.root, userHome: f.root, env: {}, runtimePrompt: "runtime", errorSink: (error) => errors.push(error),
+      acquireParentLockFn: () => ({ ok: true, release() {} }), materializeRuntimeFn() {},
+      buildInvocationFn: ({ argv, env, runtimePrompt }) => {
+        prompt = runtimePrompt;
+        return { command: "pi", args: argv, env: { ...env, PI_CODING_AGENT_DIR: path.join(f.root, "runtime") } };
+      },
+      spawnSyncFn: (_command, args) => { spawned = args; return { status: 0 }; },
+    });
+    assert.equal(result.exitCode, 0, errors.join("\n"));
+    assert.match(prompt, /admitted-routing-recovery-profile/);
+    assert.match(prompt, /"plan_approval":"not_verified_by_recovery"/);
+    assert.equal(spawned[3], "gpt-5.6-terra");
+    files.forEach((file, index) => assert.deepEqual(fs.readFileSync(file), before[index]));
+  } finally { f.cleanup(); }
+});
+
+test("a routed admission remains resumable after a native additive scope correction", () => {
+  const f = routedAdmissionFixture();
+  try {
+    preserveTaskPlanForPlanner({ projectRoot: f.root, sessionId: SESSION, featureId: FEATURE });
+    const plan = JSON.parse(fs.readFileSync(f.plan, "utf8"));
+    plan.tasks[0].scope_paths.push("vitest.config.ts");
+    fs.writeFileSync(f.plan, JSON.stringify(plan));
+    const state = JSON.parse(fs.readFileSync(f.state, "utf8"));
+    state.plan_review_evidence.plan_sha256 = sha(fs.readFileSync(f.plan));
+    fs.writeFileSync(f.state, JSON.stringify(state));
+    const result = recoverPiParentSession(f.root, SESSION);
+    assert.equal(result.ok, true, result.reason);
+    assert.match(result.context, /admitted-routing-recovery-profile/);
+  } finally { f.cleanup(); }
+});
+
+test("a routed scope correction cannot replace its admission snapshot or change task behavior", () => {
+  for (const violation of ["missing-snapshot", "changed-behavior"]) {
+    const f = routedAdmissionFixture();
+    try {
+      preserveTaskPlanForPlanner({ projectRoot: f.root, sessionId: SESSION, featureId: FEATURE });
+      const plan = JSON.parse(fs.readFileSync(f.plan));
+      plan.tasks[0].scope_paths.push("vitest.config.ts");
+      if (violation === "changed-behavior") plan.tasks[0].criterion_refs = ["#different-contract"];
+      else {
+        const registry = JSON.parse(fs.readFileSync(f.registry));
+        delete registry.plan_snapshot;
+        fs.writeFileSync(f.registry, JSON.stringify(registry));
+      }
+      fs.writeFileSync(f.plan, JSON.stringify(plan));
+      const state = JSON.parse(fs.readFileSync(f.state));
+      state.plan_review_evidence.plan_sha256 = sha(fs.readFileSync(f.plan));
+      fs.writeFileSync(f.state, JSON.stringify(state));
+      assert.deepEqual(recoverPiParentSession(f.root, SESSION), { ok: false, reason: "resume plan invalid" });
+    } finally { f.cleanup(); }
+  }
+});
+
+test("a routed plan cannot authorize itself through edited, missing or unrelated evidence", () => {
+  for (const edit of [
+    (f) => fs.unlinkSync(f.registry),
+    (f) => fs.unlinkSync(path.join(f.root, ".pi/harness/state/model-profiles", `${SESSION}.routing.json`)),
+    (f) => {
+      const file = path.join(f.root, ".pi/harness/state/model-profiles", `${SESSION}.routing.json`);
+      const record = JSON.parse(fs.readFileSync(file));
+      record.admitted_sha256 = "0".repeat(64);
+      fs.writeFileSync(file, JSON.stringify(record));
+    },
+    ...[
+      ["parent_session_id", "other-session"], ["feature_id", "other-feature"],
+      ["spec_sha256", "0".repeat(64)], ["plan_sha256", "0".repeat(64)], ["tasks", {}],
+    ].map(([key, value]) => (f) => {
+      const registry = JSON.parse(fs.readFileSync(f.registry));
+      registry[key] = value;
+      fs.writeFileSync(f.registry, JSON.stringify(registry));
+    }),
+    ...[
+      ["parent_session_id", "other-session"], ["verdict", "REQUEST_CHANGES"],
+      ["written_by", "assistant"], ["plan_sha256", "0".repeat(64)], ["spec_sha256", "0".repeat(64)],
+    ].map(([key, value]) => (f) => {
+      const state = JSON.parse(fs.readFileSync(f.state));
+      state.plan_review_evidence[key] = value;
+      fs.writeFileSync(f.state, JSON.stringify(state));
+    }),
+    (f) => {
+      const plan = JSON.parse(fs.readFileSync(f.plan));
+      plan.model_strategy.hand_tiers.high = "openai-codex/arbitrary-model";
+      fs.writeFileSync(f.plan, JSON.stringify(plan));
+    },
+  ]) {
+    const f = routedAdmissionFixture();
+    try {
+      edit(f);
+      assert.deepEqual(recoverPiParentSession(f.root, SESSION), { ok: false, reason: "resume plan invalid" });
+    } finally { f.cleanup(); }
+  }
+});
 
 function completedSpecReview() {
   return {
