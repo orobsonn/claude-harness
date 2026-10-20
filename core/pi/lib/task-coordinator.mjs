@@ -520,6 +520,8 @@ async function previewAggregateRefresh(entry, task, owner, params, deps) {
     throw new Error("reconcile_head must be the exact current committed aggregate HEAD");
   requireTaskIdentity(entry);
   requireClean(owner.root);
+  if (entry.reconciliation_required)
+    throw new Error(`task ${entry.task_id} has pending dependency reconciliation; integrate corrected upstream owners first, then resume the same task/attempt with instruction and OMIT reconcile_head. The host imports corrected dependency receipts automatically; reconcile_head is only for aggregate refresh of an integrated task`);
   if (entry.reconciliation_intent?.kind === "aggregate-refresh") {
     if (entry.reconciliation_intent.parent_head !== params.reconcile_head)
       throw new Error("aggregate refresh journal belongs to another HEAD; preserve it and use status");

@@ -1214,6 +1214,17 @@ test("an admitted dependent can recover an upstream defect without integrating b
   assert.equal((await integrate("a", commit("a", "export const a=2;"))).ok, true);
   const correctedParent = git(f.dir, "rev-parse", "HEAD");
   assert.equal((await integrate("c", childHead)).ok, false, "old dependent result cannot integrate after correction");
+  // A model confusing aggregate refresh with dependency recovery must receive
+  // an actionable correction without changing authority or launching a child.
+  const pending = f.registry();
+  const launchesBefore = f.launches();
+  const wrongLane = await action({ action: "resume", task_id: "c", attempt_id: c.attempt_id,
+    reconcile_head: correctedParent, instruction: "Revalidate after upstream correction." });
+  assert.equal(wrongLane.ok, false);
+  assert.match(wrongLane.reason, /pending dependency reconciliation/);
+  assert.match(wrongLane.reason, /OMIT reconcile_head/);
+  assert.deepEqual(f.registry(), pending);
+  assert.equal(f.launches(), launchesBefore);
   const resumed = await action({ action: "resume", task_id: "c", attempt_id: c.attempt_id });
   assert.equal(resumed.ok, true, resumed.reason);
   const recovered = f.registry().tasks.c;
