@@ -13,7 +13,7 @@ import { piTaskRegateStatus, missingPiReviewRoles, capturePiReviewInput, isSatis
 import { requiredPiFinalReviewRoles } from "./roles.mjs";
 import { readTaskRunBinding } from "./task-run.mjs";
 import { checkScope } from "../../shared/lib/capture-oracle.mjs";
-import { readPendingReconciliation } from "./memory-cycle.mjs";
+import { DURABLE_MEMORY_FILES, readPendingReconciliation } from "./memory-cycle.mjs";
 
 const ENTRY = "harness-delivery-continuation";
 const COMMIT_SHA = /^[0-9a-f]{40}$/;
@@ -96,7 +96,7 @@ export function readDeliveryContinuation(ctx, { readBinding = readTaskRunBinding
       !["FULL", "LIGHT"].includes(String(state.mode).toUpperCase())) return null;
   const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
   const feature = state.feature_id;
-  let stage, progress, liveTasks = false, finalPreparation = null;
+  let stage, progress, liveTasks = false, finalPreparation = null, deliveryAction;
   let verificationCommands = [];
   if (state.task_run) {
     const binding = readBinding(root, sessionId);
@@ -148,10 +148,48 @@ export function readDeliveryContinuation(ctx, { readBinding = readTaskRunBinding
     stage = tasks.some(t => t.status !== "integrated") ? "tasks" : finalCurrent ? "shipping" : "final-review";
     if (stage !== "tasks" && reconciliation) stage = "reconciliation";
     const harvest = read(root, `${directory}/memory-harvest.json`);
+    if (stage === "reconciliation") {
+      const args = { action: "reconcile", expected_head: head, base_sha: reconciliation.base_sha,
+        reconcile_mode: reconciliation.ready_to_apply ? "apply" : "preview" };
+      deliveryAction = { tool: "harness_memory", args,
+        key: hash({ sessionId, feature, reconciliation }),
+        instruction: reconciliation.ready_to_apply
+          ? `Execute harness_memory with ${JSON.stringify(args)} now; the staged proposal is ready.`
+          : `Execute harness_memory with ${JSON.stringify(args)}, read the complete next_hunk and context, resolve it preserving both behaviors, then stage its exact path/before_sha256/hunk_index/hunk_sha256/new_text. Use harness-support for that hunk if needed. A preview or conflict summary alone does not resolve a hunk. Continue until ready_to_apply and apply.` };
+    } else if (stage === "shipping" && harvest?.written_by === "host-subagent-completion" &&
+        harvest.session_id === sessionId && harvest.feature_id === feature && harvest.base_head === head &&
+        harvest.status === "completed" && harvest.apply_status === "applied" && Array.isArray(harvest.changes) &&
+        harvest.changes.length && harvest.proposal_sha256 === hash(harvest.changes)) {
+      // Advisory only: never stage/commit from this hook. Match the exact host
+      // proposal bytes and reject unrelated pending files before suggesting it.
+      try {
+        const git = args => execFileSync("git", args, { cwd: root, encoding: "utf8" }).trim();
+        const paths = harvest.changes.map(c => c.path);
+        const changed = git(["diff", "--name-only", "HEAD", "--"]).split("\n").filter(Boolean);
+        const untracked = git(["ls-files", "--others", "--exclude-standard"]).split("\n").filter(Boolean);
+        const valid = paths.every(p => DURABLE_MEMORY_FILES.includes(p)) &&
+          changed.length === paths.length && changed.every(p => paths.includes(p)) && !untracked.length &&
+          harvest.changes.every(c => {
+            const absolute = path.join(root, c.path);
+            return fs.realpathSync(absolute) === absolute && fs.lstatSync(absolute).isFile() &&
+              createHash("sha256").update(fs.readFileSync(absolute)).digest("hex") === c.after_sha256;
+          });
+        if (valid) {
+          const staged = git(["diff", "--cached", "--name-only", "--"]).split("\n").filter(Boolean);
+          const unstaged = git(["diff", "--name-only", "--"]).split("\n").filter(Boolean);
+          const command = staged.length === paths.length && !unstaged.length
+            ? 'git commit -m "docs: record delivery harvest"'
+            : `git add -- ${paths.join(" ")}`;
+          deliveryAction = { tool: "bash", command, key: hash({ sessionId, feature, head, command, proposal: harvest.proposal_sha256 }),
+            instruction: `Execute native bash command=${JSON.stringify(command)} now after checking the selective staged diff. Only the applied durable-memory proposal is pending. Then run its declared structural verification on the committed HEAD and dispatch harness-shipper within the existing delivery authorization. Do not rerun valid application tests for this memory-only commit.` };
+        }
+      } catch { /* Unsafe or stale pending bytes cannot suggest a commit. */ }
+    }
     if (stage === "final-review" && verificationCommands.length)
       finalPreparation = checkPiFinalCommands({ projectRoot: root, sessionId, commands: verificationCommands, includeAttempts: true });
     progress = { head, tasks, final: state.final_review_done, harvest: harvest?.apply_status,
       shippingPending,
+      ...(deliveryAction ? { deliveryAction: deliveryAction.key } : {}),
       ...(reconciliation ? { reconciliation } : {}),
       reviews: Object.fromEntries(Object.entries(state.final_review_evidence ?? {}).map(([role, r]) => [role, [r.status, r.accepted, r.report_digest, r.reviewed_head_sha]])) };
   }
@@ -174,15 +212,15 @@ export function readDeliveryContinuation(ctx, { readBinding = readTaskRunBinding
   } catch { /* Evidence is advisory; absence never waives a gate. */ }
   const nextCommand = finalPreparation?.ok === false && finalPreparation.attempted_commands?.length === 0
     ? finalPreparation.unattempted_commands?.[0] : undefined;
-  const nextAction = nextCommand ? { command: nextCommand, head,
-    key: hash({ sessionId, feature, head, command: nextCommand }) } : undefined;
+  const nextAction = deliveryAction ?? (nextCommand ? { command: nextCommand, head,
+    key: hash({ sessionId, feature, head, command: nextCommand }) } : undefined);
   const content = instructions[stage] + (finalPreparation ? finalPreparation.ok
     ? " Native final verification preparation is already satisfied for current application inputs. Reuse that evidence; do not rerun the full suite for an empty/peripheral reconciliation commit. Continue with the missing final reviews."
     : ` Native preparation requires only these commands: ${JSON.stringify(finalPreparation.commands ?? [])}. A failure requires diagnosis against the SAME application inputs and a concrete correction or justified operational recovery before retrying. A failure on an older implementation does not block testing the corrected HEAD. Use harness_reviews phase=final for current preparation diagnostics.`
     : "");
   return { sessionId, stage, liveTasks, ...(nextAction ? { nextAction } : {}),
     key: hash({ sessionId, feature, stage, progress, commands: [...new Set(commands)].sort() }),
-    content: content + (nextAction ? ` The next authorized action is the native bash tool with command=${JSON.stringify(nextCommand)} on HEAD ${head}. It has NOT been attempted on these application inputs. Execute it now; missing verification is work to perform, not an external blocker or a prerequisite for running that very verification. Do not substitute another task-status call or a summary of the next step. Preserve normal policy and evidence hooks; no gate or review is waived.` : "") };
+    content: content + (deliveryAction ? ` ${deliveryAction.instruction}` : nextAction ? ` The next authorized action is the native bash tool with command=${JSON.stringify(nextCommand)} on HEAD ${head}. It has NOT been attempted on these application inputs. Execute it now; missing verification is work to perform, not an external blocker or a prerequisite for running that very verification. Do not substitute another task-status call or a summary of the next step. Preserve normal policy and evidence hooks; no gate or review is waived.` : "") };
 }
 
 /** Progress-sensitive continuation, then diagnosis; neither repeats for unchanged input. */
@@ -283,7 +321,9 @@ export function installDeliveryContinuation(pi, { readPending = readDeliveryCont
         // failed test. Persist its identity so reloads cannot create a loop.
         if (pending.nextAction && !executionReminded.has(pending.nextAction.key)) {
           await pi.sendMessage({ customType: ENTRY, content:
-            "The previous response only described pending verification. No attempt of this command was observed on the current application inputs. Execute the next authorized native bash call now, before another status report. This is verification of the repaired aggregate, not repetition of a failed old implementation.\n" + pending.content,
+            (pending.nextAction.tool
+              ? "The previous response only described an actionable delivery obligation. Execute the concrete native action below before another status report; preserve existing authorization and all tool checks. A diagnosis is not completion.\n"
+              : "The previous response only described pending verification. No attempt of this command was observed on the current application inputs. Execute the next authorized native bash call now, before another status report. This is verification of the repaired aggregate, not repetition of a failed old implementation.\n") + pending.content,
             display: true }, { deliverAs: "followUp", triggerTurn: true });
           executionReminded.add(pending.nextAction.key);
           pi.appendEntry(ENTRY, { sessionId: pending.sessionId, executionKey: pending.nextAction.key, stage: pending.stage });
@@ -292,7 +332,9 @@ export function installDeliveryContinuation(pi, { readPending = readDeliveryCont
         ctx.ui?.notify?.("Harness: obrigação pendente após solicitação de diagnóstico, sem progresso observado. A causa não foi classificada pelo runtime; consulte a evidência da sessão. A mesma ação não será repetida automaticamente.", "warning");
         return false;
       }
-      const content = diagnostic && pending.nextAction
+      const content = diagnostic && pending.nextAction?.tool
+        ? "Execute the concrete native delivery action below now; do not replace it with another diagnosis or summary. If that action fails, diagnose its actual error and preserve all gates.\n" + pending.content
+        : diagnostic && pending.nextAction
         ? "The next verification command is still unattempted on the current application inputs. Execute the native bash action below now; do not diagnose an old failure as if the corrected HEAD had already failed. Do not end by describing the command instead of calling it.\n" + pending.content
         : diagnostic
         ? "The authorized delivery obligation remains pending, but no new progress was observed. Diagnose instead of repeating the same failed action. Read the current native status, exact failure and existing hand/reviewer evidence. A task status of blocked is not by itself an external blocker. If a safe existing recovery is available, execute it in the owning task and preserve valid work and reviews. Retain every unresolved material concern in the next brief, or explain its inapplicability against the approved contract. If the cause is unclear, use focused read-only investigation rather than another writer. Ask the operator only for a concrete missing decision, authority or resource; explain what was checked and why autonomous recovery cannot proceed. Do not manufacture a receipt, relax a test or repeat an unchanged command to create progress. This diagnosis grants no new authority.\nPending obligation: " + pending.content

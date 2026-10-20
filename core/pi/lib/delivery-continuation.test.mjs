@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { checkPiFinalCommands, registerPiCommandEvidence } from "./pi-command-evidence.mjs";
 import { installDeliveryContinuation, readDeliveryContinuation } from "./delivery-continuation.mjs";
@@ -233,12 +234,15 @@ test("saved conflict resolutions continue across partial summaries and reload; i
   const c = controller({ readPending: pending }); c.ctx.cwd = root;
   assert.equal(await c.end(stopped, c.ctx), true);
   assert.equal(await c.end(stopped, c.ctx), true);
-  assert.equal(await c.create()(stopped, c.ctx), false, "no-progress diagnosis remains bounded after reload");
+  assert.equal(await c.create()(stopped, c.ctx), true, "concrete reconciliation execution is requested after summary-only diagnosis");
+  assert.match(c.messages.at(-1).message.content, /Execute the concrete native action/);
+  assert.equal(await c.create()(stopped, c.ctx), false, "an ignored concrete reminder cannot spin after reload");
   preview = stage(first, "local-a\nupstream-a");
   assert.equal(pending().key, after.key, "restaging identical bytes is not progress");
   preview = stage(preview.next_hunk, "local-b\nupstream-b");
   assert.equal(preview.ready_to_apply, true);
   assert.notEqual(pending().key, after.key);
+  assert.equal(pending().nextAction.args.reconcile_mode, "apply");
   assert.equal(await c.create()(stopped, c.ctx), true, "new native proposal progress wakes a previously exhausted diagnosis");
   const stateBefore = fs.readFileSync(path.join(f.directory, "gate-state.json"), "utf8");
   assert.equal(call({ reconcile_mode: "apply" }).applied, true);
@@ -593,4 +597,52 @@ test("native Pi executes verification of a repaired HEAD after summary-only stop
     assert.equal(session.messages.filter(message => message.role === "toolResult" && message.toolName === "bash").length, 1);
     assert.equal(JSON.parse(fs.readFileSync(path.join(root, ".pi/harness/state", sessionId, "gate-state.json"))).final_review_done, undefined);
   } finally { session.dispose(); }
+});
+
+
+test("applied harvest advances from selective staging to commit without reopening product verification", async t => {
+  const f = fixture(t), root = f.ctx.cwd;
+  const git = (...args) => execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+  const digest = text => createHash("sha256").update(text).digest("hex");
+  git("config", "user.name", "Test"); git("config", "user.email", "test@example.invalid");
+  fs.writeFileSync(path.join(root, ".gitignore"), ".pi/\n");
+  fs.writeFileSync(path.join(root, "MEMORY.md"), "old memory\n");
+  git("add", ".gitignore", "MEMORY.md"); git("commit", "-qm", "baseline memory");
+  const head = git("rev-parse", "HEAD"), content = "old memory\nreviewed lesson\n";
+  const harvest = { written_by: "host-subagent-completion", session_id: "parent", feature_id: "issue-22",
+    status: "completed", apply_status: "applied", base_head: head,
+    changes: [{ path: "MEMORY.md", after_sha256: digest(content) }] };
+  harvest.proposal_sha256 = digest(JSON.stringify(harvest.changes));
+  f.registry.tasks.one.status = "integrated"; f.write("task-runs/index.json", f.registry);
+  f.state.final_review_done = true; f.write("gate-state.json", f.state);
+  f.write("memory-harvest.json", harvest);
+  fs.writeFileSync(path.join(root, "MEMORY.md"), content);
+  const pending = () => readDeliveryContinuation(f.ctx, { hasCurrentFinalReviews: () => true });
+  const stage = pending();
+  assert.equal(stage.nextAction.command, "git add -- MEMORY.md");
+  git("add", "MEMORY.md");
+  const commit = pending();
+  assert.equal(commit.nextAction.command, 'git commit -m "docs: record delivery harvest"');
+  assert.notEqual(commit.key, stage.key, "staging the exact proposal advances to its missing commit");
+  assert.equal(pending().key, commit.key, "reading status is not new progress");
+  assert.match(commit.content, /Do not rerun valid application tests/);
+  const c = controller({ readPending: pending });
+  await c.end(stopped, c.ctx); await c.end(stopped, c.ctx);
+  assert.equal(await c.create()(stopped, c.ctx), true);
+  assert.match(c.messages.at(-1).message.content, /concrete native action/);
+  assert.equal(await c.create()(stopped, c.ctx), false);
+  for (const patch of [{ session_id: "other" }, { base_head: "0".repeat(40) },
+    { changes: [{ path: "MEMORY.md", after_sha256: "0".repeat(64) }] },
+    { changes: [{ path: "product.js", after_sha256: digest(content) }] }]) {
+    f.write("memory-harvest.json", { ...harvest, ...patch });
+    assert.equal(pending().nextAction, undefined, JSON.stringify(patch));
+  }
+  f.write("memory-harvest.json", harvest);
+  fs.writeFileSync(path.join(root, "product.js"), "unrelated pending work");
+  assert.equal(pending().nextAction, undefined, "untracked product prevents a selective commit suggestion");
+  git("add", "product.js");
+  assert.equal(pending().nextAction, undefined, "unrelated staged product also prevents commit suggestion");
+  git("reset", "--", "product.js"); fs.rmSync(path.join(root, "product.js"));
+  fs.rmSync(path.join(root, "MEMORY.md")); fs.symlinkSync(".gitignore", path.join(root, "MEMORY.md"));
+  assert.equal(pending().nextAction, undefined, "memory symlink cannot suggest a commit");
 });
