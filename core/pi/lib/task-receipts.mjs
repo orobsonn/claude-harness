@@ -21,7 +21,7 @@ import { piGateStatePath, piHandRecordPath } from "./pi-paths.mjs";
 import { readTaskProcess } from "./task-process.mjs";
 import { capturePlanReviewInput, readTaskRunBinding, validateTaskRepairCheckpoint } from "./task-run.mjs";
 import { readPiSpecApproval } from "./spec-approval.mjs";
-import { taskScopeBase, taskReconciliationDigest, inheritedTaskFidelity } from "./task-reconciliation.mjs";
+import { taskScopeBase, taskReconciliationDigest, inheritedTaskFidelity, revalidatedTaskFidelity } from "./task-reconciliation.mjs";
 import { DURABLE_MEMORY_FILES } from "./memory-cycle.mjs";
 
 const COMMIT_SHA = /^[0-9a-f]{40}$/;
@@ -400,6 +400,11 @@ function validateFidelity({ events, task, taskId, worktree, head, reviewRole, re
   if (entry && currentAuthorIndex >= 0 && currentAuthorIndex < currentReviewIndex &&
       fidelityReviewApproved(events[currentReviewIndex], reviewRole) &&
       fidelityMarkers.some(event => events.indexOf(event) < currentAuthorIndex)) {
+    const priorMarkerIndex = events.findLastIndex((event, index) => index < currentAuthorIndex && fidelityMarkers.includes(event));
+    const prior = validateFidelity({ events: events.slice(0, priorMarkerIndex + 1), task, taskId, worktree, head,
+      reviewRole, reconciliations, entry, hand, state, sessionId });
+    if (revalidatedTaskFidelity({ root: worktree, head, taskId, featureId: entry.feature_id, hand, state, sessionId,
+      authorCallId: events[currentAuthorIndex].callId, prior })) return { ...prior, markerIndex: latestMarkerIndex, authorIndex: currentAuthorIndex };
     const inherited = inheritedTaskFidelity({ entry, root: worktree, head, task, hand, state, sessionId,
       authorCallId: events[currentAuthorIndex].callId });
     if (inherited) return { ok: true, freezeSha: inherited.freezeSha, frozenBlobs: inherited.frozenBlobs,
