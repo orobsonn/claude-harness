@@ -390,6 +390,19 @@ Qualquer escrita posterior fora da proposta exata de memória invalida as revis�
 e exige novos olhos sobre o produto corrigido antes de uma nova colheita. Mudança de
 spec/plano ou parecer negativo novo nunca é dispensado pela colheita.
 
+**Merge após draft.** Um pedido posterior de merge é uma nova operação na mesma
+entrega; o encerramento anterior do draft não comprova seu cumprimento. Encaminhe
+o merge autorizado ao `harness-shipper` pelo subagent nativo, inclusive depois de
+`harness_memory finalize`, para o host acompanhar a tentativa e seu resultado.
+Não encerre o pedido apenas porque `gh pr view` mostrou draft ou `DIRTY`.
+Draft exige ready no fluxo autorizado; conflito com a base exige recuperação pelo
+pai global com `harness_memory reconcile` e sua revalidação. Preserve as provas
+compatíveis e siga até atualizar o PR, conferir CI e concluir o merge autorizado.
+Conflito resolvível não exige que o operador repita o pedido ou resolva os hunks.
+Se `main` avançar novamente antes do merge, reconcilie a nova base; repetir um merge
+inalterado não é progresso. Esta continuidade não autoriza merge quando o escopo
+original limita a entrega ao draft, nem dispensa os checks e os reviews afetados.
+
 **Release após squash.** Ao entrar em `chore/release-X.Y.Z`, tente o shipper e a
 operação de release normalmente. Não reexecute tarefas funcionais só porque o squash
 tirou seus commits antigos da ancestralidade. O host dispensa somente as obrigações

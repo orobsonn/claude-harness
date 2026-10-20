@@ -132,9 +132,11 @@ export function readDeliveryContinuation(ctx, { readBinding = readTaskRunBinding
     const reconciliation = readPendingReconciliation(root, sessionId, head);
     const shipment = read(root, `${directory}/memory-shipment.json`);
     const finalized = read(root, `${directory}/memory-finalized.json`);
+    const shippingPending = shipment?.written_by === "host-subagent-start" && shipment.session_id === sessionId &&
+      shipment.feature_id === feature && shipment.status === "pending" && shipment.head === head;
     if (!reconciliation && shipment?.written_by === "host-subagent-completion" && shipment.session_id === sessionId &&
         shipment.feature_id === feature && shipment.status === "completed" && shipment.head === head) return null;
-    if (!reconciliation && finalized?.written_by === "host-memory-finalize" && finalized.session_id === sessionId && finalized.feature_id === feature && finalized.head === head) return null;
+    if (!reconciliation && !shippingPending && finalized?.written_by === "host-memory-finalize" && finalized.session_id === sessionId && finalized.feature_id === feature && finalized.head === head) return null;
     const tasks = Object.values(registry.tasks).map(e => ({ task: e.task_id, status: e.status,
       head: e.integration?.integrated_head ?? e.result?.child_head, reason: e.reason,
       run: e.launches?.at(-1)?.run_id }));
@@ -149,6 +151,7 @@ export function readDeliveryContinuation(ctx, { readBinding = readTaskRunBinding
     if (stage === "final-review" && verificationCommands.length)
       finalPreparation = checkPiFinalCommands({ projectRoot: root, sessionId, commands: verificationCommands, includeAttempts: true });
     progress = { head, tasks, final: state.final_review_done, harvest: harvest?.apply_status,
+      shippingPending,
       ...(reconciliation ? { reconciliation } : {}),
       reviews: Object.fromEntries(Object.entries(state.final_review_evidence ?? {}).map(([role, r]) => [role, [r.status, r.accepted, r.report_digest, r.reviewed_head_sha]])) };
   }
@@ -157,7 +160,7 @@ export function readDeliveryContinuation(ctx, { readBinding = readTaskRunBinding
     "task-reviews": "The task has a capture but its local review closure remains pending. Use harness_reviews phase=task, satisfy only affected missing obligations, then record regate-passed only if its regate status remains unsatisfied. An already satisfied ancestral marker does not need rebinding to HEAD. Do not repeat implementation or valid reviews merely to close the task.",
     tasks: "The delivery still has unsettled tasks. Use harness_tasks status to reconcile actual processes and read diagnostics, wait for live tasks, integrate ready results, and recover actionable blockers in the same attempts. Do not end with only a running label.",
     "final-review": "Task integration is not delivery completion. Verify the current aggregate, finish applicable final reviews and final-review marking, then harvest and ship within the existing authorization. Do not reopen integrated tasks without a concrete finding.",
-    shipping: "Finish the existing harvest/apply/shipping obligations, reusing valid receipts. A draft PR is a valid headless delivery boundary; never infer merge, release or deployment authorization from this reminder.",
+    shipping: "Finish the existing harvest/apply/shipping obligations, reusing valid receipts. If an already authorized merge reports DIRTY or a base conflict, continue recovery in the global parent: fetch the current base, use harness_memory reconcile preview/stage/apply, preserve both behaviors and tests, revalidate affected evidence and resume shipping. A conflict alone is not an operator dependency. Do not ask the operator to repeat the merge request or retry the same unchanged failed merge. A draft PR remains a valid boundary when that is the authorized operation; never infer merge, release or deployment authorization from this reminder.",
     reconciliation: "The native base reconciliation still has saved work to finish. Use harness_memory reconcile_mode=preview with the same exact HEAD/base, resolve and stage the next pending hunk, and repeat until ready_to_apply; then use reconcile_mode=apply for the local merge. A partial-progress report is not completion. Do not rebuild the whole JSON or restart completed hunks. If the next hunk is difficult, read all its preview pages and surrounding code; use harness-support for one complete hunk with its exact path, HEAD/base/tree and both sides when necessary, then stage the resolution yourself. Do not replace this work with another task-status report or a statement of the next step. Preserve every valid behavior and test assertion; never shorten a resolution by dropping coverage. Verify the merged product and obtain current reviews afterward. This grants no remote merge/deploy authority; preserve the operator's delivery boundary.",
   };
   // Re-running an identical command does not buy another continuation. A first
@@ -224,6 +227,12 @@ export function installDeliveryContinuation(pi, { readPending = readDeliveryCont
     }
   });
   pi.on("session_shutdown", () => waiting?.abort());
+  pi.on("tool_execution_start", (event, ctx) => {
+    const args = event.args ?? event.input ?? {};
+    if (!owned(ctx) || paused || event.toolName !== "subagent" || args.subagent_type !== "harness-shipper") return;
+    if (!active) pi.appendEntry(ENTRY, { sessionId: piSessionId(ctx), active: true });
+    active = true; // A blocked native shipper must hand recovery back to its parent.
+  });
   pi.on("tool_result", (event, ctx) => {
     if (!owned(ctx) || event.isError || paused) return;
     // A fresh workflow action renews existing authorization after a pause.

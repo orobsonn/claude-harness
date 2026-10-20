@@ -162,6 +162,8 @@ test("a finalized draft does not lock admitted scope after a real base reconcili
   assert.equal(memoryCycle.canRecoverTaskScopeDuringFinalization(root, SESSION), false,
     "the exact finalized input remains closed");
 
+  memoryCycle.invalidateMemoryAttempt(root, SESSION, "shipment");
+
   const merged = memoryCycle.reconcileMemoryDelivery(root, SESSION, { ...input, resolutions: [] });
   assert.notEqual(merged.head, input.expected_head);
   assert.equal(memoryCycle.canRecoverTaskScopeDuringFinalization(root, SESSION), true,
@@ -185,6 +187,26 @@ test("a finalized draft does not lock admitted scope after a real base reconcili
   writeFileSync(finalizedPath, finalizedBefore);
   writeFileSync(registryPath, JSON.stringify({ ...registry, parent_session_id: "ses-other" }));
   assert.equal(memoryCycle.canRecoverTaskScopeDuringFinalization(root, SESSION), false);
+});
+
+test("an old finalized draft cannot finalize a pending or blocked new shipper attempt", t => {
+  const { root, expected_head } = parallelDelivery(t, { memoryConflict: false });
+  const snapshot = { project_root: root, session_id: SESSION, head: expected_head };
+  memoryCycle.completeMemoryShipment(snapshot, "Draft published.\nStatus: DONE", "first-shipper");
+  memoryCycle.finalizeMemory(root, SESSION);
+  const file = join(root, ".pi/harness/state", SESSION, "memory-shipment.json");
+  memoryCycle.invalidateMemoryAttempt(root, SESSION, "shipment");
+  const pending = JSON.parse(readFileSync(file, "utf8"));
+  assert.equal(pending.status, "pending");
+  assert.equal(pending.session_id, SESSION);
+  assert.equal(pending.feature_id, FEATURE);
+  assert.equal(pending.head, expected_head);
+  assert.throws(() => memoryCycle.finalizeMemory(root, SESSION), /pending|successful shipper/i);
+  assert.throws(() => memoryCycle.completeMemoryShipment(snapshot, "DIRTY: reconcile base.\nStatus: BLOCKED", "second-shipper"), /Status: DONE/);
+  assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), pending);
+  memoryCycle.completeMemoryShipment(snapshot, "Authorized operation verified.\nStatus: DONE", "second-shipper");
+  assert.equal(JSON.parse(readFileSync(file, "utf8")).status, "completed");
+  assert.equal(memoryCycle.finalizeMemory(root, SESSION).finalized, true);
 });
 
 test("clean base integration accepts the first durable note created by another run", (t) => {
