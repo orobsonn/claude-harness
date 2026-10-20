@@ -8,7 +8,7 @@ import { isSafeSessionId, isSafeTaskId, isSafeFeatureId } from "../../shared/lib
 import { parseReviewReportText, validateReviewReport } from "../../shared/lib/review-report-schema.mjs";
 import { validatePlan } from "../../shared/lib/validate-plan.mjs";
 import { parseTaskDispatchIdentity } from "../../opencode/lib/task-dispatch-identity.mjs";
-import { parseHandStatusFromOutput } from "../../opencode/lib/hand-records.mjs";
+import { isUnwrittenBlockedWriter } from "./native-writer.mjs";
 import { parseTestReviewVerdict } from "../../shared/lib/test-review-verdict.mjs";
 import { checkScope } from "../../shared/lib/capture-oracle.mjs";
 import { splitShellSegments } from "../../shared/lib/dangerous-bash-denylist.mjs";
@@ -396,18 +396,6 @@ function fidelityCalls(entries) {
     }
   }
   return calls;
-}
-
-/** A native no-tool refusal cannot supersede actual oracle authorship.
- * Missing/ambiguous counters and blocked writers that used tools stay conservative.
- * This is only fidelity selection, never capture/implementation approval.
- */
-export function isUnwrittenBlockedWriter(role, result, isError = false) {
-  if (!TASK_WRITING_ROLES.has(role) || isError === true ||
-      result?.details?.status !== "completed" || result.details.subagentType !== role ||
-      result.details.toolUses !== 0) return false;
-  const text = (result.content ?? []).filter(b => b?.type === "text").map(b => b.text).join("\n");
-  return parseHandStatusFromOutput(text) === "BLOCKED";
 }
 
 /** Prove author, reviewed test-only commit and unchanged locked blobs before fidelity. */

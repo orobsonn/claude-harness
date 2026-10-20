@@ -19,9 +19,10 @@ import { PARALLEL_REVIEW_ROLES, requiredPiTaskReviewRoles } from "./roles.mjs";
 import { canonicalTaskReviewPrompt, classifyPiReviewDispatch } from "./pi-review-concurrency.mjs";
 import { piGateStatePath, piHandRecordPath } from "./pi-paths.mjs";
 import { readTaskProcess } from "./task-process.mjs";
-import { capturePlanReviewInput, readTaskRunBinding, validateTaskRepairCheckpoint, isUnwrittenBlockedWriter } from "./task-run.mjs";
+import { capturePlanReviewInput, readTaskRunBinding, validateTaskRepairCheckpoint } from "./task-run.mjs";
 import { readPiSpecApproval } from "./spec-approval.mjs";
 import { taskScopeBase, taskReconciliationDigest, inheritedTaskFidelity, revalidatedTaskFidelity } from "./task-reconciliation.mjs";
+import { isUnwrittenBlockedWriter } from "./native-writer.mjs";
 import { DURABLE_MEMORY_FILES } from "./memory-cycle.mjs";
 
 const COMMIT_SHA = /^[0-9a-f]{40}$/;
