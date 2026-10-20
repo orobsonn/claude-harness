@@ -624,3 +624,11 @@ Continuam necessárias a identidade da sessão/task, a origem selada da integra�
 a revisão do teste alterado, a captura atual e as revisões realmente afetadas.
 Essas condições distinguem um reparo de teste de uma mudança de produto sem prova;
 nenhuma delas exige outra mão de implementação apenas para produzir um HEAD novo.
+
+Na run Victor Dados Bot #142, o pai já havia commitado uma correção real de
+formatação antes de obter APPROVE da fidelidade. Marker e inspeção agora aceitam
+esse commit nativo entre o último autor e a revisão, sem exigir outro delta.
+O freeze posterior à revisão continua prioritário para preservar amendments;
+commits anteriores ao autor, órfãos, mistos ou com blobs congelados divergentes
+continuam inválidos. A inspeção também reconhece a identidade host-owned de
+commits silenciosos, como a autoridade do marker já fazia.

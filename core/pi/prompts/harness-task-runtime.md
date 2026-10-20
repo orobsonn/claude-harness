@@ -272,6 +272,12 @@ omissão. Quando a contradição exceder esta task, devolva ao pai global a perg
 focal e os fatos para suporte read-only; não peça nova implementação às cegas.
 
 - Evidência ausente: forneça o diff/resultado acessível. Não abra autoria ou freeze.
+- Testes corretivos já commitados pelo pai após o autor: revise esse commit e
+  registre `fidelity` sobre os mesmos blobs. O host aceita o commit nativo
+  concluído antes do reviewer APPROVE, mantendo autoria, escopo só de testes,
+  ancestralidade e árvore limpa. Não crie outro commit não vazio, no-op ou churn
+  só para colocar o commit depois da revisão. Um freeze posterior à revisão,
+  quando existir, continua sendo a referência prioritária.
 - Produto errado e testes intactos: sniper e verificação do delta; preserve fidelidade.
 - Teste/fixture errado e produto já correto: se a task já foi integrada, use o par
   host-owned de inspeção/integração imediatamente anterior como baseline, inclusive

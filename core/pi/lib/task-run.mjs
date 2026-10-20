@@ -395,7 +395,7 @@ function fidelityCalls(entries) {
   return calls;
 }
 
-/** Prove author -> APPROVE -> test-only freeze, ancestral to HEAD with every locked blob intact. */
+/** Prove author, reviewed test-only commit and unchanged locked blobs before fidelity. */
 export function validateTaskFidelityFreeze({ projectRoot, sessionId, taskId, sessionEntries }, dependencies = {}) {
   try {
     const binding = (dependencies.readTaskRunBindingFn ?? readTaskRunBinding)(projectRoot, sessionId);
@@ -419,8 +419,13 @@ export function validateTaskFidelityFreeze({ projectRoot, sessionId, taskId, ses
       call.index > author.endIndex && call.index < boundary);
     if (!completed(review) || parseTestReviewVerdict(text(review))?.verdict !== "APPROVE")
       return fail("fidelity requires native test-author then test-reviewer APPROVE before freeze");
-    const commitCall = calls.find((call) => call.name === "bash" && call.index > review.endIndex && call.index < boundary &&
-      /\bgit\s+commit\b/.test(call.args?.command ?? "") && call.result && call.result.isError !== true);
+    const nativeCommit = (call) => call.name === "bash" && /\bgit\s+commit\b/.test(call.args?.command ?? "") &&
+      call.result && call.result.isError !== true;
+    // Prefer the ordinary post-review freeze, including an amended commit. A
+    // recovery already committed by this author can instead be reviewed as-is;
+    // demanding another nonempty commit would manufacture test churn.
+    const commitCall = calls.find((call) => nativeCommit(call) && call.index > review.endIndex && call.index < boundary)
+      ?? calls.findLast((call) => nativeCommit(call) && call.index > author.endIndex && call.endIndex < review.index);
     const commandEvidence = commitCall?.result?.details?.command_evidence;
     const observedCommit = commandEvidence?.status === "available" &&
       commandEvidence?.original_status?.kind === "success" &&
@@ -432,7 +437,7 @@ export function validateTaskFidelityFreeze({ projectRoot, sessionId, taskId, ses
     const abbreviated = observedCommit
       ?? text(commitCall).match(/^\[[^\]\n]+\s+([0-9a-f]{7,40})\]/m)?.[1]
       ?? text(commitCall).match(/\bcommit\s+([0-9a-f]{7,40})\b/i)?.[1];
-    if (!abbreviated) return fail("native test-only freeze commit required after test-reviewer APPROVE");
+    if (!abbreviated) return fail("native test-only freeze commit required after the latest author, with test-reviewer APPROVE");
     const freezeSha = String(gitFn("rev-parse", `${abbreviated}^{commit}`)).trim();
     if (!HEX_40.test(freezeSha)) return fail("invalid fidelity freeze commit");
     gitFn("merge-base", "--is-ancestor", freezeSha, "HEAD");
@@ -443,7 +448,7 @@ export function validateTaskFidelityFreeze({ projectRoot, sessionId, taskId, ses
       ":(exclude).pi/harness/", ":(exclude)node_modules/",
     )).trim();
     if (status) return fail("task worktree must be clean before fidelity");
-    const changed = String(gitFn("diff-tree", "--no-commit-id", "--name-only", "-r", "-z", freezeSha))
+    const changed = String(gitFn("diff-tree", "--no-renames", "--no-commit-id", "--name-only", "-r", "-z", freezeSha))
       .split("\0").filter(Boolean);
     if (changed.length === 0 || changed.some((item) => !frozen.includes(item))) {
       return fail("fidelity freeze commit must change only canonical locked tests and fixtures");
