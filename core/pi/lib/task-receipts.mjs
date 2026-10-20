@@ -19,7 +19,7 @@ import { PARALLEL_REVIEW_ROLES, requiredPiTaskReviewRoles } from "./roles.mjs";
 import { canonicalTaskReviewPrompt, classifyPiReviewDispatch } from "./pi-review-concurrency.mjs";
 import { piGateStatePath, piHandRecordPath } from "./pi-paths.mjs";
 import { readTaskProcess } from "./task-process.mjs";
-import { capturePlanReviewInput, readTaskRunBinding, validateTaskRepairCheckpoint } from "./task-run.mjs";
+import { capturePlanReviewInput, readTaskRunBinding, validateTaskRepairCheckpoint, isUnwrittenBlockedWriter } from "./task-run.mjs";
 import { readPiSpecApproval } from "./spec-approval.mjs";
 import { taskScopeBase, taskReconciliationDigest, inheritedTaskFidelity, revalidatedTaskFidelity } from "./task-reconciliation.mjs";
 import { DURABLE_MEMORY_FILES } from "./memory-cycle.mjs";
@@ -249,7 +249,8 @@ function commitFromEvent(event, worktree) {
 function observedImplementationReviewRoles(events, taskId) {
   const firstImplementation = events.find((event) => event.tool === "subagent" &&
     ["harness-executor", "harness-sniper"].includes(event.args?.subagent_type) &&
-    taskFromPrompt(event.args?.prompt) === taskId && eventSucceeded(event));
+    taskFromPrompt(event.args?.prompt) === taskId && eventSucceeded(event) &&
+    !isUnwrittenBlockedWriter(event.args.subagent_type, event.end.result, event.end.isError));
   return new Map(events.filter((event) => {
     // Native events retain the submitted headers, before dispatch normalizes
     // them. Observe the same role/task identity as the live dispatch rail.
@@ -389,12 +390,13 @@ function frozenBytesAfterReconciliation(root, freezeSha, head, file, reconciliat
 function validateFidelity({ events, task, taskId, worktree, head, reviewRole, reconciliations = [], entry, hand, state, sessionId }) {
   const paths = frozenPaths(task);
   if (paths.length === 0) return { ok: true, freezeSha: null, frozenBlobs: {}, markerIndex: -1 };
+  const authored = event => event.tool === "subagent" && event.args?.subagent_type === "harness-test-author" &&
+    eventSucceeded(event) && !isUnwrittenBlockedWriter(event.args.subagent_type, event.end.result, event.end.isError);
   const fidelityMarkers = events.filter((event) => event.tool === "mark" && event.args?.action === "fidelity" && event.args?.task_id === taskId && markerSucceeded(event));
   const marker = fidelityMarkers.at(-1);
   if (!marker) return failure("latest successful native fidelity marker required");
   const latestMarkerIndex = events.indexOf(marker);
-  const currentAuthorIndex = events.findLastIndex(event => event.tool === "subagent" &&
-    event.args?.subagent_type === "harness-test-author" && eventSucceeded(event));
+  const currentAuthorIndex = events.findLastIndex(authored);
   const currentReviewIndex = events.findLastIndex((event, index) => index > currentAuthorIndex && index < latestMarkerIndex &&
     event.tool === "subagent" && event.args?.subagent_type === reviewRole && eventSucceeded(event));
   if (entry && currentAuthorIndex >= 0 && currentAuthorIndex < currentReviewIndex &&
@@ -410,10 +412,10 @@ function validateFidelity({ events, task, taskId, worktree, head, reviewRole, re
     if (inherited) return { ok: true, freezeSha: inherited.freezeSha, frozenBlobs: inherited.frozenBlobs,
       markerIndex: latestMarkerIndex, authorIndex: currentAuthorIndex };
   }
-  if (events.some((event, index) => index > latestMarkerIndex && event.tool === "subagent" && event.args?.subagent_type === "harness-test-author" && eventSucceeded(event))) {
+  if (events.some((event, index) => index > latestMarkerIndex && authored(event))) {
     return failure("latest test-author work has no subsequent fidelity marker");
   }
-  const authorIndex = events.findLastIndex((event, index) => index < latestMarkerIndex && event.tool === "subagent" && event.args?.subagent_type === "harness-test-author" && eventSucceeded(event));
+  const authorIndex = events.findLastIndex((event, index) => index < latestMarkerIndex && authored(event));
   const reviewIndex = events.findLastIndex((event, index) => index > authorIndex && index < latestMarkerIndex && event.tool === "subagent" &&
     event.args?.subagent_type === reviewRole && (reviewRole === "harness-compliance" ? eventSucceeded(event) : true));
   if (authorIndex < 0 || reviewIndex < 0 || !fidelityReviewApproved(events[reviewIndex], reviewRole))
@@ -675,7 +677,8 @@ export function inspectTaskRun(entry, dependencies = {}) {
     const scopeBase = taskScopeBase(entry, worktree, head, scopes);
     const scopedChanges = splitZero(git(worktree, ["diff", "--no-renames", "--name-only", "-z", scopeBase, head]));
     if (scopedChanges.some((item) => !covered(item, scopes))) return failure("task changed paths outside canonical scope", { changed: scopedChanges });
-    const implementationObserved = native.events.some((event) => event.tool === "subagent" && ["harness-executor", "harness-sniper"].includes(event.args?.subagent_type) && eventSucceeded(event));
+    const implementationObserved = native.events.some((event) => event.tool === "subagent" && ["harness-executor", "harness-sniper"].includes(event.args?.subagent_type) && eventSucceeded(event) &&
+        !isUnwrittenBlockedWriter(event.args.subagent_type, event.end.result, event.end.isError));
     if (!implementationObserved) return failure("successful native implementation call was not observed", contextDiagnostics);
     const statePath = piGateStatePath({ projectRoot: worktree, sessionId: claim.session_id });
     const handPath = piHandRecordPath({ projectRoot: worktree, sessionId: claim.session_id, featureId: entry.feature_id }, entry.task_id);
@@ -718,7 +721,8 @@ export function inspectTaskRun(entry, dependencies = {}) {
     const isImplementationForTask = (event) => event.tool === "subagent" &&
       !abandonedWriters.has(event.launchIndex) &&
       ["harness-executor", "harness-sniper"].includes(event.args?.subagent_type) &&
-      taskFromPrompt(event.args?.prompt) === entry.task_id && eventSucceeded(event);
+      taskFromPrompt(event.args?.prompt) === entry.task_id && eventSucceeded(event) &&
+      !isUnwrittenBlockedWriter(event.args.subagent_type, event.end.result, event.end.isError);
     const recovery = hand.agent === "harness-test-author";
     const replayHand = recovery ? { agent: hand.agent, producer_call_id: hand.producerCallId,
       freeze_sha: hand.freezeCommitSha, captured_verified_at: hand.capturedVerifiedAt } : null;
@@ -746,6 +750,7 @@ export function inspectTaskRun(entry, dependencies = {}) {
       const isCountingWriter = (event) => event.tool === "subagent" &&
         !abandonedWriters.has(event.launchIndex) &&
         event.end?.isError !== true &&
+        !isUnwrittenBlockedWriter(event.args?.subagent_type, event.end?.result, event.end?.isError) &&
         ["harness-executor", "harness-sniper", "harness-test-author"].includes(event.args?.subagent_type);
       const implementationIndex = native.events.findLastIndex((event, index) => index < producerIndex && isImplementationForTask(event));
       const firstAuthorIndex = native.events.findIndex((event, index) => index > implementationIndex && isCountingWriter(event) &&

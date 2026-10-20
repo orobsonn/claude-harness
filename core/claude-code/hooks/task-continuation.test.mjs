@@ -109,3 +109,15 @@ test("a casual session (no task registry) never writes continuation state, even 
   decide({ session_id: project.sessionId, hook_event_name: "UserPromptSubmit", prompt: "pare tudo" }, { env: {}, cwd: project.root });
   assert.equal(fs.existsSync(path.join(dir, "continuation.json")), false);
 });
+
+
+test("a clean native BLOCKED author does not reopen a captured reviewed lane", t => {
+  const lane = laneLedger(t);
+  lane.agent("executor", "## Status: DONE"); lane.mark("capture-verified");
+  lane.agent("compliance", "## Veredito: pass");
+  assert.equal(laneContinuation(lane.root, lane.binding), null);
+  lane.call({ tool: "Agent", subagent_type: "test-author", agent_status: "completed", report_tail: "## Status: BLOCKED" });
+  assert.equal(laneContinuation(lane.root, lane.binding), null, "unchanged clean refusal is not a new writer");
+  lane.call({ tool: "Agent", subagent_type: "test-author", agent_status: "completed", report_tail: "## Status: BLOCKED", dirty: ["test/changed.test.mjs"] });
+  assert.equal(laneContinuation(lane.root, lane.binding).stage, "task-implementation", "a dirty refusal remains a writing boundary");
+});

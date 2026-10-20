@@ -26,7 +26,7 @@ import { hashTaskReceipt } from "../../../shared/lib/task-contract.mjs";
 import { buildTaskContextReturn, validateTaskContextReturn } from "../../../shared/lib/task-context.mjs";
 import { readTaskProcess } from "../../../shared/lib/task-process.mjs";
 import { readArtifact, readParentAuthority, readTaskRunBinding } from "./task-admission.mjs";
-import { attachLedger, readLaneEvents, readLaneLedger } from "./task-events.mjs";
+import { attachLedger, readLaneEvents, readLaneLedger, isUnwrittenBlockedLaneAuthor } from "./task-events.mjs";
 import {
   EYE_ROLES,
   PRODUCER_ROLES,
@@ -176,7 +176,7 @@ function frozenBytesAfterReconciliation(root, freezeSha, head, file, reconciliat
   return current;
 }
 
-const isWriter = (call) => call.tool === "Agent" && call.ok && (call.role === "test-author" || PRODUCER_ROLES.includes(call.role));
+const isWriter = (call) => call.tool === "Agent" && call.ok && !isUnwrittenBlockedLaneAuthor(call) && (call.role === "test-author" || PRODUCER_ROLES.includes(call.role));
 const isProducer = (call) => call.tool === "Agent" && call.ok && PRODUCER_ROLES.includes(call.role) &&
   call.agentStatus === "completed" && ["DONE", "DONE_WITH_CONCERNS"].includes(parseHandStatus(call.text));
 const isMark = (call, action, identity) => {
@@ -190,7 +190,7 @@ const committedBy = (call) => call.tool === "Bash" && call.ok && call.post?.stat
 /** Prove test-author → fidelity pass → test-only freeze; returns the freeze and frozen blobs. */
 function validateFidelity({ calls, frozen, worktree, head, reconciliations, state, identity }) {
   if (frozen.length === 0) return { ok: true, freezeSha: null, frozenBlobs: {}, freezeSeq: -1 };
-  const authors = calls.filter((call) => call.tool === "Agent" && call.ok && call.role === "test-author" && call.agentStatus === "completed");
+  const authors = calls.filter((call) => call.tool === "Agent" && call.ok && call.role === "test-author" && call.agentStatus === "completed" && !isUnwrittenBlockedLaneAuthor(call));
   const author = authors.at(-1);
   if (!author) return failure("fidelity requires a completed test-author for this task");
   const review = calls.findLast((call) => call.seq > author.seq && call.tool === "Agent" && call.ok && call.role === "compliance" &&
@@ -322,7 +322,7 @@ export function inspectTaskRun(entry, dependencies = {}) {
     if (fidelity.freezeSha !== null && lastProducer.seq < fidelity.freezeSeq) {
       // Test-only recovery: the latest freeze follows the latest producer. Accept only when a clean
       // capture of that producer exists before the next test-author and product is unchanged since.
-      const nextAuthor = calls.find((call) => call.seq > lastProducer.seq && call.tool === "Agent" && call.ok && call.role === "test-author");
+      const nextAuthor = calls.find((call) => call.seq > lastProducer.seq && call.tool === "Agent" && call.ok && call.role === "test-author" && !isUnwrittenBlockedLaneAuthor(call));
       const priorCapture = calls.findLast((call) => call.seq > lastProducer.seq && (!nextAuthor || call.seq < nextAuthor.seq) &&
         isMark(call, "capture-verified", identity) && Array.isArray(call.pre?.dirty) && call.pre.dirty.length === 0 && SHA.test(call.pre?.head ?? ""));
       if (!priorCapture || !ancestor(worktree, priorCapture.pre.head, head) || productChanges(worktree, priorCapture.pre.head, head, frozen).length) {
