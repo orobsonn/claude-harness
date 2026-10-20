@@ -4,7 +4,7 @@ const TASK_WRITING_ROLES = new Set(["harness-test-author", "harness-executor", "
 
 /** A native no-tool refusal cannot supersede actual oracle authorship.
  * Missing/ambiguous counters and blocked writers that used tools stay conservative.
- * This is only fidelity selection, never capture/implementation approval.
+ * Excluding a non-writing dispatch never grants capture or implementation approval.
  */
 export function isUnwrittenBlockedWriter(role, result, isError = false) {
   if (!TASK_WRITING_ROLES.has(role) || isError === true ||

@@ -83,6 +83,7 @@ const REQUIRED_LIBS = [
   "core/pi/lib/task-reconciliation.mjs",
   "core/pi/lib/task-runtime-assets.mjs",
   "core/pi/lib/task-run.mjs",
+  "core/pi/lib/native-writer.mjs",
   "core/pi/lib/ceremony-mode.mjs",
   "core/pi/lib/context-files.mjs",
   "core/pi/lib/dispatch-rail.mjs",
