@@ -116,7 +116,10 @@ caminho, preservando os recibos históricos. Não edite state nem relaxe a valid
 
 Correção de dependência pertence ao host: integre a correção da tarefa dona e use
 `harness_tasks resume` na tentativa dependente quando for necessário revalidá-la,
-inclusive se ela já estiver integrada. O host incorpora o upstream e registra a
+inclusive se ela já estiver integrada. Se houver `reconciliation_required`, omita
+`reconcile_head` nesse `resume`: esse parâmetro é exclusivo da atualização do
+agregado em tarefa integrada, e não da correção de dependência pendente.
+O host incorpora o upstream e registra a
 prova antes de lançar o filho. Se houver conflito de merge, use o mesmo `resume`:
 o host inicia o merge na worktree da tarefa e preserva o pai global. O pai local
 despacha sniper para resolver os paths indicados, preservando o comportamento de
