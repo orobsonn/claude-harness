@@ -74,6 +74,12 @@ Mudança de HEAD por squash ou preparação exclusiva de versão/changelog deve 
 reconciliada pela prova do host, não por repetir olhos sobre produto inalterado.
 Se falhar o registro após um efeito remoto, consulte primeiro PR/tag/release existentes;
 não repita publicação cegamente nem confunda falha do recibo com merge não realizado.
+O host aceita o squash normal contra a base imutável efetiva, mesmo quando a API
+retém a base antiga do PR. Após reconciliação local, ele pode recuperar o recibo do
+único PR mergeado da mesma branch se HEAD contém o head e o squash originais e tem
+árvore exatamente igual à publicada. Não resete HEAD, reabra tasks nem publique
+outro PR para fabricar igualdade de SHA. Confira o remoto e retorne a conclusão
+da operação já realizada; CI vermelho e conteúdo local ainda não publicado continuam bloqueados.
 
 Se o merge falhar por conflito com a base, não altere produto, não chame planner e não
 proponha uma tarefa nova. `DIRTY` é um handoff ao pai global para recuperação, não

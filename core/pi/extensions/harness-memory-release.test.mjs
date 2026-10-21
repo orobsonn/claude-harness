@@ -12,6 +12,7 @@ import test from "node:test";
 
 import harnessMemory from "./harness-memory.ts";
 import { capturePiReviewInput } from "../lib/pi-review-evidence.mjs";
+import { readPiMergedBranchEvidence } from "../lib/release-only.mjs";
 
 const SESSION = "ses-release-memory";
 const FEATURE = "release-memory-cycle";
@@ -367,6 +368,29 @@ else process.exit(1);
   });
   return { publish: () => writeFileSync(publishedMarker, "published\n", "utf8") };
 }
+
+test("merged-branch discovery refuses stale HEAD, main and ambiguous reused branches", async t => {
+  for (const ambiguous of [false, true]) await t.test(ambiguous ? "ambiguous" : "unique", st => {
+    const f = releaseFixture(st);
+    const mergeSha = mergeRelease(f.root);
+    const originalHead = git(f.root, ["rev-parse", "chore/release-1.2.4"]);
+    const duplicate = { number: 43, title: "another PR", state: "MERGED", isDraft: false,
+      mergedAt: "2026-09-05T12:00:00Z", mergeCommit: { oid: mergeSha }, headRefOid: originalHead,
+      headRefName: "chore/release-1.2.4", baseRefName: "main", baseRefOid: f.baseSha,
+      statusCheckRollup: [{ conclusion: "SUCCESS" }] };
+    installFakeGh(st, f.root, mergeSha, 42, originalHead, ambiguous ? [duplicate] : []);
+    assert.equal(readPiMergedBranchEvidence(f.root, mergeSha), null, "main is not a delivery branch");
+    git(f.root, ["switch", "-q", "chore/release-1.2.4"]);
+    assert.equal(readPiMergedBranchEvidence(f.root, mergeSha), null, "snapshot HEAD must still be current");
+    const evidence = readPiMergedBranchEvidence(f.root, originalHead);
+    if (ambiguous) assert.equal(evidence, null, "never guess which merged PR belongs to this delivery");
+    else {
+      assert.equal(evidence.number, 42);
+      assert.equal(evidence.remoteMerge.sha, mergeSha);
+      assert.equal(evidence.repository.defaultBranchContainsMerge, true);
+    }
+  });
+});
 
 test("harness-memory release: prova pre-merge libera shipper apesar das revisões pertencerem ao HEAD anterior", async (t) => {
   const f = releaseFixture(t);

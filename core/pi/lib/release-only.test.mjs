@@ -306,10 +306,11 @@ test("release metadata from an older main preserves the product in the actual sq
     git(f.root, ["commit", "-q", "-m", "feat: delivered product"]);
     const currentBase = git(f.root, ["rev-parse", "HEAD"]);
     const merged = mergeReleaseFixture(f);
-    merged.evidence.baseRefOid = currentBase;
     const { classifyPiPostMergeRelease } = await subject();
     const proof = classifyPiPostMergeRelease(f.root, merged.evidence);
     assert.equal(proof.ok, true, proof.reason);
+    assert.equal(proof.baseSha, currentBase, "use the squash parent when GitHub reports an older baseRefOid");
+    assert.equal(classifyPiPostMergeRelease(f.root, { ...merged.evidence, baseRefOid: currentBase }).ok, true);
     assert.equal(proof.contentTreeSha, git(f.root, ["rev-parse", "HEAD^{tree}"]));
     assert.notEqual(proof.contentTreeSha, git(f.root, ["rev-parse", `${f.headSha}^{tree}`]));
     assert.equal(git(f.root, ["show", "HEAD:delivered-product.mjs"]), "export const delivered = true;");

@@ -9,6 +9,7 @@ import { join } from "node:path";
 
 import { applyHarvest, beginHarvest, checkCurrentMemoryReviews, checkMemoryShipperReady, completeHarvest, classifyMemoryShipmentTransition } from "./memory-cycle.mjs";
 import { missingPiReviewRoles } from "./pi-review-evidence.mjs";
+import { classifyPiFunctionalMerge } from "./release-only.mjs";
 import * as memoryCycle from "./memory-cycle.mjs";
 
 let capturePiReviewInput;
@@ -318,6 +319,67 @@ for (const corrective of ["patch", "zero"]) test(`a ${corrective} replacement ha
   writeFileSync(join(root, "product.txt"), "unreviewed code\n");
   git("add", "product.txt"); git("commit", "-qm", "feat: new application input");
   assert.throws(() => checkMemoryShipperReady(root, SESSION), /outside.*harvest|review|changed/i);
+});
+
+test("already merged delivery closes its receipt after exact-content reconciliation without another merge", t => {
+  const { root, git, expected_head: originalHead, base_sha: upstreamHead } = parallelDelivery(t, { memoryConflict: false });
+  const originalBase = git("merge-base", originalHead, upstreamHead);
+  git("checkout", "-qb", "delivery-186");
+  git("checkout", "-q", "parallel-main");
+  git("merge", "--squash", "delivery-186");
+  git("commit", "-qm", "fix: reviewed feature with concurrent main");
+  const mergeSha = git("rev-parse", "HEAD");
+  const evidence = { number: 227, state: "MERGED", isDraft: false, mergedAt: "2026-10-21T15:26:00Z",
+    headRefOid: originalHead, headRefName: "delivery-186", mergeCommit: { oid: mergeSha },
+    baseRefOid: originalBase, baseRefName: "main", url: "https://github.com/example/delivery/pull/227",
+    statusCheckRollup: [{ conclusion: "SUCCESS" }], repository: { nameWithOwner: "example/delivery",
+      url: "https://github.com/example/delivery", defaultBranch: "main", defaultBranchOid: mergeSha,
+      defaultBranchContainsMerge: true } };
+  git("checkout", "-q", "delivery-186");
+  assert.notEqual(git("rev-parse", "HEAD^{tree}"), git("rev-parse", `${mergeSha}^{tree}`));
+  assert.equal(classifyPiFunctionalMerge(root, originalHead, evidence).ok, true,
+    "the immutable squash parent may advance beyond GitHub's original baseRefOid");
+  git("merge", "--no-ff", "-qm", "Reconcile already merged delivery", mergeSha);
+  const head = git("rev-parse", "HEAD");
+  assert.notEqual(head, originalHead);
+  assert.notEqual(head, mergeSha);
+  assert.equal(git("rev-parse", "HEAD^{tree}"), git("rev-parse", `${mergeSha}^{tree}`));
+  seed(root, head, { accepted: true, input_digest: currentInput(root).input_digest,
+    report_digest: REPORT_DIGEST, report: EMPTY_REPORT });
+  completeHarvest(beginHarvest(root, SESSION), '[HARNESS_HARVEST_RESULT]{"changes":[],"verification_commands":[]}[/HARNESS_HARVEST_RESULT]', "current-harvester");
+  const statePath = join(root, ".pi/harness/state", SESSION, "gate-state.json");
+  const state = readFileSync(statePath, "utf8");
+  memoryCycle.invalidateMemoryAttempt(root, SESSION, "shipment", "merge");
+  const snapshot = { project_root: root, session_id: SESSION, head, operation: "merge" };
+  const shipmentPath = join(root, ".pi/harness/state", SESSION, "memory-shipment.json");
+  const pending = readFileSync(shipmentPath, "utf8");
+  for (const invalid of [{ ...evidence, headRefName: "another-delivery" },
+    { ...evidence, state: "OPEN" }, { ...evidence, statusCheckRollup: [{ conclusion: "FAILURE" }] },
+    { ...evidence, repository: { ...evidence.repository, defaultBranchOid: "f".repeat(40), defaultBranchContainsMerge: false } },
+    { ...evidence, baseRefOid: head }, { ...evidence, headRefOid: originalBase }]) {
+    assert.equal(classifyPiFunctionalMerge(root, head, invalid, { reconciled: true }).ok, false);
+    assert.throws(() => memoryCycle.completeMemoryShipment(snapshot, "Already merged.\nStatus: DONE", "shipper",
+      { readMergedEvidence: () => null, readBranchEvidence: () => invalid }), /merge remains pending/);
+    assert.equal(readFileSync(shipmentPath, "utf8"), pending);
+  }
+  memoryCycle.completeMemoryShipment(snapshot, "Verified existing remote merge.\nStatus: DONE", "shipper",
+    { readMergedEvidence: () => null, readBranchEvidence: () => evidence });
+  assert.equal(git("rev-parse", "HEAD"), head, "completion must not repeat a merge, commit or reset");
+  assert.equal(git("status", "--porcelain"), "");
+  assert.equal(readFileSync(statePath, "utf8"), state, "leave current approvals intact");
+  const receipt = JSON.parse(readFileSync(shipmentPath, "utf8"));
+  assert.deepEqual(receipt.merge, { pr_number: 227, head, sha: mergeSha, reconciled: true,
+    pr_head: originalHead, base_sha: upstreamHead });
+  assert.equal(memoryCycle.finalizeMemory(root, SESSION).finalized, true);
+  writeFileSync(join(root, "product.txt"), "unpublished application change\n");
+  git("add", "product.txt"); git("commit", "-qm", "Unpublished application input");
+  assert.equal(classifyPiFunctionalMerge(root, git("rev-parse", "HEAD"), evidence, { reconciled: true }).ok, false);
+  git("checkout", "-q", "-b", "published-tree-copy", head);
+  // Equal bytes alone cannot associate another branch's unrelated history.
+  git("checkout", "--orphan", "unrelated-delivery");
+  git("commit", "-qm", "Unrelated copy of the same tree");
+  assert.equal(classifyPiFunctionalMerge(root, git("rev-parse", "HEAD"),
+    { ...evidence, headRefName: "unrelated-delivery" }, { reconciled: true }).ok, false);
 });
 
 test("clean base integration accepts the first durable note created by another run", (t) => {
