@@ -687,6 +687,12 @@ export function completeHarvest(snapshot, text, agentId) {
     ])];
     reviewInput = { head_sha: snapshot.review_input.head_sha,
       input_digest: snapshot.review_input.input_digest, memory_paths,
+      // Both dispatch and completion replayed the preceding host harvest (or
+      // finalized carry) against this exact clean base. Preserve that attestation
+      // when replacing its receipt; there need not be a finalize between two
+      // formatting corrections, or before a zero-delta replacement harvest.
+      ...(reviewed.reviewBinding && snapshot.review_input.head_sha !== snapshot.base_head
+        ? { verified_base_head: snapshot.base_head } : {}),
       remainder_digest: memoryReviewRemainder(captured.snapshot, memory_paths) };
   }
   const receipt = { ...(requiresVerification ? { receipt_version: 2 } : {}), written_by: "host-subagent-completion", session_id: snapshot.session_id, parent_session_id: snapshot.session_id,
@@ -788,11 +794,22 @@ export function resolvePostHarvestReviewSnapshot(projectRoot, sessionId, snapsho
       if (harvest.feature_id !== snapshot.feature_id) return { snapshot, binding: null };
       binding = harvest.review_input;
       if (binding?.head_sha !== harvest.base_head) {
+        // New host receipts can carry a previously verified memory transaction
+        // without inventing a finalized draft. Bound it to the current base and
+        // original review ancestry; every intervening path must be covered memory.
+        let chained = false;
+        if (binding?.verified_base_head === harvest.base_head && /^[a-f0-9]{40}$/.test(binding.head_sha ?? "") &&
+            Array.isArray(binding.memory_paths) && binding.memory_paths.length > 0 &&
+            binding.memory_paths.every(file => DURABLE_MEMORY_FILES.includes(file))) {
+          gitMemory(paths.root, ["merge-base", "--is-ancestor", binding.head_sha, harvest.base_head]);
+          const priorPaths = gitMemory(paths.root, ["diff", "--no-renames", "--name-only", binding.head_sha, harvest.base_head]).split("\n").filter(Boolean);
+          chained = priorPaths.every(file => binding.memory_paths.includes(file));
+        }
         const finalized = JSON.parse(readSmall(paths.finalized, 8192) ?? "null");
-        if (finalized?.written_by !== "host-memory-finalize" || finalized.session_id !== sessionId ||
+        if (!chained && (finalized?.written_by !== "host-memory-finalize" || finalized.session_id !== sessionId ||
             finalized.feature_id !== snapshot.feature_id || finalized.head !== harvest.base_head ||
             finalized.review_input?.head_sha !== binding?.head_sha ||
-            finalized.review_input?.input_digest !== binding?.input_digest) return { snapshot, binding: null };
+            finalized.review_input?.input_digest !== binding?.input_digest)) return { snapshot, binding: null };
       }
       const changedPaths = harvest.changes.map((change) => change.path);
       if (!changedPaths.every((file) => binding?.memory_paths?.includes(file))) return { snapshot, binding: null };
