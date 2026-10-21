@@ -897,6 +897,10 @@ export function finalizeMemory(projectRoot, sessionId) {
     if (shipment && (shipment.status !== "completed" || shipment.written_by !== "host-subagent-completion" ||
         shipment.session_id !== sessionId || shipment.feature_id !== featureId || shipment.head !== head))
       throw new Error("Finalize requires successful shipper completion; a pending attempt is not the old completed draft");
+    if (shipment?.shipment_phase) atomicWrite(paths.finalized, JSON.stringify({ ...tombstone,
+      shipment_phase: shipment.shipment_phase,
+      ...(shipment.operation ? { operation: shipment.operation } : {}),
+      finalized_at: new Date().toISOString() }));
     if (regularFile(paths.shipment)) unlinkSync(paths.shipment);
     return { ok: true, path: paths.shared, finalized: true, head };
   }

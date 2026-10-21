@@ -248,6 +248,8 @@ test("merge shipment rejects DONE on an unmerged or red PR and preserves the nat
   const { root, git, expected_head } = parallelDelivery(t, { memoryConflict: false });
   const snapshot = { project_root: root, session_id: SESSION, head: expected_head, operation: "merge" };
   const file = join(root, ".pi/harness/state", SESSION, "memory-shipment.json");
+  memoryCycle.completeMemoryShipment({ ...snapshot, operation: "draft" }, "Draft published.\nStatus: DONE", "draft-shipper");
+  memoryCycle.finalizeMemory(root, SESSION);
   memoryCycle.invalidateMemoryAttempt(root, SESSION, "shipment", "merge");
   const pending = readFileSync(file, "utf8");
   const baseSha = git("rev-parse", "HEAD^");
@@ -280,6 +282,10 @@ test("merge shipment rejects DONE on an unmerged or red PR and preserves the nat
   assert.equal(completed.shipment_phase, "merged");
   assert.equal(completed.operation, "merge");
   assert.deepEqual(completed.merge, { pr_number: 221, head: expected_head, sha: mergeSha });
+  memoryCycle.finalizeMemory(root, SESSION);
+  const finalized = JSON.parse(readFileSync(join(root, ".pi/harness/state", SESSION, "memory-finalized.json"), "utf8"));
+  assert.equal(finalized.shipment_phase, "merged", "merge advances the old draft tombstone on the same HEAD");
+  assert.equal(finalized.operation, "merge");
 });
 
 test("clean base integration accepts the first durable note created by another run", (t) => {
