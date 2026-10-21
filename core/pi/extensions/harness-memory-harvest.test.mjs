@@ -1008,7 +1008,9 @@ test("harness-memory harvest: finalize aceita delta exato revisado e remove reci
   assert.equal(readFileSync(join(root, "MEMORY.md"), "utf8"), before + proposed);
 
   const tombstone = JSON.parse(readFileSync(finalizedPath(root), "utf8"));
-  assert.deepEqual(Object.keys(tombstone).sort(), ["feature_id", "finalized_at", "head", "input_digest", "review_input", "session_id", "written_by"]);
+  assert.deepEqual(Object.keys(tombstone).sort(), ["feature_id", "finalized_at", "head", "input_digest", "operation", "review_input", "session_id", "shipment_phase", "written_by"]);
+  assert.equal(tombstone.operation, "draft");
+  assert.equal(tombstone.shipment_phase, "delivered");
   assert.equal(tombstone.session_id, SESSION);
   assert.equal(tombstone.feature_id, FEATURE);
   assert.equal(tombstone.head, head(root));
