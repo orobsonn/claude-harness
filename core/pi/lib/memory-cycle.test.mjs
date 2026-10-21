@@ -288,6 +288,38 @@ test("merge shipment rejects DONE on an unmerged or red PR and preserves the nat
   assert.equal(finalized.operation, "merge");
 });
 
+for (const corrective of ["patch", "zero"]) test(`a ${corrective} replacement harvest carries approved code before finalize`, t => {
+  const { root, git, expected_head } = parallelDelivery(t, { memoryConflict: false });
+  const sha256 = value => createHash("sha256").update(value).digest("hex");
+  const statePath = join(root, ".pi/harness/state", SESSION, "gate-state.json");
+  const approvals = readFileSync(statePath, "utf8");
+  const envelope = changes => `[HARNESS_HARVEST_RESULT]${JSON.stringify({ changes, verification_commands: [] })}[/HARNESS_HARVEST_RESULT]`;
+  const before = readFileSync(join(root, "MEMORY.md"), "utf8");
+  completeHarvest(beginHarvest(root, SESSION), envelope([{ path: "MEMORY.md", before_sha256: sha256(before),
+    append: "firstlearning\n", evidence: "verified CI recovery", invalidation: "workflow changes" }]), "harvester-one");
+  applyHarvest(root, SESSION);
+  git("add", "MEMORY.md"); git("commit", "-qm", "docs: first harvest");
+  assert.ok(checkMemoryShipperReady(root, SESSION));
+  const changes = corrective === "zero" ? [] : [{ path: "MEMORY.md", before_sha256: sha256(readFileSync(join(root, "MEMORY.md"), "utf8")),
+    patch: { old_text: "firstlearning", new_text: "first learning" }, evidence: "correct the memory entry only", invalidation: "entry changes" }];
+  const second = completeHarvest(beginHarvest(root, SESSION), envelope(changes), "harvester-two");
+  applyHarvest(root, SESSION);
+  if (changes.length) { git("add", "MEMORY.md"); git("commit", "-qm", "docs: correct harvest formatting"); }
+  assert.equal(checkMemoryShipperReady(root, SESSION).head, git("rev-parse", "HEAD"));
+  assert.equal(readFileSync(statePath, "utf8"), approvals, "no new code reviews or rewritten approvals");
+  assert.equal(second.review_input.head_sha, expected_head, "keep the original accepted code input");
+  const receiptPath = join(root, ".pi/harness/state", SESSION, "memory-harvest.json");
+  const receipt = readFileSync(receiptPath, "utf8");
+  const unbound = JSON.parse(receipt);
+  delete unbound.review_input.verified_base_head;
+  writeFileSync(receiptPath, JSON.stringify(unbound));
+  assert.throws(() => checkMemoryShipperReady(root, SESSION), /review|evidence/i, "legacy unproven binding remains closed");
+  writeFileSync(receiptPath, receipt);
+  writeFileSync(join(root, "product.txt"), "unreviewed code\n");
+  git("add", "product.txt"); git("commit", "-qm", "feat: new application input");
+  assert.throws(() => checkMemoryShipperReady(root, SESSION), /outside.*harvest|review|changed/i);
+});
+
 test("clean base integration accepts the first durable note created by another run", (t) => {
   const { root, git, ...input } = parallelDelivery(t, { memoryConflict: false });
   git("checkout", "-q", "parallel-main");
