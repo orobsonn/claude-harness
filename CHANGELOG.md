@@ -5,6 +5,22 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [3.10.2](https://github.com/orobsonn/claude-harness/compare/v3.10.1...v3.10.2) (2026-10-21)
+
+
+### Bug Fixes
+
+* **pi:** accept committed tests reviewed before fidelity ([#1169](https://github.com/orobsonn/claude-harness/issues/1169)) ([3fc3ad6](https://github.com/orobsonn/claude-harness/commit/3fc3ad61a863c33727dd9bb58a527c5d02f3e67d))
+* **pi:** execute actionable harvest and reconciliation recovery ([#1174](https://github.com/orobsonn/claude-harness/issues/1174)) ([1241917](https://github.com/orobsonn/claude-harness/commit/1241917d8bf1c27a9cbb0f3b499cea5e39dad32d))
+* **pi:** guide pending dependency recovery to native resume ([#1173](https://github.com/orobsonn/claude-harness/issues/1173)) ([83cdfa5](https://github.com/orobsonn/claude-harness/commit/83cdfa5d6d7e7ef04c200a0ceaa8462beffa28bd))
+* **pi:** preserve proven fidelity after read-only validation ([#1175](https://github.com/orobsonn/claude-harness/issues/1175)) ([cce66c8](https://github.com/orobsonn/claude-harness/commit/cce66c853f92062e454c734b3034bfe55d6f8791))
+* **pi:** preserve reviewed code across replacement harvests ([#1178](https://github.com/orobsonn/claude-harness/issues/1178)) ([7984f53](https://github.com/orobsonn/claude-harness/commit/7984f539b784150eee6717fcc6f5890489830c61))
+* **pi:** recover receipts for reconciled merged deliveries ([#1179](https://github.com/orobsonn/claude-harness/issues/1179)) ([0fa371d](https://github.com/orobsonn/claude-harness/commit/0fa371df8edc3ed734b753226fecae725c1db1c0))
+* **pi:** recover shipping and inherited fidelity after base conflicts ([#1172](https://github.com/orobsonn/claude-harness/issues/1172)) ([923d6ff](https://github.com/orobsonn/claude-harness/commit/923d6ff0b1b5ccf5d249b5d620e6c2fdad4db16e))
+* **pi:** resume plans admitted after model routing recovery ([#1171](https://github.com/orobsonn/claude-harness/issues/1171)) ([8e92a0d](https://github.com/orobsonn/claude-harness/commit/8e92a0d498a6f8829909ffc7080845173468971c))
+* **pi:** verify shipping operations before closing delivery ([#1177](https://github.com/orobsonn/claude-harness/issues/1177)) ([abebfb6](https://github.com/orobsonn/claude-harness/commit/abebfb692d0cdee626bba36588488f6d84475b3f))
+* preserve provenance across unwritten blocked dispatches ([#1176](https://github.com/orobsonn/claude-harness/issues/1176)) ([42f180d](https://github.com/orobsonn/claude-harness/commit/42f180dd73ac8fd1f57d97f417820f495a63ea77))
+
 ## [3.10.1](https://github.com/orobsonn/claude-harness/compare/v3.10.0...v3.10.1) (2026-10-19)
 
 
