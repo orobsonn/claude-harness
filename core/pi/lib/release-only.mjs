@@ -409,9 +409,8 @@ export function classifyPiPostMergeRelease(projectRoot, evidence) {
       return { ok: false, reason: "remote merge commit subject does not match release PR" };
     }
     const baseSha = mergedCommit.parentSha;
-    if (baseSha !== pr.baseRefOid) {
-      return { ok: false, reason: "merged release PR base advanced or is not immutable" };
-    }
+    // The PR API may retain its earlier base; the squash parent is immutable.
+    git(projectRoot, ["merge-base", "--is-ancestor", pr.baseRefOid, baseSha]);
     const headFiles = verifyReleaseFiles(projectRoot, baseSha, releaseHeadSha, version);
     if (!headFiles.ok) return headFiles;
     let releaseNotes = headFiles.releaseNotes;
@@ -541,24 +540,26 @@ export function readPiReleasePublicationEvidence(projectRoot, proof) {
 }
 
 /** @description Resolve o PR mergeado associado exatamente ao HEAD. Leitura host-only, fail-closed. */
-export function readPiMergedReleaseEvidence(projectRoot, headSha) {
+export function readPiMergedReleaseEvidence(projectRoot, headSha, { sameBranch = false } = {}) {
   try {
     if (!GIT_SHA.test(headSha)) return null;
+    const branch = sameBranch ? git(projectRoot, ["symbolic-ref", "--quiet", "--short", "HEAD"]) : null;
+    if (sameBranch && (!branch || branch === "main" || git(projectRoot, ["rev-parse", "HEAD"]) !== headSha)) return null;
     const repository = readPiRepositoryEvidence(projectRoot);
     const rows = ghJson(projectRoot, [
         "pr",
         "list",
         "--state",
         "merged",
-        "--search",
-        headSha,
+        ...(sameBranch ? ["--head", branch, "--base", "main"] : ["--search", headSha]),
         "--limit",
         "20",
         "--json",
         "number,title,state,isDraft,url,mergedAt,mergeCommit,headRefOid,headRefName,baseRefOid,baseRefName,statusCheckRollup",
       ]);
     if (!Array.isArray(rows)) return null;
-    const exact = rows.filter((row) => row?.mergeCommit?.oid === headSha || row?.headRefOid === headSha);
+    const exact = rows.filter((row) => sameBranch ? row?.headRefName === branch
+      : row?.mergeCommit?.oid === headSha || row?.headRefOid === headSha);
     if (exact.length !== 1) return null;
     const mergeOid = exact[0]?.mergeCommit?.oid;
     if (typeof mergeOid !== "string" || !FULL_GIT_SHA.test(mergeOid)) return null;
@@ -584,8 +585,13 @@ export function readPiMergedReleaseEvidence(projectRoot, headSha) {
   }
 }
 
+/** Discover only the current branch's unique merged PR; content/ancestry proof is separate. */
+export function readPiMergedBranchEvidence(projectRoot, headSha) {
+  return readPiMergedReleaseEvidence(projectRoot, headSha, { sameBranch: true });
+}
+
 /** Verify a completed functional squash independently of a release ceremony. */
-export function classifyPiFunctionalMerge(projectRoot, reviewedHeadSha, evidence) {
+export function classifyPiFunctionalMerge(projectRoot, reviewedHeadSha, evidence, { reconciled = false } = {}) {
   try {
     if (!FULL_GIT_SHA.test(reviewedHeadSha)) {
       return { ok: false, reason: "reviewed functional HEAD invalid" };
@@ -607,7 +613,8 @@ export function classifyPiFunctionalMerge(projectRoot, reviewedHeadSha, evidence
     if (
       !Number.isSafeInteger(number) || number <= 0 ||
       pr.state !== "MERGED" || pr.isDraft !== false || !Number.isFinite(mergedAt) ||
-      pr.headRefOid !== reviewedHeadSha || typeof mergeOid !== "string" || !FULL_GIT_SHA.test(mergeOid) ||
+      typeof pr.headRefOid !== "string" || !FULL_GIT_SHA.test(pr.headRefOid) ||
+      (!reconciled && pr.headRefOid !== reviewedHeadSha) || typeof mergeOid !== "string" || !FULL_GIT_SHA.test(mergeOid) ||
       pr.baseRefName !== "main" || typeof pr.baseRefOid !== "string" || !FULL_GIT_SHA.test(pr.baseRefOid) ||
       !decideMergeChecks(pr.statusCheckRollup).ok ||
       typeof repository?.nameWithOwner !== "string" ||
@@ -618,9 +625,22 @@ export function classifyPiFunctionalMerge(projectRoot, reviewedHeadSha, evidence
       return { ok: false, reason: "functional PR does not match repository, reviewed HEAD, immutable base, merge SHA, or green CI" };
     }
     const metadata = mergedCommitMetadata(projectRoot, mergeOid, evidence);
-    if (metadata.parentSha !== pr.baseRefOid ||
-        metadata.treeSha !== commitMetadata(projectRoot, reviewedHeadSha, "tree")) {
-      return { ok: false, reason: "functional squash does not preserve the reviewed content on its immutable base" };
+    // GitHub's baseRefOid can retain the earlier PR base when main advances.
+    // The squash's single immutable parent is the actual merge base input.
+    if (metadata.local && git(projectRoot, ["show", "-s", "--format=%P", mergeOid]) !== metadata.parentSha)
+      return { ok: false, reason: "functional delivery is not a single-parent squash" };
+    git(projectRoot, ["merge-base", "--is-ancestor", pr.baseRefOid, metadata.parentSha]);
+    const expectedTree = execFileSync("git", ["merge-tree", "--write-tree", "--name-only", "-z", metadata.parentSha, pr.headRefOid],
+      { cwd: projectRoot, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 10000 }).split("\0", 1)[0];
+    if (!FULL_GIT_SHA.test(expectedTree) || metadata.treeSha !== expectedTree)
+      return { ok: false, reason: "functional squash differs from the exact reviewed PR head merged with its immutable parent" };
+    if (reconciled) {
+      if (git(projectRoot, ["rev-parse", "HEAD"]) !== reviewedHeadSha ||
+          git(projectRoot, ["symbolic-ref", "--quiet", "--short", "HEAD"]) !== pr.headRefName ||
+          commitMetadata(projectRoot, reviewedHeadSha, "tree") !== metadata.treeSha)
+        return { ok: false, reason: "current branch or reviewed tree does not match the already merged delivery" };
+      git(projectRoot, ["merge-base", "--is-ancestor", pr.headRefOid, reviewedHeadSha]);
+      git(projectRoot, ["merge-base", "--is-ancestor", mergeOid, reviewedHeadSha]);
     }
     return {
       ok: true,
@@ -628,8 +648,9 @@ export function classifyPiFunctionalMerge(projectRoot, reviewedHeadSha, evidence
       prNumber: number,
       headSha: reviewedHeadSha,
       mergeSha: mergeOid,
-      baseSha: pr.baseRefOid,
+      baseSha: metadata.parentSha,
       contentTreeSha: metadata.treeSha,
+      ...(reconciled ? { reconciled: true, originalHeadSha: pr.headRefOid } : {}),
     };
   } catch {
     return { ok: false, reason: "functional merge proof unavailable" };

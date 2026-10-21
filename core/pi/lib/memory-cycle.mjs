@@ -4,7 +4,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { isSafeSessionId, isSafeFeatureId } from "../../shared/lib/feature-id.mjs";
-import { classifyPiFunctionalMerge, classifyPiFunctionalMergeTransition, readPiMergedReleaseEvidence, resolvePiReleaseProof } from "./release-only.mjs";
+import { classifyPiFunctionalMerge, classifyPiFunctionalMergeTransition, readPiMergedBranchEvidence, readPiMergedReleaseEvidence, resolvePiReleaseProof } from "./release-only.mjs";
 import { capturePiReviewInput, hasAcceptedPiReviewEvidence, isPiReviewExcludedPath, readPiReviewPlan } from "./pi-review-evidence.mjs";
 import { checkPiFinalCommands, validatePiVerificationCommands } from "./pi-command-evidence.mjs";
 import { requiredPiFinalReviewRoles } from "./roles.mjs";
@@ -976,7 +976,8 @@ export function classifyMemoryShipmentTransition(snapshot, ready, functionalMerg
   return { ok: false, reason: "Shipper changed HEAD outside the exact reviewed release transition" };
 }
 
-export function completeMemoryShipment(snapshot, text, agentId, { readMergedEvidence = readPiMergedReleaseEvidence } = {}) {
+export function completeMemoryShipment(snapshot, text, agentId, { readMergedEvidence = readPiMergedReleaseEvidence,
+  readBranchEvidence = readPiMergedBranchEvidence } = {}) {
   if (typeof agentId !== "string" || !agentId || !/(?:^|\r?\n)Status: DONE\s*$/.test(text)) throw new Error("Shipper must report terminal Status: DONE");
   const paths = memoryPaths(snapshot.project_root, snapshot.session_id, true);
   const ready = checkMemoryShipperReady(paths.root, snapshot.session_id);
@@ -990,7 +991,13 @@ export function completeMemoryShipment(snapshot, text, agentId, { readMergedEvid
   let merge;
   if (snapshot.operation === "merge") {
     merge = classifyPiFunctionalMerge(paths.root, snapshot.head, readMergedEvidence(paths.root, snapshot.head));
-    if (!merge.ok) throw new Error("Authorized merge remains pending: " + merge.reason + "; diagnose failed CI and route correctable findings to the owning task or an additive reviewed scope amendment");
+    if (!merge.ok) {
+      const recovered = classifyPiFunctionalMerge(paths.root, snapshot.head,
+        readBranchEvidence(paths.root, snapshot.head), { reconciled: true });
+      if (recovered.ok) merge = recovered;
+    }
+    if (!merge.ok) throw new Error("Authorized merge remains pending: " + merge.reason +
+      "; inspect the remote effect first. If already merged, fetch origin and reconcile the verified merge SHA in the global parent, then revalidate only changed inputs and retry receipt completion without another merge. Diagnose CI only if its observed checks failed");
     transition.phase = "merged";
   }
   if (snapshot.operation === "release-prepare" && !["release-prepared", "merged", "published"].includes(transition.phase))
@@ -999,7 +1006,8 @@ export function completeMemoryShipment(snapshot, text, agentId, { readMergedEvid
     throw new Error("Release publication remains pending; verify the exact remote tag and published GitHub Release");
   atomicWrite(paths.shipment, JSON.stringify({ written_by: "host-subagent-completion", session_id: snapshot.session_id, feature_id: ready.featureId, head: ready.head, agent_id: agentId, status: "completed", shipment_phase: transition.phase,
     ...(snapshot.operation ? { operation: snapshot.operation } : {}),
-    ...(merge ? { merge: { pr_number: merge.prNumber, head: merge.headSha, sha: merge.mergeSha } } : {}),
+    ...(merge ? { merge: { pr_number: merge.prNumber, head: merge.headSha, sha: merge.mergeSha,
+      ...(merge.reconciled ? { reconciled: true, pr_head: merge.originalHeadSha, base_sha: merge.baseSha } : {}) } } : {}),
     ...(ready.release ? { release_phase: ready.release.phase } : {}) }));
 }
 export function memoryBrief(projectRoot, sessionId) {
