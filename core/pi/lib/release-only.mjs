@@ -584,10 +584,11 @@ export function readPiMergedReleaseEvidence(projectRoot, headSha) {
   }
 }
 
-export function classifyPiFunctionalMergeTransition(projectRoot, reviewedHeadSha, preparedRelease, evidence) {
+/** Verify a completed functional squash independently of a release ceremony. */
+export function classifyPiFunctionalMerge(projectRoot, reviewedHeadSha, evidence) {
   try {
-    if (!FULL_GIT_SHA.test(reviewedHeadSha) || preparedRelease?.ok !== true || !["pre-merge", "post-merge"].includes(preparedRelease.phase)) {
-      return { ok: false, reason: "functional-to-release transition identity invalid" };
+    if (!FULL_GIT_SHA.test(reviewedHeadSha)) {
+      return { ok: false, reason: "reviewed functional HEAD invalid" };
     }
     if (!evidence || typeof evidence !== "object" || Array.isArray(evidence)) {
       return { ok: false, reason: "merged functional PR evidence unavailable" };
@@ -602,13 +603,11 @@ export function classifyPiFunctionalMergeTransition(projectRoot, reviewedHeadSha
     const number = pr.number;
     const repositoryUrl = typeof repository?.url === "string" ? repository.url.replace(/\/$/, "") : "";
     const mergedAt = typeof pr.mergedAt === "string" ? Date.parse(pr.mergedAt) : Number.NaN;
-    const defaultBranchIsCurrent = preparedRelease.phase === "pre-merge"
-      ? repository?.defaultBranchOid === mergeOid
-      : repository?.defaultBranchContainsMerge === true;
+    const defaultBranchIsCurrent = repository?.defaultBranchOid === mergeOid || repository?.defaultBranchContainsMerge === true;
     if (
       !Number.isSafeInteger(number) || number <= 0 ||
       pr.state !== "MERGED" || pr.isDraft !== false || !Number.isFinite(mergedAt) ||
-      pr.headRefOid !== reviewedHeadSha || mergeOid !== preparedRelease.baseSha ||
+      pr.headRefOid !== reviewedHeadSha || typeof mergeOid !== "string" || !FULL_GIT_SHA.test(mergeOid) ||
       pr.baseRefName !== "main" || typeof pr.baseRefOid !== "string" || !FULL_GIT_SHA.test(pr.baseRefOid) ||
       !decideMergeChecks(pr.statusCheckRollup).ok ||
       typeof repository?.nameWithOwner !== "string" ||
@@ -618,8 +617,9 @@ export function classifyPiFunctionalMergeTransition(projectRoot, reviewedHeadSha
     ) {
       return { ok: false, reason: "functional PR does not match repository, reviewed HEAD, immutable base, merge SHA, or green CI" };
     }
-    if (commitMetadata(projectRoot, mergeOid, "parent") !== pr.baseRefOid ||
-        commitMetadata(projectRoot, mergeOid, "tree") !== commitMetadata(projectRoot, reviewedHeadSha, "tree")) {
+    const metadata = mergedCommitMetadata(projectRoot, mergeOid, evidence);
+    if (metadata.parentSha !== pr.baseRefOid ||
+        metadata.treeSha !== commitMetadata(projectRoot, reviewedHeadSha, "tree")) {
       return { ok: false, reason: "functional squash does not preserve the reviewed content on its immutable base" };
     }
     return {
@@ -629,11 +629,23 @@ export function classifyPiFunctionalMergeTransition(projectRoot, reviewedHeadSha
       headSha: reviewedHeadSha,
       mergeSha: mergeOid,
       baseSha: pr.baseRefOid,
-      contentTreeSha: commitMetadata(projectRoot, mergeOid, "tree"),
+      contentTreeSha: metadata.treeSha,
     };
   } catch {
     return { ok: false, reason: "functional merge proof unavailable" };
   }
+}
+
+export function classifyPiFunctionalMergeTransition(projectRoot, reviewedHeadSha, preparedRelease, evidence) {
+  if (preparedRelease?.ok !== true || !["pre-merge", "post-merge"].includes(preparedRelease.phase))
+    return { ok: false, reason: "functional-to-release transition identity invalid" };
+  const proof = classifyPiFunctionalMerge(projectRoot, reviewedHeadSha, evidence);
+  if (!proof.ok) return proof;
+  if (proof.mergeSha !== preparedRelease.baseSha ||
+      (preparedRelease.phase === "pre-merge" && evidence.repository?.defaultBranchOid !== proof.mergeSha) ||
+      (preparedRelease.phase === "post-merge" && evidence.repository?.defaultBranchContainsMerge !== true))
+    return { ok: false, reason: "functional merge does not match the exact release base" };
+  return proof;
 }
 
 /** @description Prova compartilhada para consumidores host-owned (entry gate, memory e shipper). */

@@ -94,6 +94,7 @@ function recordZeroDeltaHarvest(api, root) {
 function recordSuccessfulShipper(api, root) {
   const args = {
     subagent_type: "harness-shipper",
+      shipment_operation: "draft",
     description: "publish reviewed delivery",
     prompt: "Publish the already reviewed delivery.",
   };
@@ -427,6 +428,7 @@ test("harness-memory: falha de shipment preserva efeito remoto e exige reconcili
     tool: syntheticSubagent(original, { agentId: "agent-shipper" }),
     input: {
       subagent_type: "harness-shipper",
+      shipment_operation: "draft",
       description: "publish reviewed delivery",
       prompt: "Publish the already reviewed delivery.",
     },
@@ -443,6 +445,32 @@ test("harness-memory: falha de shipment preserva efeito remoto e exige reconcili
   assert.match(resultText(result), /remote effect may already have happened/i);
   assert.match(resultText(result), /reconcile the remote before retrying/i);
   assert.match(resultText(result), /do not repeat.*merge|do not repeat.*publish/i);
+});
+
+test("harness-memory binds the requested merge and rejects a false DONE without recording delivery", async t => {
+  const root = makeRoot(t);
+  const head = initGit(root);
+  seedFinalState(root, head);
+  const api = register();
+  recordZeroDeltaHarvest(api, root);
+  const input = { subagent_type: "harness-shipper", shipment_operation: "merge",
+    description: "merge PR221", prompt: "Merge the reviewed PR within the operator authorization." };
+  const denied = api.handlers.get("tool_call")({ toolName: "subagent", input: { ...input, shipment_operation: undefined } }, ctx(root));
+  assert.equal(denied.block, true);
+  assert.match(denied.reason, /shipment_operation/);
+  assert.equal(api.handlers.get("tool_call")({ toolName: "subagent", input }, ctx(root)), undefined);
+  const { result } = await runNativeToolCall({
+    tool: syntheticSubagent("PR221 remains draft; CI failed. I did not merge it.\nStatus: DONE", { agentId: "merge-shipper" }),
+    input, hooks: api.handlers, ctx: ctx(root),
+  });
+  assert.equal(result.isError, true);
+  assert.equal(result.details.harness_memory_receipt.ok, false);
+  assert.match(resultText(result), /merge remains pending/);
+  const shipment = JSON.parse(readFileSync(join(root, ".pi/harness/state", SESSION, "memory-shipment.json"), "utf8"));
+  assert.equal(shipment.status, "pending");
+  assert.equal(shipment.operation, "merge");
+  assert.equal(shipment.head, head);
+  assert.equal(shipment.written_by, "host-subagent-start");
 });
 
 test("harness-memory: runner real do Pi propaga falha de shipment ao modelo e ao evento final", { timeout: 15000 }, async (t) => {
@@ -481,6 +509,7 @@ test("harness-memory: runner real do Pi propaga falha de shipment ao modelo e ao
     fauxAssistantMessage([
       fauxToolCall("subagent", {
         subagent_type: "harness-shipper",
+      shipment_operation: "draft",
         description: "publish reviewed delivery",
         prompt: "Publish the already reviewed delivery.",
       }, { id: "real-memory-callback" }),
@@ -535,6 +564,7 @@ test("harness-memory: resultado concluído sem snapshot falha de forma explícit
     tool: syntheticSubagent(original, { agentId: "agent-shipper" }),
     input: {
       subagent_type: "harness-shipper",
+      shipment_operation: "draft",
       description: "publish reviewed delivery",
       prompt: "Publish the already reviewed delivery.",
     },

@@ -51,6 +51,8 @@ test("the registered native tool teaches foreground review batches instead of fo
   assert.match(tool.parameters.properties.run_in_background.description, /(?:omit|false|forbidden)/i);
   assert.deepEqual(tool.parameters.properties.complexity.enum, ["low", "medium", "high", "max"]);
   assert.match(tool.parameters.properties.complexity.description, /Required for executor, sniper and test-author/);
+  assert.deepEqual(tool.parameters.properties.shipment_operation.enum, ["draft", "merge", "release-prepare", "release-publish"]);
+  assert.match(tool.parameters.properties.shipment_operation.description, /grants no authorization/);
   assert.notEqual(tool.description, native.description, "native guidance is adapted without mutating the native tool");
   assert.match(native.description, /For parallel work, use run_in_background: true/);
 });

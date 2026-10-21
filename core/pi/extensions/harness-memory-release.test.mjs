@@ -234,7 +234,7 @@ function shipperEvent() {
   return {
     toolName: "subagent",
     toolCallId: "shipper-release",
-    input: { subagent_type: "harness-shipper", description: "publish release", prompt: "Publish the verified release." },
+    input: { subagent_type: "harness-shipper", shipment_operation: "release-prepare", description: "publish release", prompt: "Publish the verified release." },
   };
 }
 

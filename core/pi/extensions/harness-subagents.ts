@@ -207,6 +207,11 @@ function decorateNativeFactory(nativeFactory: (pi: ExtensionAPI) => unknown) {
                   enum: ["low", "medium", "high", "max"],
                   description: "Harness task complexity. Required for executor, sniper and test-author; copy the canonical task value exactly so model routing can be validated.",
                 },
+                shipment_operation: {
+                  type: "string",
+                  enum: ["draft", "merge", "release-prepare", "release-publish"],
+                  description: "Required for harness-shipper. Copy the operator-authorized delivery operation; draft completion cannot satisfy a later merge. This field grants no authorization.",
+                },
               },
             },
           } : {}),

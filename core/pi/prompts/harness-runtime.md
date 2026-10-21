@@ -396,11 +396,20 @@ spec/plano ou parecer negativo novo nunca é dispensado pela colheita.
 **Merge após draft.** Um pedido posterior de merge é uma nova operação na mesma
 entrega; o encerramento anterior do draft não comprova seu cumprimento. Encaminhe
 o merge autorizado ao `harness-shipper` pelo subagent nativo, inclusive depois de
-`harness_memory finalize`, para o host acompanhar a tentativa e seu resultado.
+`harness_memory finalize`, para o host acompanhar a tentativa e seu resultado. Inclua no despacho
+`shipment_operation="merge"`; para as demais operações use `draft`, `release-prepare`
+ou `release-publish` conforme a autorização existente. O campo não concede autoridade.
+O host só registra conclusão de merge com PR remoto MERGED no HEAD revisado, squash
+com conteúdo idêntico e CI verde; `Status: DONE` sozinho não prova a operação.
 Não encerre o pedido apenas porque `gh pr view` mostrou draft ou `DIRTY`.
 Draft exige ready no fluxo autorizado; conflito com a base exige recuperação pelo
 pai global com `harness_memory reconcile` e sua revalidação. Preserve as provas
 compatíveis e siga até atualizar o PR, conferir CI e concluir o merge autorizado.
+CI vermelho também é um finding da entrega: leia o job e a primeira falha, compare
+com o comando local, lifecycle/pretest, versões e ambiente efetivamente usados.
+Recupere pela task dona; um path de CI fora do escopo exige a emenda aditiva já
+aprovável por planner/plan-reviewer, não abandono da entrega nem waiver do check.
+Um draft finalizado não impede essa correção enquanto seu novo merge permanece pendente.
 Conflito resolvível não exige que o operador repita o pedido ou resolva os hunks.
 Se `main` avançar novamente antes do merge, reconcilie a nova base; repetir um merge
 inalterado não é progresso. Esta continuidade não autoriza merge quando o escopo
