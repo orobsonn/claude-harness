@@ -74,7 +74,11 @@ export default function harnessMemory(pi: ExtensionAPI) {
       if (isLatePlanner && finalizationStarted(ctx.cwd, sessionId) &&
           !canRecoverTaskScopeDuringFinalization(ctx.cwd, sessionId))
         throw new Error("Finalization cannot dispatch planner or plan-reviewer after shipping the current input or outside an admitted task scope correction");
-      if (isShipper) checkMemoryShipperReady(ctx.cwd, sessionId);
+      if (isShipper) {
+        if (!["draft", "merge", "release-prepare", "release-publish"].includes(input.shipment_operation))
+          throw new Error("Shipper requires shipment_operation=draft, merge, release-prepare or release-publish matching the operator-authorized operation; this field grants no authorization");
+        checkMemoryShipperReady(ctx.cwd, sessionId);
+      }
       if (isHarvest) {
         if (!/^\[HARNESS_HARVEST\](?:\r?\n|$)/.test(input.prompt ?? "")) throw new Error("Start harvester prompt with [HARNESS_HARVEST]");
         beginHarvest(ctx.cwd, sessionId);
@@ -88,9 +92,10 @@ export default function harnessMemory(pi: ExtensionAPI) {
     try {
       const sessionId = identity(ctx);
       if (args.subagent_type === "harness-shipper") {
-        invalidateMemoryAttempt(ctx.cwd, sessionId, "shipment");
+        if (!["draft", "merge", "release-prepare", "release-publish"].includes(args.shipment_operation)) return;
+        invalidateMemoryAttempt(ctx.cwd, sessionId, "shipment", args.shipment_operation);
         const ready = checkMemoryShipperReady(ctx.cwd, sessionId);
-        pending.set(key(ctx, event.toolCallId), { kind: "shipment", session_id: sessionId, project_root: ctx.cwd, ...ready });
+        pending.set(key(ctx, event.toolCallId), { kind: "shipment", session_id: sessionId, project_root: ctx.cwd, ...ready, operation: args.shipment_operation });
       } else {
         if (!/^\[HARNESS_HARVEST\](?:\r?\n|$)/.test(args.prompt ?? "")) return;
         // Replacement harvests are transactional. A failed corrective attempt

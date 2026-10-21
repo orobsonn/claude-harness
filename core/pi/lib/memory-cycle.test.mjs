@@ -209,6 +209,79 @@ test("an old finalized draft cannot finalize a pending or blocked new shipper at
   assert.equal(memoryCycle.finalizeMemory(root, SESSION).finalized, true);
 });
 
+test("a pending authorized merge can repair CI scope after finalizing its draft", t => {
+  const { root, expected_head } = parallelDelivery(t, { memoryConflict: false });
+  const directory = join(root, ".pi/harness/state", SESSION);
+  const statePath = join(directory, "gate-state.json");
+  const state = JSON.parse(readFileSync(statePath, "utf8"));
+  state.task_pipeline_version = 1;
+  state.spec_sha256 = state.reviewed_spec_sha256;
+  writeFileSync(statePath, JSON.stringify(state));
+  mkdirSync(join(directory, "task-runs"));
+  writeFileSync(join(directory, "task-runs/index.json"), JSON.stringify({ version: 1,
+    parent_session_id: SESSION, feature_id: FEATURE, spec_sha256: state.spec_sha256,
+    plan_sha256: state.plan_review_evidence.plan_sha256,
+    tasks: { "task-one": { task_id: "task-one", status: "integrated" } } }));
+  memoryCycle.completeMemoryShipment({ project_root: root, session_id: SESSION, head: expected_head },
+    "Draft published.\nStatus: DONE", "draft-shipper");
+  memoryCycle.finalizeMemory(root, SESSION);
+  const finalizedPath = join(directory, "memory-finalized.json");
+  const finalized = readFileSync(finalizedPath, "utf8");
+  memoryCycle.invalidateMemoryAttempt(root, SESSION, "shipment", "merge");
+  assert.equal(memoryCycle.canRecoverTaskScopeDuringFinalization(root, SESSION), true,
+    "a CI scope amendment still requires planner/reviewer, but draft closure must not forbid it");
+  assert.equal(readFileSync(finalizedPath, "utf8"), finalized, "keep exact draft approval carry");
+  assert.throws(() => memoryCycle.finalizeMemory(root, SESSION), /pending|successful shipper/i);
+  for (const phase of ["merged", "published", "release-prepared"]) {
+    writeFileSync(finalizedPath, JSON.stringify({ ...JSON.parse(finalized), shipment_phase: phase }));
+    assert.equal(memoryCycle.canRecoverTaskScopeDuringFinalization(root, SESSION), false,
+      "pending merge cannot reopen a verified merge or release");
+  }
+  writeFileSync(finalizedPath, finalized);
+  for (const operation of [undefined, "draft", "release-publish"]) {
+    memoryCycle.invalidateMemoryAttempt(root, SESSION, "shipment", operation);
+    assert.equal(memoryCycle.canRecoverTaskScopeDuringFinalization(root, SESSION), false);
+  }
+});
+
+test("merge shipment rejects DONE on an unmerged or red PR and preserves the native pending obligation", t => {
+  const { root, git, expected_head } = parallelDelivery(t, { memoryConflict: false });
+  const snapshot = { project_root: root, session_id: SESSION, head: expected_head, operation: "merge" };
+  const file = join(root, ".pi/harness/state", SESSION, "memory-shipment.json");
+  memoryCycle.invalidateMemoryAttempt(root, SESSION, "shipment", "merge");
+  const pending = readFileSync(file, "utf8");
+  const baseSha = git("rev-parse", "HEAD^");
+  const treeSha = git("rev-parse", "HEAD^{tree}");
+  const mergeSha = "d".repeat(40); // Remote squash not fetched into this worktree.
+  const evidence = { number: 221, state: "MERGED", isDraft: false,
+    mergedAt: "2026-10-21T12:00:00Z", headRefOid: expected_head,
+    mergeCommit: { oid: mergeSha }, baseRefOid: baseSha, baseRefName: "main",
+    url: "https://github.com/example/delivery/pull/221",
+    statusCheckRollup: [{ conclusion: "SUCCESS" }],
+    remoteMerge: { sha: mergeSha, parentSha: baseSha, treeSha, subject: "feat: reviewed delivery" },
+    repository: { nameWithOwner: "example/delivery", url: "https://github.com/example/delivery",
+      defaultBranch: "main", defaultBranchOid: "e".repeat(40), defaultBranchContainsMerge: true } };
+  for (const invalid of [null, { ...evidence, state: "OPEN", isDraft: true },
+    { ...evidence, statusCheckRollup: [{ conclusion: "FAILURE" }] },
+    { ...evidence, statusCheckRollup: [] },
+    { ...evidence, headRefOid: "f".repeat(40) },
+    { ...evidence, url: "https://github.com/other/repo/pull/221" },
+    { ...evidence, remoteMerge: { ...evidence.remoteMerge, parentSha: "f".repeat(40) } },
+    { ...evidence, remoteMerge: { ...evidence.remoteMerge, treeSha: "f".repeat(40) } },
+    { ...evidence, repository: { ...evidence.repository, defaultBranchContainsMerge: false } }]) {
+    assert.throws(() => memoryCycle.completeMemoryShipment(snapshot,
+      "PR221 is draft, CI failed, I did not merge it.\nStatus: DONE", "native-shipper",
+      { readMergedEvidence: () => invalid }), /merge remains pending/);
+    assert.equal(readFileSync(file, "utf8"), pending, "no false successful shipment");
+  }
+  memoryCycle.completeMemoryShipment(snapshot, "Remote merge verified.\nStatus: DONE", "native-shipper",
+    { readMergedEvidence: (project, head) => { assert.equal(project, root); assert.equal(head, expected_head); return evidence; } });
+  const completed = JSON.parse(readFileSync(file, "utf8"));
+  assert.equal(completed.shipment_phase, "merged");
+  assert.equal(completed.operation, "merge");
+  assert.deepEqual(completed.merge, { pr_number: 221, head: expected_head, sha: mergeSha });
+});
+
 test("clean base integration accepts the first durable note created by another run", (t) => {
   const { root, git, ...input } = parallelDelivery(t, { memoryConflict: false });
   git("checkout", "-q", "parallel-main");

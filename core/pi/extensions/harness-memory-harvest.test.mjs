@@ -228,6 +228,7 @@ function emitShipper(api, root, {
   const runtime = ctx(root);
   const args = {
     subagent_type: "harness-shipper",
+      shipment_operation: "draft",
     description: "publish reviewed delivery",
     prompt: "Publish the reviewed commit series.",
   };
@@ -316,6 +317,7 @@ function shipperEvent(prompt = "Publish the reviewed commit series.") {
     toolCallId: "shipper-gate-call",
     input: {
       subagent_type: "harness-shipper",
+      shipment_operation: "draft",
       description: "publish reviewed delivery",
       prompt,
     },

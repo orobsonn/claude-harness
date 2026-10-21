@@ -26,6 +26,10 @@ escopo/autorização de infraestrutura do projeto. Ele corrige somente o timeout
 do servidor loopback, preservando versões, isolamento e assertions; é idempotente
 e recusa outras versões/blocos de código. Ao atualizar o Miniflare, revise/remova
 esse backport. O runner de shards não altera dependências automaticamente.
+No CI, execute o mesmo script `npm test` para preservar o `pretest`; chamar
+`npx vitest run` diretamente pula essa preparação. Use uma versão de Node
+compatível com os engines das dependências resolvidas no lockfile e compare
+a primeira falha antes de tratar erros posteriores de setup como causas distintas.
 
 O runner vendorizado `node .pi/harness/bin/vitest-shards.mjs --` pode ser adotado
 como script `test` do projeto, preservando o `pretest`. `npm test` executa a suíte

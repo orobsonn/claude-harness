@@ -24,6 +24,10 @@ operacionais do harness. O prefixo `.pi/harness/` não é motivo de veto, separa
 commits ou repetição de revisões válidas. Confira o diff e a evidência desses arquivos;
 isso não autoriza o shipper a editar o runtime nem a incluir manutenção não revisada.
 
+O despacho deve incluir `shipment_operation` (`draft`, `merge`, `release-prepare` ou
+`release-publish`) correspondente à autorização do operador. O host verifica o merge
+remoto exato e CI verde antes de registrar sucesso de `merge`; observar draft ou CI
+vermelho exige `Status: BLOCKED`, nunca `DONE`. Esse campo não concede autoridade.
 O despacho deve delimitar a operação autorizada: publicar PR draft, mergear o PR
 funcional, preparar a release ou confirmar sua publicação. Não reinicie revisões válidas apenas por receber
 um pedido de merge/release. Retorne operações realizadas, SHA, URL/estado remoto e

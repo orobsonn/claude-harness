@@ -4,7 +4,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { isSafeSessionId, isSafeFeatureId } from "../../shared/lib/feature-id.mjs";
-import { classifyPiFunctionalMergeTransition, readPiMergedReleaseEvidence, resolvePiReleaseProof } from "./release-only.mjs";
+import { classifyPiFunctionalMerge, classifyPiFunctionalMergeTransition, readPiMergedReleaseEvidence, resolvePiReleaseProof } from "./release-only.mjs";
 import { capturePiReviewInput, hasAcceptedPiReviewEvidence, isPiReviewExcludedPath, readPiReviewPlan } from "./pi-review-evidence.mjs";
 import { checkPiFinalCommands, validatePiVerificationCommands } from "./pi-command-evidence.mjs";
 import { requiredPiFinalReviewRoles } from "./roles.mjs";
@@ -226,12 +226,20 @@ export function canRecoverTaskScopeDuringFinalization(projectRoot, sessionId) {
   if (state?.session_id !== sessionId || state.task_pipeline_version !== TASK_PIPELINE_VERSION ||
       !isSafeFeatureId(state.feature_id)) return false;
   const head = gitMemory(paths.root, ["rev-parse", "HEAD"]);
+  const attempt = JSON.parse(readSmall(paths.shipment, 8192) ?? "null");
+  const pendingMerge = attempt?.written_by === "host-subagent-start" && attempt.status === "pending" &&
+    attempt.session_id === sessionId && attempt.feature_id === state.feature_id &&
+    attempt.head === head && attempt.operation === "merge";
   for (const [file, writer] of [[paths.shipment, "host-subagent-completion"], [paths.finalized, "host-memory-finalize"]]) {
     const receipt = JSON.parse(readSmall(file, 8192) ?? "null");
     if (receipt === null) continue;
     if (file === paths.shipment && receipt.written_by === "host-subagent-start" && receipt.status === "pending" &&
         receipt.session_id === sessionId && receipt.feature_id === state.feature_id && /^[a-f0-9]{40}$/.test(receipt.head ?? ""))
       continue; // An attempted shipment is not proof that this input was shipped.
+    if (file === paths.finalized && pendingMerge && receipt.written_by === writer &&
+        receipt.session_id === sessionId && receipt.feature_id === state.feature_id && receipt.head === head &&
+        (!receipt.shipment_phase || receipt.shipment_phase === "delivered"))
+      continue; // A completed draft does not prevent repairing its pending merge.
     if (receipt.written_by !== writer || receipt.session_id !== sessionId || receipt.feature_id !== state.feature_id ||
         !/^[a-f0-9]{40}$/.test(receipt.head ?? "") || receipt.head === head) return false;
     try {
@@ -539,7 +547,7 @@ function snapshotPlan(paths, featureId) {
   return { plan, hash: sha(raw), metadata_hash: sha(stable(metadata)), tasks: tasks.map((task) => ({ id: task.id, hash: sha(stable(task)) })) };
 }
 
-export function invalidateMemoryAttempt(projectRoot, sessionId, kind) {
+export function invalidateMemoryAttempt(projectRoot, sessionId, kind, operation) {
   const paths = memoryPaths(projectRoot, sessionId);
   const target = kind === "shipment" ? paths.shipment : paths.harvest;
   if (kind === "shipment") {
@@ -548,7 +556,8 @@ export function invalidateMemoryAttempt(projectRoot, sessionId, kind) {
     // Keep the finalized tombstone: it still carries exact review authority.
     // A new native attempt supersedes its terminality, never its approvals.
     atomicWrite(target, JSON.stringify({ written_by: "host-subagent-start", session_id: sessionId,
-      feature_id: state.feature_id, head: gitMemory(paths.root, ["rev-parse", "HEAD"]), status: "pending" }));
+      feature_id: state.feature_id, head: gitMemory(paths.root, ["rev-parse", "HEAD"]), status: "pending",
+      ...(operation ? { operation } : {}) }));
     return;
   }
   if (regularFile(target)) unlinkSync(target);
@@ -907,6 +916,8 @@ export function finalizeMemory(projectRoot, sessionId) {
   const harvest = JSON.parse(readSmall(paths.harvest, 262144) ?? "null");
   const current = capturePiReviewInput({ projectRoot: paths.root, sessionId, featureId, phase: "final" });
   atomicWrite(paths.finalized, JSON.stringify({ written_by: "host-memory-finalize", session_id: sessionId, feature_id: featureId, head,
+    ...(shipment.operation ? { operation: shipment.operation } : {}),
+    ...(shipment.shipment_phase ? { shipment_phase: shipment.shipment_phase } : {}),
     ...(current.ok && harvest?.review_input ? { input_digest: current.snapshot.input_digest, review_input: harvest.review_input } : {}),
     finalized_at: new Date().toISOString() }));
   // No shutdown cleanup: quit/reload/new/resume are not delivery completion.
@@ -943,7 +954,7 @@ export function classifyMemoryShipmentTransition(snapshot, ready, functionalMerg
   return { ok: false, reason: "Shipper changed HEAD outside the exact reviewed release transition" };
 }
 
-export function completeMemoryShipment(snapshot, text, agentId) {
+export function completeMemoryShipment(snapshot, text, agentId, { readMergedEvidence = readPiMergedReleaseEvidence } = {}) {
   if (typeof agentId !== "string" || !agentId || !/(?:^|\r?\n)Status: DONE\s*$/.test(text)) throw new Error("Shipper must report terminal Status: DONE");
   const paths = memoryPaths(snapshot.project_root, snapshot.session_id, true);
   const ready = checkMemoryShipperReady(paths.root, snapshot.session_id);
@@ -954,7 +965,20 @@ export function completeMemoryShipment(snapshot, text, agentId) {
   }
   const transition = classifyMemoryShipmentTransition(snapshot, ready, functionalMergeProof);
   if (!transition.ok) throw new Error(transition.reason + "; confirm the remote effect before retrying completion");
-  atomicWrite(paths.shipment, JSON.stringify({ written_by: "host-subagent-completion", session_id: snapshot.session_id, feature_id: ready.featureId, head: ready.head, agent_id: agentId, status: "completed", shipment_phase: transition.phase, ...(ready.release ? { release_phase: ready.release.phase } : {}) }));
+  let merge;
+  if (snapshot.operation === "merge") {
+    merge = classifyPiFunctionalMerge(paths.root, snapshot.head, readMergedEvidence(paths.root, snapshot.head));
+    if (!merge.ok) throw new Error("Authorized merge remains pending: " + merge.reason + "; diagnose failed CI and route correctable findings to the owning task or an additive reviewed scope amendment");
+    transition.phase = "merged";
+  }
+  if (snapshot.operation === "release-prepare" && !["release-prepared", "merged", "published"].includes(transition.phase))
+    throw new Error("Release preparation remains pending");
+  if (snapshot.operation === "release-publish" && transition.phase !== "published")
+    throw new Error("Release publication remains pending; verify the exact remote tag and published GitHub Release");
+  atomicWrite(paths.shipment, JSON.stringify({ written_by: "host-subagent-completion", session_id: snapshot.session_id, feature_id: ready.featureId, head: ready.head, agent_id: agentId, status: "completed", shipment_phase: transition.phase,
+    ...(snapshot.operation ? { operation: snapshot.operation } : {}),
+    ...(merge ? { merge: { pr_number: merge.prNumber, head: merge.headSha, sha: merge.mergeSha } } : {}),
+    ...(ready.release ? { release_phase: ready.release.phase } : {}) }));
 }
 export function memoryBrief(projectRoot, sessionId) {
   const paths = memoryPaths(projectRoot, sessionId);
