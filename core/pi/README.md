@@ -674,3 +674,10 @@ recusados. `locked_tests[].path` continua exigindo arquivo regular.
 Uma tentativa admitida com pasta de fixtures pode retomar o freeze já revisado
 após atualizar o runtime, sem reescrever o plano, migrar o grant ou fabricar um
 novo commit de teste. Autor, reviewer, freeze e os demais gates continuam exigidos.
+
+Na retomada de uma task de projeto consumidor, o host pode adotar o launcher
+atual mesmo quando o primeiro launch já usava uma fonte externa. A origem
+vendorizada deve estar registrada na base Git imutável da admissão; arquivos
+locais não rastreados não bastam. O runtime atual precisa passar sua captura
+de integridade, e a tentativa, o grant e os recibos históricos permanecem iguais.
+Tasks de desenvolvimento da fonte sem essa origem continuam presas ao pin.
