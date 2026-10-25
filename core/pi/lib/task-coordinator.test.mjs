@@ -2201,3 +2201,109 @@ test("reapproving an unchanged admitted plan preserves original task provenance"
   write(statePath, { ...current, plan_review_evidence: { ...current.plan_review_evidence, verdict: "REJECT" } });
   assert.throws(() => readTaskPlanAuthority(input), /current host-confirmed/);
 });
+
+function installLockDrift(f) {
+  const original = { name: "fixture", lockfileVersion: 3, packages: {
+    "": { name: "fixture", devDependencies: { tool: "1.0.0" } },
+    "node_modules/tool": { version: "1.0.0", integrity: "sha512-fixture", devOptional: true },
+    "node_modules/tool-linux": { version: "1.0.0", optional: true, os: ["linux"] },
+  } };
+  const file = path.join(f.dir, "package-lock.json");
+  fs.writeFileSync(file, JSON.stringify(original, null, 2) + "\n");
+  git(f.dir, "add", "--", "package-lock.json"); git(f.dir, "commit", "-qm", "lock baseline");
+  const before = fs.readFileSync(file);
+  const changed = structuredClone(original);
+  delete changed.packages["node_modules/tool"].devOptional;
+  changed.packages["node_modules/tool"].dev = true;
+  changed.packages["node_modules/tool-linux"].dev = true;
+  fs.writeFileSync(file, JSON.stringify(changed, null, 2) + "\n");
+  return { file, original, changed, before, residue: fs.readFileSync(file) };
+}
+
+test("first admission preserves npm install classification drift and launches without operator cleanup", async t => {
+  const f = fixture(t, [task("a")]);
+  const lock = installLockDrift(f), head = git(f.dir, "rev-parse", "HEAD");
+  const stateBefore = fs.readFileSync(path.join(f.dir, ".pi/harness/state/parent/gate-state.json"));
+  const result = await executeTaskAction({ action: "dispatch", task_ids: ["a"] }, f.context, f.deps);
+  assert.equal(result.ok, true, result.reason);
+  assert.equal(result.tasks[0].status, "running");
+  assert.equal(git(f.dir, "rev-parse", "HEAD"), head, "recovery must not create a commit");
+  assert.deepEqual(fs.readFileSync(lock.file), lock.before);
+  const recovery = result.worktree_recovery;
+  assert.equal(recovery.path, "package-lock.json");
+  assert.equal(recovery.kind, "npm-install-classification");
+  assert.deepEqual(fs.readFileSync(recovery.preserved_path), lock.residue);
+  assert.equal(fs.statSync(recovery.preserved_path).mode & 0o777, 0o600);
+  assert.deepEqual(f.registry().worktree_recovery, recovery);
+  assert.deepEqual(fs.readFileSync(path.join(f.dir, ".pi/harness/state/parent/gate-state.json")), stateBefore);
+  const child = f.registry().tasks.a.worktree;
+  assert.deepEqual(fs.readFileSync(path.join(child, "package-lock.json")), lock.before, "task sees approved committed dependencies");
+  const repeat = await executeTaskAction({ action: "dispatch", task_ids: ["a"] }, f.context, f.deps);
+  assert.equal(repeat.ok, true); assert.equal(f.launches(), 1);
+  assert.deepEqual(fs.readFileSync(recovery.preserved_path), lock.residue);
+});
+
+test("install recovery refuses dependency changes, staged intent, owned locks and unrelated edits", async t => {
+  for (const variant of ["version", "integrity", "manifest", "root", "staged", "scope", "lock-test", "other", "symlink", "invalid-json", "reverse", "new-package", "deleted", "mode", "script"]) {
+    const f = fixture(t, [task("a")]), lock = installLockDrift(f);
+    if (variant === "version") lock.changed.packages["node_modules/tool"].version = "2.0.0";
+    if (variant === "integrity") lock.changed.packages["node_modules/tool"].integrity = "sha512-other";
+    if (variant === "script") lock.changed.packages["node_modules/tool"].hasInstallScript = true;
+    if (variant === "root") lock.changed.packages[""].devDependencies.tool = "2.0.0";
+    if (variant === "new-package") lock.changed.packages["node_modules/new"] = { version: "1" };
+    if (variant === "reverse") { delete lock.changed.packages["node_modules/tool"].dev; lock.changed.packages["node_modules/tool"].devOptional = true; delete lock.changed.packages["node_modules/tool-linux"].dev; lock.changed.packages["node_modules/tool-linux"].devOptional = true; }
+    fs.writeFileSync(lock.file, JSON.stringify(lock.changed, null, 2) + "\n");
+    if (variant === "staged") git(f.dir, "add", "--", "package-lock.json");
+    if (variant === "manifest") fs.writeFileSync(path.join(f.dir, "package.json"), '{"changed":true}');
+    if (variant === "other") fs.writeFileSync(path.join(f.dir, "notes.txt"), "operator work");
+    if (["scope", "lock-test"].includes(variant)) {
+      if (variant === "scope") f.plan.tasks[0].scope_paths.push("package-lock.json");
+      else f.plan.tasks[0].locked_tests[0].fixture_paths = ["package-lock.json"];
+      const planPath=path.join(f.dir,".pi/harness/plans/feature/execution-plan.json");write(planPath,f.plan);
+      f.state.plan_review_evidence.plan_sha256=hashTaskArtifact(planPath);write(path.join(f.dir,".pi/harness/state/parent/gate-state.json"),f.state);
+    }
+    if (variant === "symlink") { fs.renameSync(lock.file, path.join(f.dir,"outside-lock")); fs.symlinkSync("outside-lock",lock.file); }
+    if (variant === "invalid-json") fs.writeFileSync(lock.file, "{broken");
+    if (variant === "deleted") fs.unlinkSync(lock.file);
+    if (variant === "mode") fs.chmodSync(lock.file, 0o755);
+    const before = fs.existsSync(lock.file) ? fs.readFileSync(lock.file) : null, index = git(f.dir,"diff","--cached","--binary"), head=git(f.dir,"rev-parse","HEAD");
+    const result=await executeTaskAction({action:"dispatch",task_ids:["a"]},f.context,f.deps);
+    assert.equal(result.ok,false,variant);assert.match(result.reason,/clean before task admission/,variant);
+    assert.deepEqual(fs.existsSync(lock.file) ? fs.readFileSync(lock.file) : null,before,variant);assert.equal(git(f.dir,"diff","--cached","--binary"),index,variant);
+    assert.equal(git(f.dir,"rev-parse","HEAD"),head,variant);assert.equal(f.launches(),0,variant);
+  }
+});
+
+test("install drift after task admission remains a blocker and is never auto-restored", async t => {
+  const f=fixture(t,[task("a"),task("b")]);
+  const lock=installLockDrift(f);fs.writeFileSync(lock.file,lock.before);
+  assert.equal((await executeTaskAction({action:"dispatch",task_ids:["a"]},f.context,f.deps)).ok,true);
+  fs.writeFileSync(lock.file,lock.residue);
+  const result=await executeTaskAction({action:"dispatch",task_ids:["b"]},f.context,f.deps);
+  assert.equal(result.ok,false);assert.match(result.reason,/clean before task admission/);
+  assert.deepEqual(fs.readFileSync(lock.file),lock.residue);assert.equal(f.launches(),1);
+});
+
+test("install preservation must be durable before restoring any worktree bytes", async t => {
+  const f=fixture(t,[task("a")]), lock=installLockDrift(f), originalOpen=fs.openSync;
+  t.mock.method(fs,"openSync",function(file,...args){
+    if(String(file).includes("install-residue-") && String(file).endsWith("package-lock.json")) throw new Error("backup storage unavailable");
+    return originalOpen.call(this,file,...args);
+  });
+  const result=await executeTaskAction({action:"dispatch",task_ids:["a"]},f.context,f.deps);
+  assert.equal(result.ok,false);assert.match(result.reason,/backup storage unavailable/);
+  assert.deepEqual(fs.readFileSync(lock.file),lock.residue);assert.equal(f.launches(),0);
+});
+
+test("install residue changed during backup is preserved and not overwritten", async t => {
+  const f=fixture(t,[task("a")]), lock=installLockDrift(f), originalWrite=fs.writeFileSync;
+  const changed=Buffer.concat([lock.residue,Buffer.from("\n")]);
+  t.mock.method(fs,"writeFileSync",function(file,...args){
+    const result=originalWrite.call(this,file,...args);
+    if(typeof file==='number') originalWrite(lock.file,changed);
+    return result;
+  });
+  const result=await executeTaskAction({action:"dispatch",task_ids:["a"]},f.context,f.deps);
+  assert.equal(result.ok,false);assert.match(result.reason,/changed during preservation/);
+  assert.deepEqual(fs.readFileSync(lock.file),changed);assert.equal(f.launches(),0);
+});

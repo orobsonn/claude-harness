@@ -1,5 +1,6 @@
 /** Host coordination only: admission, durable task handles and exact integration. */
 import fs from "node:fs";
+import { isDeepStrictEqual } from "node:util";
 import { providerTaskTimeoutMs } from "./provider-control-config.mjs";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
@@ -32,7 +33,7 @@ import {
   taskRegistryPath,
 } from "./task-contract.mjs";
 import { taskScopeOf, taskScopesOverlap } from "../../shared/lib/task-contract.mjs";
-import { requireCleanTaskWorktree } from "../../shared/lib/task-git.mjs";
+import { pendingTaskChanges, requireCleanTaskWorktree } from "../../shared/lib/task-git.mjs";
 import {
   captureTaskRuntime,
   verifyTaskRuntime,
@@ -73,6 +74,77 @@ const volatile = (name) =>
   /^\.pi\/\.harness-version-check-cache(?:\.tmp)?$/.test(name);
 function requireClean(root, label = "parent") {
   requireCleanTaskWorktree(root, volatile, label);
+}
+// An install hook can rewrite npm's classification flags before the first task.
+// Relocate only that narrow, unstaged residue; retain its exact bytes durably.
+// Versions, dependency edges, the index, task-owned locks and admitted work are
+// never repaired here. This neither creates a commit nor grants review authority.
+function preserveInstallClassification(owner, registry, plan, registryPath) {
+  if (Object.keys(registry.tasks).length || registry.worktree_recovery) return null;
+  const root = owner.root, file = "package-lock.json", absolute = path.join(root, file);
+  const pending = pendingTaskChanges(root, volatile);
+  if (pending.length !== 1 || pending[0] !== file ||
+      git(root, "diff", "--cached", "--name-only", "--") ||
+      plan.tasks.some(task => checkScope([file], scopeOf(task)).length === 0)) return null;
+  let stat;
+  try { stat = fs.lstatSync(absolute); } catch { return null; }
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || (stat.mode & 0o111) || stat.size > 8 * 1024 * 1024) return null;
+  if (!/^100644 [a-f0-9]{40} 0\tpackage-lock\.json$/.test(git(root, "ls-files", "--stage", "--", file))) return null;
+  const head = git(root, "rev-parse", "HEAD"), bytes = fs.readFileSync(absolute);
+  const baseline = execFileSync("git", ["show", `${head}:${file}`], { cwd: root, maxBuffer: 8 * 1024 * 1024 });
+  let before, after;
+  try { before = JSON.parse(baseline); after = JSON.parse(bytes); } catch { return null; }
+  if (!before || !after || before.lockfileVersion !== 3 || after.lockfileVersion !== 3 ||
+      !before.packages || !after.packages || Array.isArray(before.packages) || Array.isArray(after.packages)) return null;
+  const packageNames = Object.keys(before.packages);
+  if (!isDeepStrictEqual(packageNames.sort(), Object.keys(after.packages).sort())) return null;
+  let changed = 0;
+  for (const name of packageNames) {
+    const original = before.packages[name], current = after.packages[name];
+    if (isDeepStrictEqual(original, current)) continue;
+    if (!name.startsWith("node_modules/") || !original || !current ||
+        typeof original !== "object" || typeof current !== "object" ||
+        Array.isArray(original) || Array.isArray(current) || current.dev !== true ||
+        original.dev !== undefined || current.devOptional !== undefined ||
+        (original.devOptional !== true && original.optional !== true)) return null;
+    const { devOptional: oldClass, ...originalContent } = original;
+    const { dev: newClass, ...currentContent } = current;
+    if (!isDeepStrictEqual(originalContent, currentContent)) return null;
+    changed++;
+  }
+  const { packages: oldPackages, ...oldRoot } = before;
+  const { packages: newPackages, ...newRoot } = after;
+  if (!changed || !isDeepStrictEqual(oldRoot, newRoot)) return null;
+  const parent = path.dirname(registryPath);
+  if (fs.realpathSync(parent) !== parent) throw new Error("install residue directory is indirect");
+  const saved = fs.mkdtempSync(path.join(parent, "install-residue-"));
+  const preservedPath = path.join(saved, file);
+  const preservedFd = fs.openSync(preservedPath, "wx", 0o600);
+  try { fs.writeFileSync(preservedFd, bytes); fs.fsyncSync(preservedFd); }
+  finally { fs.closeSync(preservedFd); }
+  const recovery = { kind: "npm-install-classification", path: file, head_sha: head,
+    preserved_path: preservedPath, preserved_sha256: hash(bytes), baseline_sha256: hash(baseline),
+    changed_packages: changed, status: "preserved" };
+  writeTaskJson(path.join(saved, "recovery.json"), recovery);
+  const savedDir = fs.openSync(saved, "r");
+  try { fs.fsyncSync(savedDir); } finally { fs.closeSync(savedDir); }
+  // Recheck the exact input after the durable backup, before touching the file.
+  // Keep recovery independent of ceremony state and never stage the residue.
+  const fd = fs.openSync(absolute, fs.constants.O_RDWR | fs.constants.O_NOFOLLOW);
+  try {
+    const current = fs.fstatSync(fd);
+    if (current.ino !== stat.ino || current.dev !== stat.dev || current.size !== bytes.length ||
+        !fs.readFileSync(fd).equals(bytes) || git(root, "rev-parse", "HEAD") !== head ||
+        git(root, "diff", "--cached", "--name-only", "--") ||
+        !isDeepStrictEqual(pendingTaskChanges(root, volatile), pending))
+      throw new Error(`install residue changed during preservation; original backup: ${preservedPath}`);
+    fs.writeSync(fd, baseline, 0, baseline.length, 0);
+    fs.ftruncateSync(fd, baseline.length);
+    fs.fsyncSync(fd);
+  } finally { fs.closeSync(fd); }
+  if (!fs.readFileSync(absolute).equals(baseline))
+    throw new Error(`install residue restoration failed; original backup: ${preservedPath}`);
+  return recovery;
 }
 const scopeOf = taskScopeOf;
 export { taskScopesOverlap };
@@ -1013,6 +1085,8 @@ export async function executeTaskAction(params, context = {}, injected = {}) {
           ok: true,
           tasks: requested.map((task) => summary(registry.tasks[task.id])),
         };
+      const recovery = preserveInstallClassification(owner, registry, artifacts.plan, registryPath);
+      if (recovery) { registry.worktree_recovery = recovery; persist(); }
       requireClean(owner.root);
       const base = git(owner.root, "rev-parse", "HEAD");
       registry.runtime_base_sha ??= base;
@@ -1134,6 +1208,7 @@ export async function executeTaskAction(params, context = {}, injected = {}) {
       return {
         ok: true,
         tasks: requested.map((task) => summary(registry.tasks[task.id])),
+        ...(registry.worktree_recovery ? { worktree_recovery: registry.worktree_recovery } : {}),
       };
     }
     const entry = registry.tasks[params.task_id];
