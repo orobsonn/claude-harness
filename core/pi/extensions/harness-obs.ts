@@ -113,6 +113,8 @@ export default function harnessObs(pi: ExtensionAPI, injected: any = {}) {
           producerCallId: typeof event?.toolCallId === "string" ? event.toolCallId : "",
           outputText,
           background: dispatch.run_in_background === true,
+          nativeResult: event?.result,
+          isError: event?.isError,
         });
         observePiEyeVerdict({
           projectRoot,
