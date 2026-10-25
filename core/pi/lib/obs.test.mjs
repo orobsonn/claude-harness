@@ -311,6 +311,7 @@ test("observePiHandCompletion exige mão escritora, taskId, callId e feature", a
     assert.equal(observePiHandCompletion({ ...base, taskId: "" }, deps), null);
     assert.equal(observePiHandCompletion({ ...base, producerCallId: "" }, deps), null);
     assert.equal(observePiHandCompletion({ ...base, sessionId: "sem-gate-state" }, deps), null);
+    assert.equal(observePiHandCompletion({ ...base, isError: true }, deps), null);
     assert.deepEqual(sink.events, []);
   });
 });

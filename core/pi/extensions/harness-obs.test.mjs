@@ -6,6 +6,7 @@
  * e o outbox real é exercitado por HARNESS_OBSERVABILITY_RUN_PATH.
  */
 import test from "node:test";
+import crypto from "node:crypto";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
@@ -170,4 +171,40 @@ test("tools não observadas e eventos malformados não emitem nada e nunca lanç
 test("o adaptador não tem dependência do OpenCode", () => {
   const source = fs.readFileSync(new URL("./harness-obs.ts", import.meta.url), "utf8");
   assert.equal(/opencode/i.test(source), false);
+});
+
+
+test("observation cannot erase a captured producer when the native writer refuses without tools", async () => {
+  await withFixture({}, async ({ root, ctx }) => {
+    const handDir = path.join(root, ".pi/harness/state/hand-records", FEATURE, SESSION);
+    const handPath = path.join(handDir, "t1.json");
+    fs.mkdirSync(handDir, { recursive: true });
+    const original = JSON.stringify({ featureId: FEATURE, taskId: "t1", sessionId: SESSION,
+      producerCallId: "captured-implementation", producerClaimedAt: "2026-10-20T00:00:00.000Z",
+      outcome: "DONE", agent: "harness-executor", writtenBy: "host-hand-finished",
+      capturedVerifiedAt: "2026-10-20T00:01:00.000Z", freezeCommitSha: "b".repeat(40),
+      touchedPaths: ["src/a.ts"], scopeViolations: [], frozenViolations: [] });
+    fs.writeFileSync(handPath, original);
+    const statePath = path.join(root, ".pi/harness/state", SESSION, "gate-state.json");
+    const gate = JSON.parse(fs.readFileSync(statePath));
+    gate.hand_finished = [`${FEATURE}/t1`];
+    gate.capture_verified = [`${FEATURE}/t1@${"b".repeat(40)}`];
+    fs.writeFileSync(statePath, JSON.stringify(gate));
+    const stateBefore = fs.readFileSync(statePath, "utf8");
+    const callId = "refused-sniper";
+    const dispatchDir = path.join(root, ".pi/harness/state", SESSION, "dispatch-records");
+    fs.mkdirSync(dispatchDir, { recursive: true });
+    fs.writeFileSync(path.join(dispatchDir, `${crypto.createHash("sha256").update(callId).digest("hex")}.json`),
+      JSON.stringify({ parent_session_id: SESSION, dispatch_call_id: callId, child_session_id: null,
+        feature_id: FEATURE, task_id: "t1", role: "harness-sniper", scope_paths: ["src"], allowed_writes: [],
+        frozen_paths: [], plan_hash: "a".repeat(64), claimed_at: "2026-10-25T00:00:00.000Z", worktree_baseline: null }));
+    const h = captureHandlers();
+    h.tool_execution_start({ toolCallId: callId, toolName: "subagent",
+      args: { subagent_type: "harness-sniper", prompt: MARKER } }, ctx);
+    h.tool_execution_end({ toolCallId: callId, toolName: "subagent", isError: false,
+      result: { details: { status: "completed", subagentType: "harness-sniper", toolUses: 0 },
+        content: [{ type: "text", text: "Status: BLOCKED" }] } }, ctx);
+    assert.equal(fs.readFileSync(handPath, "utf8"), original);
+    assert.equal(fs.readFileSync(statePath, "utf8"), stateBefore);
+  });
 });

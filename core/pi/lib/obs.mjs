@@ -256,7 +256,7 @@ export function observePiTaskExecuting(input, deps = {}) {
  * Devolve o evento (ou null). Nunca lança.
  * @param {{ projectRoot: string, sessionId: string, role: unknown, taskId?: string,
  *   featureId?: string|null, model?: string, producerCallId?: string, outputText?: string,
- *   background?: boolean }} input
+ *   background?: boolean, nativeResult?: object, isError?: boolean }} input
  * @param {{ obsAppend?: typeof obsAppend, recordCompletion?: typeof recordPiTaskCompletion,
  *   existsSync?: typeof fsExistsSync, readFileSync?: typeof fsReadFileSync }} [deps]
  * @returns {object|null}
@@ -265,7 +265,7 @@ export function observePiHandCompletion(input, deps = {}) {
   try {
     const { projectRoot, sessionId, role, taskId, producerCallId } = input ?? {};
     const ocRole = toOcRole(role);
-    if (!isHandRole(ocRole) || !isPiWritingHand(role)) return null;
+    if (!isHandRole(ocRole) || !isPiWritingHand(role) || input?.isError === true) return null;
     if (typeof sessionId !== "string" || !sessionId) return null;
     if (typeof producerCallId !== "string" || !producerCallId) return null;
     if (typeof taskId !== "string" || !taskId) return null;
@@ -284,6 +284,8 @@ export function observePiHandCompletion(input, deps = {}) {
       producerCallId,
       outputText: String(input?.outputText ?? ""),
       background: input?.background === true,
+      nativeResult: input?.nativeResult,
+      isError: input?.isError,
     });
     if (!completion || completion.terminal === false) return null;
     const model = typeof input?.model === "string" && input.model ? input.model : ocRole;
