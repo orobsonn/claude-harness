@@ -696,3 +696,11 @@ aplicáveis dos olhos do mesmo HEAD numa correção coerente. Uma barreira de co
 indicada por `final-review` aponta a task dona; não implica defeito na primeira
 task do plano. Use a recuperação exata já existente somente se suas verificações
 host-owned permitirem, sem forçar aprovação ou descartar evidência.
+
+Quando `harness_tasks dispatch` retornar `worktree_recovery`, o host preservou
+um resíduo restrito de classificação npm antes da primeira admissão. Informe o
+caminho do backup sem expor seu conteúdo e continue a task retornada; isso não é
+bloqueio humano, mudança de escopo, aprovação de produto ou autorização para
+incluir o resíduo no PR. Não use `git restore` genérico para imitar a recuperação.
+Mudanças reais de dependências, arquivos staged e resíduos fora desse contrato
+continuam exigindo diagnóstico e preservação das alterações existentes.

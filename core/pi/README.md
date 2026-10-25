@@ -636,3 +636,19 @@ O freeze posterior à revisão continua prioritário para preservar amendments;
 commits anteriores ao autor, órfãos, mistos ou com blobs congelados divergentes
 continuam inválidos. A inspeção também reconhece a identidade host-owned de
 commits silenciosos, como a autoridade do marker já fazia.
+
+Antes da primeira task, `harness_tasks dispatch` recupera um caso restrito de
+setup npm: `package-lock.json` v3 com alterações somente nas flags
+`dev/devOptional`, sem versões, integridades, dependências ou scripts alterados.
+O arquivo precisa estar unstaged, ser o único resíduo e não pertencer ao escopo,
+aos testes ou às fixtures de nenhuma task aprovada. O host preserva os bytes
+originais em um diretório privado `task-runs/install-residue-*`, registra hashes
+e o HEAD em `recovery.json` e retorna `worktree_recovery` antes de usar o
+lockfile commitado. Não cria commit nem altera aprovações. O backup fica fora do
+PR e pode ser reaplicado separadamente após inspeção; nunca deve ser aplicado
+sobre trabalho novo sem conferir o diff. Falha de backup mantém o resíduo intacto.
+
+Essa recuperação não se aplica a trabalho staged, dependências alteradas, outros
+arquivos pendentes ou alterações posteriores à admissão. Esses casos mantêm o
+gate de worktree limpa. Em setups com lockfile npm, prefira `npm ci` para instalar
+as versões fixadas sem reescrever o lockfile.
