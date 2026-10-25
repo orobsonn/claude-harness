@@ -860,3 +860,37 @@ test("task tools prevent detached HEAD before losing the binding, preserving pat
   assert.equal(readTaskRunBinding(f.root, "task-parent").ok, false,
     "external identity changes still fail closed; no recovery bypass");
 });
+
+test("canonical binary fixture directories freeze recursively without changing the admitted plan", t => {
+  for (const mutation of [null, "binary", "add", "delete", "symlink"]) {
+    const f=fixture(t), plan=JSON.parse(fs.readFileSync(f.planPath));
+    plan.tasks[0].locked_tests[0].fixture_paths=["test/media"];
+    fs.writeFileSync(f.planPath,JSON.stringify(plan));f.grant.plan_sha256=hashTaskArtifact(f.planPath);f.save();
+    const parentState=path.join(f.root,".pi/harness/state/global-parent/gate-state.json");
+    const state=JSON.parse(fs.readFileSync(parentState));state.plan_review_evidence.plan_sha256=f.grant.plan_sha256;fs.writeFileSync(parentState,JSON.stringify(state));
+    const admitted=admitTaskRun(f.grantPath,{cwd:f.root,sessionId:`directory-${crypto.randomUUID()}`});assert.equal(admitted.ok,true,admitted.reason);
+    const entries=[],prompt='[HARNESS_TASK_CONTEXT]{"task_id":"task-one"}[/HARNESS_TASK_CONTEXT]';
+    const done=(id,name,args,text="",details={status:"completed"})=>{
+      entries.push({type:"message",message:{role:"assistant",content:[{type:"toolCall",id,name,arguments:args}]}});
+      entries.push({type:"message",message:{role:"toolResult",toolCallId:id,toolName:name,isError:false,details,content:[{type:"text",text}]}});
+    };
+    done("author","subagent",{subagent_type:"harness-test-author",prompt});
+    done("review","subagent",{subagent_type:"harness-test-reviewer",prompt},"Verdict: APPROVE");
+    fs.mkdirSync(path.join(f.root,"test/media/nested"),{recursive:true});
+    fs.writeFileSync(path.join(f.root,"test/task-one.test.ts"),"// real RED\n");
+    fs.writeFileSync(path.join(f.root,"test/media/nested/image.png"),Buffer.from([0,255,0,1]));
+    if(mutation==="symlink") fs.symlinkSync("image.png",path.join(f.root,"test/media/nested/link.png"));
+    f.git("add","--","test");f.git("-c","user.name=Harness","-c","user.email=harness@example.invalid","commit","-qm","freeze binary tests");
+    const freeze=f.git("rev-parse","HEAD");done("freeze","bash",{command:"git commit -m freeze"},`[task ${freeze}] freeze`,{});
+    if(mutation && mutation!=="symlink") {
+      if(mutation==="binary")fs.writeFileSync(path.join(f.root,"test/media/nested/image.png"),Buffer.from([0,255,0,2]));
+      if(mutation==="add")fs.writeFileSync(path.join(f.root,"test/media/new.pdf"),"other");
+      if(mutation==="delete")fs.unlinkSync(path.join(f.root,"test/media/nested/image.png"));
+      f.git("add","--","test");f.git("-c","user.name=Harness","-c","user.email=harness@example.invalid","commit","-qm","mutate fixture");
+    }
+    const result=validateTaskFidelityFreeze({projectRoot:f.root,sessionId:admitted.sessionId,taskId:"task-one",sessionEntries:entries});
+    assert.equal(result.ok,mutation===null,JSON.stringify({mutation,result}));
+    if(!mutation)assert.deepEqual(result.frozenPaths,["test/task-one.test.ts","test/media"]);
+    assert.equal(hashTaskArtifact(f.planPath),f.grant.plan_sha256,"freeze must not migrate or rewrite the plan");
+  }
+});

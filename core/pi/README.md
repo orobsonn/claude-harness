@@ -652,3 +652,15 @@ Essa recuperação não se aplica a trabalho staged, dependências alteradas, ou
 arquivos pendentes ou alterações posteriores à admissão. Esses casos mantêm o
 gate de worktree limpa. Em setups com lockfile npm, prefira `npm ci` para instalar
 as versões fixadas sem reescrever o lockfile.
+
+`locked_tests[].fixture_paths` pode declarar um arquivo ou uma pasta de fixtures.
+O freeze de uma pasta sela a árvore Git completa: nomes, modos e identidades de
+objetos dos arquivos e subpastas, incluindo binários. O host revalida esse mesmo
+manifesto na captura, reconciliação e integração. Usar apenas a listagem textual
+de `git show` não comprova os bytes dos filhos. Alterar, adicionar ou excluir um
+filho invalida a prova; symlinks, submodules e substituir a pasta por arquivo são
+recusados. `locked_tests[].path` continua exigindo arquivo regular.
+
+Uma tentativa admitida com pasta de fixtures pode retomar o freeze já revisado
+após atualizar o runtime, sem reescrever o plano, migrar o grant ou fabricar um
+novo commit de teste. Autor, reviewer, freeze e os demais gates continuam exigidos.

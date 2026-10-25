@@ -11,7 +11,7 @@ import { isCaptureEligibleHandRecord, recordViolations } from "../../shared/lib/
 import { isSafeFeatureId, isSafeSessionId, isSafeTaskId } from "../../shared/lib/feature-id.mjs";
 import { parseTestReviewVerdict } from "../../shared/lib/test-review-verdict.mjs";
 import { parseHandStatusFromOutput, validateOcCaptureEligibleHandRecord } from "../../opencode/lib/hand-records.mjs";
-import { hashTaskReceipt, taskRegistryPath, unsupportedTaskScopePattern } from "./task-contract.mjs";
+import { readTaskFrozenArtifact, taskFixtureTreeAllowed, hashTaskReceipt, taskRegistryPath, unsupportedTaskScopePattern } from "./task-contract.mjs";
 import { readTaskContextReturn, validateTaskContextReturn } from "./task-context.mjs";
 import { readTaskPlanAuthority, recoveredTaskContractHash } from "./task-plan-recovery.mjs";
 import { capturePiReviewInput, hasCurrentPiTaskReviewCompletion, currentPiReviewIssues, findPiReviewReceipt, isSatisfiedPiTaskReviewReceipt, readPiReviewPlan } from "./pi-review-evidence.mjs";
@@ -362,8 +362,10 @@ function validateLaunches(entry, jobRoot, readTaskProcessFn = readTaskProcess, a
   return { ok: true, lifecycles, interruptedIndexes };
 }
 
-function frozenBytesAfterReconciliation(root, freezeSha, head, file, reconciliations = []) {
-  let frozen = git(root, ["show", `${freezeSha}:${file}`], null);
+function frozenBytesAfterReconciliation(root, freezeSha, head, file, reconciliations = [], task) {
+  const read = revision => readTaskFrozenArtifact(root, revision, file, {
+    allowTree: taskFixtureTreeAllowed(task, file), reference: freezeSha });
+  let frozen = read(freezeSha);
   // taskScopeBase already verified these host-owned merges. An unchanged
   // child may inherit a frozen file from the parent without a cosmetic new
   // freeze commit. Keep the original fidelity chain; accept only exact
@@ -372,18 +374,18 @@ function frozenBytesAfterReconciliation(root, freezeSha, head, file, reconciliat
     if (ancestor(root, proof.merged_head, freezeSha)) continue;
     if (!ancestor(root, freezeSha, proof.pre_child_head))
       throw new Error(`frozen file has no ancestral fidelity before reconciliation: ${file}`);
-    const before = git(root, ["show", `${proof.pre_child_head}:${file}`], null);
-    const merged = git(root, ["show", `${proof.merged_head}:${file}`], null);
+    const before = read(proof.pre_child_head);
+    const merged = read(proof.merged_head);
     if (!Buffer.from(frozen).equals(Buffer.from(before)))
       throw new Error(`frozen file changed before host reconciliation: ${file}`);
     if (!Buffer.from(before).equals(Buffer.from(merged))) {
-      const parent = git(root, ["show", `${proof.parent_head}:${file}`], null);
-      if (proof.conflicts?.includes(file) || !Buffer.from(merged).equals(Buffer.from(parent)))
+      const parent = read(proof.parent_head);
+      if ((proof.conflicts ?? []).some(conflict => covered(conflict, [file])) || !Buffer.from(merged).equals(Buffer.from(parent)))
         throw new Error(`frozen file changed outside parent import: ${file}`);
     }
     frozen = merged;
   }
-  const current = git(root, ["show", `${head}:${file}`], null);
+  const current = read(head);
   if (!Buffer.from(frozen).equals(Buffer.from(current))) throw new Error(`frozen file changed after fidelity: ${file}`);
   return current;
 }
@@ -434,11 +436,11 @@ function validateFidelity({ events, task, taskId, worktree, head, reviewRole, re
   const commitIndex = events.indexOf(commitEvent);
   const markerIndex = events.findIndex((event, index) => index > Math.max(commitIndex, reviewIndex) && fidelityMarkers.includes(event));
   const changed = String(git(worktree, ["diff-tree", "--no-renames", "--no-commit-id", "--name-only", "-r", commitSha])).trim().split("\n").filter(Boolean);
-  if (changed.length === 0 || changed.some((item) => !paths.includes(item))) return failure("fidelity freeze commit must change only canonical frozen files");
+  if (changed.length === 0 || changed.some((item) => !covered(item, paths))) return failure("fidelity freeze commit must change only canonical frozen files");
   const blobs = {};
   for (const file of paths) {
     try {
-      const current = frozenBytesAfterReconciliation(worktree, commitSha, head, file, reconciliations);
+      const current = frozenBytesAfterReconciliation(worktree, commitSha, head, file, reconciliations, task);
       blobs[file] = crypto.createHash("sha256").update(current).digest("hex");
     } catch (error) { return failure(error.message.startsWith("frozen file ") ? error.message : `canonical frozen file is absent from the fidelity chain: ${file}`); }
   }
@@ -447,7 +449,7 @@ function validateFidelity({ events, task, taskId, worktree, head, reviewRole, re
 
 function onlyFrozenChanges(root, baseline, head, paths) {
   return ancestor(root, baseline, head) && splitZero(git(root, ["diff", "--no-renames", "--name-only", "-z", baseline, head, "--"]))
-    .every((file) => paths.includes(file));
+    .every((file) => covered(file, paths));
 }
 
 function onlyRecoveryChanges(entry, root, baseline, head, task, plan, replayHand = null) {
@@ -892,7 +894,7 @@ export function inspectTaskRun(entry, dependencies = {}) {
             commitFromEvent(event, worktree) === hand.freezeCommitSha);
           if (!checkpoint || !ancestor(worktree, hand.freezeCommitSha, head)) continue;
           const productPaths = splitZero(git(worktree, ["diff", "--no-renames", "--name-only", "-z", `${hand.freezeCommitSha}^`, hand.freezeCommitSha]));
-          if (!productPaths.length || productPaths.some((file) => !covered(file, scopes) || frozenPaths(binding.task).includes(file))) continue;
+          if (!productPaths.length || productPaths.some((file) => !covered(file, scopes) || covered(file, frozenPaths(binding.task)))) continue;
           recoveryOrigin = { head_sha: hand.freezeCommitSha, producer_call_id: writer.callId,
             producer_launch_index: writer.launchIndex, derived_from: "pre-author-product-commit" };
         }
@@ -1169,11 +1171,11 @@ function validateIntegration(entry, integration, { projectRoot, sessionId, featu
   for (const [file, expected] of Object.entries(result.frozen_blobs)) {
     try {
       const digestAt = (revision) => crypto.createHash("sha256").update(
-        git(projectRoot, ["show", `${revision}:${file}`], null)).digest("hex");
+        readTaskFrozenArtifact(projectRoot, revision, file, { allowTree: taskFixtureTreeAllowed(canonicalTask, file), reference: result.freeze_sha })).digest("hex");
       const parentDigest = frozenParent?.blobs?.[file];
       if (parentDigest !== undefined &&
           (parentDigest === expected || crypto.createHash("sha256").update(
-            frozenBytesAfterReconciliation(projectRoot, result.freeze_sha, result.child_head, file, entry.reconciliations)).digest("hex") !== expected ||
+            frozenBytesAfterReconciliation(projectRoot, result.freeze_sha, result.child_head, file, entry.reconciliations, canonicalTask)).digest("hex") !== expected ||
             digestAt(result.child_head) !== expected || digestAt(frozenParent.head_sha) !== parentDigest ||
             digestAt(integration.integrated_head) !== parentDigest))
         return failure(`frozen parent reconciliation proof differs from Git: ${file}`);

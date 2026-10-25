@@ -346,3 +346,10 @@ descobertas verificadas, sua evidência e a condição de revalidação. Não us
 Retorne ao pai global os SHAs exatos de freeze/implementação/correção, IDs nativos de
 dispatch e captura, comandos e resultados, recibos dos olhos, resolução dos achados e
 qualquer bloqueio. Evidência local da tarefa não aprova o conjunto global.
+
+Uma pasta declarada em `locked_tests[].fixture_paths` é um conjunto congelado de
+fixtures: o host sela sua árvore Git recursivamente, inclusive bytes binários,
+nomes e modos. Não troque a pasta por uma lista no plano admitido para satisfazer
+o freeze; use o marker de fidelidade com o commit revisado existente. Isso não
+permite alterações posteriores nos filhos por executor/sniper, nem dispensa
+reviewer, captura ou reviews. Tests em `locked_tests[].path` são arquivos regulares.

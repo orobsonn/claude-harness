@@ -94,10 +94,15 @@ function appendImplementationReviews(f, roles = ["harness-adversary", "harness-c
   }
 }
 
-function inspectionFixture({ historicFailure = false, frozenFixture = false, extraTest = false } = {}) {
+function inspectionFixture({ historicFailure = false, frozenFixture = false, extraTest = false, frozenDirectory = false } = {}) {
   const { root, base } = repo();
   write(path.join(root, "src", "task.spec.mjs"), "export const expected = 1;\n");
   if (frozenFixture) write(path.join(root, "fixtures", "task.json"), '{"expected":1}\n');
+  if (frozenDirectory) {
+    fs.mkdirSync(path.join(root, "fixtures/media/nested"), { recursive: true });
+    fs.writeFileSync(path.join(root, "fixtures/media/image.png"), Buffer.from([0,255,13,10,0]));
+    fs.writeFileSync(path.join(root, "fixtures/media/nested/input.pdf"), Buffer.from([37,80,68,70,0]));
+  }
   const freeze = commit(root, "freeze tests");
   if (extraTest) write(path.join(root, "src", "extra.spec.mjs"), "export const expected = true;\n");
   write(path.join(root, "src", "task.mjs"), "export const actual = 1;\n");
@@ -174,7 +179,7 @@ function inspectionFixture({ historicFailure = false, frozenFixture = false, ext
       id: "lt-1",
       path: "src/task.spec.mjs",
       assertion: "expected behavior",
-      ...(frozenFixture ? { fixture_paths: ["fixtures/task.json"] } : {}),
+      ...(frozenDirectory ? { fixture_paths: ["fixtures/media"] } : frozenFixture ? { fixture_paths: ["fixtures/task.json"] } : {}),
     }],
   };
   const entry = {
@@ -3721,5 +3726,44 @@ test("a zero-tool BLOCKED implementation refusal cannot supersede a real capture
       assert.equal(inspected.ok, toolUses === 0, `${role} tools=${toolUses}: ${inspected.reason}`);
       if (inspected.ok) assert.equal(inspected.result.hand_capture.producer_call_id, "correct-author");
     }
+  }
+});
+
+test("inspection seals recursive binary fixture manifests and rejects byte or membership changes",()=>{
+  for(const mutation of [null,"binary","add","delete"]){
+    const f=inspectionFixture({frozenDirectory:true});appendImplementationReviews(f);
+    const initial=inspectTaskRun(f.entry,f.dependencies);assert.equal(initial.ok,true,initial.reason);
+    const tree=run(f.root,"git","rev-parse",`${f.freeze}:fixtures/media`);
+    const raw=execFileSync("git",["cat-file","tree",tree],{cwd:f.root});
+    assert.equal(initial.result.frozen_blobs["fixtures/media"],crypto.createHash("sha256").update(raw).digest("hex"));
+    if(!mutation)continue;
+    if(mutation==="binary")fs.writeFileSync(path.join(f.root,"fixtures/media/nested/input.pdf"),Buffer.from([37,80,68,70,1]));
+    if(mutation==="add")fs.writeFileSync(path.join(f.root,"fixtures/media/new.png"),Buffer.from([1,2,3]));
+    if(mutation==="delete")fs.unlinkSync(path.join(f.root,"fixtures/media/image.png"));
+    run(f.root,"git","add","--","fixtures");run(f.root,"git","commit","-m","unreviewed fixture mutation");
+    const result=inspectTaskRun(f.entry,f.dependencies);assert.equal(result.ok,false,mutation);assert.match(result.reason,/frozen file|fidelity chain/,mutation);
+  }
+});
+
+test("integrated fixture directories bind recursive contents, kind and membership",()=>{
+  for(const mutation of ["binary","add","delete","kind"]){
+    const plan={feature_id:FEATURE,mode:"full",tasks:[{id:TASK,locked_tests:[{id:"locked",path:"acceptance.test.mjs",fixture_paths:["fixtures/media"]}]}]};
+    const f=integratedFixture({plan});
+    write(path.join(f.root,"acceptance.test.mjs"),"oracle\n");write(path.join(f.root,"fixtures/media/nested/test.bin"),"binary\0content");
+    const head=commit(f.root,"frozen fixtures");const result=f.entry.result;
+    result.child_head=head;result.freeze_sha=head;result.changed_paths=run(f.root,"git","diff","--no-renames","--name-only",f.base,head).split("\n");
+    result.frozen_blobs={"acceptance.test.mjs":crypto.createHash("sha256").update("oracle\n").digest("hex"),"fixtures/media":crypto.createHash("sha256").update(execFileSync("git",["cat-file","tree",run(f.root,"git","rev-parse",`${head}:fixtures/media`)],{cwd:f.root})).digest("hex")};
+    result.hand_capture.freeze_sha=head;result.hand_capture.capture_marker=`${FEATURE}/${TASK}@${head}`;
+    f.integration.child_head=head;f.integration.integrated_head=head;f.integration.result_sha256=hashTaskReceipt(result);write(f.registryPath,f.registry);
+    const check=()=>readIntegratedTaskEvidence({projectRoot:f.root,sessionId:PARENT,featureId:FEATURE,taskId:TASK,headSha:run(f.root,"git","rev-parse","HEAD")});
+    assert.equal(check().ok,true,check().reason);
+    if(mutation==="binary")write(path.join(f.root,"fixtures/media/nested/test.bin"),"binary\0changed");
+    if(mutation==="add")write(path.join(f.root,"fixtures/media/new.bin"),"new");
+    if(mutation==="delete")fs.unlinkSync(path.join(f.root,"fixtures/media/nested/test.bin"));
+    if(mutation==="kind"){
+      const raw=execFileSync("git",["cat-file","tree",run(f.root,"git","rev-parse",`${head}:fixtures/media`)],{cwd:f.root});
+      fs.rmSync(path.join(f.root,"fixtures/media"),{recursive:true});fs.writeFileSync(path.join(f.root,"fixtures/media"),raw);
+    }
+    commit(f.root,"unreviewed change");assert.equal(check().ok,false,mutation);
   }
 });

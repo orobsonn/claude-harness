@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { checkScope } from "../../shared/lib/capture-oracle.mjs";
-import { hashTaskReceipt, taskRegistryPath } from "./task-contract.mjs";
+import { readTaskFrozenArtifact, taskFixtureTreeAllowed, hashTaskReceipt, taskRegistryPath } from "./task-contract.mjs";
 import { readTaskPlanAuthority } from "./task-plan-recovery.mjs";
 import { isSafeFeatureId, isSafeSessionId, isSafeTaskId } from "../../shared/lib/feature-id.mjs";
 
@@ -64,15 +64,14 @@ export function inheritedTaskFidelity({ entry, root, head, task, hand, sessionId
   const blobs = {};
   for (const file of frozen) {
     const before = git(root, "rev-parse", `${proof.pre_child_head}:${file}`);
-    const originalBytes = execFileSync("git", ["show", `${proof.pre_child_head}:${file}`], { cwd: root });
+    const options = { allowTree: taskFixtureTreeAllowed(task, file), reference: original.freeze_sha };
+    const originalBytes = readTaskFrozenArtifact(root, proof.pre_child_head, file, options);
     if (createHash("sha256").update(originalBytes).digest("hex") !== original.frozen_blobs[file])
       throw new Error("inherited fidelity original oracle differs from its archived receipt");
     const current = git(root, "rev-parse", `${head}:${file}`);
     if (current !== before && current !== git(root, "rev-parse", `${proof.parent_head}:${file}`))
       throw new Error("inherited fidelity requires exact parent oracle bytes");
-    if (!/^100[0-7]{3} blob /.test(git(root, "ls-tree", head, "--", file)))
-      throw new Error("inherited fidelity oracle must be a regular blob");
-    blobs[file] = createHash("sha256").update(execFileSync("git", ["show", `${head}:${file}`], { cwd: root })).digest("hex");
+    blobs[file] = createHash("sha256").update(readTaskFrozenArtifact(root, head, file, options)).digest("hex");
   }
   return { freezeSha: head, frozenPaths: frozen, frozenBlobs: blobs, originalFreezeSha: original.freeze_sha };
 }

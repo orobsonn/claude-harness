@@ -18,6 +18,7 @@ import { loadModelProfileFromEnv } from "./model-profile.mjs";
 import { readPiSpecApproval } from "./spec-approval.mjs";
 import { validateTaskContextHandoff } from "./task-context.mjs";
 import {
+  readTaskFrozenArtifact, taskFixtureTreeAllowed,
   TASK_PIPELINE_VERSION,
   TASK_RUN_ENV,
   hashTaskReceipt,
@@ -479,15 +480,14 @@ export function validateTaskFidelityFreeze({ projectRoot, sessionId, taskId, ses
     if (status) return fail("task worktree must be clean before fidelity");
     const changed = String(gitFn("diff-tree", "--no-renames", "--no-commit-id", "--name-only", "-r", "-z", freezeSha))
       .split("\0").filter(Boolean);
-    if (changed.length === 0 || changed.some((item) => !frozen.includes(item))) {
+    if (changed.length === 0 || checkScope(changed, frozen).length) {
       return fail("fidelity freeze commit must change only canonical locked tests and fixtures");
     }
     for (const file of frozen) {
       // Git object identities preserve binary fixtures and detect absent canonical files.
       if (gitFn("rev-parse", "--verify", `${freezeSha}:${file}`) !== gitFn("rev-parse", "--verify", `HEAD:${file}`))
         return fail(`frozen file changed after fidelity: ${file}`);
-      if (!/^100[0-7]{3} blob /.test(gitFn("ls-tree", freezeSha, "--", file)))
-        return fail(`canonical frozen file is not a regular blob: ${file}`);
+      readTaskFrozenArtifact(projectRoot, freezeSha, file, { allowTree: taskFixtureTreeAllowed(binding.task, file) });
     }
     return { ok: true, freezeSha, frozenPaths: frozen };
   } catch (error) {
@@ -558,7 +558,7 @@ export function validateTaskRepairCheckpoint({ root, task, baseSha, headSha }) {
     const frozen = (task.locked_tests ?? []).flatMap((test) => [test.path, ...(test.fixture_paths ?? [])]);
     const scopes = [...(task.scope_paths ?? []), ...(task.allowed_writes ?? [])];
     const paths = git(root, "diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--name-only", "-z", baseSha, headSha).split("\0").filter(Boolean);
-    if (!paths.length || paths.some((file) => frozen.includes(file)) || checkScope(paths, scopes).length) return { ok: false };
+    if (!paths.length || paths.some((file) => checkScope([file], frozen).length === 0) || checkScope(paths, scopes).length) return { ok: false };
     return { ok: true, head: headSha };
   } catch { return { ok: false }; }
 }
@@ -570,7 +570,7 @@ export function checkBlockedTaskRepairCheckpoint(binding, record) {
         record.sessionId !== binding.sessionId || (record.scopeViolations ?? []).length ||
         !["harness-executor", "harness-sniper"].includes(record.agent)) return { ok: false };
     const frozen = (binding.task.locked_tests ?? []).flatMap((test) => [test.path, ...(test.fixture_paths ?? [])]);
-    if ((record.frozenViolations ?? []).some((file) => !frozen.includes(file))) return { ok: false };
+    if ((record.frozenViolations ?? []).some((file) => checkScope([file], frozen).length !== 0)) return { ok: false };
     // Include the index and working tree. A restored commit with dirty tests is
     // not a restored baseline. Runtime state is excluded from product dirtiness.
     if (git(binding.root, "status", "--porcelain", "--untracked-files=all", "--", ".",
@@ -596,7 +596,7 @@ export function checkTaskRepairPreservation(binding, event) {
       ...git(root, "diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--name-only", "-z", "--cached", "HEAD", "--").split("\0"),
       ...git(root, "diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--name-only", "-z", "--").split("\0"),
       ...git(root, "ls-files", "--others", "--exclude-standard", "-z").split("\0"),
-    ].filter((file) => file && !frozen.includes(file) && checkScope([file], scopes).length === 0))];
+    ].filter((file) => file && checkScope([file], frozen).length !== 0 && checkScope([file], scopes).length === 0))];
     if (!dirty.length) return { ok: true };
     // Unstaging preserves worktree bytes. A literal, standalone cleanup of other
     // paths is also allowed; chains and broad resets cannot discard the task delta.
