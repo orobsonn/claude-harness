@@ -227,10 +227,20 @@ function installedTaskRuntime(entry) {
   // Adopt the actual host runtime, retaining every historical launch receipt;
   // source-development tasks without vendored provenance remain pinned.
   const external = relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative);
-  return external && entry.launches.some((launch) =>
+  if (!external) return false;
+  if (entry.launches.some((launch) =>
     typeof launch.runtime?.launcher_path === "string" &&
     [entry.parent_root, entry.worktree].some((root) =>
-      path.relative(root, launch.runtime.launcher_path) === ".pi/harness/bin/pi-harness.mjs"));
+      path.relative(root, launch.runtime.launcher_path) === ".pi/harness/bin/pi-harness.mjs"))) return true;
+  // A consumer may have started this task with an external recovery runtime.
+  // Prove its vendored origin at admission, never from mutable working files.
+  if (!/^[a-f0-9]{40}$/.test(entry.runtime_base_sha ?? "")) return false;
+  try {
+    return /^100(?:644|755) blob [a-f0-9]{40}\t\.pi\/harness\/bin\/pi-harness\.mjs$/.test(
+      git(entry.parent_root, "ls-tree", entry.runtime_base_sha, "--", ".pi/harness/bin/pi-harness.mjs"));
+  } catch {
+    return false;
+  }
 }
 function runtimeRecovery(entry, reason) {
   if (!installedTaskRuntime(entry) ||

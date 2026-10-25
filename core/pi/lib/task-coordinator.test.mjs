@@ -1837,6 +1837,34 @@ test("external host runtime recovers a vendored task after a base merge without 
   assert.equal(f.launches(), launches, "external recovery must capture valid current assets");
 });
 
+for (const committed of [false, true]) test(`external-born task adopts current host only with admitted consumer provenance: ${committed}`, async t => {
+  const f = fixture(t, [task("a")], { vendored: true });
+  if (committed) {
+    git(f.dir, "add", ".pi");
+    git(f.dir, "commit", "-qm", "admitted consumer runtime");
+  } else {
+    fs.appendFileSync(path.join(f.dir, ".git/info/exclude"), "\n.pi/\n");
+  }
+  const host = fileURLToPath(new URL("../bin/pi-harness.mjs", import.meta.url));
+  const old = { launcher_path: "/external/previous/core/pi/bin/pi-harness.mjs", sha256: "a".repeat(64) };
+  f.deps.resolveRuntime = () => ({ ok: true, launcherPath: old.launcher_path });
+  f.deps.captureRuntime = launcher => ({ ok: true, runtime: launcher === host
+    ? { launcher_path: host, sha256: "b".repeat(64) } : old });
+  f.deps.verifyRuntime = () => ({ ok: true });
+  const action = params => executeTaskAction(params, f.context, f.deps);
+  const dispatched = await action({ action: "dispatch", task_ids: ["a"] });
+  assert.equal(dispatched.ok, true, dispatched.reason);
+  const original = structuredClone(f.registry().tasks.a);
+  assert.deepEqual(original.runtime, old);
+  const resumed = await action({ action: "resume", task_id: "a", attempt_id: original.attempt_id });
+  assert.equal(resumed.ok, true, resumed.reason);
+  const updated = f.registry().tasks.a;
+  assert.equal(updated.runtime.launcher_path, committed ? host : old.launcher_path);
+  assert.deepEqual(updated.launches[0], original.launches[0]);
+  assert.deepEqual(updated.grant, original.grant);
+  assert.equal(updated.attempt_id, original.attempt_id);
+});
+
 test("source runtime drift remains blocked without consumer upgrade recovery", async t => {
   const f = fixture(t, [task("a")]);
   const action = params => executeTaskAction(params, f.context, f.deps);
