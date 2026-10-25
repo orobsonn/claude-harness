@@ -22,7 +22,7 @@ import {
 import { readPiSpecApproval } from "./spec-approval.mjs";
 import { capturePlanReviewInput } from "./task-run.mjs";
 import { captureTaskContext } from "./task-context.mjs";
-import { readTaskPlanAuthority } from "./task-plan-recovery.mjs";
+import { captureTaskAdmissionPlan, readTaskPlanAuthority } from "./task-plan-recovery.mjs";
 import { checkScope } from "../../shared/lib/capture-oracle.mjs";
 import { taskScopeBase, taskMergePreview } from "./task-reconciliation.mjs";
 import { resolveOrcaTaskBackend, isOrcaLocalHostMigration, taskWorktreeName } from "./task-orca.mjs";
@@ -1004,7 +1004,10 @@ export async function executeTaskAction(params, context = {}, injected = {}) {
       throw new Error(
         "canonical plan/spec changed after task admission; reconcile the plan before dispatch",
       );
+    let admissionPlanSnapshot;
     if (registry.plan_sha256 !== artifacts.plan_sha256) {
+      admissionPlanSnapshot = captureTaskAdmissionPlan({ projectRoot: owner.root, sessionId: owner.sessionId,
+        featureId: owner.featureId, planSha256: artifacts.plan_sha256, specSha256: artifacts.spec_sha256 });
       readTaskPlanAuthority({ projectRoot: owner.root, sessionId: owner.sessionId, featureId: owner.featureId,
         planSha256: registry.plan_sha256, specSha256: registry.spec_sha256 });
       // Preserve admission identities; only the current reviewed plan supplies dispatch scope.
@@ -1165,6 +1168,7 @@ export async function executeTaskAction(params, context = {}, injected = {}) {
         };
         registry.tasks[task.id] = {
           task_id: task.id,
+          ...(admissionPlanSnapshot ? { admission_plan_snapshot: admissionPlanSnapshot } : {}),
           attempt_id: attemptId,
           parent_session_id: owner.sessionId,
           parent_root: owner.root,
