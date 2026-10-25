@@ -336,6 +336,80 @@ test("Claude Code scope correction flows through planner review and the same Pi 
   assert.deepEqual(f.registry().tasks.b, b, "unaffected task and all its evidence are untouched");
 });
 
+test("reviewed future task changes become frozen only at that task's own admission", async (t) => {
+  const f = fixture(t);
+  const action = params => executeTaskAction(params, f.context, f.deps);
+  assert.equal((await action({ action: "dispatch", task_ids: ["a"] })).ok, true);
+  const a = f.registry().tasks.a;
+  assert.equal(admitTaskRun(a.grant_path, { cwd: a.worktree, sessionId: "local-a" }).ok, true);
+  const originalGrant = fs.readFileSync(a.grant_path, "utf8");
+  const identity = { projectRoot: f.dir, sessionId: "parent", featureId: "feature" };
+  preserveTaskPlanForPlanner(identity, f.deps);
+  const corrected = structuredClone(f.plan);
+  corrected.tasks[1].description = "Expose opening, status and import as three direct tools";
+  corrected.tasks[1].locked_tests[0].assertion = "Given the complete journey When listed Then exactly 61 tools exist";
+  corrected.tasks[1].resolved_judgments = { fallback: "Opening and status work without FileParams" };
+  const planPath = path.join(f.dir, ".pi/harness/plans/feature/execution-plan.json");
+  const approve = (plan, call) => {
+    write(planPath, plan);
+    write(path.join(f.dir, ".pi/harness/state/parent/gate-state.json"), { ...f.state,
+      plan_review_evidence: { ...f.state.plan_review_evidence, dispatch_call_id: call,
+        plan_sha256: hashTaskArtifact(planPath) } });
+  };
+  write(planPath, corrected);
+  assert.equal((await action({ action: "dispatch", task_ids: ["b"] })).ok, false,
+    "future revisions still require current native approval");
+  approve(corrected, "future-plan-review");
+  const launched = await action({ action: "dispatch", task_ids: ["b"] });
+  assert.equal(launched.ok, true, launched.reason);
+  const b = f.registry().tasks.b;
+  assert.equal(fs.readFileSync(a.grant_path, "utf8"), originalGrant);
+  assert.equal(readTaskRunBinding(a.worktree, "local-a").ok, true);
+  const admitted = admitTaskRun(b.grant_path, { cwd: b.worktree, sessionId: "local-b" });
+  assert.equal(admitted.ok, true, admitted.reason);
+  assert.deepEqual(readTaskRunBinding(b.worktree, "local-b").task, corrected.tasks[1]);
+  const later = structuredClone(corrected);
+  later.tasks[2].description = "A later reviewed obligation for another unadmitted task";
+  later.tasks[2].locked_tests[0].assertion = "Given the later journey When invoked Then the approved result exists";
+  approve(later, "next-future-task-review");
+  assert.equal(readTaskRunBinding(a.worktree, "local-a").ok, true);
+  assert.equal(readTaskRunBinding(b.worktree, "local-b").ok, true,
+    "a verified admission plan remains usable when only another future task changes");
+  const forbidden = structuredClone(corrected);
+  forbidden.tasks[1].locked_tests[0].assertion = "Given less When less Then less";
+  approve(forbidden, "cannot-rewrite-admitted-b");
+  assert.equal(readTaskRunBinding(b.worktree, "local-b").ok, false,
+    "the revised contract is frozen after admission, not compared to the obsolete feature plan");
+  approve(corrected, "restore-reviewed-b");
+  assert.equal(readTaskRunBinding(b.worktree, "local-b").ok, true);
+  approve(f.plan, "plan-call");
+  assert.equal(readTaskRunBinding(b.worktree, "local-b").ok, false,
+    "reapproving the feature's original bytes cannot reset a later task's frozen contract");
+  approve(corrected, "restore-again");
+  const registry = f.registry();
+  registry.tasks.b.admission_plan_snapshot.text += " ";
+  write(taskRegistryPath(f.dir, "parent"), registry);
+  assert.equal(readTaskRunBinding(b.worktree, "local-b").ok, false,
+    "admission snapshots must remain bound to their native approval hash");
+});
+
+test("future task revision preserves IDs, order, dependencies, commands and proof paths", t => {
+  const f = fixture(t);
+  const admitted = new Map([["a", f.plan.tasks[0]]]);
+  for (const mutate of [
+    p => p.tasks.reverse(),
+    p => { p.tasks[1].depends_on = ["a"]; },
+    p => { p.tasks[1].verification_commands = ["changed"]; },
+    p => { p.tasks[1].locked_tests[0].path = "tests/replacement.mjs"; },
+    p => { p.tasks[0].description = "change an admitted obligation"; },
+    p => { p.tasks[0].locked_tests[0].assertion = "weaken an admitted proof"; },
+  ]) {
+    const plan = structuredClone(f.plan);
+    mutate(plan);
+    assert.throws(() => validateTaskScopeRecovery(f.plan, plan, admitted));
+  }
+});
+
 test("reviewed recovery may append judgment prose but preserves every admitted decision and audit marker", (t) => {
   const f = fixture(t);
   const before = structuredClone(f.plan);

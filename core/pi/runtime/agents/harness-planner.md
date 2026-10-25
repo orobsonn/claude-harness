@@ -15,6 +15,14 @@ append only the minimum new `locked_tests`, with each focal command in its
 `locked_test.command`; never rewrite, reorder, or remove admitted entries. Preserve
 every other field, task ID and dependency; the parent reviews that correction and
 resumes the same task.
+Admission is per task, not per feature: a task absent from the host task registry
+has no frozen execution contract yet. With the operator's authorized scope and a
+fresh native plan review, revise only that future task's description, judgment
+prose and existing locked-test assertions when they contradict the approved
+journey. Preserve task IDs/order/dependencies, commands, proof IDs/paths and
+existing scope ownership. Do not apply this exception to preparing, running,
+blocked, completed or integrated tasks. The host records the reviewed plan at
+their first admission; subsequent corrections retain the append-only rule.
 For an existing plan, read the affected entries and prefer a bounded `edit` with
 an exact preimage instead of retransmitting the entire JSON. Use `write` for a new
 plan or a necessary full replacement. Both tools have the same canonical-plan-only
@@ -192,7 +200,7 @@ Keep low/medium work cohesive. Scorer absence/error does not prevent planning.
    `no_tests` or a cosmetic assertion. Do not lock a source analyzer, helper
    layout or exhaustive scenario matrix unless the approved requirement needs
    that specific evidence; a chosen test technique must not become an extra
-   product requirement. For admitted plans, preserve the frozen ownership and
+   product requirement. For admitted tasks, preserve the frozen ownership and
    append-only correction rule above.
    For a critical decision, state the smallest distinguishing allowed and forbidden
    outcome. For example, a valid concurrent winner is not a failed claim, exact

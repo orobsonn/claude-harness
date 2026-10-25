@@ -42,32 +42,76 @@ function preservesJudgments(before, after) {
 }
 
 /** Scope, corrective proof and reviewed clarifications can grow; admitted evidence stays intact. */
-export function validateTaskScopeRecovery(before, after) {
+export function validateTaskScopeRecovery(before, after, admittedTasks) {
   const valid = validatePlan(after, { expect: "full", expectedModelStrategy: before.model_strategy });
   if (!valid.ok) throw new Error(`invalid corrected plan: ${valid.errors.join("; ")}`);
   const withoutTasks = ({ tasks, ...rest }) => rest;
   if (stableTaskJson(withoutTasks(before)) !== stableTaskJson(withoutTasks(after)) || before.tasks.length !== after.tasks.length)
     throw new Error("scope recovery must preserve the approved feature contract and task set");
+  if (stableTaskJson(before.tasks.map(task => task.id)) !== stableTaskJson(after.tasks.map(task => task.id)))
+    throw new Error("scope recovery must preserve task order and IDs");
   const changed = [];
-  for (const previous of before.tasks) {
-    const current = after.tasks.find((task) => task.id === previous.id);
+  for (const original of before.tasks) {
+    const admitted = admittedTasks === undefined || admittedTasks.has(original.id);
+    const previous = admittedTasks?.get(original.id) ?? original;
+    const current = after.tasks.find((task) => task.id === original.id);
     if (!current) throw new Error("scope recovery must preserve task IDs");
     const contract = ({ scope_paths, allowed_writes, locked_tests, resolved_judgments,
       resolved_judgments_model_resolved, ...rest }) => rest;
-    if (stableTaskJson(contract(previous)) !== stableTaskJson(contract(current)))
+    const behavior = task => {
+      const value = contract(task);
+      if (!admitted) delete value.description;
+      return value;
+    };
+    if (stableTaskJson(behavior(previous)) !== stableTaskJson(behavior(current)))
       throw new Error(`scope recovery must preserve task ${previous.id} behavior, frozen tests and dependencies`);
-    if (!preservesJudgments(previous.resolved_judgments, current.resolved_judgments))
+    if (admitted && !preservesJudgments(previous.resolved_judgments, current.resolved_judgments))
       throw new Error(`scope recovery must preserve task ${previous.id} admitted judgments`);
     for (const key of ["scope_paths", "allowed_writes", "locked_tests", "resolved_judgments_model_resolved"]) {
-      const admitted = previous[key] ?? [];
+      const frozen = previous[key] ?? [];
       const corrected = current[key] ?? [];
-      if (corrected.length < admitted.length || admitted.some((item, index) =>
-        stableTaskJson(item) !== stableTaskJson(corrected[index])))
+      const comparable = item => {
+        if (key !== "locked_tests" || admittedTasks === undefined || admittedTasks.has(original.id)) return item;
+        const { assertion, ...rest } = item;
+        return rest;
+      };
+      if (corrected.length < frozen.length || frozen.some((item, index) =>
+        stableTaskJson(comparable(item)) !== stableTaskJson(comparable(corrected[index]))))
         throw new Error(`scope recovery may only append ${key} for ${previous.id}`);
     }
-    if (stableTaskJson(previous) !== stableTaskJson(current)) changed.push(previous.id);
+    if (stableTaskJson(original) !== stableTaskJson(current)) changed.push(original.id);
   }
   return changed;
+}
+
+/** A later task freezes the reviewed contract it actually starts with, not an older proposal. */
+export function captureTaskAdmissionPlan({ projectRoot, sessionId, featureId, planSha256, specSha256 }) {
+  identity(projectRoot, sessionId, featureId);
+  const text = readText(planFile(projectRoot, featureId));
+  const state = read(stateFile(projectRoot, sessionId));
+  if (hash(text) !== planSha256 || state.session_id !== sessionId || state.feature_id !== featureId ||
+      !approvalValid(state.plan_review_evidence, sessionId, featureId, planSha256, specSha256))
+    throw new Error("current reviewed task admission plan required");
+  return { written_by: "host-task-admission-plan", text, approval: state.plan_review_evidence };
+}
+
+function admittedTaskContracts(registry, originalPlan, sessionId, featureId, specSha256) {
+  const admitted = new Map();
+  for (const [id, entry] of Object.entries(registry.tasks)) {
+    const original = originalPlan.tasks.find(task => task.id === id);
+    if (!original || entry.task_id !== undefined && entry.task_id !== id)
+      throw new Error("task admission registry identity mismatch");
+    const snapshot = entry.admission_plan_snapshot;
+    if (snapshot === undefined) { admitted.set(id, original); continue; }
+    if (snapshot?.written_by !== "host-task-admission-plan" || typeof snapshot.text !== "string" ||
+        Buffer.byteLength(snapshot.text) > 16 * 1024 * 1024 ||
+        !approvalValid(snapshot.approval, sessionId, featureId, hash(snapshot.text), specSha256))
+      throw new Error("task admission plan snapshot is invalid");
+    const plan = JSON.parse(snapshot.text);
+    validateTaskScopeRecovery(originalPlan, plan, new Map());
+    admitted.set(id, plan.tasks.find(task => task.id === id));
+  }
+  return admitted;
 }
 
 /** Before the existing planner runs, retain the admission contract so old successful tasks stay provable. */
@@ -122,6 +166,19 @@ export function readTaskPlanAuthority({ projectRoot, sessionId, featureId, planS
   // same host-owned snapshot used for scope recovery instead of rejecting it.
   if (currentHash === planSha256 &&
       (!originCallId || originCallId === state.plan_review_evidence.dispatch_call_id)) {
+    const registryFile = taskRegistryPath(projectRoot, sessionId);
+    if (fs.existsSync(registryFile)) {
+      const registry = read(registryFile);
+      // Legacy exact-plan receipts need no schema migration. Only a later
+      // admission snapshot can add an obligation absent from these old bytes.
+      if (Object.values(registry.tasks ?? {}).some(entry => entry.admission_plan_snapshot !== undefined)) {
+        if (registry.parent_session_id !== sessionId || registry.feature_id !== featureId ||
+            registry.plan_sha256 !== planSha256 || registry.spec_sha256 !== specSha256)
+          throw new Error("task admission registry identity mismatch");
+        validateTaskScopeRecovery(plan, plan,
+          admittedTaskContracts(registry, plan, sessionId, featureId, specSha256));
+      }
+    }
     return { plan, planHash: currentHash, originalPlan: plan, affectedTasks: [], approval: state.plan_review_evidence };
   }
   const registry = read(taskRegistryPath(projectRoot, sessionId));
@@ -136,10 +193,19 @@ export function readTaskPlanAuthority({ projectRoot, sessionId, featureId, planS
   const originalPlan = JSON.parse(snapshot.text);
   // Identical bytes cannot add or remove a task obligation. Keep the same
   // validation behavior as the original exact-plan path, including old plans.
-  if (currentHash === planSha256)
+  if (currentHash === planSha256) {
+    if (Object.values(registry.tasks ?? {}).some(entry => entry.admission_plan_snapshot !== undefined))
+      validateTaskScopeRecovery(originalPlan, plan,
+        admittedTaskContracts(registry, originalPlan, sessionId, featureId, specSha256));
     return { plan, planHash: currentHash, originalPlan, affectedTasks: [], approval: state.plan_review_evidence };
-  const affectedTasks = validateTaskScopeRecovery(originalPlan, plan);
-  return { plan, planHash: currentHash, originalPlan, affectedTasks, approval: state.plan_review_evidence };
+  }
+  const affectedTasks = validateTaskScopeRecovery(originalPlan, plan,
+    admittedTaskContracts(registry, originalPlan, sessionId, featureId, specSha256));
+  const admissionPlanHashes = Object.fromEntries(Object.entries(registry.tasks)
+    .filter(([, entry]) => entry.admission_plan_snapshot !== undefined)
+    .map(([id, entry]) => [id, hash(entry.admission_plan_snapshot.text)]));
+  return { plan, planHash: currentHash, originalPlan, affectedTasks, approval: state.plan_review_evidence,
+    admissionPlanHashes };
 }
 
 /** Read-only resume proof; an interrupted scope correction need not be approved yet. */
@@ -160,7 +226,8 @@ export function readTaskPlanAdmission({ projectRoot, sessionId, featureId, specS
     throw new Error("host-confirmed original task admission required");
   const originalPlan = JSON.parse(text);
   const plan = JSON.parse(currentText);
-  const affectedTasks = validateTaskScopeRecovery(originalPlan, plan);
+  const affectedTasks = validateTaskScopeRecovery(originalPlan, plan,
+    admittedTaskContracts(registry, originalPlan, sessionId, featureId, specSha256));
   // This only proves historical admission. Dispatch/integration continue to
   // require readTaskPlanAuthority's APPROVE for the current canonical bytes.
   return { originalPlan, plan, affectedTasks };

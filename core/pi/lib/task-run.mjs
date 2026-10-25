@@ -182,7 +182,8 @@ function inspectGrant(grantPath, cwd, { allowHistoricalDeps = false } = {}) {
   const authority = readTaskPlanAuthority({ projectRoot: parentRoot, sessionId: grant.parent_session_id,
     featureId: grant.feature_id, planSha256: grant.plan_sha256, specSha256: grant.spec_sha256,
     originCallId: grant.origin.plan_review_call_id });
-  if (![grant.plan_sha256, authority.planHash].includes(artifacts.planSha256) || artifacts.specSha256 !== grant.spec_sha256)
+  if (![grant.plan_sha256, authority.planHash, authority.admissionPlanHashes?.[grant.task_id]].includes(artifacts.planSha256) ||
+      artifacts.specSha256 !== grant.spec_sha256)
     throw new Error("plan/spec hash mismatch");
   const valid = validatePlan(artifacts.plan, { expect: "full", expectedModelStrategy: artifacts.plan.model_strategy });
   if (!valid.ok) throw new Error(`invalid canonical plan: ${valid.errors.join("; ")}`);

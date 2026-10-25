@@ -653,6 +653,16 @@ arquivos pendentes ou alterações posteriores à admissão. Esses casos mantêm
 gate de worktree limpa. Em setups com lockfile npm, prefira `npm ci` para instalar
 as versões fixadas sem reescrever o lockfile.
 
+A admissão é por task. Uma task que ainda não existe no registro host-owned pode
+ter descrição, julgamentos e assertions do plano corrigidos por planner/reviewer
+antes do primeiro dispatch, mantendo IDs, ordem, dependências, comandos e paths
+dos testes. O host arquiva os bytes do plano e sua aprovação nessa admissão.
+Depois disso, inclusive se a task ficar bloqueada ou já tiver sido integrada,
+seu contrato admitido continua protegido: correções só acrescentam escopo/provas
+sem substituir os anteriores. Reaprovar o plano inicial não restaura um contrato
+antigo sobre uma task admitida mais tarde. Grants e recibos existentes permanecem
+intactos; uma proposta editada sem aprovação nativa atual não autoriza execução.
+
 `locked_tests[].fixture_paths` pode declarar um arquivo ou uma pasta de fixtures.
 O freeze de uma pasta sela a árvore Git completa: nomes, modos e identidades de
 objetos dos arquivos e subpastas, incluindo binários. O host revalida esse mesmo
