@@ -27,6 +27,7 @@ import { checkScope } from "../../shared/lib/capture-oracle.mjs";
 import { taskScopeBase, taskMergePreview } from "./task-reconciliation.mjs";
 import { resolveOrcaTaskBackend, isOrcaLocalHostMigration, taskWorktreeName } from "./task-orca.mjs";
 import {
+  readTaskFrozenArtifact,
   TASK_PIPELINE_VERSION,
   hashTaskReceipt,
   taskAdmissionPath,
@@ -277,23 +278,14 @@ function requireFrozen(root, tree, parentHead, results) {
   const parentBlobs = {};
   for (const [index, { result }] of results.entries())
     for (const [file, expected] of Object.entries(result?.frozen_blobs ?? {})) {
-      const actual = execFileSync("git", ["show", `${tree}:${file}`], {
-        cwd: root,
-        stdio: ["ignore", "pipe", "pipe"],
-      });
+      const actual = readTaskFrozenArtifact(root, tree, file, { allowTree: true, reference: result.freeze_sha });
       const actualHash = hash(actual);
       if (actualHash === expected) continue;
       // A global base merge may have changed a frozen test before this task
       // integrates. The task may carry that parent version through unchanged;
       // it may never supply a different version of its own.
-      const parentHash = hash(execFileSync("git", ["show", `${parentHead}:${file}`], {
-        cwd: root,
-        stdio: ["ignore", "pipe", "pipe"],
-      }));
-      const childHash = hash(execFileSync("git", ["show", `${result.child_head}:${file}`], {
-        cwd: root,
-        stdio: ["ignore", "pipe", "pipe"],
-      }));
+      const parentHash = hash(readTaskFrozenArtifact(root, parentHead, file, { allowTree: true, reference: result.freeze_sha }));
+      const childHash = hash(readTaskFrozenArtifact(root, result.child_head, file, { allowTree: true, reference: result.freeze_sha }));
       if (actualHash !== parentHash || childHash !== expected)
         throw new Error(`integration would change frozen test ${file}`);
       if (index === 0) parentBlobs[file] = parentHash;
