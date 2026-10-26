@@ -682,7 +682,8 @@ export async function decidePiBashGate(input = {}) {
       };
     }
     if (integrated.ok) {
-      const { feature_id: _delegatedFeature, ...withoutLocalCaptureLookup } = deliveryGateState;
+      const { feature_id: _delegatedFeature, ...withoutLocalCaptureLookup } =
+        integratedRegateState(deliveryGateState, integrated, loadedPlan.plan.tasks);
       deliveryGateState = withoutLocalCaptureLookup;
     }
   }
@@ -779,6 +780,21 @@ export async function decidePiBashGate(input = {}) {
   return { ...ALLOW, ...advisory };
 }
 
+/** Project only event-validated integrated task absolutions into the legacy parent
+ * rail. Keep obligations and disk state intact; unmatched/foreign obligations still
+ * fail closed. The caller must have validated every canonical task at this HEAD. */
+function integratedRegateState(state, integrated, tasks) {
+  const canonical = new Set(tasks.map(task => typeof task === "string" ? task : task?.id));
+  const passed = Array.isArray(state.regate_passed) ? state.regate_passed : [];
+  const validated = (integrated.results ?? []).flatMap(result => {
+    if (result?.feature_id !== state.feature_id || !canonical.has(result.task_id)) return [];
+    const bare = formatFeatureTaskEntry(state.feature_id, result.task_id);
+    return (Array.isArray(result.regate?.passed) ? result.regate.passed : [])
+      .filter(entry => typeof entry === "string" && entry.startsWith(`${bare}@`));
+  });
+  return { ...state, regate_passed: [...new Set([...passed, ...validated])] };
+}
+
 /**
  * @description Rail de dispatch de subagente da lane Pi, na ordem exata do entry-gate.ts:
  * papel traduzido por toOcRole → gate-state (fail-open só quando a reason começa com
@@ -797,6 +813,8 @@ export async function decidePiBashGate(input = {}) {
  *   claimDispatchFn?: (root: string, args: object, deps: object) => object,
  *   readCanonicalTaskPolicyFn?: (root: string, featureId: string, taskId: string) => object,
  *   readIntegratedTaskEvidenceFn?: typeof readIntegratedTaskEvidence,
+ *   readAllIntegratedTaskEvidenceFn?: typeof readAllIntegratedTaskEvidence,
+ *   readReviewPlanFn?: typeof readPiReviewPlan,
  *   readSpecDraftFn?: (context: object) => object,
  *   readSpecApprovalFn?: (context: object) => object,
  *   classifyReleaseOnlyFn?: (root: string) => object,
@@ -976,18 +994,34 @@ export function decidePiDispatchGate(input = {}) {
     }
   }
 
+  let dispatchGateState = releaseScope.gateState;
+  if (bareRole === "shipper" && !releaseScope.active && gateState.task_pipeline_version === 1 &&
+      !gateState.task_run && Array.isArray(gateState.regate_pending) &&
+      gateState.regate_pending.some(entry => !matchesAbsolution(entry, gateState.regate_passed, isAncestorFn))) {
+    const readPlan = input.readReviewPlanFn ?? readPiReviewPlan;
+    const readAll = input.readAllIntegratedTaskEvidenceFn ?? readAllIntegratedTaskEvidence;
+    const loadedPlan = readPlan({ projectRoot, featureId });
+    const headSha = resolvePiHeadSha(projectRoot);
+    const integrated = loadedPlan?.ok && headSha
+      ? readAll({ projectRoot, sessionId, featureId, headSha, tasks: loadedPlan.plan.tasks })
+      : { ok: false };
+    if (!integrated?.ok) return { ok: false, decision: "deny",
+      reason: `${PREFIX} Blocked: task-pipeline delivery requires every canonical task integration on the current HEAD.` };
+    dispatchGateState = integratedRegateState(dispatchGateState, integrated, loadedPlan.plan.tasks);
+  }
+
   // decideEntryTask é compartilhado com OC e ainda não conhece no_tests. A cópia é efêmera e
   // localizada: só satisfaz o seu consumer de fidelidade para a tarefa canônica sem testes;
   // não persiste nem remove qualquer outro rail do gate-state original.
   const entryGateState = canonicalNoTests
     ? {
-        ...releaseScope.gateState,
+        ...dispatchGateState,
         fidelity_pass: [
           ...(Array.isArray(gateState.fidelity_pass) ? gateState.fidelity_pass : []),
           formatFeatureTaskEntry(featureId, taskId),
         ],
       }
-    : releaseScope.gateState;
+    : dispatchGateState;
   const entryDecision = decideEntryTask({
     subagentType: role,
     gateState: entryGateState,

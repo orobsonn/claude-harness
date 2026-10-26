@@ -1296,7 +1296,9 @@ export function readAllIntegratedTaskEvidence({ projectRoot, sessionId, featureI
     if (!isSafeTaskId(taskId)) return failure("canonical task list contains an invalid task id");
     const evidence = readIntegratedTaskEvidence({ projectRoot, sessionId, featureId, taskId, headSha });
     if (!evidence.ok) return failure(`integrated evidence missing for ${featureId}/${taskId}: ${evidence.reason}`);
-    results.push(evidence.result);
+    // The integration receipt identifies delivery; the validated inspection owns
+    // the task-local re-gate proof. Expose both without changing persisted receipts.
+    results.push({ ...evidence.result, regate: evidence.entry.result.regate });
   }
   return { ok: true, results };
 }

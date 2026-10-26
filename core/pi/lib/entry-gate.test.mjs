@@ -1680,3 +1680,55 @@ test("native zero-tool refusals preserve an already captured hand without mintin
     }
   }
 });
+
+for (const surface of ["shipper", "bash"]) {
+  test(`${surface}: re-gate integrado satisfaz obrigação antiga do pai sem modificar estado`, async () => {
+    const f = completionFixture({ noTests: true });
+    try {
+      const head = fixtureGit(f.root, ["rev-parse", "HEAD"]);
+      const bare = `${f.featureId}/task-1`;
+      const state = { session_id: f.sessionId, feature_id: f.featureId, mode: "FULL", classified: true,
+        task_pipeline_version: 1, final_review_done: true, regate_pending: [bare], regate_passed: [] };
+      const before = JSON.stringify(state);
+      const input = { projectRoot: f.root, sessionId: f.sessionId, loadGateStateFn: stateOf(state),
+        isAncestorFn: sha => sha === head,
+        readReviewPlanFn: () => ({ ok: true, plan: { tasks: [{ id: "task-1" }] } }),
+        readAllIntegratedTaskEvidenceFn: () => ({ ok: true, results: [{ feature_id: f.featureId,
+          task_id: "task-1", regate: { pending: [bare], passed: [`${bare}@${head}`] } }] }) };
+      const result = surface === "shipper"
+        ? dispatch({ ...input, subagentType: "harness-shipper" })
+        : await bash({ ...input, command: "git push origin feature/task-pipeline",
+          gitStateFn: () => ({ branch: "feature/task-pipeline", defaultBranch: "main", commitsAhead: 1 }),
+          listHandRecordsForFeatureFn: () => { throw new Error("no synthetic global capture"); } });
+      assert.equal(result.decision, "allow", result.reason);
+      assert.equal(JSON.stringify(state), before);
+    } finally { f.close(); }
+  });
+}
+
+for (const surface of ["shipper", "bash"]) {
+  for (const scenario of ["barrier", "missing", "foreign-task", "foreign-feature", "divergent", "corrupt", "unrelated-pending"]) {
+    test(`${surface}: projeção de re-gate integrado preserva bloqueio ${scenario}`, async () => {
+      const f = completionFixture({ noTests: true });
+      try {
+        const head = fixtureGit(f.root, ["rev-parse", "HEAD"]);
+        const bare = `${f.featureId}/task-1`;
+        const pending = scenario === "corrupt" ? "corrupt" : [bare, ...(scenario === "unrelated-pending" ? ["other-feature/task-1"] : [])];
+        const state = { session_id: f.sessionId, feature_id: f.featureId, mode: "FULL", classified: true,
+          task_pipeline_version: 1, final_review_done: true, regate_pending: pending, regate_passed: [] };
+        const input = { projectRoot: f.root, sessionId: f.sessionId, loadGateStateFn: stateOf(state),
+          isAncestorFn: sha => sha === head,
+          readReviewPlanFn: () => ({ ok: true, plan: { tasks: [{ id: "task-1" }] } }),
+          readAllIntegratedTaskEvidenceFn: () => scenario === "barrier" ? { ok: false } : { ok: true, results: [{
+            feature_id: scenario === "foreign-feature" ? "other-feature" : f.featureId,
+            task_id: scenario === "foreign-task" ? "task-2" : "task-1",
+            regate: { passed: scenario === "missing" ? [] : [`${bare}@${scenario === "divergent" ? "a".repeat(40) : head}`] },
+          }] } };
+        const result = surface === "shipper" ? dispatch({ ...input, subagentType: "harness-shipper" })
+          : await bash({ ...input, command: "git push origin feature/task-pipeline",
+            gitStateFn: () => ({ branch: "feature/task-pipeline", defaultBranch: "main", commitsAhead: 1 }) });
+        assert.equal(result.decision, "deny", scenario);
+      } finally { f.close(); }
+    });
+  }
+}
