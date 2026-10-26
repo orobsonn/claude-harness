@@ -361,11 +361,16 @@ export function runTick(deps) {
     return { ok: true, dispatched: false, reason: "empty" };
   }
 
-  // 3) Dependency gate on ISSUE STATE — never on a branch name.
+  // 3) Dependency gate: closed issue or verified merged PR, never a branch name.
   const isClosed = (n) => {
     try {
-      const view = gh(["issue", "view", String(n), "--repo", config.ghRepo, "--json", "state"]);
-      return String(view?.state ?? "").toUpperCase() === "CLOSED";
+      // REST /issues includes PR identity and merge proof. `gh issue view`
+      // returns MERGED for PRs; CLOSED alone also accepts abandoned PRs.
+      const view = gh(["api", `repos/${config.ghRepo}/issues/${n}`]);
+      if (view?.number !== n || String(view?.state ?? "").toUpperCase() !== "CLOSED") return false;
+      if (!Object.hasOwn(view, "pull_request")) return true;
+      const mergedAt = view.pull_request?.merged_at;
+      return typeof mergedAt === "string" && Number.isFinite(Date.parse(mergedAt));
     } catch {
       return false; // fail-closed
     }
