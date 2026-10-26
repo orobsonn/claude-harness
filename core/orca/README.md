@@ -200,6 +200,8 @@ ficavam `harness:queued` para sempre (4 de 14 issues de um projeto estavam morta
 que são propriedades do *grafo*, não do *gate*. Aqui a pergunta é a que realmente importa: **a issue
 da dependência está CLOSED?** — o estado que significa "entregue", independente de como foi entregue.
 
+Uma dependência pode nomear uma issue fechada ou um PR efetivamente mergeado. O selector lê o endpoint REST `/issues/<n>`, que identifica PRs e informa `pull_request.merged_at`: PR aberto ou fechado sem merge continua bloqueando. O estado `MERGED` devolvido por `gh issue view` não é confundido com uma issue ainda aberta.
+
 Estado de dependência ilegível é **fail-closed**: um soluço do `gh` nunca libera uma issue gated.
 
 ## O nome do branch é `<owner>/harness-<N>` — e casar prefixo é anti-padrão

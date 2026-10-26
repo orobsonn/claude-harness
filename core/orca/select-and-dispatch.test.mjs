@@ -79,6 +79,12 @@ function harness(opts = {}) {
   const gh = (args) => {
     ghCalls.push(args);
     if (args[1] === "list") return issues;
+    if (args[0] === "api") {
+      const number = Number(args[1].split("/").at(-1));
+      const value = issueStates[number];
+      if (value === undefined) throw new Error("gh: unreadable");
+      return typeof value === "string" ? { number, state: value.toLowerCase() } : value;
+    }
     if (args[1] === "view") {
       const state = issueStates[Number(args[2])];
       if (state === undefined) throw new Error("gh: unreadable");
@@ -451,8 +457,8 @@ test("runTick: dependency satisfaction reads the ISSUE STATE, not a harness/<N> 
   const result = runTick(h.deps);
   assert.equal(result.dispatched, true);
   assert.equal(result.issue, 8);
-  const view = h.ghCalls.find((a) => a[1] === "view");
-  assert.deepEqual(view, ["issue", "view", "3", "--repo", "orobsonn/oraculo-app", "--json", "state"]);
+  const view = h.ghCalls.find((a) => a[0] === "api");
+  assert.deepEqual(view, ["api", "repos/orobsonn/oraculo-app/issues/3"]);
 });
 
 test("runTick defers (no lock, no worktree) while a dependency issue is still OPEN", () => {
@@ -651,3 +657,28 @@ test("runTick records Claude Code trust for the clone before a claude agent is d
   runTick({ ...pi.deps, trust: (root) => piTrust.push(root) });
   assert.deepEqual(piTrust, [], "only a claude agent needs Claude Code trust");
 });
+
+// Reduced response captured from GitHub REST /issues/401 after its real merge.
+// gh issue view reports MERGED for that same PR, not CLOSED.
+const MERGED_DEPENDENCY_PR = JSON.parse(readFileSync(new URL("./__fixtures__/merged-dependency-pr.json", import.meta.url), "utf8"));
+test("a dependency naming an actual merged PR releases the next issue", () => {
+  const h = harness({ issues: [issue(8, { body: "```harness-deps\n#401\n```" })],
+    issueStates: { 401: MERGED_DEPENDENCY_PR } });
+  assert.equal(runTick(h.deps).dispatched, true);
+});
+
+for (const [name, view] of [
+  ["open PR", { number: 401, state: "open", pull_request: { merged_at: null } }],
+  ["closed unmerged PR", { number: 401, state: "closed", pull_request: { merged_at: null } }],
+  ["missing merge proof", { number: 401, state: "closed", pull_request: {} }],
+  ["malformed PR marker", { number: 401, state: "closed", pull_request: null }],
+  ["invalid merge date", { number: 401, state: "closed", pull_request: { merged_at: "unknown" } }],
+  ["different dependency", { ...MERGED_DEPENDENCY_PR, number: 402 }],
+]) {
+  test(`dependency ${name} cannot claim an issue or create a worktree`, () => {
+    const h = harness({ issues: [issue(8, { body: "```harness-deps\n#401\n```" })], issueStates: { 401: view } });
+    assert.equal(runTick(h.deps).reason, "deps-pending");
+    assert.equal(h.ghCalls.filter(a => a[1] === "edit").length, 0);
+    assert.equal(h.orcaCalls.filter(a => a[1] === "create").length, 0);
+  });
+}
