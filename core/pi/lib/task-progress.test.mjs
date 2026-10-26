@@ -1,6 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { projectTaskProgress, reconcileTaskProgress } from "./task-progress.mjs";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { projectTaskProgress, reconcileTaskProgress, readCanonicalTaskProgress } from "./task-progress.mjs";
 import { hashTaskReceipt } from "./task-contract.mjs";
 import { formatPlanProgress, restorePlanSnapshot } from "./plan-tracker.mjs";
 
@@ -75,4 +78,53 @@ test("ready, failed and unknown process states have distinct actionable displays
   registry.tasks.inbound.status = "running";
   registry.tasks.inbound.launches = [{}];
   assert.equal(projectTaskProgress(plan, registry, { readProcess: () => ({ ok: false, terminal: false }) })[0].status, "blocked");
+});
+
+function diskFixture({ withRegistry = true, foreign = false } = {}) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-progress-admission-"));
+  const registry = fixture();
+  const dir = path.join(root, ".pi/harness/state/parent");
+  fs.mkdirSync(path.join(dir, "task-runs"), { recursive: true });
+  fs.writeFileSync(path.join(dir, "gate-state.json"), JSON.stringify({ session_id: "parent", feature_id: "issue",
+    task_pipeline_version: 1, spec_sha256: "spec", plan_review_evidence: { plan_sha256: "amended-plan" } }));
+  if (foreign) registry.feature_id = "another-feature";
+  if (withRegistry) fs.writeFileSync(path.join(dir, "task-runs/index.json"), JSON.stringify(registry));
+  return { root, registry, close: () => fs.rmSync(root, { recursive: true, force: true }) };
+}
+
+test("amended approved plan uses registry admission identity and refreshes completed native tasks", () => {
+  const f = diskFixture();
+  try {
+    const progress = readCanonicalTaskProgress(f.root, "parent", { readAuthority: input => {
+      assert.equal(input.planSha256, "plan", "authority must reconcile the original admission with the current approval");
+      assert.equal(input.specSha256, "spec");
+      return { plan };
+    } });
+    assert.ok(progress, "an approved amendment must not silently retain an old UI snapshot");
+    assert.deepEqual(formatPlanProgress(reconcileTaskProgress(undefined, progress)),
+      ["Plano 2/2 · concluído", "Validação 2/2 · aprovada"]);
+  } finally { f.close(); }
+});
+
+test("without admissions the display still validates the current plan approval", () => {
+  const f = diskFixture({ withRegistry: false });
+  try {
+    const progress = readCanonicalTaskProgress(f.root, "parent", { readAuthority: input => {
+      assert.equal(input.planSha256, "amended-plan"); return { plan };
+    } });
+    assert.ok(progress.tasks.every(task => task.status === "pending"));
+  } finally { f.close(); }
+});
+
+test("foreign registry is rejected before plan authority and rejected amendments remain undisplayed", () => {
+  const f = diskFixture({ foreign: true });
+  try {
+    let called = false;
+    assert.equal(readCanonicalTaskProgress(f.root, "parent", { readAuthority: () => { called = true; return { plan }; } }), null);
+    assert.equal(called, false);
+  } finally { f.close(); }
+  const valid = diskFixture();
+  try {
+    assert.equal(readCanonicalTaskProgress(valid.root, "parent", { readAuthority: () => { throw new Error("unapproved amendment"); } }), null);
+  } finally { valid.close(); }
 });
