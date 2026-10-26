@@ -495,12 +495,13 @@ export function runTick(deps) {
  * @description Runs a CLI and parses stdout as JSON when the argv asks for `--json`; otherwise
  * returns the raw stdout. Throws on non-zero exit, which is what the tick's try/catch rails expect.
  * @param {string} bin
+ * @param {{apiJson?: boolean}} [options] gh api emits JSON without a --json flag.
  * @returns {(args: string[]) => any}
  */
-function cliSeam(bin) {
+function cliSeam(bin, { apiJson = false } = {}) {
   return (args) => {
     const stdout = execFileSync(bin, args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
-    if (!args.includes("--json")) return stdout;
+    if (!args.includes("--json") && !(apiJson && args[0] === "api")) return stdout;
     try {
       return JSON.parse(stdout);
     } catch {
@@ -533,7 +534,7 @@ export function main(argv) {
     result = runTick({
       config,
       orca: cliSeam(process.env.ORCA_BIN || "orca"),
-      gh: cliSeam(process.env.GH_BIN || "gh"),
+      gh: cliSeam(process.env.GH_BIN || "gh", { apiJson: true }),
       git: cliSeam(process.env.GIT_BIN || "git"),
       trust: (root) => ensureClaudeTrust(root),
       log: (t) => process.stdout.write(`${t}\n`),
