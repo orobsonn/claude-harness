@@ -54,6 +54,16 @@ test("spec seal follows its native adversary marker", () => {
   assert.match(prompt, /Depois de tratar o relatório,.*mark.*adversary_fired.*seal_spec_review/);
 });
 
+test("aggregate verification can recover missing infrastructure scope through the existing reviewed task", () => {
+  const prompt = readFileSync(promptPath, "utf8");
+  assert.match(prompt, /Falha de verificação agregada também tem recuperação/);
+  assert.match(prompt, /timeout de teste, timeout de hook e contenção de recursos/);
+  assert.match(prompt, /configuração sem tarefa dona.*tarefa de integração existente.*harness-planner.*harness-plan-reviewer/s);
+  assert.match(prompt, /Preserve todos os campos globais do plano/);
+  assert.match(prompt, /Após APPROVE.*mesma tentativa.*reconcile_head/s);
+  assert.match(prompt, /não pule testes nem esconda\s+falhas com retries/);
+});
+
 test("shipper waits for the explicit PR with bounded CI observation", () => {
   const shipper = readFileSync(shipperPath, "utf8");
   assert.match(shipper, /diretório temporário.*--body-file/s);
