@@ -535,6 +535,37 @@ test("an old final-review flag cannot route a changed aggregate straight to ship
   assert.equal(readDeliveryContinuation(f.ctx, { hasCurrentFinalReviews: () => true }).stage, "shipping");
 });
 
+test("a failed aggregate verification offers reviewed scope recovery without retrying or granting writes", async t => {
+  const f = fixture(t), handlers = new Map();
+  f.registry.tasks.one.status = "integrated"; f.write("task-runs/index.json", f.registry);
+  const plan = path.join(f.ctx.cwd, ".pi/harness/plans/issue-22/execution-plan.json");
+  fs.mkdirSync(path.dirname(plan), { recursive: true });
+  fs.writeFileSync(plan, JSON.stringify({ tasks: [{ id: "one", scope_paths: ["src/feature.ts"] }],
+    final_review: { verification_commands: ["npm test"] } }));
+  const originalPlan = fs.readFileSync(plan);
+  registerPiCommandEvidence({ on: (name, fn) => handlers.set(name, fn) });
+  const event = { toolName: "bash", toolCallId: "aggregate-timeout", input: { command: "npm test" } };
+  handlers.get("tool_execution_start")({ ...event, args: event.input }, f.ctx);
+  await handlers.get("tool_result")({ ...event, isError: true,
+    content: [{ type: "text", text: "Hook timed out in 10000ms in tests/sqlite.spec.ts\nCommand exited with code 1" }] }, f.ctx);
+  const before = fs.readFileSync(path.join(f.directory, "gate-state.json"));
+  const pending = readDeliveryContinuation(f.ctx);
+  assert.equal(pending.stage, "final-review");
+  assert.equal(pending.nextAction, undefined, "a failed suite must not be suggested as an unattempted command");
+  assert.match(pending.content, /complete native command output/);
+  assert.match(pending.content, /harness-planner.*harness-plan-reviewer/);
+  assert.match(pending.content, /existing integration task/);
+  assert.match(pending.content, /Preserve all global plan fields/);
+  assert.match(pending.content, /does not grant write authority/);
+  assert.deepEqual(fs.readFileSync(plan), originalPlan);
+  assert.deepEqual(fs.readFileSync(path.join(f.directory, "gate-state.json")), before);
+  assert.equal(checkPiFinalCommands({ projectRoot: f.ctx.cwd, sessionId: "parent", commands: ["npm test"] }).ok, false);
+  const loop = controller({ readPending: () => readDeliveryContinuation(f.ctx) });
+  assert.equal(await loop.end(stopped, loop.ctx), true);
+  assert.equal(await loop.end(stopped, loop.ctx), true);
+  assert.equal(await loop.create()(stopped, loop.ctx), false, "recovery advice cannot create an unchanged-input retry loop");
+});
+
 test("native Pi executes verification of a repaired HEAD after summary-only stops; old failure is not a current blocker", { timeout: 30000 }, async t => {
   const sdk = await import("@earendil-works/pi-coding-agent");
   const { fauxProvider, fauxAssistantMessage } = await import("@earendil-works/pi-ai");

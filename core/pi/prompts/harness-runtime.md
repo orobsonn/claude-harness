@@ -349,6 +349,19 @@ Essa correção aditiva de escopo também vale após harvest se a entrega ainda 
 recibo de shipping; depois da correção, obtenha olhos finais atuais e refaça o harvest
 antes de publicar. Shipping ou finalização concluídos encerram essa recuperação.
 
+**Falha de verificação agregada também tem recuperação.** Leia o output nativo completo:
+erro de asserção, timeout de teste, timeout de hook e contenção de recursos são
+diagnósticos diferentes. Um timeout de CLI não prova que hooks ou limites locais
+mudaram. Se a correção exige teste, fixture ou configuração sem tarefa dona,
+encaminhe a menor emenda aditiva de escopo à tarefa de integração existente pelo
+`harness-planner` e `harness-plan-reviewer`; ausência do path no plano antigo não é
+dependência do operador. Preserve todos os campos globais do plano, spec, IDs,
+dependências, testes congelados e asserções. Após APPROVE, retome a mesma tentativa
+com `reconcile_head` do agregado atual e delegue a correção à mão nativa. Um orçamento
+de execução deve ser justificado pelo erro observado; não pule testes nem esconda
+falhas com retries. Verifique uma correção concreta ou recuperação operacional distinta
+antes de repetir a suíte. Só peça decisão, autoridade ou recurso realmente ausente.
+
 **Colheita durável — depois dos olhos finais.** Com as tarefas funcionais verificadas e
 commitadas, colete os olhos finais sobre o agregado. Resolva os achados aplicáveis,
 conclua o retrabalho e a revalidação e registre `mark action="final-review"`.
