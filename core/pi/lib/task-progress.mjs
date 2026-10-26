@@ -51,11 +51,14 @@ export function readCanonicalTaskProgress(projectRoot, sessionId, dependencies =
     const loaded = loadPiGateStateFromDisk(projectRoot, { sessionId });
     const state = loaded.state;
     if (!loaded.ok || state?.session_id !== sessionId || state.task_pipeline_version !== 1 || state.task_run) return null;
-    const approval = state.plan_review_evidence;
-    const authority = (dependencies.readAuthority ?? readTaskPlanAuthority)({ projectRoot, sessionId, featureId: state.feature_id,
-      planSha256: approval?.plan_sha256, specSha256: state.spec_sha256 });
     const registry = read(projectRoot, `.pi/harness/state/${sessionId}/task-runs/index.json`);
     if (registry && (registry.parent_session_id !== sessionId || registry.feature_id !== state.feature_id)) return null;
+    const approval = state.plan_review_evidence;
+    // The registry retains the immutable admission plan. Authority reconciles it
+    // with the current approved amendment; passing the new approval as the old
+    // admission identity makes valid amended runs silently retain a stale UI.
+    const authority = (dependencies.readAuthority ?? readTaskPlanAuthority)({ projectRoot, sessionId, featureId: state.feature_id,
+      planSha256: registry ? registry.plan_sha256 : approval?.plan_sha256, specSha256: state.spec_sha256 });
     return { featureId: state.feature_id, tasks: projectTaskProgress(authority.plan, registry, dependencies) };
   } catch { return null; }
 }
