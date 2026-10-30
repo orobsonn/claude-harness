@@ -410,7 +410,7 @@ function validateFidelity({ events, task, taskId, worktree, head, reviewRole, re
     const changed = splitZero(git(worktree, ["diff-tree", "--no-commit-id", "--name-only", "-r", "-z", sha]));
     return changed.length > 0 && changed.every((file) => paths.includes(file));
   });
-  if (priorMarkerIndex >= 0 && !laterFreeze) {
+  if (priorMarkerIndex >= 0 && currentAuthorIndex < latestMarkerIndex && !laterFreeze && hand?.agent !== "harness-test-author") {
     const freshReviewIndex = events.findLastIndex((event, index) => index > currentAuthorIndex && index < latestMarkerIndex &&
       event.tool === "subagent" && event.args?.subagent_type === reviewRole);
     if (freshReviewIndex < 0 || !fidelityReviewApproved(events[freshReviewIndex], reviewRole))

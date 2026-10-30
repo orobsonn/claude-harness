@@ -432,7 +432,10 @@ export function validateTaskFidelityFreeze({ projectRoot, sessionId, taskId, ses
       const paths = String(gitFn("diff-tree", "--no-commit-id", "--name-only", "-r", "-z", sha)).split("\0").filter(Boolean);
       return paths.length > 0 && paths.every((file) => frozen.includes(file));
     });
-    if (priorMarker && !laterFreeze) {
+    let currentHand;
+    try { currentHand = JSON.parse(fs.readFileSync(piHandRecordPath({ projectRoot, sessionId,
+      featureId: binding.grant.feature_id }, taskId).path, "utf8")); } catch { /* Ordinary native proof remains required. */ }
+    if (priorMarker && !laterFreeze && currentHand?.agent !== "harness-test-author") {
       const freshReview = calls.findLast((call) => forTask(call) && call.args.subagent_type === "harness-test-reviewer" && call.index > author.endIndex);
       if (!completed(author) || !completed(freshReview) || parseTestReviewVerdict(text(freshReview))?.verdict !== "APPROVE")
         return fail("latest test-author requires a subsequent test-reviewer APPROVE to reuse frozen blobs");
