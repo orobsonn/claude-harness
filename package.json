@@ -42,8 +42,8 @@
   ],
   "license": "MIT",
   "dependencies": {
-    "@earendil-works/pi-ai": "1.2.0",
-    "@earendil-works/pi-coding-agent": "1.2.0",
+    "@earendil-works/pi-ai": "1.4.0",
+    "@earendil-works/pi-coding-agent": "1.4.0",
     "@gotgenes/pi-subagents": "23.0.0"
   },
   "pi": {

@@ -402,6 +402,25 @@ function validateFidelity({ events, task, taskId, worktree, head, reviewRole, re
   const currentAuthorIndex = events.findLastIndex(authored);
   const currentReviewIndex = events.findLastIndex((event, index) => index > currentAuthorIndex && index < latestMarkerIndex &&
     event.tool === "subagent" && event.args?.subagent_type === reviewRole && eventSucceeded(event));
+  const priorMarkerIndex = events.findLastIndex((event, index) => index < currentAuthorIndex && fidelityMarkers.includes(event));
+  const laterFreeze = events.some((event, index) => {
+    if (index <= currentAuthorIndex || index >= latestMarkerIndex) return false;
+    const sha = commitFromEvent(event, worktree);
+    if (!sha) return false;
+    const changed = splitZero(git(worktree, ["diff-tree", "--no-commit-id", "--name-only", "-r", "-z", sha]));
+    return changed.length > 0 && changed.every((file) => paths.includes(file));
+  });
+  if (priorMarkerIndex >= 0 && !laterFreeze) {
+    const freshReviewIndex = events.findLastIndex((event, index) => index > currentAuthorIndex && index < latestMarkerIndex &&
+      event.tool === "subagent" && event.args?.subagent_type === reviewRole);
+    if (freshReviewIndex < 0 || !fidelityReviewApproved(events[freshReviewIndex], reviewRole))
+      return failure("latest test-author requires a subsequent fidelity review APPROVE to reuse frozen blobs");
+    // Replay the original native chain against today's HEAD. This retains its
+    // implementation boundary and checks every frozen blob, rather than
+    // fabricating a new freeze or accepting a prose claim of no writes.
+    const prior = validateFidelity({ events: events.slice(0, priorMarkerIndex + 1), task, taskId, worktree, head, reviewRole, reconciliations, entry, hand, state, sessionId });
+    if (prior.ok) return prior;
+  }
   if (entry && currentAuthorIndex >= 0 && currentAuthorIndex < currentReviewIndex &&
       fidelityReviewApproved(events[currentReviewIndex], reviewRole) &&
       fidelityMarkers.some(event => events.indexOf(event) < currentAuthorIndex)) {
