@@ -507,7 +507,7 @@ export function verifyPiHarness(root, cacheOptions = {}) {
   if (missing) return { ok: false, reason: `missing:${missing}` };
   const runtime = JSON.parse(readFileSync(dependencies.piPackage, "utf8"));
   const subagents = JSON.parse(readFileSync(dependencies.subagentsPackage, "utf8"));
-  if (runtime.version !== "1.2.0") return { ok: false, reason: `runtime-version:${runtime.version}` };
+  if (runtime.version !== "1.4.0") return { ok: false, reason: `runtime-version:${runtime.version}` };
   if (subagents.version !== "23.0.0") return { ok: false, reason: `subagents-version:${subagents.version}` };
   const authPatch = verifyPiAuthPathPatch(dependencies.piPackage, dependencies.subagentsPackage);
   if (!authPatch.ok) return { ok: false, reason: `auth-path-patch:${authPatch.reason}` };
