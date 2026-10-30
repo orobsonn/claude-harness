@@ -437,6 +437,21 @@ test("task fidelity accepts a reviewed ancestral freeze across executor sniper a
   const unreviewed = [...valid.entries];
   valid.completed("later-author", "subagent", { subagent_type: "harness-test-author", prompt: valid.prompt });
   assert.equal(check(valid).ok, false, "a later test author invalidates earlier fidelity");
+  // Real recovery: the original native freeze was marked before a no-write
+  // author confirmation; a fresh review can retain that exact blob chain.
+  valid.entries.splice(0, valid.entries.length, ...unreviewed);
+  valid.completed("original-marker", "mark", { action: "fidelity", task_id: "task-one" }, "", { ok: true });
+  valid.completed("confirm-author", "subagent", { subagent_type: "harness-test-author", prompt: valid.prompt });
+  assert.equal(check(valid).ok, false, "inspection alone cannot restore fidelity");
+  valid.completed("confirm-review", "subagent", { subagent_type: "harness-test-reviewer", prompt: valid.prompt }, "Verdict: REVISE");
+  assert.equal(check(valid).ok, false, "a rejected review cannot restore fidelity");
+  valid.completed("confirm-approval", "subagent", { subagent_type: "harness-test-reviewer", prompt: valid.prompt }, "Verdict: APPROVE");
+  assert.equal(check(valid).freezeSha, freezeSha, "unchanged frozen blobs retain the original reviewed freeze");
+  valid.completed("repeated-marker", "mark", { action: "fidelity", task_id: "task-one" }, "", { ok: true });
+  assert.equal(check(valid).freezeSha, freezeSha, "repeated recovery retains the native chain");
+  fs.writeFileSync(path.join(valid.root, "test", "task-one.test.ts"), "// unreviewed drift\n");
+  assert.equal(check(valid).ok, false, "dirty frozen files cannot reuse approval");
+  valid.git("restore", "test/task-one.test.ts");
   valid.entries = unreviewed;
   fs.writeFileSync(path.join(valid.root, "test/task-one.test.ts"), "// mutated test\n");
   valid.git("add", "test/task-one.test.ts");

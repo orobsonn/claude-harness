@@ -419,6 +419,30 @@ export function validateTaskFidelityFreeze({ projectRoot, sessionId, taskId, ses
     const refused = call => isUnwrittenBlockedWriter(call.args?.subagent_type, call.result, call.result?.isError);
     const author = calls.findLast((call) => forTask(call) && call.args.subagent_type === "harness-test-author" && !refused(call));
     if (!completed(author)) return fail("fidelity requires the latest native test-author completion");
+    // A later author may inspect already-frozen tests. Reuse only a native,
+    // previously accepted freeze, with a fresh approval after that inspection.
+    const priorMarker = calls.findLast((call) => call.name === "mark" && call.args?.action === "fidelity" &&
+      call.args?.task_id === taskId && call.index < author?.index && call.result?.isError !== true && call.endIndex >= 0 && call.result?.details?.ok === true);
+    const laterFreeze = calls.some((call) => {
+      if (call.name !== "bash" || call.index <= author?.endIndex || !/\bgit\s+commit\b/.test(call.args?.command ?? "") ||
+          !call.result || call.result.isError === true) return false;
+      const sha = text(call).match(/^\[[^\]\n]+\s+([0-9a-f]{7,40})\]/m)?.[1]
+        ?? text(call).match(/\bcommit\s+([0-9a-f]{7,40})\b/i)?.[1];
+      if (!sha) return false;
+      const paths = String(gitFn("diff-tree", "--no-commit-id", "--name-only", "-r", "-z", sha)).split("\0").filter(Boolean);
+      return paths.length > 0 && paths.every((file) => frozen.includes(file));
+    });
+    let currentHand;
+    try { currentHand = JSON.parse(fs.readFileSync(piHandRecordPath({ projectRoot, sessionId,
+      featureId: binding.grant.feature_id }, taskId).path, "utf8")); } catch { /* Ordinary native proof remains required. */ }
+    if (priorMarker && !laterFreeze && currentHand?.agent !== "harness-test-author") {
+      const freshReview = calls.findLast((call) => forTask(call) && call.args.subagent_type === "harness-test-reviewer" && call.index > author.endIndex);
+      if (!completed(author) || !completed(freshReview) || parseTestReviewVerdict(text(freshReview))?.verdict !== "APPROVE")
+        return fail("latest test-author requires a subsequent test-reviewer APPROVE to reuse frozen blobs");
+      const prior = validateTaskFidelityFreeze({ projectRoot, sessionId, taskId,
+        sessionEntries: sessionEntries.slice(0, priorMarker.endIndex + 1) }, dependencies);
+      if (prior.ok) return prior;
+    }
     const nextWriter = calls.find((call) => call.index > author.endIndex && forTask(call) && TASK_WRITING_ROLES.has(call.args.subagent_type) && !refused(call));
     const boundary = nextWriter?.index ?? Infinity;
     const review = calls.findLast((call) => forTask(call) && call.args.subagent_type === "harness-test-reviewer" &&

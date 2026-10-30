@@ -2335,6 +2335,26 @@ test("inspectTaskRun rejects successful test-author work after the latest fideli
   assert.match(inspected.reason, /test-author work has no subsequent fidelity marker/i);
 });
 
+test("a fresh fidelity review reuses unchanged frozen blobs after author confirmation", () => {
+  const fixture = inspectionFixture();
+  const eventsPath = fixture.entry.launches.at(-1).events_path;
+  const append = (id, tool, args, result) => fs.appendFileSync(eventsPath, [
+    event("tool_execution_start", { toolCallId: id, toolName: tool, args }),
+    event("tool_execution_end", { toolCallId: id, toolName: tool, isError: false, result }), "",
+  ].join("\n"));
+  append("confirm-author", "subagent", { subagent_type: "harness-test-author" }, { details: { status: "completed" } });
+  append("confirm-marker", "mark", { action: "fidelity", task_id: TASK }, { details: { ok: true } });
+  assert.equal(inspectTaskRun(fixture.entry, fixture.dependencies).ok, false);
+  append("confirm-review", "subagent", { subagent_type: "harness-compliance" }, {
+    details: { status: "completed" }, content: [{ type: "text", text: "Verdict: APPROVE" }],
+  });
+  append("reviewed-marker", "mark", { action: "fidelity", task_id: TASK }, { details: { ok: true } });
+  const recovered = inspectTaskRun(fixture.entry, fixture.dependencies);
+  assert.equal(recovered.ok, true, recovered.reason);
+  fs.appendFileSync(path.join(fixture.root, "src/task.spec.mjs"), "// drift\n");
+  assert.equal(inspectTaskRun(fixture.entry, fixture.dependencies).ok, false);
+});
+
 test("inspectTaskRun rejects the latest failed continuation even when an older event stream is healthy", () => {
   const fixture = inspectionFixture();
   const last = fixture.entry.launches.at(-1);
