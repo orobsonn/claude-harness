@@ -8,6 +8,10 @@ A native test-author inspected the previously reviewed freeze without editing it
 
 Correction: when no later test-only freeze exists, replay the prior successful native author/reviewer/freeze chain against current clean HEAD and its exact locked blobs; require the latest subsequent test review to approve. Keep the original implementation boundary. A failed/missing review, changed locked blob, dirty worktree, missing native chain, or unreviewed author remains blocked. Ordinary real fixture repair and aggregate-import recovery retain their existing paths.
 
+## Confirmed redundant preflight gate
+
+The launcher duplicated the Pi/subagent version pins already enforced by the sealed runtime and compatibility verifier. During the 1.4.0 update, its stale literal rejected an otherwise verified runtime. Remove the duplicate literal checks; retain exact version and integrity enforcement in the existing authority. Integration coverage mutates each isolated package manifest and requires refusal without repair.
+
 ## Other gate paths inspected
 
 | Path | Evidence checked | Finding |
