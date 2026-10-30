@@ -30,7 +30,7 @@ import {
 
 export { TASK_PIPELINE_VERSION, TASK_RUN_ENV } from "./task-contract.mjs";
 import { readTaskPlanAuthority, recoveredTaskContractHash } from "./task-plan-recovery.mjs";
-import { inheritedTaskFidelity, revalidatedTaskFidelity } from "./task-reconciliation.mjs";
+import { inheritedTaskFidelity, revalidatedTaskFidelity, isNoWriteTaskFidelityAuthor } from "./task-reconciliation.mjs";
 import { piHandRecordPath, piGateStatePath } from "./pi-paths.mjs";
 
 const TASK_ROLES = new Set([
@@ -479,8 +479,16 @@ export function validateTaskFidelityFreeze({ projectRoot, sessionId, taskId, ses
     // Prefer the ordinary post-review freeze, including an amended commit. A
     // recovery already committed by this author can instead be reviewed as-is;
     // demanding another nonempty commit would manufacture test churn.
+    const inspectedHead = String(gitFn("rev-parse", "HEAD")).trim();
+    const inspectedCommit = priorMarker && isNoWriteTaskFidelityAuthor({ hand: currentHand, head: inspectedHead,
+      taskId, featureId: binding.grant.feature_id, sessionId, authorCallId: author.id })
+      ? calls.findLast(call => nativeCommit(call) && call.index > priorMarker.endIndex && call.endIndex < author.index &&
+        !calls.some(other => other.index > priorMarker.endIndex && other.index < call.index && forTask(other) &&
+          other.args.subagent_type === "harness-test-author" && !refused(other)))
+      : null;
     const commitCall = calls.find((call) => nativeCommit(call) && call.index > review.endIndex && call.index < boundary)
-      ?? calls.findLast((call) => nativeCommit(call) && call.index > author.endIndex && call.endIndex < review.index);
+      ?? calls.findLast((call) => nativeCommit(call) && call.index > author.endIndex && call.endIndex < review.index)
+      ?? inspectedCommit;
     const commandEvidence = commitCall?.result?.details?.command_evidence;
     const observedCommit = commandEvidence?.status === "available" &&
       commandEvidence?.original_status?.kind === "success" &&
@@ -495,6 +503,8 @@ export function validateTaskFidelityFreeze({ projectRoot, sessionId, taskId, ses
     if (!abbreviated) return fail("native test-only freeze commit required after the latest author, with test-reviewer APPROVE");
     const freezeSha = String(gitFn("rev-parse", `${abbreviated}^{commit}`)).trim();
     if (!HEX_40.test(freezeSha)) return fail("invalid fidelity freeze commit");
+    if (inspectedCommit && commitCall === inspectedCommit && freezeSha !== inspectedHead)
+      return fail("pre-author freeze must equal the exact no-write inspected HEAD");
     gitFn("merge-base", "--is-ancestor", freezeSha, "HEAD");
     const commit = String(gitFn("rev-list", "--parents", "-n", "1", freezeSha)).trim().split(/\s+/);
     if (commit.length !== 2) return fail("fidelity freeze must be a linear test-only commit");

@@ -25,6 +25,15 @@ export function taskReconciliationDigest(entry) {
   return entry.reconciliations?.length ? hashTaskReceipt(entry.reconciliations) : null;
 }
 
+/** Host completion binds a no-write author inspection to the exact committed HEAD. */
+export function isNoWriteTaskFidelityAuthor({ hand, head, taskId, featureId, sessionId, authorCallId }) {
+  return sha.test(head ?? "") && hand?.writtenBy === "host-hand-finished" &&
+    hand.agent === "harness-test-author" && hand.sessionId === sessionId &&
+    hand.featureId === featureId && hand.taskId === taskId && hand.producerCallId === authorCallId &&
+    hand.freezeCommitSha === head && ["DONE", "DONE_WITH_CONCERNS"].includes(hand.outcome) &&
+    [hand.touchedPaths, hand.scopeViolations, hand.frozenViolations].every(a => Array.isArray(a) && !a.length);
+}
+
 /** Reuse an already proven exact freeze after a host-observed no-write inspection.
  * The caller must replay the prior native author/reviewer/freeze proof first.
  */

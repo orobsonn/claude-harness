@@ -3619,7 +3619,7 @@ test("restored historical frozen violations admit test repair with current proof
 
 
 test("a no-write validation author renews the exact proven freeze without another test commit", () => {
-  const prepare = () => {
+  const prepare = (preAuthorCommit = false) => {
     const f = testOnlyRecovery();
     bindPinnedRuntime(f, { testReviewer: true });
     const file = f.entry.launches.at(-1).events_path;
@@ -3632,6 +3632,22 @@ test("a no-write validation author renews the exact proven freeze without anothe
       JSON.parse(event("tool_execution_start", { toolCallId: id, toolName, args })),
       JSON.parse(event("tool_execution_end", { toolCallId: id, toolName, result })));
     const prompt = `[HARNESS_TASK_CONTEXT]{"task_id":"${TASK}"}[/HARNESS_TASK_CONTEXT]`;
+    if (preAuthorCommit) {
+      write(path.join(f.root, ".pi/harness/state", PARENT, "task-runs/index.json"), { tasks: {} });
+      const testPath = path.join(f.root, "src/task.spec.mjs");
+      fs.appendFileSync(testPath, "\n// formatted before the read-only author inspection\n");
+      run(f.root, "git", "add", "src/task.spec.mjs");
+      run(f.root, "git", "commit", "-m", "format locked test");
+      f.head = run(f.root, "git", "rev-parse", "HEAD");
+      const captureReview = f.dependencies.captureReviewInputFn;
+      f.dependencies.captureReviewInputFn = (...args) => {
+        const captured = captureReview(...args);
+        return { ...captured, snapshot: { ...captured.snapshot, head_sha: f.head } };
+      };
+      add("preauthor-format", "bash", { command: "git commit -m format" }, {
+        content: [{ type: "text", text: `[task ${f.head}] format locked test` }],
+      });
+    }
     add("inspect-author", "subagent", { subagent_type: "harness-test-author", prompt },
       { details: { status: "completed" }, content: [{ type: "text", text: "Validated unchanged oracle. Status: DONE" }] });
     add("inspect-review", "subagent", { subagent_type: "harness-test-reviewer", prompt },
@@ -3645,7 +3661,20 @@ test("a no-write validation author renews the exact proven freeze without anothe
       freezeCommitSha: f.head, touchedPaths: [], scopeViolations: [], frozenViolations: [] };
     write(handPath, hand);
     const state = JSON.parse(fs.readFileSync(f.statePath));
-    state.capture_verified.push(`${FEATURE}/${TASK}@${f.head}`); write(f.statePath, state);
+    state.capture_verified.push(`${FEATURE}/${TASK}@${f.head}`);
+    if (preAuthorCommit) {
+      state.fidelity_pass.push(`${FEATURE}/${TASK}@${f.head}`);
+      // This fixture supplies current accepted implementation eyes independently
+      // of the fidelity chain under test.
+      const refreshEyes = value => {
+        if (!value || typeof value !== "object") return;
+        if (value.reviewed_head_sha) value.reviewed_head_sha = f.head;
+        for (const child of Object.values(value)) refreshEyes(child);
+      };
+      refreshEyes(state.task_adversary_evidence);
+      refreshEyes(state.task_review_evidence);
+    }
+    write(f.statePath, state);
     const entries = () => fs.readFileSync(file, "utf8").trim().split("\n").map(JSON.parse).flatMap(row =>
       row.type === "tool_execution_start" ? [{ type: "message", message: { role: "assistant", stopReason: "toolUse", content: [
         { type: "toolCall", id: row.toolCallId, name: row.toolName, arguments: row.args }] } }]
@@ -3660,6 +3689,22 @@ test("a no-write validation author renews the exact proven freeze without anothe
   const replay = inspectTaskRun(f.entry, f.dependencies);
   assert.equal(replay.ok, true, replay.reason);
   assert.equal(replay.result.freeze_sha, f.head);
+  const formatted = prepare(true);
+  assert.equal(formatted.check().ok, true, formatted.check().reason);
+  assert.equal(formatted.check().freezeSha, formatted.head);
+  const formattedReplay = inspectTaskRun(formatted.entry, formatted.dependencies);
+  assert.equal(formattedReplay.ok, true, formattedReplay.reason);
+  assert.equal(formattedReplay.result.freeze_sha, formatted.head);
+  for (const mutation of ["touched", "producer", "negative-review", "missing-commit"]) {
+    const bad = prepare(true);
+    if (mutation === "touched") bad.hand.touchedPaths = ["src/task.spec.mjs"];
+    if (mutation === "producer") bad.hand.producerCallId = "unrelated";
+    write(bad.handPath, bad.hand);
+    if (mutation === "negative-review") write(bad.file, replaceEventText(fs.readFileSync(bad.file, "utf8"), "inspect-review", "Verdict: REVISE"));
+    if (mutation === "missing-commit") write(bad.file, fs.readFileSync(bad.file, "utf8").split("\n").filter(line => !line || JSON.parse(line).toolCallId !== "preauthor-format").join("\n"));
+    assert.equal(bad.check().ok, false, mutation);
+    assert.equal(inspectTaskRun(bad.entry, bad.dependencies).ok, false, mutation);
+  }
   for (const change of ["touched", "violation", "producer", "negative-review", "missing-prior-commit", "missing-prior-marker", "dirty", "new-head"]) {
     const f = prepare();
     if (change === "touched") f.hand.touchedPaths = ["src/task.spec.mjs"];
