@@ -21,7 +21,7 @@ import { piGateStatePath, piHandRecordPath } from "./pi-paths.mjs";
 import { readTaskProcess } from "./task-process.mjs";
 import { capturePlanReviewInput, readTaskRunBinding, validateTaskRepairCheckpoint } from "./task-run.mjs";
 import { readPiSpecApproval } from "./spec-approval.mjs";
-import { taskScopeBase, taskReconciliationDigest, inheritedTaskFidelity, revalidatedTaskFidelity } from "./task-reconciliation.mjs";
+import { taskScopeBase, taskReconciliationDigest, inheritedTaskFidelity, revalidatedTaskFidelity, isNoWriteTaskFidelityAuthor } from "./task-reconciliation.mjs";
 import { isUnwrittenBlockedWriter } from "./native-writer.mjs";
 import { DURABLE_MEMORY_FILES } from "./memory-cycle.mjs";
 
@@ -445,14 +445,22 @@ function validateFidelity({ events, task, taskId, worktree, head, reviewRole, re
   // Match marker authority: prefer the post-review freeze so amendments cannot
   // select a rewritten SHA. Otherwise reuse this author's committed tests when
   // the native commit completed before the approving reviewer started.
+  const inspectedCommit = priorMarkerIndex >= 0 && isNoWriteTaskFidelityAuthor({ hand, head, taskId,
+    featureId: entry?.feature_id, sessionId, authorCallId: events[authorIndex]?.callId })
+    ? events.findLast((event, index) => index > priorMarkerIndex && index < authorIndex &&
+      eventEndsBefore(event, events[authorIndex]) && commitFromEvent(event, worktree) &&
+      !events.some((other, otherIndex) => otherIndex > priorMarkerIndex && otherIndex < index && authored(other))) : null;
   const commitEvent = events.find((event, index) => index > reviewIndex && index < latestMarkerIndex && commitFromEvent(event, worktree))
     ?? events.findLast((event, index) => index > authorIndex && index < reviewIndex &&
-      eventEndsBefore(events[authorIndex], event) && eventEndsBefore(event, events[reviewIndex]) && commitFromEvent(event, worktree));
+      eventEndsBefore(events[authorIndex], event) && eventEndsBefore(event, events[reviewIndex]) && commitFromEvent(event, worktree))
+    ?? inspectedCommit;
   const commitSha = commitFromEvent(commitEvent, worktree);
   if (!commitSha || !ancestor(worktree, commitSha, head)) return failure("fidelity freeze commit is missing or not ancestral to task HEAD");
   if (String(git(worktree, ["rev-list", "--parents", "-n", "1", commitSha])).trim().split(/\s+/).length !== 2)
     return failure("fidelity freeze must be a linear test-only commit");
   const commitIndex = events.indexOf(commitEvent);
+  if (inspectedCommit && commitEvent === inspectedCommit && commitSha !== head)
+    return failure("pre-author freeze must equal the exact no-write inspected HEAD");
   const markerIndex = events.findIndex((event, index) => index > Math.max(commitIndex, reviewIndex) && fidelityMarkers.includes(event));
   const changed = String(git(worktree, ["diff-tree", "--no-renames", "--no-commit-id", "--name-only", "-r", commitSha])).trim().split("\n").filter(Boolean);
   if (changed.length === 0 || changed.some((item) => !covered(item, paths))) return failure("fidelity freeze commit must change only canonical frozen files");
