@@ -112,7 +112,11 @@ test("e2e (Orca): lanes are Orca child worktrees and terminals; the host still d
   const outside = { ...orca.env, ORCA_WORKTREE_ID: "" };
   assert.equal(cli("status", undefined, outside).ok, true);
   assert.match(cli("resume", { task_id: "task-a", attempt_id: byId["task-a"].attempt_id, instruction: "x" }, outside).reason, /Orca workspace/);
-  assert.match(cli("resume", { task_id: "task-a", attempt_id: byId["task-a"].attempt_id, instruction: "x" }, { ...orca.env, ORCA_WORKTREE_ID: `${REPO_ID}::/elsewhere` }).reason, /does not belong to this global worktree/);
+  const foreign = cli("resume", { task_id: "task-a", attempt_id: byId["task-a"].attempt_id, instruction: "x" },
+    { ...orca.env, ORCA_WORKTREE_ID: `${REPO_ID}::/elsewhere` });
+  assert.equal(foreign.ok, false);
+  assert.match(foreign.reason, /worktree show --worktree id:.*\/elsewhere/,
+    "an unknown exact ID is refused at lookup, without resolving another workspace by path");
   // Resume reuses the same Orca worktree and opens a new terminal there.
   const resumed = cli("resume", { task_id: "task-a", attempt_id: byId["task-a"].attempt_id, instruction: "revalide" });
   assert.equal(resumed.ok, true, resumed.reason);
