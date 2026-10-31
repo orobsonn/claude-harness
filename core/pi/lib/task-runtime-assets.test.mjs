@@ -44,8 +44,10 @@ test("task assets preserve LIGHT/FULL eye selection and fresh aggregate review",
     assert.match(asset, /olho que o produziu e somente\s+(?:outros )?olhos.*obrigação ou trigger explícito.*afetado/is);
     assert.doesNotMatch(asset, /obrigatório após toda task|Toda task com escrita\s+exige adversary|false[^.\n]*não (?:o dispensa|remove)|repita todos os\s+olhos já ativados/is);
   }
-  for (const role of ["planner", "plan-reviewer"]) {
-    const asset = readAsset(`../runtime/agents/harness-${role}.md`);
+  for (const asset of [
+    ...["planner", "plan-reviewer"].map(role => readAsset(`../runtime/agents/harness-${role}.md`)),
+    readAsset("../../codex/skills/harness-planning/SKILL.md"),
+  ]) {
     assert.match(asset, /LIGHT has no per-task implementation eyes/);
     assert.match(asset, /FULL requires\s+compliance/);
     assert.match(asset, /adversary.*only when `adversarial\.enabled` is true/is);

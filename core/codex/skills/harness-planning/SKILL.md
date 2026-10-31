@@ -51,9 +51,10 @@ Within this Pi task pipeline:
   file-existence guards or export inventories to make collection pass. Keep module
   creation and its behavior in the same task; the executor must make the original
   behavioral tests GREEN. Do not use a fake foundation or `no_tests` task.
-- Treat `adversarial.enabled` as additional task-specific risk focus. `false` remains
-  correct for ordinary low-risk work and does not disable the Pi pipeline's mandatory
-  post-implementation adversary and re-gate; do not invent focus to encode that baseline.
+- LIGHT has no per-task implementation eyes. FULL requires compliance; task
+  adversary runs only when `adversarial.enabled` is true, and security only for an
+  existing trigger or applicability. Do not invent risk focus, reviews or re-gates
+  for ordinary tasks; final global review remains fresh and follows its own contract.
 
 `.codex/lib/plan-contract.mjs` validates a frozen, explicit TDD plan without
 retaining state. `.codex/lib/review-contracts.mjs` exposes advisory complexity
