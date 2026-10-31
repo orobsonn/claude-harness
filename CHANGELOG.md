@@ -5,6 +5,27 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [3.10.3](https://github.com/orobsonn/claude-harness/compare/v3.10.2...v3.10.3) (2026-10-31)
+
+
+### Bug Fixes
+
+* **orca:** decode API JSON in the real queue CLI ([#1189](https://github.com/orobsonn/claude-harness/issues/1189)) ([5eea9de](https://github.com/orobsonn/claude-harness/commit/5eea9dec2c81e193e3045331fbe3cad18d9592cf))
+* **orca:** recognize merged pull requests as queue dependencies ([#1188](https://github.com/orobsonn/claude-harness/issues/1188)) ([27025d6](https://github.com/orobsonn/claude-harness/commit/27025d6cdecffa0422e651d55a156e0c2a71cec9))
+* **pi:** accept reviewed committed test corrections before inspection ([#1192](https://github.com/orobsonn/claude-harness/issues/1192)) ([dcfdca8](https://github.com/orobsonn/claude-harness/commit/dcfdca807e115ba3962df1abe840fb281c765e4b))
+* **pi:** complete new-module recovery and exact Orca dispatch ([#1195](https://github.com/orobsonn/claude-harness/issues/1195)) ([1b7d793](https://github.com/orobsonn/claude-harness/commit/1b7d79396399ec8bb479dd1ca1bfa32477b80dff))
+* **pi:** freeze canonical fixture directories recursively ([#1182](https://github.com/orobsonn/claude-harness/issues/1182)) ([ff42fa6](https://github.com/orobsonn/claude-harness/commit/ff42fa605e6a2093ae049cf0f3cbb2cd48125f8c))
+* **pi:** freeze revised task contracts at their own admission ([#1184](https://github.com/orobsonn/claude-harness/issues/1184)) ([a4705eb](https://github.com/orobsonn/claude-harness/commit/a4705eb3b05d0459437c467249cc651fdd193e02))
+* **pi:** guide aggregate verification scope recovery ([#1190](https://github.com/orobsonn/claude-harness/issues/1190)) ([acc3ba8](https://github.com/orobsonn/claude-harness/commit/acc3ba86ec3ba29c81dd036d780eb3fcfab44c44))
+* **pi:** honor integrated task re-gates during delivery ([#1186](https://github.com/orobsonn/claude-harness/issues/1186)) ([fc86e46](https://github.com/orobsonn/claude-harness/commit/fc86e463b7761ba6ff9dd5cf4ed81f683af6eac1))
+* **pi:** preserve frozen test proof after author inspection ([#1191](https://github.com/orobsonn/claude-harness/issues/1191)) ([df4e5fd](https://github.com/orobsonn/claude-harness/commit/df4e5fd794588f89bc400dab7caef7127123bc73))
+* **pi:** preserve install residue before first task admission ([#1180](https://github.com/orobsonn/claude-harness/issues/1180)) ([8b17437](https://github.com/orobsonn/claude-harness/commit/8b174375e837c7cab485dd6c702f9946b6ca3fbe))
+* **pi:** preserve native completion evidence in observers ([#1183](https://github.com/orobsonn/claude-harness/issues/1183)) ([b01a528](https://github.com/orobsonn/claude-harness/commit/b01a528f017c16188991977485af1e36fa5e922e))
+* **pi:** recover unchanged oracle after dependency import ([#1193](https://github.com/orobsonn/claude-harness/issues/1193)) ([ffcb86c](https://github.com/orobsonn/claude-harness/commit/ffcb86c47fb0a903ef6ffa438c718f74f4c91acc))
+* **pi:** refresh externally admitted consumer task runtimes ([#1185](https://github.com/orobsonn/claude-harness/issues/1185)) ([0beafe6](https://github.com/orobsonn/claude-harness/commit/0beafe6ddd4ba3d9bec834089460c4c5d9541f95))
+* **pi:** refresh task progress after approved plan amendments ([#1187](https://github.com/orobsonn/claude-harness/issues/1187)) ([74d24df](https://github.com/orobsonn/claude-harness/commit/74d24df4341c25902f4b384a38af1730ce1df3ad))
+* **pi:** unblock TDD for explicitly planned new modules ([#1194](https://github.com/orobsonn/claude-harness/issues/1194)) ([ca87123](https://github.com/orobsonn/claude-harness/commit/ca8712388f1e1d4049fa528113e5d591a040aada))
+
 ## [3.10.2](https://github.com/orobsonn/claude-harness/compare/v3.10.1...v3.10.2) (2026-10-21)
 
 
