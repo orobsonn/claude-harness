@@ -507,7 +507,8 @@ function onlyRecoveryChanges(entry, root, baseline, head, task, plan, replayHand
     // not to this test-author. Keep child writes restricted on both sides.
     let dependencyPaths = null;
     if (replayHand?.agent === "harness-test-author" &&
-        (ancestor(root, replayHand.freeze_sha, proof.pre_child_head) || ancestor(root, proof.merged_head, replayHand.freeze_sha)) &&
+        (ancestor(root, replayHand.freeze_sha, proof.pre_child_head) ||
+          replayHand.freeze_sha === head && ancestor(root, proof.merged_head, head)) &&
         proof.upstreams?.length && !proof.conflicts?.length) {
       const registry = readJson(taskRegistryPath(entry.parent_root, entry.parent_session_id), entry.parent_root);
       const results = proof.upstreams.map((upstream) => {
