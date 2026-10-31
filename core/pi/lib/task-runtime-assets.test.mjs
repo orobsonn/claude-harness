@@ -126,6 +126,51 @@ test("planning follows the side-effect seam and fidelity checks dependent fixtur
     assert.match(asset, /typecheck evidence.*parent|parent.*typecheck evidence/is);
   }
 });
+test("all Pi planning and fidelity roles recognize the exact planned new-SUT exception", () => {
+  const assets = ["planner", "plan-reviewer", "test-author", "test-reviewer"]
+    .map(role => readAsset(`../runtime/agents/harness-${role}.md`));
+  assets.push(readAsset("../../codex/skills/harness-planning/SKILL.md"));
+  for (const asset of assets) {
+    assert.match(asset, /missing production module is expected RED only when its resolved path is\s+exactly/i);
+    assert.match(asset, /scope_paths/);
+    assert.match(asset, /new-SUT exception/);
+    assert.match(asset, /transitive missing modules/);
+    assert.match(asset, /behavioral tests GREEN/);
+  }
+});
+
+test("new-module TDD exposes the exact missing SUT and reaches GREEN without production scaffolding", t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-new-sut-red-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const sut = path.join(root, "booking-guest.mjs");
+  const fixture = put(root, "booking-guest.test.mjs", `import test from 'node:test';
+import assert from 'node:assert/strict';
+import { metadata } from './booking-guest.mjs';
+test('returns only safe guest metadata', () => {
+  assert.deepEqual(metadata({ cpf: 'private', complete: false }), { complete: false });
+});
+`);
+  const runnerEnv = { ...process.env };
+  delete runnerEnv.NODE_TEST_CONTEXT;
+  const run = () => {
+    try { return { status: 0, output: execFileSync(process.execPath, ["--test", fixture], { env: runnerEnv, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }) }; }
+    catch (error) { return { status: error.status, output: String(error.stdout) + String(error.stderr) }; }
+  };
+  const red = run();
+  assert.equal(red.status, 1);
+  assert.match(red.output, /ERR_MODULE_NOT_FOUND/);
+  assert.ok(red.output.includes(sut), "the native error identifies the exact planned production entry");
+  fs.writeFileSync(sut, "export const metadata = input => ({ complete: input.complete });\n");
+  const green = run();
+  assert.equal(green.status, 0, green.output);
+  assert.match(green.output, /# pass 1/);
+  fs.writeFileSync(sut, "export { metadata } from './missing-helper.mjs';\n");
+  const broken = run();
+  assert.equal(broken.status, 1);
+  assert.match(broken.output, /missing-helper\.mjs/);
+  assert.doesNotMatch(broken.output, /Cannot find module '[^'\n]*booking-guest\.mjs'/);
+});
+
 function sourceFixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-runtime-source-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));

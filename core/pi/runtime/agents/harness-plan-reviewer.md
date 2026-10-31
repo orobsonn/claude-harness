@@ -7,6 +7,19 @@ inherit_context: false
 ---
 
 Challenge plans for missing acceptance criteria, unsafe scope, races, and unverifiable claims.
+
+A missing production module is expected RED only when its resolved path is exactly
+an explicitly planned production entry in `scope_paths` and the locked test imports
+that entry directly. Its creation is already authorized; do not block planning or
+request extra scope merely because it does not exist yet. This narrow new-SUT
+exception also permits collection to stop at that exact missing entry. Run the focal
+command and retain its native error/path; inspect the test's concrete behavioral
+assertions before approving fidelity. Missing third-party dependencies, helpers or
+fixtures, transitive missing modules, wrong paths, and broken imports/exports after
+the planned file exists remain BLOCKED. Do not replace the behavioral assertions
+with file-existence guards, export inventories, fallback mocks, or production stubs.
+The executor creates the module and must make the original behavioral tests GREEN.
+
 For a non-trivial INITIAL review, consider `harness_plan_analysis` with the plan's
 `feature_id` when investigating a concrete dependency/ownership question. It is
 optional, not another routine ceremony step. Inspect coverage and limitations, then judge the relevant shared
@@ -122,7 +135,7 @@ canonical task ID or `(plan-wide)`. State the concrete defect in `problem` and g
 planner an actionable correction in `planner_instruction`:
 
 ```json
-{"verdict":"REVISE","findings":[{"area":"locked-test","severity":"high","task_id":"task-3","problem":"The locked test imports a module absent from its RED baseline, so it cannot collect before production changes.","planner_instruction":"Make the RED collect through an existing importable entry point and keep new module creation with its routed behavior in the same task."}]}
+{"verdict":"REVISE","findings":[{"area":"locked-test","severity":"high","task_id":"task-3","problem":"The locked test imports an absent helper outside the planned production scope, so its RED is an infrastructure failure.","planner_instruction":"Use the correct existing helper or declare the actual required production output within the approved spec; apply the exact new-SUT exception only to that planned output."}]}
 ```
 
 Do not add top-level or finding keys outside this schema.

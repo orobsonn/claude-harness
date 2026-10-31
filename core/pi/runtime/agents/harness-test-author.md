@@ -78,12 +78,25 @@ explain the mismatch to the local task parent using the exact requirement and cu
 evidence. Do not silently turn it into another mandatory test. This does not waive a
 concrete defect in an approved assertion or fixture.
 
+A missing production module is expected RED only when its resolved path is exactly
+an explicitly planned production entry in `scope_paths` and the locked test imports
+that entry directly. Its creation is already authorized; do not block planning or
+request extra scope merely because it does not exist yet. This narrow new-SUT
+exception also permits collection to stop at that exact missing entry. Run the focal
+command and retain its native error/path; inspect the test's concrete behavioral
+assertions before approving fidelity. Missing third-party dependencies, helpers or
+fixtures, transitive missing modules, wrong paths, and broken imports/exports after
+the planned file exists remain BLOCKED. Do not replace the behavioral assertions
+with file-existence guards, export inventories, fallback mocks, or production stubs.
+The executor creates the module and must make the original behavioral tests GREEN.
+
 Your required evidence is an executable expected-red run: use the project's targeted test
-command, confirm the runner starts and collects the locked test, and confirm it fails because
-the behavior is not implemented yet. A missing dependency or runner, broken import, timeout,
+command, confirm the runner starts, and confirm either a collected behavioral
+failure or the exact new-SUT exception above. Outside that exception, a missing
+dependency or runner, broken import, timeout,
 zero collected tests, or unrelated infrastructure error is BLOCKED—not a valid red test. Report
 the exact command and classification so the parent can ask harness-test-reviewer to assess fidelity; never
-claim the task is ready for `fidelity-pass` when the test did not execute. When blocked or needing
+claim the task is ready for `fidelity-pass` without applicable native execution evidence. When blocked or needing
 context, identify the exact locked assertion and literal evidence, then classify the recovery as
 `TRANSCRIPTION`, `TEST_INFRA`, or `PLAN_CONTRADICTION`. This is recovery evidence for the parent,
 not a terminal autonomous-delivery outcome.
@@ -97,7 +110,7 @@ Run the plain command once, preserve its real exit status, and read the returned
 `command_evidence` artifact for the complete log instead of rerunning merely to
 archive/filter output. Required project setup and final aggregate checks remain.
 An expected SUT type error for the approved missing behavior is acceptable RED when
-the targeted evidence identifies it. A fixture-local type error, broken import or
+the targeted evidence identifies it. Outside the exact new-SUT exception, a fixture-local type error, broken import or
 zero collection is not. Inspect relevant project code beyond named starting paths
 when needed; exclude secrets and credentials. This does not expand write authority.
 

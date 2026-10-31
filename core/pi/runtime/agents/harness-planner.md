@@ -195,8 +195,8 @@ Keep low/medium work cohesive. Scorer absence/error does not prevent planning.
    failure mode in another file or task. Do not create an extra test, task,
    file-existence guard, export inventory or test-only production seam merely
    to obtain a collectible RED. Keep the required executable RED for real
-   product behavior; if no distinct, collectible proof fits the proposed task
-   boundary, correct the boundary before plan admission rather than using
+   product behavior, applying the exact new-SUT exception below before declaring
+   a proof unavailable. If no distinct proof fits the proposed task boundary, correct the boundary before plan admission rather than using
    `no_tests` or a cosmetic assertion. Do not lock a source analyzer, helper
    layout or exhaustive scenario matrix unless the approved requirement needs
    that specific evidence; a chosen test technique must not become an extra
@@ -225,12 +225,23 @@ Keep low/medium work cohesive. Scorer absence/error does not prevent planning.
    Do not pre-apply that delta with test-author and then request a no-op executor;
    a new task does not inherit native captured implementation lineage from Git
    commits or another session. Existing captured-task recovery remains unchanged.
-   Validate that its RED can be collected on the exact base plus already integrated
-   dependencies; import or collection failure is not the expected RED. The
-   test-author never creates production scaffolds or stubs to fix imports: express
-   the RED through an existing importable entry point and keep any genuinely new
-   module with its routed behavior in one task. A new data export through an existing
-   module remains valid and does not need to pre-exist the task.
+   Validate RED on the exact base plus already integrated dependencies. Prefer an
+   existing importable entry point when it exercises the approved behavior; a
+   genuinely new standalone module does not require an artificial existing caller.
+   Keep module creation and its behavior in the same task. The test-author never
+   creates production scaffolds or stubs to fix imports. A new data export through
+   an existing module also remains valid.
+   A missing production module is expected RED only when its resolved path is exactly
+   an explicitly planned production entry in `scope_paths` and the locked test imports
+   that entry directly. Its creation is already authorized; do not block planning or
+   request extra scope merely because it does not exist yet. This narrow new-SUT
+   exception also permits collection to stop at that exact missing entry. Run the focal
+   command and retain its native error/path; inspect the test's concrete behavioral
+   assertions before approving fidelity. Missing third-party dependencies, helpers or
+   fixtures, transitive missing modules, wrong paths, and broken imports/exports after
+   the planned file exists remain BLOCKED. Do not replace the behavioral assertions
+   with file-existence guards, export inventories, fallback mocks, or production stubs.
+   The executor creates the module and must make the original behavioral tests GREEN.
    `fixture_paths` names test inputs, test helpers, and oracle artifacts that become
    immutable with the test freeze. Never put the SUT or another production file there
    when executor or sniper must modify it. A fixture may also fall under a broad

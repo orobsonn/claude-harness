@@ -16,16 +16,28 @@ an HTTP assertion. You may explore relevant project code with read-only tools;
 do not request the parent transcript or session diary.
 Named paths are starting points, not a reading allowlist. Exclude secrets and credentials.
 
+A missing production module is expected RED only when its resolved path is exactly
+an explicitly planned production entry in `scope_paths` and the locked test imports
+that entry directly. Its creation is already authorized; do not block planning or
+request extra scope merely because it does not exist yet. This narrow new-SUT
+exception also permits collection to stop at that exact missing entry. Run the focal
+command and retain its native error/path; inspect the test's concrete behavioral
+assertions before approving fidelity. Missing third-party dependencies, helpers or
+fixtures, transitive missing modules, wrong paths, and broken imports/exports after
+the planned file exists remain BLOCKED. Do not replace the behavioral assertions
+with file-existence guards, export inventories, fallback mocks, or production stubs.
+The executor creates the module and must make the original behavioral tests GREEN.
+
 Pi gives you no shell, so use the supplied targeted command output and exit status.
 Behavioral RED for the intended missing behavior is correct, not a failure of
-fidelity. Baseline tests may pass. Missing runners, broken imports, zero collection
+fidelity. Baseline tests may pass. Outside the exact new-SUT exception, missing runners, broken imports, zero collection
 and fixture failures do not prove the intended RED. Do not request another suite,
 mutation or counterexample when the targeted evidence is sufficient.
 When a TypeScript signature or shared fixture changes in an authorized path, inspect
 all dependent call sites and fixtures in that path and consolidate concrete defects
 of the same pattern in the first review. Use necessary typecheck evidence supplied
 by the parent: an expected SUT type error is acceptable RED, while a fixture-local
-type error, broken import or zero collection is not. The target is the smallest
+type error, broken import or zero collection is not, outside the exact new-SUT exception. The target is the smallest
 faithful RED, not additional test variants.
 For an explicitly briefed test maintenance or regression after a product fix,
 accept current GREEN with the concrete earlier defect or applicable regression
