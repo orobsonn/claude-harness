@@ -1043,6 +1043,70 @@ test("a reviewed read-only author can revalidate exact aggregate-imported frozen
   assert.equal(run(f.root, "git", "rev-list", "--parents", "-n", "1", f.head).split(" ").length, 3);
 });
 
+test("a read-only author reuses the proven oracle after a host dependency import", () => {
+  const f = reconciledTestRecovery({ readOnlyAuthor: true });
+  bindPinnedRuntime(f, { testReviewer: true });
+  const file = f.entry.launches.at(-1).events_path;
+  const rows = fs.readFileSync(file, "utf8").trim().split("\n").map(JSON.parse);
+  for (const row of rows) if (row.toolCallId === "correct-eye" && row.type === "tool_execution_start") {
+    row.args.subagent_type = "harness-test-reviewer";
+    row.args.prompt = `[HARNESS_TASK_CONTEXT]{"task_id":"${TASK}"}[/HARNESS_TASK_CONTEXT]`;
+  }
+  write(file, rows.map(JSON.stringify).join("\n") + "\n");
+  const history = f.entry.launches.flatMap(launch => {
+    const rows = fs.readFileSync(launch.events_path, "utf8").trim().split("\n").map(JSON.parse);
+    for (const row of rows) if (row.type === "tool_execution_start" && ["author", "fidelity-eye"].includes(row.toolCallId)) {
+      row.args.prompt = `[HARNESS_TASK_CONTEXT]{"task_id":"${TASK}"}[/HARNESS_TASK_CONTEXT]`;
+      if (row.toolCallId === "fidelity-eye") row.args.subagent_type = "harness-test-reviewer";
+    }
+    write(launch.events_path, rows.map(JSON.stringify).join("\n") + "\n");
+    return rows;
+  });
+  const entries = history.flatMap(row => row.type === "tool_execution_start"
+      ? [{ type: "message", message: { role: "assistant", stopReason: "toolUse", content: [
+        { type: "toolCall", id: row.toolCallId, name: row.toolName, arguments: row.args }] } }]
+      : [{ type: "message", message: { role: "toolResult", toolCallId: row.toolCallId, toolName: row.toolName,
+        isError: row.isError, ...row.result } }]);
+  const fidelity = validateTaskFidelityFreeze({ projectRoot: f.root, sessionId: CHILD, taskId: TASK, sessionEntries: entries },
+    { readTaskRunBindingFn: f.dependencies.readTaskRunBindingFn });
+  assert.equal(fidelity.ok, true, fidelity.reason);
+  assert.equal(fidelity.freezeSha, f.head);
+  const inspected = inspectTaskRun(f.entry, f.dependencies);
+  assert.equal(inspected.ok, true, inspected.reason);
+  assert.equal(inspected.result.freeze_sha, f.head);
+  assert.equal(inspected.result.hand_capture.recovery_origin.producer_call_id, "producer");
+});
+
+test("read-only recovery keeps a captured implementation across a product-bearing host refresh and blocked writer", () => {
+  for (const childProductDelta of [false, true]) {
+    const f = reconciledTestRecovery({ aggregateRefresh: true, productDelta: true, readOnlyAuthor: true, childProductDelta });
+    const source = f.entry.result_history[f.entry.integration_history.at(-1).result_sha256];
+    const first = f.entry.launches[0].events_path;
+    fs.appendFileSync(first, [
+      event("tool_execution_start", { toolCallId: "original-capture", toolName: "mark", args: { action: "capture-verified", task_id: TASK } }),
+      event("tool_execution_end", { toolCallId: "original-capture", toolName: "mark", result: { details: { ok: true,
+        capture_origin: { task_id: TASK, producer_call_id: "producer", head_sha: source.child_head, worktree_clean: true } } } }), "",
+    ].join("\n"));
+    const file = f.entry.launches.at(-1).events_path;
+    const rows = fs.readFileSync(file, "utf8").trim().split("\n").map(JSON.parse);
+    const index = rows.findIndex(row => row.type === "tool_execution_start" && row.toolCallId === "correct-author");
+    rows.splice(index, 0,
+      JSON.parse(event("tool_execution_start", { toolCallId: "earlier-inspection", toolName: "subagent", args: {
+        subagent_type: "harness-test-author", prompt: `[HARNESS_TASK_CONTEXT]{"task_id":"${TASK}"}[/HARNESS_TASK_CONTEXT]` } })),
+      JSON.parse(event("tool_execution_end", { toolCallId: "earlier-inspection", toolName: "subagent", result: {
+        details: { status: "completed" }, content: [{ type: "text", text: "Status: DONE" }] } })),
+      JSON.parse(event("tool_execution_start", { toolCallId: "blocked-inspection", toolName: "subagent", args: {
+        subagent_type: "harness-sniper", prompt: `[HARNESS_TASK_CONTEXT]{"task_id":"${TASK}"}[/HARNESS_TASK_CONTEXT]` } })),
+      JSON.parse(event("tool_execution_end", { toolCallId: "blocked-inspection", toolName: "subagent", result: {
+        details: { status: "completed", subagentType: "harness-sniper", toolUses: 4 },
+        content: [{ type: "text", text: "Scope refused without changes. Status: BLOCKED" }] } })));
+    write(file, rows.map(JSON.stringify).join("\n") + "\n");
+    const inspected = inspectTaskRun(f.entry, f.dependencies);
+    assert.equal(inspected.ok, !childProductDelta, inspected.reason);
+    if (!childProductDelta) assert.equal(inspected.result.hand_capture.recovery_origin.derived_from, "earlier-native-capture");
+  }
+});
+
 test("marker and replay agree on read-only inherited fidelity and reject missing authority or own edits", () => {
   const prepare = () => {
     const f = reconciledTestRecovery({ aggregateRefresh: true, readOnlyAuthor: true, importOwnFrozen: true });

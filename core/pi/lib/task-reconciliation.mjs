@@ -38,14 +38,18 @@ export function isNoWriteTaskFidelityAuthor({ hand, head, taskId, featureId, ses
  * The caller must replay the prior native author/reviewer/freeze proof first.
  */
 export function revalidatedTaskFidelity({ root, head, taskId, featureId, hand, sessionId, authorCallId, state, prior }) {
-  if (!prior?.ok || prior.freezeSha !== head || !sha.test(head ?? "") ||
+  if (!prior?.ok || !sha.test(prior.freezeSha ?? "") || !sha.test(head ?? "") ||
       state?.session_id !== sessionId || state.feature_id !== featureId ||
-      !state.fidelity_pass?.includes(`${featureId}/${taskId}@${head}`) ||
+      !state.fidelity_pass?.includes(`${featureId}/${taskId}@${prior.freezeSha}`) ||
       hand?.writtenBy !== "host-hand-finished" || hand.agent !== "harness-test-author" ||
       hand.sessionId !== sessionId || hand.featureId !== featureId || hand.taskId !== taskId ||
       hand.producerCallId !== authorCallId || hand.freezeCommitSha !== head ||
       !["DONE", "DONE_WITH_CONCERNS"].includes(hand.outcome) ||
       ![hand.touchedPaths, hand.scopeViolations, hand.frozenViolations].every(a => Array.isArray(a) && !a.length)) return false;
+  // The prior native replay already checked every frozen blob at today's HEAD.
+  // A host import or captured implementation can advance HEAD without changing
+  // the oracle; full commit equality would demand an artificial test change.
+  try { ancestor(root, prior.freezeSha, head); } catch { return false; }
   return !git(root, "status", "--porcelain", "--untracked-files=all", "--", ".", ":(exclude).pi/harness/", ":(exclude)node_modules/");
 }
 

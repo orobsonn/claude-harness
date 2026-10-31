@@ -464,15 +464,18 @@ export function validateTaskFidelityFreeze({ projectRoot, sessionId, taskId, ses
       const prior = validateTaskFidelityFreeze({ projectRoot, sessionId, taskId,
         sessionEntries: sessionEntries.slice(0, priorMarker.endIndex + 1) }, dependencies);
       const currentState = JSON.parse(fs.readFileSync(piGateStatePath({ projectRoot, sessionId }).path, "utf8"));
-      if (revalidatedTaskFidelity({ root: projectRoot, head: String(gitFn("rev-parse", "HEAD")).trim(), taskId,
+      const inspectedHead = String(gitFn("rev-parse", "HEAD")).trim();
+      const revalidated = revalidatedTaskFidelity({ root: projectRoot, head: inspectedHead, taskId,
         featureId: binding.grant.feature_id, hand: inheritedHand, sessionId, authorCallId: author.id,
-        state: currentState, prior })) return prior;
+        state: currentState, prior });
+      if (revalidated && prior.freezeSha === inspectedHead) return prior;
       const registry = JSON.parse(fs.readFileSync(taskRegistryPath(binding.grant.parent_root, binding.grant.parent_session_id), "utf8"));
       const inherited = inheritedTaskFidelity({ entry: registry.tasks?.[taskId], root: projectRoot,
         head: String(gitFn("rev-parse", "HEAD")).trim(), task: binding.task, sessionId, authorCallId: author.id,
         hand: inheritedHand,
         state: JSON.parse(fs.readFileSync(piGateStatePath({ projectRoot, sessionId }).path, "utf8")) });
       if (inherited) return { ok: true, freezeSha: inherited.freezeSha, frozenPaths: inherited.frozenPaths };
+      if (revalidated) return { ...prior, freezeSha: inspectedHead };
     }
     const nativeCommit = (call) => call.name === "bash" && /\bgit\s+commit\b/.test(call.args?.command ?? "") &&
       call.result && call.result.isError !== true;
