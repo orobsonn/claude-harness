@@ -497,7 +497,9 @@ function onlyRecoveryChanges(entry, root, baseline, head, task, plan, replayHand
       sourceHand.producer_call_id === replayHand.producer_call_id && sourceHand.freeze_sha === replayHand.freeze_sha &&
       sourceHand.captured_verified_at === replayHand.captured_verified_at &&
       sourceHand.recovery_origin?.head_sha === baseline && hashTaskReceipt(sourceResult) === source.result_sha256;
-    const exactParentRefresh = sameAuthor && proof.kind === "aggregate-refresh" &&
+    const inspectedSource = replayHand?.agent === "harness-test-author" && replayHand.freeze_sha === head &&
+      sourceResult?.child_head === baseline && hashTaskReceipt(sourceResult) === source?.result_sha256;
+    const exactParentRefresh = (sameAuthor || inspectedSource) && proof.kind === "aggregate-refresh" &&
       String(git(root, ["rev-parse", `${proof.merged_head}^{tree}`])).trim() ===
         String(git(root, ["rev-parse", `${proof.parent_head}^{tree}`])).trim();
     // taskScopeBase has validated the merge tree and each corrected ancestor's
@@ -505,7 +507,8 @@ function onlyRecoveryChanges(entry, root, baseline, head, task, plan, replayHand
     // not to this test-author. Keep child writes restricted on both sides.
     let dependencyPaths = null;
     if (replayHand?.agent === "harness-test-author" &&
-        ancestor(root, replayHand.freeze_sha, proof.pre_child_head) && proof.upstreams?.length && !proof.conflicts?.length) {
+        (ancestor(root, replayHand.freeze_sha, proof.pre_child_head) || ancestor(root, proof.merged_head, replayHand.freeze_sha)) &&
+        proof.upstreams?.length && !proof.conflicts?.length) {
       const registry = readJson(taskRegistryPath(entry.parent_root, entry.parent_session_id), entry.parent_root);
       const results = proof.upstreams.map((upstream) => {
         const dependency = registry.tasks?.[upstream.task_id];
@@ -834,7 +837,7 @@ export function inspectTaskRun(entry, dependencies = {}) {
             if (origin?.task_id !== entry.task_id || origin.producer_call_id !== priorWriter.callId ||
                 origin.worktree_clean !== true || !COMMIT_SHA.test(origin.head_sha ?? "") ||
                 !ancestor(worktree, origin.head_sha, hand.freezeCommitSha) ||
-                !onlyRecoveryChanges(entry, worktree, origin.head_sha, head, binding.task, binding.plan)) continue;
+                !onlyRecoveryChanges(entry, worktree, origin.head_sha, head, binding.task, binding.plan, replayHand)) continue;
             recoveryOrigin = { head_sha: origin.head_sha, producer_call_id: origin.producer_call_id,
               producer_launch_index: priorWriter.launchIndex, derived_from: "earlier-native-capture" };
             break;
