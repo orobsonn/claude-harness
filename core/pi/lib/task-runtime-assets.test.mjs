@@ -141,6 +141,18 @@ test("all Pi planning and fidelity roles recognize the exact planned new-SUT exc
   }
 });
 
+test("global and task coordinators preserve the same scoped new-SUT exception", () => {
+  for (const asset of [readAsset("../prompts/harness-runtime.md"),
+    readAsset("../prompts/harness-task-runtime.md"), readAsset("../skills/harness-task-pipeline/SKILL.md")]) {
+    assert.match(asset, /Exceção new-SUT/);
+    assert.match(asset, /caminho resolvido é exatamente uma entrada de produção planejada/);
+    assert.match(asset, /scope_paths.*teste travado o importa diretamente/is);
+    assert.match(asset, /coleta pode parar nesse import específico/);
+    assert.match(asset, /módulo ausente transitivo/);
+    assert.match(asset, /testes comportamentais originais GREEN/);
+  }
+});
+
 test("new-module TDD exposes the exact missing SUT and reaches GREEN without production scaffolding", t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-new-sut-red-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));

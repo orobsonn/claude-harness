@@ -26,6 +26,17 @@ sessão pai local, usando a pipeline nativa de mãos, fidelidade, freeze, captur
   `shared_context` global com `harness_memory update`.
   Depois de consumir um `context_return`, use `compact:true` nas consultas `status`/`wait`
   seguintes para preservar estado, handles, heads e diagnósticos sem repetir o corpo inteiro.
+**Exceção new-SUT.** A ausência de um módulo de produção é RED esperado somente
+quando o caminho resolvido é exatamente uma entrada de produção planejada em
+`scope_paths` e o teste travado o importa diretamente. Esse arquivo é a saída
+que o executor foi autorizado a criar; a coleta pode parar nesse import específico.
+Preserve o comando focal, exit status, erro/caminho nativos e as asserções concretas
+de comportamento para o test-reviewer. Não exija caller artificial, stub de
+produção, mock de fallback, teste de existência ou inventário de exports. Caminho
+errado, dependência/helper/fixture ausente, módulo ausente transitivo e import/export
+quebrado depois que o arquivo planejado existe continuam inválidos. O executor
+precisa implementar o módulo e tornar os testes comportamentais originais GREEN.
+
 - Integre apenas um resultado `ready` com `task_id`, `attempt_id` e `expected_head` exatos. O recibo
   host-owned, não o tip da branch nem o relatório textual, é a evidência para dependentes e gates
   finais.

@@ -66,7 +66,7 @@ reporte a contradição antes da mão, sem inventar RED ou alterar grants/recibo
 
 Nas tasks com testes travados há um RED/freeze inicial por task; retomar ou corrigir produto preserva a fidelidade
 válida. Em uma task nova, não presuma fidelity, freeze, captura, revisão ou re-gate. Siga esta
-ordem exata: (1) test-author; (2) RED comportamental executável; (3) aprovação de
+ordem exata: (1) test-author; (2) RED comportamental executável ou a exceção new-SUT abaixo; (3) aprovação de
 fidelidade pelo harness-test-reviewer; (4) freeze commit seletivo contendo somente testes/fixtures travados;
 (5) marker `fidelity`; (6) marker `capture-verified`; (7) executor. O pai faz o freeze
 seletivo diretamente; não despache outro test-author apenas para commitar testes aprovados.
@@ -84,13 +84,24 @@ a autoridade deriva o commit do estado host-owned. Ao relatar um SHA, leia o val
 completo com `git log -1 --format=%H`; nunca complete por inferência um SHA abreviado.
 **Recuperação de dependência declarada.** Se a validação focal não inicia porque uma dependência já declarada não está instalada, o pai — nunca uma mão — deve primeiro confirmar que `package.json` e `package-lock.json` existem e que `git diff --exit-code -- package.json package-lock.json` não mostra mudança. Execute então `npm ci` em uma única chamada permitida e repita exatamente uma vez o mesmo comando de validação. Não use `npm install`, não altere manifests, não adicione dependências e não abra um novo `harness-test-author` apenas para instalar. Registre o resultado do `npm ci`, a checagem dos manifests e a repetição do teste. Se a segunda execução ainda falhar por infraestrutura ou dependência, preserve o erro e marque `BLOCKED`; se ela coletar o teste, prossiga normalmente com a evidência observada.
 
+**Exceção new-SUT.** A ausência de um módulo de produção é RED esperado somente
+quando o caminho resolvido é exatamente uma entrada de produção planejada em
+`scope_paths` e o teste travado o importa diretamente. Esse arquivo é a saída
+que o executor foi autorizado a criar; a coleta pode parar nesse import específico.
+Preserve o comando focal, exit status, erro/caminho nativos e as asserções concretas
+de comportamento para o test-reviewer. Não exija caller artificial, stub de
+produção, mock de fallback, teste de existência ou inventário de exports. Caminho
+errado, dependência/helper/fixture ausente, módulo ausente transitivo e import/export
+quebrado depois que o arquivo planejado existe continuam inválidos. O executor
+precisa implementar o módulo e tornar os testes comportamentais originais GREEN.
+
 Falha de infraestrutura não é RED. Execute as verificações de tipagem/sintaxe
 exigidas pelo contrato ou necessárias para esclarecer um erro concreto; o reviewer
 de fidelidade não acrescenta uma etapa de typecheck por rotina.
 Quando uma assinatura TypeScript ou fixture compartilhada mudar em path autorizado,
 confira todos os call sites e fixtures dependentes naquele path. Forneça o typecheck
-necessário ao reviewer: erro de tipo esperado no SUT pode ser RED; erro local de
-fixture, import quebrado ou zero testes coletados não podem.
+necessário ao reviewer: erro de tipo esperado no SUT pode ser RED; fora da exceção
+new-SUT, erro local de fixture, import quebrado ou zero testes coletados não podem.
 Antes de reabrir test-author com implementação pendente, faça commit seletivo dos
 paths de produto autorizados que já foram implementados. O gate preserva esse delta
 contra descarte e exige esse checkpoint antes do reparo. Esse commit não aprova
