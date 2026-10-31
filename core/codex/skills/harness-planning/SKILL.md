@@ -36,18 +36,25 @@ decomposition does not change planning or dispatch for other hosts.
 
 Within this Pi task pipeline:
 
-- Before freezing task boundaries, confirm each planned RED can be collected on the
-  exact base plus its already integrated dependencies; an import or collection
-  failure is not the expected RED. A task may add and assert a new data export
-  through an existing module, but its test must not import a module absent from that
-  RED baseline.
-- Never ask the test-author to add production scaffolds or stubs just to make test
-  collection pass. Express the RED through an existing importable entry point and,
-  when behavior requires a genuinely new module, combine its creation with the routed
-  behavior in one task; do not use a fake foundation or `no_tests` task.
-- Treat `adversarial.enabled` as additional task-specific risk focus. `false` remains
-  correct for ordinary low-risk work and does not disable the Pi pipeline's mandatory
-  post-implementation adversary and re-gate; do not invent focus to encode that baseline.
+- Validate each planned RED on its exact base plus integrated dependencies. Prefer
+  an existing entry point when it exercises the approved behavior, but do not
+  require an artificial caller for a genuinely new standalone module.
+- A missing production module is expected RED only when its resolved path is
+  exactly an explicitly planned production entry in `scope_paths` and the locked
+  test imports it directly. This narrow new-SUT exception permits collection to
+  stop at that exact missing entry; retain the focal command's native error/path
+  and concrete behavioral assertions for fidelity review. Its creation is already
+  authorized, so do not request extra scope solely because the module is absent.
+  Wrong paths, transitive missing modules, missing dependencies/helpers/fixtures,
+  and import/export errors after the planned file exists remain invalid RED.
+- Never ask the test-author to add production scaffolds, stubs, fallback mocks,
+  file-existence guards or export inventories to make collection pass. Keep module
+  creation and its behavior in the same task; the executor must make the original
+  behavioral tests GREEN. Do not use a fake foundation or `no_tests` task.
+- LIGHT has no per-task implementation eyes. FULL requires compliance; task
+  adversary runs only when `adversarial.enabled` is true, and security only for an
+  existing trigger or applicability. Do not invent risk focus, reviews or re-gates
+  for ordinary tasks; final global review remains fresh and follows its own contract.
 
 `.codex/lib/plan-contract.mjs` validates a frozen, explicit TDD plan without
 retaining state. `.codex/lib/review-contracts.mjs` exposes advisory complexity
