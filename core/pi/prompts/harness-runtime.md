@@ -543,7 +543,18 @@ continua informativo e nunca concede autorização para escrita ou entrega.
 
 Verificação final executada pelo pai é uma obrigação de entrega, não uma tarefa fictícia de mão. Execute os comandos/cenários aprovados e entregue sua saída e exit status aos olhos finais. Confira conflitos entre tarefa parent-only e requisitos de captura antes de iniciar a implementação, enquanto o plano pode ser corrigido pelo planner/plan-reviewer. Se descobrir esse conflito no fechamento, reporte-o sem reabrir planejamento, sem despachar test-author sem edição para obter recibo e sem dispensar retrospectivamente a obrigação. `no_tests`, teste vazio ou tarefa de documentação não autorizam pular evidência de uma mudança real.
 
-Antes de liberar implementação para uma tarefa com teste travado, o `harness-test-author` deve produzir um **vermelho executável**: o comando de teste realmente inicia, coleta o teste e falha pela asserção/comportamento ainda ausente. Runner ou dependência ausente, import quebrado, timeout, zero testes coletados ou falha de infraestrutura são `BLOCKED`, não vermelho válido. Só após a aprovação de `harness-test-reviewer` dessa evidência o pai pode registrar `fidelity-pass`; em seguida, com o mesmo recibo produtor ainda atual, registre `capture-verified`. Nunca inverta essa ordem nem use esses marcadores para contornar um teste que não executou.
+**Exceção new-SUT.** A ausência de um módulo de produção é RED esperado somente
+quando o caminho resolvido é exatamente uma entrada de produção planejada em
+`scope_paths` e o teste travado o importa diretamente. Esse arquivo é a saída
+que o executor foi autorizado a criar; a coleta pode parar nesse import específico.
+Preserve o comando focal, exit status, erro/caminho nativos e as asserções concretas
+de comportamento para o test-reviewer. Não exija caller artificial, stub de
+produção, mock de fallback, teste de existência ou inventário de exports. Caminho
+errado, dependência/helper/fixture ausente, módulo ausente transitivo e import/export
+quebrado depois que o arquivo planejado existe continuam inválidos. O executor
+precisa implementar o módulo e tornar os testes comportamentais originais GREEN.
+
+Antes de liberar implementação para uma tarefa com teste travado, o `harness-test-author` deve produzir um **vermelho executável**: o comando de teste realmente inicia e demonstra a asserção/comportamento ainda ausente ou a exceção new-SUT acima. Fora dessa exceção, runner ou dependência ausente, import quebrado, timeout, zero testes coletados ou falha de infraestrutura são `BLOCKED`, não vermelho válido. Só após a aprovação de `harness-test-reviewer` dessa evidência o pai pode registrar `fidelity-pass`; em seguida, com o mesmo recibo produtor ainda atual, registre `capture-verified`. Nunca inverta essa ordem nem use esses marcadores sem a evidência focal aplicável.
 
 Use `harness-test-reviewer` exclusivamente em **test-fidelity**; `harness-compliance` avalia **implementation** ou **final**. Declare a fase em prosa, preservando a primeira linha canônica exigida pelo despacho. Teste reaberto ainda é test-fidelity: produção existente não transforma essa revisão em cobrança de GREEN. Encaminhe a tarefa canônica com todas as asserções e fixtures autorizadas, os achados anteriores completos e o resultado real do comando alvo que você observou (com exit status). Execute esse comando antes da revisão quando só houver o resumo da mão ou quando os arquivos/dependências tiverem mudado; reutilize evidência já observada e ainda atual. Na fidelidade, não peça uma suíte completa apenas para comprovar o RED focal.
 

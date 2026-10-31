@@ -103,7 +103,9 @@ export async function resolveOrcaTaskBackend({ projectRoot, worktreeId, admissio
     throw new Error("Orca parent worktree identity required");
   const root = fs.realpathSync(projectRoot);
   const run = (args) => (injected.run ?? runOrca)({ cli, args, cwd: root });
-  const parent = (await run(["worktree", "show", "--worktree", `path:${root}`])).worktree;
+  // The pane already supplied an exact identity. Path selectors can be ambiguous
+  // across registrations/hosts; retain the canonical-path check below instead.
+  const parent = (await run(["worktree", "show", "--worktree", `id:${worktreeId}`])).worktree;
   if (!parent || parent.id !== worktreeId || !parent.repoId ||
       fs.realpathSync(parent.path) !== root)
     throw new Error("Orca pane does not belong to this global worktree; resume it in the matching Orca workspace");
@@ -196,7 +198,7 @@ export async function resolveOrcaTaskBackend({ projectRoot, worktreeId, admissio
       }
     },
     async launchTerminal({ command, args, cwd, title, worktreeId, instanceId }) {
-      const target = (await run(["worktree", "show", "--worktree", `path:${cwd}`])).worktree;
+      const target = (await run(["worktree", "show", "--worktree", `id:${worktreeId}`])).worktree;
       if (!target || target.id !== worktreeId || target.instanceId !== instanceId ||
           target.repoId !== parent.repoId || target.parentWorktreeId !== parent.id ||
           (target.hostId ?? null) !== parentPlacement.host_id ||

@@ -7,7 +7,7 @@ import { execFileSync } from "node:child_process";
 import { quoteOrcaCommand, isOrcaLocalHostMigration, resolveOrcaTaskBackend, taskWorktreeName, waitForOrcaTaskTerminalExit } from "./task-orca.mjs";
 
 const git = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
-async function fixture(t) {
+async function fixture(t, { ambiguousPaths = false } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "task-orca-"));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const root = path.join(dir, "parent");
@@ -34,6 +34,7 @@ async function fixture(t) {
     if (action === "worktree list") return { worktrees: state.children };
     if (action === "worktree show") {
       const selector = flag("--worktree");
+      if (ambiguousPaths && selector.startsWith("path:")) throw new Error("selector_ambiguous");
       return { worktree: [parent, ...state.children].find((w) => selector === `path:${w.path}` || selector === `id:${w.id}`) };
     }
     if (action === "worktree create") {
@@ -85,6 +86,21 @@ test("Orca receives exact Git base and visual parent, and returned cwd/branch bi
   assert.equal(f.state.calls.filter((args) => args[0] === "worktree" && args[1] === "create").length, 1);
   f.state.children[0].instanceId = "replacement";
   await assert.rejects(f.backend.prepareWorktree(f.entry, () => {}), /replaced or moved/);
+});
+
+test("exact parent and task identities survive ambiguous path registrations", async t => {
+  const f = await fixture(t, { ambiguousPaths: true });
+  await f.backend.prepareWorktree(f.entry, () => {});
+  const launch = { command: process.execPath, args: [], cwd: f.entry.worktree,
+    worktreeId: f.entry.orca.worktree_id, instanceId: f.entry.orca.instance_id };
+  const handle = await f.backend.launchTerminal(launch);
+  assert.equal(handle.terminal_handle, "term-child");
+  const lookups = f.state.calls.filter(args => args[0] === "worktree" && args[1] === "show");
+  assert.ok(lookups.length >= 2);
+  assert.ok(lookups.every(args => args[args.indexOf("--worktree") + 1].startsWith("id:")));
+  await assert.rejects(f.backend.launchTerminal({ ...launch, cwd: f.root }), /does not belong/,
+    "an exact ID must still match the canonical Git path");
+  await assert.rejects(f.backend.launchTerminal({ ...launch, instanceId: "replaced" }), /does not belong/);
 });
 
 test("task worktree names use a short safe term with accents normalized and ID fallback", () => {
