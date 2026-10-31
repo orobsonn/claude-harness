@@ -1043,6 +1043,40 @@ test("a reviewed read-only author can revalidate exact aggregate-imported frozen
   assert.equal(run(f.root, "git", "rev-list", "--parents", "-n", "1", f.head).split(" ").length, 3);
 });
 
+test("a read-only author reuses the proven oracle after a host dependency import", () => {
+  const f = reconciledTestRecovery({ readOnlyAuthor: true });
+  bindPinnedRuntime(f, { testReviewer: true });
+  const file = f.entry.launches.at(-1).events_path;
+  const rows = fs.readFileSync(file, "utf8").trim().split("\n").map(JSON.parse);
+  for (const row of rows) if (row.toolCallId === "correct-eye" && row.type === "tool_execution_start") {
+    row.args.subagent_type = "harness-test-reviewer";
+    row.args.prompt = `[HARNESS_TASK_CONTEXT]{"task_id":"${TASK}"}[/HARNESS_TASK_CONTEXT]`;
+  }
+  write(file, rows.map(JSON.stringify).join("\n") + "\n");
+  const history = f.entry.launches.flatMap(launch => {
+    const rows = fs.readFileSync(launch.events_path, "utf8").trim().split("\n").map(JSON.parse);
+    for (const row of rows) if (row.type === "tool_execution_start" && ["author", "fidelity-eye"].includes(row.toolCallId)) {
+      row.args.prompt = `[HARNESS_TASK_CONTEXT]{"task_id":"${TASK}"}[/HARNESS_TASK_CONTEXT]`;
+      if (row.toolCallId === "fidelity-eye") row.args.subagent_type = "harness-test-reviewer";
+    }
+    write(launch.events_path, rows.map(JSON.stringify).join("\n") + "\n");
+    return rows;
+  });
+  const entries = history.flatMap(row => row.type === "tool_execution_start"
+      ? [{ type: "message", message: { role: "assistant", stopReason: "toolUse", content: [
+        { type: "toolCall", id: row.toolCallId, name: row.toolName, arguments: row.args }] } }]
+      : [{ type: "message", message: { role: "toolResult", toolCallId: row.toolCallId, toolName: row.toolName,
+        isError: row.isError, ...row.result } }]);
+  const fidelity = validateTaskFidelityFreeze({ projectRoot: f.root, sessionId: CHILD, taskId: TASK, sessionEntries: entries },
+    { readTaskRunBindingFn: f.dependencies.readTaskRunBindingFn });
+  assert.equal(fidelity.ok, true, fidelity.reason);
+  assert.equal(fidelity.freezeSha, f.head);
+  const inspected = inspectTaskRun(f.entry, f.dependencies);
+  assert.equal(inspected.ok, true, inspected.reason);
+  assert.equal(inspected.result.freeze_sha, f.head);
+  assert.equal(inspected.result.hand_capture.recovery_origin.producer_call_id, "producer");
+});
+
 test("marker and replay agree on read-only inherited fidelity and reject missing authority or own edits", () => {
   const prepare = () => {
     const f = reconciledTestRecovery({ aggregateRefresh: true, readOnlyAuthor: true, importOwnFrozen: true });

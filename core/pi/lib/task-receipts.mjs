@@ -427,12 +427,12 @@ function validateFidelity({ events, task, taskId, worktree, head, reviewRole, re
     const priorMarkerIndex = events.findLastIndex((event, index) => index < currentAuthorIndex && fidelityMarkers.includes(event));
     const prior = validateFidelity({ events: events.slice(0, priorMarkerIndex + 1), task, taskId, worktree, head,
       reviewRole, reconciliations, entry, hand, state, sessionId });
-    if (revalidatedTaskFidelity({ root: worktree, head, taskId, featureId: entry.feature_id, hand, state, sessionId,
-      authorCallId: events[currentAuthorIndex].callId, prior })) return { ...prior, markerIndex: latestMarkerIndex, authorIndex: currentAuthorIndex };
     const inherited = inheritedTaskFidelity({ entry, root: worktree, head, task, hand, state, sessionId,
       authorCallId: events[currentAuthorIndex].callId });
     if (inherited) return { ok: true, freezeSha: inherited.freezeSha, frozenBlobs: inherited.frozenBlobs,
       markerIndex: latestMarkerIndex, authorIndex: currentAuthorIndex };
+    if (revalidatedTaskFidelity({ root: worktree, head, taskId, featureId: entry.feature_id, hand, state, sessionId,
+      authorCallId: events[currentAuthorIndex].callId, prior })) return { ...prior, freezeSha: head, markerIndex: latestMarkerIndex, authorIndex: currentAuthorIndex };
   }
   if (events.some((event, index) => index > latestMarkerIndex && authored(event))) {
     return failure("latest test-author work has no subsequent fidelity marker");
