@@ -483,11 +483,13 @@ export function validateTaskFidelityFreeze({ projectRoot, sessionId, taskId, ses
     // recovery already committed by this author can instead be reviewed as-is;
     // demanding another nonempty commit would manufacture test churn.
     const inspectedHead = String(gitFn("rev-parse", "HEAD")).trim();
+    // A prior author may have written this correction before its provider failed.
+    // The fresh no-write author and current review bind the exact HEAD below.
     const inspectedCommit = priorMarker && isNoWriteTaskFidelityAuthor({ hand: currentHand, head: inspectedHead,
       taskId, featureId: binding.grant.feature_id, sessionId, authorCallId: author.id })
       ? calls.findLast(call => nativeCommit(call) && call.index > priorMarker.endIndex && call.endIndex < author.index &&
         !calls.some(other => other.index > priorMarker.endIndex && other.index < call.index && forTask(other) &&
-          other.args.subagent_type === "harness-test-author" && !refused(other)))
+          other.args.subagent_type === "harness-test-author" && completed(other) && !refused(other)))
       : null;
     const commitCall = calls.find((call) => nativeCommit(call) && call.index > review.endIndex && call.index < boundary)
       ?? calls.findLast((call) => nativeCommit(call) && call.index > author.endIndex && call.endIndex < review.index)

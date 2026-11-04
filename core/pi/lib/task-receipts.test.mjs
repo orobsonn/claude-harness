@@ -3683,7 +3683,7 @@ test("restored historical frozen violations admit test repair with current proof
 
 
 test("a no-write validation author renews the exact proven freeze without another test commit", () => {
-  const prepare = (preAuthorCommit = false) => {
+  const prepare = (preAuthorCommit = false, failedAuthor = false) => {
     const f = testOnlyRecovery();
     bindPinnedRuntime(f, { testReviewer: true });
     const file = f.entry.launches.at(-1).events_path;
@@ -3696,6 +3696,8 @@ test("a no-write validation author renews the exact proven freeze without anothe
       JSON.parse(event("tool_execution_start", { toolCallId: id, toolName, args })),
       JSON.parse(event("tool_execution_end", { toolCallId: id, toolName, result })));
     const prompt = `[HARNESS_TASK_CONTEXT]{"task_id":"${TASK}"}[/HARNESS_TASK_CONTEXT]`;
+    if (failedAuthor) add("failed-repair-author", "subagent", { subagent_type: "harness-test-author", prompt },
+      { details: { status: "error", toolUses: 15 }, content: [{ type: "text", text: "Codex error: Unable to verify model access right now" }] });
     if (preAuthorCommit) {
       write(path.join(f.root, ".pi/harness/state", PARENT, "task-runs/index.json"), { tasks: {} });
       const testPath = path.join(f.root, "src/task.spec.mjs");
@@ -3759,6 +3761,12 @@ test("a no-write validation author renews the exact proven freeze without anothe
   const formattedReplay = inspectTaskRun(formatted.entry, formatted.dependencies);
   assert.equal(formattedReplay.ok, true, formattedReplay.reason);
   assert.equal(formattedReplay.result.freeze_sha, formatted.head);
+  const recovered = prepare(true, true);
+  assert.equal(recovered.check().ok, true, recovered.check().reason);
+  assert.equal(recovered.check().freezeSha, recovered.head);
+  const recoveredReplay = inspectTaskRun(recovered.entry, recovered.dependencies);
+  assert.equal(recoveredReplay.ok, true, recoveredReplay.reason);
+  assert.equal(recoveredReplay.result.freeze_sha, recovered.head);
   for (const mutation of ["touched", "producer", "negative-review", "missing-commit"]) {
     const bad = prepare(true);
     if (mutation === "touched") bad.hand.touchedPaths = ["src/task.spec.mjs"];
