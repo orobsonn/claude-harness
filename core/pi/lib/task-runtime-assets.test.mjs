@@ -82,7 +82,7 @@ test("task pipeline summary preserves final eyes before harvest", () => {
 test("task assets preserve fidelity and escalate repeated failures without extra gates", () => {
   const task = readAsset("../prompts/harness-task-runtime.md");
   assert.match(task, /um RED\/freeze inicial por task/);
-  assert.match(task, /Findings de produto seguem diretamente ao sniper, preservando a fidelidade/);
+  assert.match(task, /Findings materiais de produto seguem diretamente ao sniper, preservando a fidelidade/);
   assert.match(task, /somente quando o próprio teste\/fixture congelado estiver incorreto,\s+o contrato aprovado mudar ou um observável aprovado estiver concretamente sem cobertura/);
   assert.match(task, /Após duas falhas de fidelidade.*escale/is);
   assert.match(task, /Após dois ciclos HIGH de sniper\/re-gate.*escale/is);

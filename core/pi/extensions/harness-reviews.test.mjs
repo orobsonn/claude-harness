@@ -265,7 +265,7 @@ test("task re-gate can explicitly affect one accepted role without reopening its
   assert.deepEqual(JSON.parse(result.content[0].text), publicDetails);
 });
 
-test("task recovery cannot reopen an accepted sibling while a negative reviewer remains missing", async (t) => {
+test("task correction can revalidate an affected sibling before or after the negative reviewer recovers", async (t) => {
   const f = fixture(t);
   implementationCompleted(f);
   for (const role of ["harness-adversary", "harness-compliance"]) {
@@ -298,11 +298,19 @@ test("task recovery cannot reopen an accepted sibling while a negative reviewer 
     affected_reason: "the correction changed the central implementation",
   }, undefined, undefined, f.ctx);
   assert.equal(reopened.isError, true);
-  assert.match(reopened.details.reason, /finish the currently missing reviewers.*accepted siblings/i);
+  assert.match(reopened.details.reason, /separate committed task input.*current HEAD was already reviewed/i);
 
   writeFileSync(join(f.root, "feature.txt"), "behavior B");
   execFileSync("git", ["add", "feature.txt"], { cwd: f.root });
   execFileSync("git", ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-qm", "finding fix"], { cwd: f.root });
+  const sameCorrection = await status.execute("affected-during-recovery", {
+    phase: "task", task_id: TASK, affected_roles: ["harness-compliance"],
+    affected_reason: "the committed guard repair also changed compliance's obligation",
+  }, undefined, undefined, f.ctx);
+  assert.equal(sameCorrection.isError, undefined);
+  assert.deepEqual(sameCorrection.details.missing, ["harness-adversary", "harness-compliance"]);
+  assert.deepEqual(sameCorrection.details.accepted, []);
+  assert.match(sameCorrection.details.review_input_digest, /^[0-9a-f]{64}$/);
   f.entries.push(reviewDispatch("harness-adversary", TASK, { id: "adversary-recovery" }));
   record(f.root, "harness-adversary", "task", '{"issues":[]}', "adversary-recovery");
 
@@ -319,9 +327,12 @@ test("task recovery cannot reopen an accepted sibling while a negative reviewer 
     affected_roles: ["harness-compliance"],
     affected_reason: "the earlier finding fix touched the central implementation",
   }, undefined, undefined, f.ctx);
-  assert.equal(lateReopen.isError, true);
-  assert.match(lateReopen.details.reason, /separate committed task input.*current HEAD was already reviewed/i);
+  assert.equal(lateReopen.isError, undefined);
+  assert.deepEqual(lateReopen.details.missing, ["harness-compliance"]);
+  assert.deepEqual(lateReopen.details.accepted, ["harness-adversary"]);
 
+  f.entries.push(reviewDispatch("harness-compliance", TASK, { id: "compliance-recovery" }));
+  record(f.root, "harness-compliance", "task", '{"issues":[]}', "compliance-recovery");
   execFileSync("git", ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "--allow-empty", "-qm", "empty after recovery"], { cwd: f.root });
   const emptyAfterRecovery = await status.execute("empty-after-recovery", {
     phase: "task",

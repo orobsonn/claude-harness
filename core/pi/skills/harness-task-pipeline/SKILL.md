@@ -78,7 +78,16 @@ precisa implementar o módulo e tornar os testes comportamentais originais GREEN
   Depois da primeira rodada, despache somente os papéis que `harness_reviews` listar em
   `missing`. Se a correção mudar materialmente a obrigação ou um trigger de um papel em
   `accepted`, passe apenas esse papel em `affected_roles` com um `affected_reason`
-  concreto; HEAD novo por si só não reabre os olhos irmãos.
+  concreto, mesmo enquanto outro papel estiver pendente ou já tiver revisado a mesma
+  correção; compare com o recibo do papel afetado, sem exigir outro commit. HEAD novo
+  por si só não reabre os olhos irmãos. Preserve todos os não afetados.
+- Encerre por suficiência: critérios obrigatórios e verificações satisfeitos, sem defeito
+  material demonstrado. Imperfeição atual não material pode ser residual com consequência,
+  contenção/recuperação e justificativa nos diagnósticos existentes. Não aceite violação de
+  contrato, identidade errada, efeito duplicado, dano a dados, segurança ou verificação
+  obrigatória falhando; não crie waiver, novo gate ou issue externa automática. Recibo
+  final continua atual, com revisão focal do delta/impactos após correção, sem nova
+  auditoria geral nem aprovação automática por tempo ou quantidade de rodadas.
 - Antes do primeiro lote FULL, avalie a mudança efetiva: `required` de `harness_reviews`
   mostra o mínimo já ativado, não uma classificação completa de aplicabilidade.
   A ausência de security nessa lista não o dispensa. Seguindo o Claude, despache

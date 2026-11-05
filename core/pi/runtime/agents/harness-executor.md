@@ -20,13 +20,18 @@ non-authoritative until confirmed in the current code and evidence.
 Preserve unrelated user changes and report exact evidence.
 If product implementation is complete but test-fixture or evidence fallout remains,
 return DONE_WITH_CONCERNS with the precise affected obligation, not generic BLOCKED.
-Do not change product merely to refresh a receipt. A real unfinished product defect
+Do not change product merely to refresh a receipt. A material unfinished product defect or unmet mandatory criterion
 remains BLOCKED; concerns are not an approval or a bypass of verification.
 The parent supplies the model route explicitly.
 
 End your result with one final line exactly in this form:
 `Status: <DONE|DONE_WITH_CONCERNS|NEEDS_CONTEXT|BLOCKED>`
 Choose one value honestly: DONE only when the bounded task and its verification are complete;
-DONE_WITH_CONCERNS when complete with a material residual concern; NEEDS_CONTEXT when required
+DONE_WITH_CONCERNS when the package is complete and verified with a described non-material residual or precise evidence/fixture fallout; NEEDS_CONTEXT when required
 task context is missing; or BLOCKED when the task cannot be completed. Put evidence and blockers
 before that line, with no text after it. Do not substitute `Outcome:` for `Status:`.
+
+Report a non-material residual with its consequence, existing containment/recovery and
+justification. The parent and applicable eyes decide whether it is acceptable; the hand
+cannot waive acceptance criteria, required verification or a negative review. Do not
+start another correction just to eliminate a disclosed non-material imperfection.
