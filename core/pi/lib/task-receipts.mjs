@@ -24,6 +24,7 @@ import { readPiSpecApproval } from "./spec-approval.mjs";
 import { taskScopeBase, taskReconciliationDigest, inheritedTaskFidelity, revalidatedTaskFidelity, isNoWriteTaskFidelityAuthor } from "./task-reconciliation.mjs";
 import { isUnwrittenBlockedWriter } from "./native-writer.mjs";
 import { DURABLE_MEMORY_FILES } from "./memory-cycle.mjs";
+import { checkPiFinalCommands } from "./pi-command-evidence.mjs";
 
 const COMMIT_SHA = /^[0-9a-f]{40}$/;
 const SHA256 = /^[0-9a-f]{64}$/;
@@ -937,6 +938,20 @@ export function inspectTaskRun(entry, dependencies = {}) {
           !ancestor(worktree, recoveryOrigin.head_sha, hand.freezeCommitSha) ||
           !onlyRecoveryChanges(entry, worktree, recoveryOrigin.head_sha, head, binding.task, binding.plan, replayHand))
         return failure("test-only recovery cannot change product after the captured implementation");
+      // Fidelity proves the oracle, not that the old implementation satisfies it.
+      // A newly frozen RED must not inherit readiness from an older green hand.
+      // Check only commands for changed frozen inputs; read-only recapture and
+      // unchanged siblings keep their existing evidence and need no new writer.
+      const recoveryChanges = splitZero(git(worktree, ["diff", "--no-renames", "--name-only", "-z", recoveryOrigin.head_sha, head]));
+      const recoveryCommands = [...new Set((binding.task.locked_tests ?? []).filter((locked) =>
+        [locked.path, ...(locked.fixture_paths ?? [])].some((file) => recoveryChanges.some((changed) => covered(changed, [file])))
+      ).map((locked) => locked.command).filter((command) => typeof command === "string" && command.trim()))];
+      const verification = checkPiFinalCommands({ projectRoot: worktree, sessionId: claim.session_id, commands: recoveryCommands });
+      if (!verification.ok) return failure(
+        "test-only recovery has no passing verification for its changed frozen tests; fidelity/capture do not complete a product correction. " +
+        "In this same task/attempt, run the pending focal commands on the committed input; if RED, use executor/sniper to finish implementation. " +
+        "Preserve the approved freeze and unaffected reviews; do not repeat authors, reviews or the global suite just for readiness.",
+        { ...blockedDiagnostics(), pending_verification_commands: verification.commands, verification_reason: verification.reason });
     } else if (fidelity.freezeSha !== null) {
       if (!ancestor(worktree, fidelity.freezeSha, hand.freezeCommitSha)) {
         return failure("current hand capture is not descended from the event-proven latest freeze");

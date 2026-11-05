@@ -294,6 +294,12 @@ focal e os fatos para suporte read-only; não peça nova implementação às ceg
   anterior. Faça o novo freeze/fidelity e capture-verified do autor. O host reconhece
   essa linhagem sem outro executor quando o produto permaneceu idêntico. Refaça os
   olhos de implementação afetados no HEAD atual; não reimplemente para gerar recibo.
+  Antes de devolver essa recuperação como pronta, execute os comandos focais já
+  declarados dos testes/fixtures congelados alterados sobre o input commitado.
+  O host reutiliza evidência verde do mesmo input; recaptura sem mudança de testes
+  não exige nova execução. Fidelity/capture de um RED são válidos para preservar
+  o teste, mas não tornam a correção pronta: complete o produto pelo sniper usando
+  esse mesmo freeze. Não repita autoria nem suíte global para preencher essa lacuna.
 - Observável aprovado concretamente sem cobertura: autor corrige essa lacuna focal,
   reviewer confere fidelidade e evidência aplicável; sniper corrige o produto se necessário.
   Defeito de produto por si só não exige novo RED/freeze.

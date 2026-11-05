@@ -12,6 +12,7 @@ import { createPiMarkerAuthority } from "./marker-authority.mjs";
 import { inspectTaskRun, readIntegratedTaskEvidence, inspectTaskResumeAbandonment } from "./task-receipts.mjs";
 import { preserveTaskPlanForPlanner } from "./task-plan-recovery.mjs";
 import { validateTaskFidelityFreeze } from "./task-run.mjs";
+import { registerPiCommandEvidence, checkPiFinalCommands } from "./pi-command-evidence.mjs";
 
 const FEATURE = "receipt-feature";
 const TASK = "receipt-task";
@@ -728,6 +729,87 @@ test("a captured implementation survives a reviewed test-only correction without
   assert.equal(inspected.result.freeze_sha, f.head);
   assert.equal(inspected.result.hand_capture.freeze_sha, f.recoveryBaseline);
   assert.equal(inspected.result.hand_capture.recovery_origin.head_sha, f.recoveryBaseline);
+});
+
+function recoveryVerificationFixture(options = {}) {
+  const f = testOnlyRecovery(options);
+  const binding = f.dependencies.readTaskRunBindingFn();
+  const command = "node --test src/task.spec.mjs";
+  binding.task.locked_tests[0].command = command;
+  const hooks = new Map();
+  registerPiCommandEvidence({ on: (name, handler) => hooks.set(name, handler) });
+  const context = { cwd: f.root, sessionManager: { getSessionId: () => CHILD } };
+  const archive = async ({ failed = false, sessionId = CHILD, commandText = command } = {}) => {
+    const ctx = sessionId === CHILD ? context : { cwd: f.root, sessionManager: { getSessionId: () => sessionId } };
+    const callId = crypto.randomUUID();
+    hooks.get("tool_execution_start")({ toolName: "bash", toolCallId: callId, args: { command: commandText } }, ctx);
+    const result = await hooks.get("tool_result")({ toolName: "bash", toolCallId: callId,
+      input: { command: commandText }, isError: failed, content: [{ type: "text",
+        text: failed ? "1 test failed\nCommand exited with code 1" : "1 test passed\n" }] }, ctx);
+    return result.details.command_evidence;
+  };
+  return { ...f, command, archive };
+}
+
+test("test-only recovery cannot promote a frozen RED or missing focal evidence to ready", async () => {
+  for (const failed of [undefined, true]) {
+    const f = recoveryVerificationFixture();
+    if (failed !== undefined) await f.archive({ failed });
+    const checked = inspectTaskRun(f.entry, f.dependencies);
+    assert.equal(checked.ok, false);
+    assert.match(checked.reason, /fidelity\/capture do not complete a product correction/);
+    assert.deepEqual(checked.details.pending_verification_commands, [f.command]);
+  }
+});
+
+test("passing focal verification closes test-only recovery without another implementation hand", async () => {
+  const f = recoveryVerificationFixture();
+  await f.archive();
+  const checked = inspectTaskRun(f.entry, f.dependencies);
+  assert.equal(checked.ok, true, checked.reason);
+  assert.equal(checked.result.hand_capture.agent, "harness-test-author");
+  assert.equal(checked.result.hand_capture.recovery_origin.head_sha, f.recoveryBaseline);
+});
+
+test("test-only verification rejects stale, foreign, unrelated, corrupted and superseded green evidence", async () => {
+  for (const kind of ["stale", "foreign", "unrelated", "corrupted", "later-red"]) {
+    const f = recoveryVerificationFixture();
+    const evidence = await f.archive({ sessionId: kind === "foreign" ? "foreign-session" : CHILD,
+      commandText: kind === "unrelated" ? "node --test unrelated.spec.mjs" : f.command });
+    if (kind === "stale") {
+      const metadata = JSON.parse(fs.readFileSync(evidence.metadata_path));
+      metadata.head_sha = metadata.started_identity.head_sha = f.recoveryBaseline;
+      write(evidence.metadata_path, metadata);
+    }
+    if (kind === "corrupted") fs.appendFileSync(evidence.path, "tampered\n");
+    if (kind === "later-red") {
+      fs.utimesSync(evidence.metadata_path, new Date(0), new Date(0));
+      await f.archive({ failed: true });
+    }
+    const checked = inspectTaskRun(f.entry, f.dependencies);
+    assert.equal(checked.ok, false, kind);
+    assert.match(checked.reason, /no passing verification/, kind);
+  }
+});
+
+test("read-only recovery does not require new focal evidence for unchanged frozen inputs", () => {
+  const f = recoveryVerificationFixture({ readOnlyAuthor: true });
+  const checked = inspectTaskRun(f.entry, f.dependencies);
+  assert.equal(checked.ok, true, checked.reason);
+});
+
+test("test-only recovery verifies only affected tests and reuses equivalent application input", async () => {
+  const f = recoveryVerificationFixture({ fixture: inspectionFixture({ frozenFixture: true }) });
+  f.dependencies.readTaskRunBindingFn().task.locked_tests.push({
+    id: "unchanged", path: "fixtures/task.json", command: "node --test src/unchanged.spec.mjs", assertion: "unchanged" });
+  await f.archive();
+  const checked = inspectTaskRun(f.entry, f.dependencies);
+  assert.equal(checked.ok, true, checked.reason);
+  write(path.join(f.root, "MEMORY.md"), "Peripheral delivery memory\n");
+  commit(f.root, "harvest memory");
+  // Existing input equivalence survives a later host harvest. This does not
+  // grant the child permission to write memory outside its task scope.
+  assert.equal(checkPiFinalCommands({ projectRoot: f.root, sessionId: CHILD, commands: [f.command] }).ok, true);
 });
 
 test("gate-refused writers do not consume the first test-author or invalidate recovery", () => {
