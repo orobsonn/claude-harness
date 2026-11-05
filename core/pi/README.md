@@ -261,7 +261,7 @@ substitui somente caminhos registrados como gerenciados pelo harness; esses extr
 continuam sendo código confiado pelo operador no mesmo processo.
 
 Cada revisão é vinculada a HEAD, index, arquivos da worktree e plano/spec canônicos.
-Uma resposta interrompida, malformada, com pergunta pendente ou com achados não aprova um
+Uma resposta interrompida, malformada, com pergunta pendente ou com achados bloqueantes não aprova um
 gate. O host preserva recibos saudáveis de irmãos. `harness_reviews` consulta a sessão
 atual. Na fase task, lista `required`, `available`, `accepted` e `missing`: adversary é
 obrigatório; compliance e security de implementação são opcionais até serem despachados.
@@ -682,3 +682,11 @@ vendorizada deve estar registrada na base Git imutável da admissão; arquivos
 locais não rastreados não bastam. O runtime atual precisa passar sua captura
 de integridade, e a tentativa, o grant e os recibos históricos permanecem iguais.
 Tasks de desenvolvimento da fonte sem essa origem continuam presas ao pin.
+
+A entrega fecha por suficiência: contrato e verificações obrigatórias satisfeitos, sem
+falha material demonstrada. Imperfeições atuais não materiais podem permanecer nos
+`follow_ups` existentes, com consequência, contenção e justificativa; raridade não
+justifica violação de contrato ou risco grave. Após correção, `affected_roles` compara
+cada olho com seu próprio recibo e preserva os demais, sem exigir commit cosmético.
+Olhos finais continuam exigindo evidência atual, mas revisam delta e impactos após
+correções, sem reiniciar auditorias gerais. Não há novo gate nem aprovação por contador.

@@ -351,7 +351,7 @@ test("o pai local preserva autoridade e só reabre autoria por defeito no contra
   assert.match(taskPrompt, /test-author só pode alterar paths literais.*locked_tests.*fixture_paths/is);
   assert.match(taskPrompt, /Nunca peça novamente.*path.*gate já recusou/is);
   assert.match(testAuthor, /path present only in `scope_paths` is not\s+test-author authority/is);
-  assert.match(taskPrompt, /Findings de produto seguem diretamente ao sniper, preservando a fidelidade/i);
+  assert.match(taskPrompt, /Findings materiais de produto seguem diretamente ao sniper, preservando a fidelidade/i);
   assert.match(taskPrompt, /Reabra.*harness-test-author.*somente.*teste\/fixture congelado estiver incorreto.*contrato aprovado mudar.*observável aprovado estiver concretamente sem cobertura/is);
   assert.doesNotMatch(taskPrompt, /Defeito real sem cobertura: autor acrescenta|nunca use um sniper exploratório/i);
 });
@@ -477,8 +477,9 @@ test("concorrência limitada preserva barreira, fallback serial e retomada por r
     assert.match(source, /despache somente papéis em `missing`/);
     assert.match(source, /`affected_roles`/);
     assert.match(source, /`affected_reason`/);
-    assert.match(source, /Enquanto (?:existir|houver) papel\s+em `missing`.*não (?:use `affected_roles` para |pode )?reabrir um irmão\s+aceito/is);
-    assert.match(source, /commit\s+posterior e separado.*(?:obrigação ou trigger|obrigação.*trigger)/is);
+    assert.match(source, /mesm[oa].*correção commitada.*afet.*(?:irmão|papel).*aceit/is);
+    assert.match(source, /(?:respectivo|próprio) recibo/);
+    assert.match(source, /Preserve (?:os )?irmãos não afetados/);
     assert.doesNotMatch(source, /`missing`[^;\n]*recibo corrente saudável/);
   }
 });
@@ -493,7 +494,9 @@ test("os três revisores retornam relatório estruturado somente em task ou fina
     assert.match(instructions, /fix_hint/);
     assert.match(instructions, /exactly six keys.*no additional keys/i);
     assert.match(instructions, /optional `follow_ups`/);
-    assert.match(instructions, /Never put an applicable current defect there to approve/);
+    assert.match(instructions, /current non-material imperfection/);
+    assert.match(instructions, /Never defer a demonstrated mandatory acceptance failure/);
+    assert.match(instructions, /fresh.*final review after correction/is);
   }
 });
 
@@ -501,7 +504,7 @@ test("finding de produto preserva fidelidade e autoria só reabre por contrato d
   const prompt = readFileSync(promptPath, "utf8");
   const sniper = readFileSync(sniperPath, "utf8");
 
-  assert.match(prompt, /finding de produto segue ao sniper sem repetir fidelidade/);
+  assert.match(prompt, /finding material de produto segue ao sniper sem repetir fidelidade/);
   assert.match(prompt, /Reabra test-author somente por teste\/fixture congelado incorreto, mudança do contrato aprovado ou observável aprovado concretamente sem cobertura/);
   assert.match(prompt, /hand-finished.*capture-verified.*rail de dispatch nega test-author.*eventos nativos.*DONE.*commit de produto.*descendente estrito/is);
   assert.doesNotMatch(prompt, /defeito real sem cobertura pede regressão focal/);

@@ -28,18 +28,6 @@ function isCommittedAncestor(projectRoot: string, ancestor: string, descendant: 
   }
 }
 
-function acceptedReviewFrontier(projectRoot: string, heads: Set<string>) {
-  const candidates = [...heads];
-  let failed = false;
-  const frontier = candidates.filter((candidate) => candidates.every((other) => {
-    if (other === candidate) return true;
-    const ancestor = isCommittedAncestor(projectRoot, other, candidate);
-    if (ancestor === null) failed = true;
-    return ancestor === true;
-  }));
-  return failed || frontier.length !== 1 ? null : frontier[0];
-}
-
 /** Read durable, current receipts; the parent decides which applicable reviewers to dispatch. */
 export default function harnessReviews(pi: ExtensionAPI) {
   pi.on("tool_result", (event: any) => {
@@ -48,7 +36,7 @@ export default function harnessReviews(pi: ExtensionAPI) {
   pi.registerTool({
     name: "harness_reviews",
     label: "Review status",
-    description: "List accepted and missing task or final reviewers for the current parent session and feature. During recovery from a missing or negative task reviewer, finish only those missing roles; accepted siblings cannot be reopened in that recovery. Otherwise an accepted role may be marked affected only after a separate committed input changes its explicit obligation or trigger. Resolve any preparation error before dispatching applicable missing roles; this tool never starts work or changes evidence.",
+    description: "List accepted and missing task or final reviewers for the current parent session and feature. Preserve accepted siblings unless a committed correction materially changes their explicit obligation or trigger. Declare only those affected roles with a concrete reason, including during recovery from another reviewer; no extra commit is needed after that reviewer approves. Resolve any preparation error before dispatching applicable missing roles; this tool never starts work or changes evidence.",
     parameters: Type.Object({
       phase: Type.Union([Type.Literal("task"), Type.Literal("final")]),
       task_id: Type.Optional(Type.String()),
@@ -104,44 +92,32 @@ export default function harnessReviews(pi: ExtensionAPI) {
         snapshot: captured.snapshot, observed, roles: roles.filter(role => baseline.includes(role) ||
           observed.has(role) || receipts.get(role) !== null) }) : null;
       if (closureRole) unavailable = [...unavailable, closureRole];
-      const unresolvedBeforeAffected = params.phase === "task" ? unavailable.filter((role) =>
-        baseline.includes(role) || observed.has(role) || receipts.get(role) !== null) : [];
       const affected = params.affected_roles ?? [];
       const acceptedBeforeAffected = roles.filter((role) => !unavailable.includes(role));
       if (affected.some((role: string) => !acceptedBeforeAffected.includes(role))) {
         return denied("affected_roles must contain only roles currently accepted for this task input.");
       }
-      if (affected.length && unresolvedBeforeAffected.length) {
-        return denied("Finish the currently missing reviewers first; recovery from their findings cannot reopen accepted siblings. Query status again after the missing set is empty, and use affected_roles only for a separate material obligation or trigger change.");
-      }
-      const acceptedHeads = new Set(acceptedBeforeAffected.map((role) => receipts.get(role)?.reviewed_head_sha)
-        .filter((head): head is string => typeof head === "string" && head.length > 0));
-      const acceptedBaselines = new Set(acceptedBeforeAffected.map((role) => {
-        const receipt = receipts.get(role);
-        return typeof receipt?.reviewed_head_sha === "string" && typeof receipt?.input_digest === "string"
-          ? `${receipt.reviewed_head_sha}:${receipt.input_digest}` : null;
-      }).filter((baseline): baseline is string => baseline !== null));
-      const currentBaseline = `${captured.snapshot.head_sha}:${captured.snapshot.input_digest}`;
-      if (affected.length && (acceptedHeads.has(captured.snapshot.head_sha) || acceptedBaselines.has(currentBaseline))) {
-        return denied("affected_roles requires a separate committed task input after the accepted receipts; the current HEAD was already reviewed. Preserve accepted siblings during recovery and declare only roles materially affected by a later commit.");
-      }
       if (affected.length) {
-        const frontier = acceptedReviewFrontier(ctx.cwd, acceptedHeads);
-        if (!frontier) {
-          return denied("affected_roles could not resolve one latest accepted review frontier from the committed history.");
-        }
-        const affectedHeads = affected.map((role: string) => receipts.get(role)?.reviewed_head_sha)
-          .filter((head: unknown): head is string => typeof head === "string" && head.length > 0);
-        if (affectedHeads.length !== affected.length) {
-          return denied("affected_roles requires a committed review baseline for every affected role.");
-        }
-        const comparisonHeads = new Set([frontier, ...affectedHeads]);
-        const treeChanges = [...comparisonHeads].map((head) => committedTreeChanged(ctx.cwd, head, captured.snapshot.head_sha));
-        if (treeChanges.some((changed) => changed === null)) {
-          return denied("affected_roles could not verify the committed tree delta from the latest review frontier and affected role baselines.");
-        }
-        if (treeChanges.some((changed) => changed === false)) {
-          return denied("affected_roles requires a material committed tree delta after the latest review frontier and from every affected role baseline; an empty commit or already-reviewed tree cannot reopen that reviewer.");
+        // Compare each affected eye with its own accepted baseline. A sibling
+        // reviewing the repair first must not demand another product commit.
+        for (const role of affected) {
+          const reviewedHead = receipts.get(role)?.reviewed_head_sha;
+          if (typeof reviewedHead !== "string" || !reviewedHead) {
+            return denied("affected_roles requires a committed review baseline for every affected role.");
+          }
+          if (reviewedHead === captured.snapshot.head_sha) {
+            return denied("affected_roles requires a separate committed task input after the affected role baseline; the current HEAD was already reviewed by that role.");
+          }
+          if (isCommittedAncestor(ctx.cwd, reviewedHead, captured.snapshot.head_sha) !== true) {
+            return denied("affected_roles requires each affected role baseline to be a verifiable ancestor of the current committed input.");
+          }
+          const changed = committedTreeChanged(ctx.cwd, reviewedHead, captured.snapshot.head_sha);
+          if (changed === null) {
+            return denied("affected_roles could not verify the committed tree delta from the affected role baseline.");
+          }
+          if (!changed) {
+            return denied("affected_roles requires a material committed tree delta from every affected role baseline; an empty commit or already-reviewed tree cannot reopen that reviewer.");
+          }
         }
       }
       const effectiveUnavailable = roles.filter((role) => unavailable.includes(role) || affected.includes(role));

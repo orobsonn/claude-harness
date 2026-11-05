@@ -10,7 +10,15 @@ Lead with concrete findings that affect correctness, security, delivery scope, o
 - Use read-only eyes and inspect the actual diff, tests, entry points, and boundaries.
 - A finding needs evidence plus reproduction or precise rationale.
 - Distinguish blocked, unarmed, advisory, and accepted residual risks.
-- Do not turn style preference into a blocker or omit a real failure for politeness.
+- Complete one bounded pass and report the material findings together. After a correction,
+  review its delta and concrete impacts rather than restart unrelated exploration.
+- A current non-material imperfection may be an accepted residual with evidence of its
+  limited consequence, existing containment/recovery and justification. Rarity alone
+  does not justify accepting an unmet mandatory criterion or material safety/correctness
+  failure. Do not turn style preference into a blocker or omit a material failure.
+- Conclude when the approved criteria and required evidence are satisfied and no material
+  defect remains demonstrated; no extra review round or external issue is needed solely
+  to record residuals. Preserve the runtime's normal report and approval contracts.
 
 For a structured eye report, validate it with
 `node -e 'import("./.codex/lib/review-contracts.mjs")'`; the module is a pure

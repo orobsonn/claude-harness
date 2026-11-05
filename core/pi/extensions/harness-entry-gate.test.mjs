@@ -1368,3 +1368,57 @@ test("native status, dispatch and regate recover exactly one ancestral review wh
     assert.equal(result.ok, true, result.output);
   } finally { f.close(); }
 });
+
+test("real affected-role status permits one correction review while preserving accepted siblings", async () => {
+  const f = fixture();
+  try {
+    const git = (...args) => execFileSync("git", args, { cwd: f.root, encoding: "utf8" }).trim();
+    git("init", "-q"); git("add", ".");
+    git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "base");
+    const statePath = join(f.root, ".pi/harness/state", SESSION, "gate-state.json");
+    const initial = JSON.parse(readFileSync(statePath, "utf8"));
+    writeFileSync(statePath, JSON.stringify({ ...initial, spec_status: "adversary-reviewed", adversary_fired: true }));
+    const entries = [{ type: "message", message: { role: "assistant", stopReason: "toolUse", content: [
+      { type: "toolCall", id: "implementation", name: "subagent", arguments: { subagent_type: "harness-executor", prompt: BRIEF } },
+    ] } }, { type: "message", message: { role: "toolResult", toolCallId: "implementation", details: { status: "completed" }, content: [] } }];
+    const ctx = ctxOf(f.root, { entries });
+    const prompt = role => role === "harness-adversary" ? BRIEF : `[HARNESS_TASK_REVIEW]\n${BRIEF}`;
+    const record = (role, body) => {
+      const callId = `initial-${role}`, agentId = `agent-${role}`;
+      entries.push({ type: "message", message: { role: "assistant", stopReason: "toolUse", content: [
+        { type: "toolCall", id: callId, name: "subagent", arguments: { subagent_type: role, prompt: prompt(role) } },
+      ] } });
+      const input = { projectRoot: f.root, sessionId: SESSION, featureId: FEATURE, phase: "task", taskId: "task-1", role };
+      const captured = capturePiReviewInput(input);
+      assert.equal(beginPiReviewReceipt({ ...input, dispatchCallId: callId }).ok, true);
+      const parsed = parsePiReviewCompletion({ role, snapshotStart: captured.snapshot, snapshotEnd: captured.snapshot,
+        nativeRecord: { id: agentId, type: role, status: "completed", isBackground: false, result: body, completedAt: 2 },
+        result: wrappedReviewResult(agentId, body) });
+      assert.equal(parsed.ok, true, parsed.reason);
+      assert.equal(recordPiReviewReceipt({ ...input, completion: parsed.completion,
+        binding: { agentId, dispatchCallId: callId, childSessionId: `child-${callId}` } }).ok, true);
+    };
+    record("harness-adversary", JSON.stringify({ issues: [{ description: "Wrong external guard", scope: "src/feature.ts",
+      evidence: "External input bypasses the guard", fix_hint: "Correct the guard", severity: "high", category: "boundary" }] }));
+    record("harness-compliance", '{"issues":[]}');
+    record("harness-security", '{"issues":[]}');
+    writeFileSync(join(f.root, "correction.txt"), "guard repair affects security\n");
+    git("add", "correction.txt");
+    git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "guard correction");
+    const tools = new Map(); harnessReviews({ on() {}, registerTool: tool => tools.set(tool.name, tool) });
+    const h = handlers(); h.get("session_start")({}, ctx);
+    const args = { phase: "task", task_id: "task-1", affected_roles: ["harness-security"],
+      affected_reason: "The guard correction changes security's external-input obligation" };
+    h.get("tool_execution_start")({ toolName: "harness_reviews", toolCallId: "affected", args });
+    const result = await tools.get("harness_reviews").execute("affected", args, undefined, undefined, ctx);
+    assert.equal(result.isError, undefined);
+    assert.deepEqual(result.details.missing, ["harness-adversary", "harness-security"]);
+    assert.deepEqual(result.details.accepted, ["harness-compliance"]);
+    h.get("tool_result")({ toolName: "harness_reviews", toolCallId: "affected", ...result });
+    const dispatch = (role, id) => h.get("tool_call")({ toolName: "subagent", toolCallId: id,
+      input: { subagent_type: role, prompt: prompt(role), description: "affected correction" } }, ctx);
+    assert.equal((await dispatch("harness-compliance", "unaffected"))?.block, true);
+    assert.equal(await dispatch("harness-security", "affected-security"), undefined);
+    assert.equal((await dispatch("harness-security", "duplicate-security"))?.block, true);
+  } finally { f.close(); }
+});

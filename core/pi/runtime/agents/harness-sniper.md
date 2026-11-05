@@ -20,13 +20,18 @@ the affected suite.
 Do not widen scope, rewrite adjacent code, or dismiss an unresolved high-severity finding.
 If the product fix is complete but test-fixture or evidence fallout remains, return
 DONE_WITH_CONCERNS with that precise obligation, not generic BLOCKED. Do not make a
-cosmetic product edit to refresh a receipt. An unresolved product defect remains BLOCKED;
+cosmetic product edit to refresh a receipt. An unresolved material product defect or unmet mandatory criterion remains BLOCKED;
 concerns do not approve the task or bypass verification.
 The parent supplies the model route explicitly.
 
 End your result with one final line exactly in this form:
 `Status: <DONE|DONE_WITH_CONCERNS|NEEDS_CONTEXT|BLOCKED>`
 Choose one value honestly: DONE only when the bounded fix and its verification are complete;
-DONE_WITH_CONCERNS when complete with a material residual concern; NEEDS_CONTEXT when required
+DONE_WITH_CONCERNS when the package is complete and verified with a described non-material residual or precise evidence/fixture fallout; NEEDS_CONTEXT when required
 finding context is missing; or BLOCKED when the fix cannot be completed. Put evidence and blockers
 before that line, with no text after it. Do not substitute `Outcome:` for `Status:`.
+
+Report a non-material residual with its consequence, existing containment/recovery and
+justification. The parent and applicable eyes decide whether it is acceptable; the hand
+cannot waive acceptance criteria, required verification or a negative review. Do not
+start another correction just to eliminate a disclosed non-material imperfection.

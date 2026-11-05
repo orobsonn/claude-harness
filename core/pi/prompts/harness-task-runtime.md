@@ -211,8 +211,8 @@ cuja obrigação ou trigger explícito foi afetado pela correção. Revise a cor
 seus impactos, sem reiniciar uma auditoria não relacionada. O final global é fresco.
 Não imponha taxonomia de
 findings, busca de variantes ou novos requisitos. Refute achados incorretos com
-evidência; achados reais seguem para sniper e os markers/re-gate nativos.
-Findings de produto seguem diretamente ao sniper, preservando a fidelidade. Consolide os achados materiais já disponíveis dos olhos da rodada, elimine duplicatas e entregue um pacote por tarefa proprietária. Achados relacionados à mesma invariável podem ser resolvidos por um único sniper; não serialize um despacho por achado. Inclua evidência, REDs existentes e obrigações afetadas. Não espere uma busca exaustiva nem crie rodada, recibo ou aprovação extra para consolidar. Resolva primeiro todos os REDs conhecidos desse pacote e confira os testes focais e lint aplicáveis antes de pedir nova revisão ou repetir a suíte global. RED aprovado/freeze é preparação para implementar, não conclusão da correção. Preserve as revisões não afetadas e encaminhe ao pai qualquer obrigação restante explicitamente. Reabra
+evidência; achados materiais reais seguem para sniper e os markers/re-gate nativos.
+Findings materiais de produto seguem diretamente ao sniper, preservando a fidelidade. Consolide os achados materiais já disponíveis dos olhos da rodada, elimine duplicatas e entregue um pacote por tarefa proprietária. Achados relacionados à mesma invariável podem ser resolvidos por um único sniper; não serialize um despacho por achado. Inclua evidência, REDs existentes e obrigações afetadas. Não espere uma busca exaustiva nem crie rodada, recibo ou aprovação extra para consolidar. Resolva primeiro todos os REDs conhecidos desse pacote e confira os testes focais e lint aplicáveis antes de pedir nova revisão ou repetir a suíte global. RED aprovado/freeze é preparação para implementar, não conclusão da correção. Preserve as revisões não afetadas e encaminhe ao pai qualquer obrigação restante explicitamente. Reabra
 `harness-test-author` somente quando o próprio teste/fixture congelado estiver incorreto,
 o contrato aprovado mudar ou um observável aprovado estiver concretamente sem cobertura.
 Nesse caso, corrija primeiro o teste/fixture autorizado e revalide a fidelidade; depois
@@ -246,17 +246,9 @@ para despachar todas. Depois da primeira rodada, despache somente papéis em `mi
 um papel em `accepted` não é repetido só porque existe um HEAD mais novo. Se a correção
 alterou materialmente a obrigação ou um trigger explícito de um olho já aceito, consulte
 novamente com esse papel em `affected_roles` e descreva o nexo concreto em
-`affected_reason`; não marque todos como afetados por rotina. Enquanto houver papel
-em `missing`, a recuperação repete somente esse conjunto e não pode reabrir um irmão
-aceito; use `affected_roles` apenas depois de zerar `missing` e diante de um commit
-posterior e separado que mude materialmente uma obrigação ou trigger. O mesmo HEAD já
-revisado nunca é justificativa. Aplique o modo LIGHT/FULL
+`affected_reason`; não marque todos como afetados por rotina. A mesma correção commitada pode afetar um irmão aceito: declare o papel em `affected_roles` e o nexo em `affected_reason` comparando com seu próprio recibo, mesmo com outro papel em `missing` ou já aprovado nessa correção. Preserve irmãos não afetados; não exija um commit posterior e separado. O mesmo HEAD ou árvore já revisada por esse papel, ou HEAD novo sozinho, não justifica reabertura. Aplique o modo LIGHT/FULL
 e os triggers explícitos antes do primeiro despacho. Erro, aborto ou REVISE exige
-revalidar o olho responsável; não cria obrigação de repetir todos os outros olhos. Os relatórios de implementação usam `issues` para
-defeitos aplicáveis e bloqueantes; `follow_ups` opcional é somente diagnóstico para
-achados explicitamente preexistentes, fora de escopo ou residuais aceitos, com evidência.
-Não mova defeito atual para follow-up. Preserve esses diagnósticos no retorno ao pai,
-sem invalidar aprovação nem repetir revisor apenas para limpar ou reformatar o relatório.
+revalidar o olho responsável; não cria obrigação de repetir todos os outros olhos. `issues` contém somente defeitos materiais aplicáveis e falta de evidência obrigatória no input atual. `follow_ups` pode registrar imperfeição atual não material: descreva consequência limitada, contenção ou recuperação existente e motivo concreto para encerrar nos campos já existentes. Raridade ou severidade baixa, isoladamente, não bastam. Não aceite como residual violação de critério obrigatório, identidade/autoridade incorreta, efeito externo duplicado, perda/corrupção de dados, falha de segurança ou verificação obrigatória conhecida como falha. O pai decide a suficiência dentro do contrato autorizado, com fatos contestáveis pelos olhos mediante evidência concreta; a mão não aceita o risco unilateralmente. Um parecer negativo existente não é apagado por essa decisão: revalide o papel responsável com a evidência focal, sem criar nova cerimônia. Preserve os diagnósticos no retorno e relatório final, sem issue externa automática, formulário, waiver ou novo gate. Somente `issues` determina a aprovação; não repita revisão para limpar follow-ups. Encerre quando os critérios e a verificação exigida estiverem satisfeitos e não restar defeito material demonstrado, sem rodada adicional apenas para encontrar outro problema.
 Em LIGHT sem revisores de implementação ativados (`required=[]`), não convoque um
 olho nem marque re-gate apenas para obter recibo. Se um runtime antigo deixou esse
 marcador pendente, retorne a captura verificada ao host: a inspeção valida o contrato

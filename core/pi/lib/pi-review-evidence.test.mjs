@@ -504,8 +504,8 @@ test("new review revokes only its old approval, preserves findings and rejects a
 
 test("follow-ups persist through task/final restart without making a role missing", (t) => {
   const root = fixture(t);
-  const followUp = { description: "Pre-existing DELETE race outside the reviewed change", category: "race", severity: "medium",
-    scope: "src/feature.ts", evidence: "unchanged baseline behavior", fix_hint: "separate follow-up" };
+  const followUp = { description: "Current optional diagnostic wording is ambiguous; consequence is limited to presentation", category: "other", severity: "low",
+    scope: "src/feature.ts", evidence: "Required behavior and recovery remain intact; existing status contains the needed detail", fix_hint: "Accept this bounded residual: wording cleanup is disproportionate to delivery scope" };
   for (const phase of ["task", "final"]) for (const blocking of [false, true]) {
     const role = "harness-adversary";
     const snapshot = capture(root, { phase, ...(phase === "task" ? { taskId: TASK } : {}) });
