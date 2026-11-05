@@ -212,7 +212,7 @@ seus impactos, sem reiniciar uma auditoria não relacionada. O final global é f
 Não imponha taxonomia de
 findings, busca de variantes ou novos requisitos. Refute achados incorretos com
 evidência; achados reais seguem para sniper e os markers/re-gate nativos.
-Findings de produto seguem diretamente ao sniper, preservando a fidelidade. Reabra
+Findings de produto seguem diretamente ao sniper, preservando a fidelidade. Consolide os achados materiais já disponíveis dos olhos da rodada, elimine duplicatas e entregue um pacote por tarefa proprietária. Achados relacionados à mesma invariável podem ser resolvidos por um único sniper; não serialize um despacho por achado. Inclua evidência, REDs existentes e obrigações afetadas. Não espere uma busca exaustiva nem crie rodada, recibo ou aprovação extra para consolidar. Resolva primeiro todos os REDs conhecidos desse pacote e confira os testes focais e lint aplicáveis antes de pedir nova revisão ou repetir a suíte global. RED aprovado/freeze é preparação para implementar, não conclusão da correção. Preserve as revisões não afetadas e encaminhe ao pai qualquer obrigação restante explicitamente. Reabra
 `harness-test-author` somente quando o próprio teste/fixture congelado estiver incorreto,
 o contrato aprovado mudar ou um observável aprovado estiver concretamente sem cobertura.
 Nesse caso, corrija primeiro o teste/fixture autorizado e revalide a fidelidade; depois

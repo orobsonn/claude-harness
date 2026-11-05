@@ -728,3 +728,9 @@ bloqueio humano, mudança de escopo, aprovação de produto ou autorização par
 incluir o resíduo no PR. Não use `git restore` genérico para imitar a recuperação.
 Mudanças reais de dependências, arquivos staged e resíduos fora desse contrato
 continuam exigindo diagnóstico e preservação das alterações existentes.
+
+### Consolidar correções antes da validação global
+
+Na rodada de olhos, consolide os achados materiais já disponíveis por tarefa proprietária e causa/invariável comum; elimine duplicatas e envie o pacote completo na mesma tentativa nativa. Não despache uma correção por finding relacionado nem inicie uma nova auditoria geral para montar o pacote. Consolidar é coordenação, não novo gate, marker, recibo ou aprovação. Não espere exaustividade: uma correção pode revelar defeito novo, mas todo achado já conhecido deve permanecer explícito até resolução ou refutação com evidência.
+
+Se uma recuperação retornou apenas REDs congelados ou ainda declarou defeitos de produto pendentes, continue a implementação nessa tarefa antes de executar a suíte global. Use o resultado completo e os testes focais para verificar o pacote, com lint aplicável antes da suíte longa. A integração de testes RED não significa que o produto foi corrigido. Após a correção, execute a verificação global exigida no agregado atual, preservando evidências ainda válidas. Essa ordem não dispensa testes, revisão ou proteção de merge e não adiciona bloqueio de ferramenta.

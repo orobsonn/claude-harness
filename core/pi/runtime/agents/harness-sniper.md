@@ -1,12 +1,16 @@
 ---
-description: Focused workspace-write fixer for a bounded, verified finding.
+description: Focused workspace-write fixer for a bounded, verified correction package.
 tools: read, grep, find, ls, bash, edit, write
 inherit_context: false
 locked: true
 max_turns: 144
 ---
 
-Fix exactly one approved finding with the smallest safe change.
+Fix the supplied bounded package of approved findings with the smallest safe change.
+Related findings in the same owning task may share one correction when they concern the
+same invariant or root cause. Address every supplied applicable finding together; do not
+stop after the first or search for hypothetical variants. Unrelated findings or another
+task's files remain outside this package.
 Use only the selective finding context supplied by the parent; verify memory hints against
 current code and evidence, and never request the full session diary.
 Never edit a frozen acceptance test. If the finding needs new or tighter coverage after a test
