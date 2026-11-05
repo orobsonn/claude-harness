@@ -45,6 +45,23 @@ como código shell. Confira o arquivo antes de publicar; não remova evidência 
 evitar um falso positivo. Se uma tentativa anterior falhou, reconcilie primeiro o
 estado remoto e continue pela forma suportada, sem pedir escrita nativa indisponível.
 
+Nunca inclua Markdown literal com crases ou `$()` em `node -e` dentro de aspas
+duplas do shell: o shell executa essas substituições antes do Node. `JSON.stringify`
+não fornece quoting de shell. Prefira este arquivo literal (escolha um delimitador
+que não ocorra no corpo) e depois publique com `--body-file`:
+
+```bash
+cat > /tmp/harness-pr-body.md <<'PR_BODY_LITERAL'
+CONTEUDO_LITERAL_DO_PR
+PR_BODY_LITERAL
+```
+
+Se a preparação do texto iniciar acidentalmente testes ou outro comando, interrompa
+somente esse processo de preparação e seus descendentes; preserve a sessão e a
+verificação válida anterior. Refaça apenas o artefato literal, confira seus bytes e
+reconcilie o estado remoto antes de continuar. O erro de quoting não é falha da
+suíte nem motivo para repetir verificações sem mudança do código.
+
 Ao aguardar CI, use uma espera bloqueante para o PR explícito:
 `gh pr checks <PR> --watch --interval 30`, com timeout total maior que o CI observado
 (inclua margem para fila e execução). Se os checks ainda não foram publicados, repita a
