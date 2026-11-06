@@ -611,12 +611,16 @@ export function checkBlockedTaskRepairCheckpoint(binding, record) {
         !["harness-executor", "harness-sniper"].includes(record.agent)) return { ok: false };
     const frozen = (binding.task.locked_tests ?? []).flatMap((test) => [test.path, ...(test.fixture_paths ?? [])]);
     if ((record.frozenViolations ?? []).some((file) => checkScope([file], frozen).length !== 0)) return { ok: false };
+    const failed = () => ({ ok: false, ...((record.frozenViolations ?? []).length && HEX_40.test(record.freezeCommitSha ?? "") ? {
+      reason: `Frozen-test violation is recoverable in this same task: preserve the product, restore only ${JSON.stringify(record.frozenViolations)} from native producer baseline ${record.freezeCommitSha}, and commit that restored checkpoint on the current branch. Do not reset product, amend history or edit receipts. Then dispatch test-author for the authorized test correction, revalidate fidelity, freeze/capture, affected checks and reviews. Formatting is test maintenance; do not manufacture RED or repeat an implementation hand just for provenance. The blocked hand remains unapproved.`,
+    } : {}) });
     // Include the index and working tree. A restored commit with dirty tests is
     // not a restored baseline. Runtime state is excluded from product dirtiness.
     if (git(binding.root, "status", "--porcelain", "--untracked-files=all", "--", ".",
-      ":(exclude).pi/harness/", ":(exclude)node_modules/")) return { ok: false };
-    return validateTaskRepairCheckpoint({ root: binding.root, task: binding.task,
+      ":(exclude).pi/harness/", ":(exclude)node_modules/")) return failed();
+    const checkpoint = validateTaskRepairCheckpoint({ root: binding.root, task: binding.task,
       baseSha: record.freezeCommitSha, headSha: git(binding.root, "rev-parse", "HEAD") });
+    return checkpoint.ok ? checkpoint : failed();
   } catch { return { ok: false }; }
 }
 

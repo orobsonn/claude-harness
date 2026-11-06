@@ -19,7 +19,7 @@ import { PARALLEL_REVIEW_ROLES, requiredPiTaskReviewRoles } from "./roles.mjs";
 import { canonicalTaskReviewPrompt, classifyPiReviewDispatch } from "./pi-review-concurrency.mjs";
 import { piGateStatePath, piHandRecordPath } from "./pi-paths.mjs";
 import { readTaskProcess } from "./task-process.mjs";
-import { capturePlanReviewInput, readTaskRunBinding, validateTaskRepairCheckpoint } from "./task-run.mjs";
+import { capturePlanReviewInput, readTaskRunBinding, validateTaskRepairCheckpoint, checkBlockedTaskRepairCheckpoint } from "./task-run.mjs";
 import { readPiSpecApproval } from "./spec-approval.mjs";
 import { taskScopeBase, taskReconciliationDigest, inheritedTaskFidelity, revalidatedTaskFidelity, isNoWriteTaskFidelityAuthor } from "./task-reconciliation.mjs";
 import { isUnwrittenBlockedWriter } from "./native-writer.mjs";
@@ -729,6 +729,8 @@ export function inspectTaskRun(entry, dependencies = {}) {
         const text = eventText(producer.end.result);
         if (text.trim()) details.hand_report = { producer_call_id: producer.callId,
           agent: hand.agent, text: text.slice(0, 6000), truncated: text.length > 6000 };
+        const repair = checkBlockedTaskRepairCheckpoint(binding, hand);
+        if (repair.reason) details.recovery_guidance = repair.reason;
       }
       // These are explanations only. Capture/fidelity/review failures below retain
       // their authority; a DONE sentence must never produce a ready receipt.

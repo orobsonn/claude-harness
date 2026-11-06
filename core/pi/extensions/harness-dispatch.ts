@@ -62,7 +62,9 @@ function uncapturedImplementationReason(projectRoot: string, sessionId: string, 
     // after preserving product in a selective checkpoint, as task-run already
     // requires. Receipt inspection still requires native checkpoint lineage,
     // test-only changes, fidelity, capture, reviews and re-gate; none is waived.
-    if (checkBlockedTaskRepairCheckpoint(binding, record).ok) return null;
+    const repair = checkBlockedTaskRepairCheckpoint(binding, record);
+    if (repair.ok) return null;
+    if (repair.reason) return repair.reason;
     return Array.isArray(record.touchedPaths) && record.touchedPaths.length > 0
       ? "latest implementation hand ended without a capture-eligible outcome and left a product delta; recover with an implementation hand before dispatching test-author"
       : null;

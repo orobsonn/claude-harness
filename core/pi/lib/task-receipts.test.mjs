@@ -3724,6 +3724,28 @@ test("integrated evidence survives same-plan reapproval only with intact origina
   assert.match(forged.reason, /current host-owned plan approval/);
 });
 
+test("blocked frozen edits explain native recovery without promoting the hand", () => {
+  const f = inspectionFixture();
+  const readBinding = f.dependencies.readTaskRunBindingFn;
+  f.dependencies.readTaskRunBindingFn = () => ({ ...readBinding(), root: f.root, sessionId: CHILD });
+  const handPath = path.join(f.root, ".pi/harness/state/hand-records", FEATURE, CHILD, `${TASK}.json`);
+  const hand = JSON.parse(fs.readFileSync(handPath));
+  delete hand.capturedVerifiedAt;
+  Object.assign(hand, { outcome: "BLOCKED", freezeCommitSha: f.freeze,
+    touchedPaths: ["src/task.mjs", "src/task.spec.mjs"], frozenViolations: ["src/task.spec.mjs"] });
+  write(handPath, hand);
+  fs.appendFileSync(path.join(f.root, "src/task.spec.mjs"), "// formatter touched the frozen file\n");
+  run(f.root, "git", "add", "src/task.spec.mjs");
+  run(f.root, "git", "commit", "-m", "mixed product and frozen formatting");
+  const inspected = inspectTaskRun(f.entry, f.dependencies);
+  assert.equal(inspected.ok, false);
+  assert.match(inspected.reason, /not capture-eligible/);
+  assert.match(inspected.details.recovery_guidance, /restore only.*src\/task\.spec\.mjs/i);
+  assert.ok(inspected.details.recovery_guidance.includes(f.freeze));
+  assert.match(inspected.details.recovery_guidance, /test-author.*fidelity/is);
+  assert.deepEqual(JSON.parse(fs.readFileSync(handPath)), hand, "diagnosis never rewrites approval");
+});
+
 test("restored historical frozen violations admit test repair with current proof and reviews", () => {
   for (const restored of [true, false]) {
     const f = inspectionFixture();

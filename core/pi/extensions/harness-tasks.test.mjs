@@ -333,6 +333,7 @@ test("native status, compact wait and integrate preserve exact pending verificat
   const diagnostics = { a: {
     pending_verification_commands: ["npm test -- test/focal.test.ts"],
     verification_reason: "Run the focal command as a standalone bash call.",
+    recovery_guidance: "Preserve product, restore only the frozen path and reopen test-author.",
     task_report: { text: "GREEN inline is not an archived command receipt" },
   } };
   for (const action of ["status", "wait", "integrate"]) {

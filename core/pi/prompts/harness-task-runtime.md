@@ -73,6 +73,17 @@ seletivo diretamente; não despache outro test-author apenas para commitar teste
 O brief inicial do test-author deve incluir todos os `locked_tests` da tarefa,
 inclusive specs de documentação. `scope_paths`/`allowed_writes` não autorizam o
 executor a atualizar esses testes: essa autoria continua sendo do test-author.
+Isso inclui formatação, imports e correções de lint em teste/fixture congelado.
+Separe um pacote misto: test-author cuida dos paths congelados, com fidelidade e
+freeze/captura; executor/sniper altera somente produto. Manutenção sem mudança
+comportamental aceita GREEN atual; não fabrique RED nem reabra implementação
+apenas para refrescar recibo. Preserve olhos válidos e revalide só o delta afetado.
+Se uma mão de produto já tocou teste congelado, o hand BLOCKED não está aprovado,
+mas não exige intervenção externa por si só. Preserve o produto commitado e
+restaure somente os paths congelados violados do baseline nativo indicado no
+hand-record; faça commit seletivo dessa restauração, sem reset/amend. Esse
+checkpoint admite a recuperação existente com test-author, fidelidade, freeze,
+captura e olhos aplicáveis na mesma tentativa. Não forje markers nem altere state.
 Execute `git add -- <paths>` e `git commit -m "<mensagem>"` em chamadas separadas.
 Não use `-q`/`--quiet` no freeze: a saída nativa do commit é a prova exigida pelo marker.
 Preserve a branch exata da tentativa; nunca use `git checkout <revisão>` ou `git switch`

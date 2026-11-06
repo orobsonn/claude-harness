@@ -833,7 +833,9 @@ test("restored frozen violations permit real test repair without promoting the b
   fs.writeFileSync(path.join(f.root, "test/task-one.test.ts"), "// executor changed test\n");
   f.git("add", "src/task-one.ts", "test/task-one.test.ts"); f.git("commit", "-qm", "mixed implementation");
   assert.equal(checkBlockedTaskRepairCheckpoint(binding, record).ok, false, "current frozen drift blocks");
-  assert.match(reason(), /recover with an implementation hand/);
+  assert.match(reason(), /restore only.*test\/task-one\.test\.ts/i);
+  assert.ok(reason().includes(record.freezeCommitSha), "recovery names the native producer baseline");
+  assert.match(reason(), /preserve.*product.*checkpoint.*test-author.*fidelity/is);
   f.git("restore", `--source=${record.freezeCommitSha}`, "--", "test/task-one.test.ts");
   assert.equal(checkBlockedTaskRepairCheckpoint(binding, record).ok, false, "restoration must be committed");
   f.git("add", "test/task-one.test.ts"); f.git("commit", "-qm", "restore reviewed test");
@@ -843,6 +845,10 @@ test("restored frozen violations permit real test repair without promoting the b
   assert.equal(checkBlockedTaskRepairCheckpoint(binding, { ...record, scopeViolations: ["unowned.ts"] }).ok, false);
   assert.equal(checkBlockedTaskRepairCheckpoint(binding, { ...record, frozenViolations: ["unowned.spec.ts"] }).ok, false);
   assert.equal(checkBlockedTaskRepairCheckpoint(binding, { ...record, sessionId: "other" }).ok, false);
+  for (const changed of [{ scopeViolations: ["unowned.ts"] }, { frozenViolations: ["unowned.spec.ts"] }, { sessionId: "other" }]) {
+    assert.equal(checkBlockedTaskRepairCheckpoint(binding, { ...record, ...changed }).reason, undefined,
+      "unbound or out-of-scope records must not prescribe restoration");
+  }
   fs.writeFileSync(path.join(f.root, "src/task-one.ts"), "// dirty product\n");
   assert.equal(checkBlockedTaskRepairCheckpoint(binding, record).ok, false);
 });

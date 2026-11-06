@@ -806,6 +806,7 @@ test("blocked status returns fresh diagnostics without persisting or replaying t
       review_findings: [{ severity: "high", finding: "Missing boundary check" }],
       pending_verification_commands: ["npm test -- test/current.test.ts"],
       verification_reason: "Run the declared focal command on the committed input.",
+      recovery_guidance: "Restore only the violated frozen path, preserve product and reopen test-author.",
       unrelated_internal_payload: "must not be transported",
     },
   });
@@ -824,6 +825,7 @@ test("blocked status returns fresh diagnostics without persisting or replaying t
       review_findings: [{ severity: "high", finding: "Missing boundary check" }],
       pending_verification_commands: ["npm test -- test/current.test.ts"],
       verification_reason: "Run the declared focal command on the committed input.",
+      recovery_guidance: "Restore only the violated frozen path, preserve product and reopen test-author.",
     },
   });
   assert.equal(blocked.tasks[0].context_return, undefined);
@@ -839,6 +841,7 @@ test("blocked status returns fresh diagnostics without persisting or replaying t
   assert.deepEqual(compactBlocked.diagnostics.a.review_findings, [{ severity: "high", finding: "Missing boundary check" }]);
   assert.deepEqual(compactBlocked.diagnostics.a.pending_verification_commands, ["npm test -- test/current.test.ts"]);
   assert.equal(compactBlocked.diagnostics.a.verification_reason, "Run the declared focal command on the committed input.");
+  assert.equal(compactBlocked.diagnostics.a.recovery_guidance, blocked.diagnostics.a.recovery_guidance);
 
   f.deps.inspectRun = () => ({ ok: false, reason: "receipt still incomplete" });
   const next = await executeTaskAction(
@@ -858,6 +861,7 @@ test("integration retains current actionable inspection diagnostics without merg
   const details = {
     pending_verification_commands: ["npm test -- test/current.test.ts"],
     verification_reason: "Use the pending command as a standalone bash call.",
+    recovery_guidance: "Restore only the violated frozen path and commit the native checkpoint.",
     task_report: { text: "36/36 passed inline; native evidence unavailable" },
     unrelated_internal_payload: "not public diagnostics",
   };
