@@ -13,6 +13,22 @@ even in a fresh child context; do not assume the parent supplied the glossary.
 If absent, continue from the approved design and code; do not create it or
 request it just to plan. It supplies vocabulary, not additional delivery scope.
 
+When exact text or data from an issue/PR/remote document defines the contract,
+the parent supplies that content verbatim in the planning and review briefs, or
+names an existing artifact the roles can read. A URL or a statement that the
+parent read it is insufficient for a fresh role without remote-access tools.
+Do not defer contract discovery to a later test-author/executor. If the source
+is missing, return the precise missing input so the parent repairs the brief;
+forwarding already-read evidence inline requires no product/fixture write or
+new permission. Preserve valid task IDs, scopes and decisions during recovery.
+Keep the same literal source accessible to isolated task parents and eyes;
+prefer an appendix in the canonical spec while it is still a draft. Use native
+revision flows for sealed artifacts, never mutate their state or receipts.
+References must be readable within each recipient's canonical project root.
+For Pi tasks in another worktree, the local parent can retrieve the same approved
+issue/PR with a standalone `gh ... view` inspection and pass its native archived
+output to local eyes; do not widen their filesystem or network permissions.
+
 - Each task names files, interfaces, failing test, expected failure, minimal code, green test, and verification command.
 - Order steps by dependency and make every handoff independently checkable.
 - Mark sensitive paths, rollback, blast radius, and required model route.

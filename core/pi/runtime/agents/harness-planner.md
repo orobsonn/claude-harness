@@ -54,6 +54,14 @@ literal `LIGHT` or `FULL`. Copy that value to the plan as lowercase `light` or
 risk, task count, or the contents of the sealed spec. If the stable mode is
 absent or has any other value, reply `BLOCKED` and do not write the plan.
 
+If exact text/data from an issue or other remote resource defines the contract,
+read the complete relevant source supplied inline by the parent or in its named
+accessible artifact. This fresh role has no HTTP/GitHub tool: a URL, the parent's
+claim of a prior read, or attempted context inheritance does not supply it. Do
+not delegate discovery of that central contract to a later hand. When absent,
+request the precise missing bytes from the parent; no product/fixture write is
+needed to include evidence inline. Preserve the current plan's valid IDs/scopes.
+
 Before decomposing, read the sealed design/spec completely; inspect the real
 implementation entry points, call sites, existing tests, root AGENTS.md or
 CLAUDE.md guidance, and MEMORY.md when present. Preserve existing user changes.

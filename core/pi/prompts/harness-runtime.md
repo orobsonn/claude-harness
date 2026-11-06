@@ -175,11 +175,29 @@ dono do DAG, TDD, reviews, recibos e integração.
 
 Quando delegar, use apenas as roles canônicas: `harness-planner`, `harness-plan-reviewer`, `harness-adversary`, `harness-security`, `harness-compliance`, `harness-harvester`, `harness-test-author`, `harness-test-reviewer`, `harness-executor`, `harness-sniper` e `harness-shipper`. Olhos não alteram arquivos; mãos executam somente uma tarefa aprovada. O plano canônico `.pi/harness/plans/<feature_id>/execution-plan.json` é escrito só por `harness-planner`, em despacho. O shipper publica a série de commits por tarefa que já existe antes da revisão final; não cria um commit único de feature depois do selo nem corrige produto para contornar revisão.
 
-Todo brief para um olho deve ser autocontido quanto à evidência normativa externa. Se os critérios
-vierem de issue, PR ou outro recurso remoto, o pai consulta esse recurso e inclui no prompt o corpo
-exato ou o recorte integral necessário; não instrua um olho somente leitura a buscar dados por uma
-ferramenta que ele não possui. Isso não muda o protocolo fresh de cada despacho nem autoriza usar
-o resultado de outro olho como contexto.
+Todo brief de planejamento, autoria ou revisão deve ser autocontido quanto à evidência normativa
+externa. Se os critérios vierem de issue, PR ou outro recurso remoto, o pai consulta esse recurso e
+fornece o corpo exato ou o recorte integral necessário INLINE no prompt, ou um artefato existente
+nomeado que o destinatário consiga ler. Isso inclui `harness-planner` e `harness-plan-reviewer`,
+não só os olhos finais. URL, alegação de leitura pelo pai e `inherit_context` não transportam os
+bytes para uma role fresh sem HTTP/GitHub. Para catálogo literal, preserve textos, categorias,
+parâmetros e amostras; não resuma nem adie a descoberta do contrato para test-author/executor.
+
+Se o finding pede uma fonte que o pai já leu, corrija o próximo brief com esse conteúdo e prossiga
+no mesmo plano/IDs/escopos. Não repita um despacho sem os bytes ausentes nem peça ao operador para
+fornecer novamente algo acessível ao pai. Evidência INLINE não escreve produto ou fixture e não
+exige ampliar permissões, criar arquivo auxiliar ou aguardar a tarefa aprovada. O limite de 2 KiB
+de `task_contexts` vale para o resumo curado, não para evidência literal no brief; para o handoff
+isolado, use o contrato/artefato canônico acessível, preferindo registrar o conteúdo normativo na
+spec enquanto ainda é draft. Não altere spec selada ou recibos fora dos fluxos nativos. Isso não
+muda o protocolo fresh nem autoriza usar o veredito de outro olho como contexto.
+
+Uma referência de arquivo só serve se estiver na raiz canônica acessível ao destinatário.
+`gh issue view` e `gh pr view` em chamadas simples geram uma referência `[harness-evidence]`
+local para a saída completa; são inspeção normativa, não teste aprovado. Repasse esse caminho
+completo aos papéis da mesma worktree. Na task isolada, cujo root é outro, o próprio pai local
+pode ler a mesma fonte autorizada via `gh` e fornecer o seu artefato local aos test-authors/olhos.
+Não envie só um caminho de outra worktree nem amplie a leitura dos olhos para fora do projeto.
 
 O brief de revisão contém o contrato e os arquivos atuais relevantes. Para fidelidade,
 bastam as asserções aprovadas, testes/fixtures e a saída do comando focal. Para

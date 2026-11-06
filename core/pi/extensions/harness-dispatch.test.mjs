@@ -126,15 +126,26 @@ test("support is a fixed-route reader for the global or admitted task parent, wi
 test("test-author and test-reviewer receive the exact canonical task even when the parent paraphrase is weaker", () => {
   const f = canonicalFixture();
   try {
+    // A large literal issue manifest is evidence, not the 2 KiB curated diary.
+    // Enrichment must preserve its exact UTF-8 contents as well as the task.
+    const normative = "[NORMATIVE_SOURCE]\n" + JSON.stringify({
+      templates: Array.from({ length: 10 }, (_, index) => ({
+        name: `rita_stage_${index}`, category: "UTILITY", language: "pt_BR",
+        body: `${index}: Olá {{1}} — instrução literal; não resumir. `.repeat(48),
+        parameters: ["nome", "reserva"], samples: ["Exemplo sintético", "R-1"],
+      })),
+    }) + "\n[/NORMATIVE_SOURCE]";
+    assert.ok(Buffer.byteLength(normative, "utf8") > 2 * 1024);
     for (const subagent_type of ["harness-test-author", "harness-test-reviewer"]) {
       const input = {
         subagent_type,
         model: subagent_type === "harness-test-author" ? "openai-codex/gpt-6.1-sol" : "openai-codex/gpt-6-luna",
         thinking: subagent_type === "harness-test-author" ? "high" : "xhigh",
         description: "Review generic size feedback",
-        prompt: `${MARKER}\nOnly check generic UTF-8 feedback.`,
+        prompt: `${MARKER}\nOnly check generic UTF-8 feedback.\n${normative}`,
       };
       assert.equal(handler()({ toolName: "subagent", input }, f.context), undefined);
+      assert.ok(input.prompt.includes(normative), "literal remote evidence survives dispatch enrichment byte-for-byte");
       assert.match(input.prompt, /\[HARNESS_CANONICAL_TASK\]/);
       assert.match(input.prompt, /same UTF-8 measure as the server before save and activation/);
       assert.match(input.prompt, /public response envelope/);
