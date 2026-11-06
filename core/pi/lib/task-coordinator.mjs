@@ -1017,10 +1017,11 @@ export async function executeTaskAction(params, context = {}, injected = {}) {
         "canonical plan/spec changed after task admission; reconcile the plan before dispatch",
       );
     let admissionPlanSnapshot;
+    let recoveredPlanAuthority;
     if (registry.plan_sha256 !== artifacts.plan_sha256) {
       admissionPlanSnapshot = captureTaskAdmissionPlan({ projectRoot: owner.root, sessionId: owner.sessionId,
         featureId: owner.featureId, planSha256: artifacts.plan_sha256, specSha256: artifacts.spec_sha256 });
-      readTaskPlanAuthority({ projectRoot: owner.root, sessionId: owner.sessionId, featureId: owner.featureId,
+      recoveredPlanAuthority = readTaskPlanAuthority({ projectRoot: owner.root, sessionId: owner.sessionId, featureId: owner.featureId,
         planSha256: registry.plan_sha256, specSha256: registry.spec_sha256 });
       // Preserve admission identities; only the current reviewed plan supplies dispatch scope.
       artifacts.plan_sha256 = registry.plan_sha256;
@@ -1345,6 +1346,13 @@ export async function executeTaskAction(params, context = {}, injected = {}) {
       applyAggregateRefresh(entry, aggregateRefresh, task, persist);
       await reconcileDependent(entry, artifacts.plan.tasks.find((task) => task.id === entry.task_id), owner, registry, persist, deps);
       prepareIntegrationConflict(entry, artifacts.plan.tasks.find((task) => task.id === entry.task_id), owner, persist);
+      if (admissionPlanSnapshot && recoveredPlanAuthority?.baselineTddRecoveries?.[entry.task_id]) {
+        const snapshots = entry.proof_recovery_snapshots ??= [];
+        if (snapshots.at(-1)?.text !== admissionPlanSnapshot.text) {
+          snapshots.push(admissionPlanSnapshot);
+          persist(); // Strengthened proof stays admitted even if process launch needs recovery.
+        }
+      }
       await prepareWorktree(entry, artifacts, deps, persist);
       await launchTask(entry, context, persist, deps, params.instruction);
       return { ok: true, tasks: [summary(entry)] };

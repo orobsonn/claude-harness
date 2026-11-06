@@ -14,9 +14,12 @@ import { captureTaskRuntime, verifyTaskRuntime } from "./task-runtime-assets.mjs
 import { taskScopeBase, taskMergePreview } from "./task-reconciliation.mjs";
 import { hashTaskReceipt } from "./task-contract.mjs";
 import { snapshotWorktreeBaseline, pathsChangedSinceBaseline } from "../../opencode/lib/worktree-baseline.mjs";
-import { hashTaskArtifact, admitTaskRun, readTaskRunBinding } from "./task-run.mjs";
+import { hashTaskArtifact, admitTaskRun, readTaskRunBinding, checkBaselineTaskTddRecovery } from "./task-run.mjs";
 import { preserveTaskPlanForPlanner, readTaskPlanAuthority, validateTaskScopeRecovery } from "./task-plan-recovery.mjs";
-import { canonicalPiDispatchFromPlan } from "./pi-state-records.mjs";
+import { canonicalPiDispatchFromPlan, claimPiDispatchForRuntime, removePiDispatchRecord } from "./pi-state-records.mjs";
+import { recordPiTaskCompletion } from "./entry-gate.mjs";
+import { piHandRecordPath } from "./pi-paths.mjs";
+import { testApi as dispatchApi } from "../extensions/harness-dispatch.ts";
 import { taskRegistryPath } from "./task-contract.mjs";
 import { vendorPi } from "../../claude-code/skills/initializing-projects/references/vendor-core.mjs";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -431,6 +434,122 @@ test("reviewed recovery may append judgment prose but preserves every admitted d
     change(altered.tasks[0]);
     assert.throws(() => validateTaskScopeRecovery(before, altered));
   }
+});
+
+test("baseline recovery may strengthen to locked TDD but never remove or rewrite admitted obligations", t => {
+  const f = fixture(t);
+  const before = structuredClone(f.plan);
+  Object.assign(before.tasks[0], { no_tests: true, locked_tests: [],
+    scope_paths: ["tests/a.test.mjs"], description: "Observe existing behavior", resolved_judgments: { oracle: "keep" } });
+  const after = structuredClone(before);
+  delete after.tasks[0].no_tests;
+  after.tasks[0].scope_paths.push("src/a.mjs");
+  after.tasks[0].locked_tests.push({ id: "a-regression", path: "tests/a.test.mjs", assertion: "Given a faithful booking When admitted Then guest count and reference persist" });
+  after.tasks[0].description += "\nRecovery: faithful coverage exposed missing persisted fields; apply normal TDD in the appended product scope.";
+  after.tasks[0].resolved_judgments.recovery = "The prior proof mode describes the initial coverage phase; current locked tests and TDD are mandatory.";
+  assert.deepEqual(validateTaskScopeRecovery(before, after), ["a"]);
+  for (const mutate of [
+    p => { p.tasks[0].description = "Replace the old contract"; },
+    p => { p.tasks[0].resolved_judgments.oracle = "weaken"; },
+    p => { p.tasks[0].scope_paths.shift(); },
+    p => { p.tasks[0].criterion_refs = ["different"]; },
+    p => { p.tasks[0].depends_on = ["b"]; },
+  ]) {
+    const invalid = structuredClone(after); mutate(invalid);
+    assert.throws(() => validateTaskScopeRecovery(before, invalid));
+  }
+  assert.throws(() => validateTaskScopeRecovery(after, before), "a task cannot return to baseline after TDD was admitted");
+});
+
+test("same-attempt baseline→TDD admits authorship only after approval and seals the stronger proof without granting product capture", async t => {
+  const baseline = { ...task("a"), no_tests: true, locked_tests: [],
+    scope_paths: ["tests/a.test.mjs", "tests/a-fixture.mjs"] };
+  const f = fixture(t, [baseline, task("b")]);
+  fs.mkdirSync(path.join(f.dir, "src"));
+  fs.writeFileSync(path.join(f.dir, "src/a.mjs"), "export const guests = null;\n");
+  git(f.dir, "add", "src/a.mjs"); git(f.dir, "commit", "-qm", "existing SUT");
+  const action = input => executeTaskAction(input, f.context, f.deps);
+  assert.equal((await action({ action: "dispatch", task_ids: ["a"] })).ok, true);
+  const entry = f.registry().tasks.a;
+  assert.equal(admitTaskRun(entry.grant_path, { cwd: entry.worktree, sessionId: "local-a" }).ok, true);
+  const grantBytes = fs.readFileSync(entry.grant_path, "utf8");
+  assert.equal(claimPiDispatchForRuntime(entry.worktree, { sessionId: "local-a", callId: "baseline-writer",
+    role: "harness-executor", taskId: "a" }).ok, true);
+  fs.mkdirSync(path.join(entry.worktree, "tests"));
+  fs.writeFileSync(path.join(entry.worktree, "tests/a.test.mjs"), 'import {guests} from "../src/a.mjs";\nimport assert from "node:assert/strict";\nassert.equal(guests, 2);\n');
+  fs.writeFileSync(path.join(entry.worktree, "tests/a-fixture.mjs"), "export const expectedGuests = 2;\n");
+  assert.throws(() => execFileSync(process.execPath, ["tests/a.test.mjs"], { cwd: entry.worktree, stdio: "pipe" }), /Command failed/,
+    "the existing SUT actually fails the new coverage");
+  recordPiTaskCompletion({ projectRoot: entry.worktree, sessionId: "local-a", featureId: "feature", taskId: "a",
+    role: "harness-executor", producerCallId: "baseline-writer", outputText: "Preserved coverage exposes missing guests.\nStatus: BLOCKED" });
+  git(entry.worktree, "add", "tests/a.test.mjs", "tests/a-fixture.mjs");
+  git(entry.worktree, "commit", "-qm", "preserve real RED baseline coverage");
+  const handPath = piHandRecordPath({ projectRoot: entry.worktree, sessionId: "local-a", featureId: "feature" }, "a").path;
+  const hand = JSON.parse(fs.readFileSync(handPath));
+  preserveTaskPlanForPlanner({ projectRoot: f.dir, sessionId: "parent", featureId: "feature" }, f.deps);
+  const corrected = structuredClone(f.plan);
+  delete corrected.tasks[0].no_tests;
+  corrected.tasks[0].scope_paths.push("src/a.mjs");
+  corrected.tasks[0].locked_tests.push({ id: "a-red", path: "tests/a.test.mjs", fixture_paths: ["tests/a-fixture.mjs"],
+    assertion: "Given real baseline coverage When admitted Then guests are persisted" });
+  const planPath = path.join(f.dir, ".pi/harness/plans/feature/execution-plan.json");
+  write(planPath, corrected);
+  assert.equal((await action({ action: "resume", task_id: "a", attempt_id: entry.attempt_id })).ok, false,
+    "current native plan approval is mandatory");
+  const approve = plan => {
+    write(planPath, plan);
+    write(path.join(f.dir, ".pi/harness/state/parent/gate-state.json"), { ...f.state,
+      plan_review_evidence: { ...f.state.plan_review_evidence, dispatch_call_id: "reviewed-proof-upgrade", plan_sha256: hashTaskArtifact(planPath) } });
+  };
+  approve(corrected);
+  const resumed = await action({ action: "resume", task_id: "a", attempt_id: entry.attempt_id });
+  assert.equal(resumed.ok, true, resumed.reason);
+  assert.equal(fs.readFileSync(entry.grant_path, "utf8"), grantBytes, "grant is never rewritten");
+  const binding = readTaskRunBinding(entry.worktree, "local-a");
+  assert.equal(binding.ok, true, binding.reason);
+  assert.equal(checkBaselineTaskTddRecovery(binding, hand).ok, true, "author may now validate/freeze real RED");
+  assert.equal(dispatchApi.uncapturedImplementationReason(entry.worktree, "local-a", "feature", "a", binding), null);
+  assert.equal(JSON.parse(fs.readFileSync(handPath)).outcome, "BLOCKED", "permission to author never promotes the old hand");
+  assert.equal(f.registry().tasks.a.proof_recovery_snapshots.length, 1);
+  assert.equal(removePiDispatchRecord(entry.worktree, { sessionId: "local-a", callId: "baseline-writer" }).ok, true);
+  const nativeEntries = [
+    { type: "message", message: { role: "assistant", content: [{ type: "toolCall", id: "baseline-writer", name: "subagent",
+      arguments: { subagent_type: "harness-executor", prompt: '[HARNESS_TASK_CONTEXT]{"task_id":"a"}[/HARNESS_TASK_CONTEXT]' } }] } },
+    { type: "message", message: { role: "toolResult", toolCallId: "baseline-writer", isError: false,
+      details: { status: "completed" }, content: [{ type: "text", text: "Coverage exposed missing guests. Status: BLOCKED" }] } },
+  ];
+  assert.equal(checkBaselineTaskTddRecovery(binding, hand).ok, false, "a removed lease alone is not proof");
+  assert.equal(checkBaselineTaskTddRecovery(binding, hand, nativeEntries).ok, true, "normal BLOCKED lease cleanup retains native producer proof");
+  assert.equal(dispatchApi.uncapturedImplementationReason(entry.worktree, "local-a", "feature", "a", binding, nativeEntries), null);
+  for (const altered of [
+    [{ ...nativeEntries[0], message: { ...nativeEntries[0].message, stopReason: "aborted" } }, nativeEntries[1]],
+    [nativeEntries[0], { ...nativeEntries[1], message: { ...nativeEntries[1].message, isError: true } }],
+  ]) assert.equal(checkBaselineTaskTddRecovery(binding, hand, altered).ok, false);
+  const future = structuredClone(corrected);
+  future.tasks[1].description = "Clarify an unadmitted future task";
+  approve(future);
+  assert.equal(readTaskRunBinding(entry.worktree, "local-a").ok, true,
+    "the sealed proof-upgrade plan remains valid when only a future task changes");
+  for (const corrupted of [{ ...binding, recovered_task_contract_sha256: null },
+    { ...binding, baseline_tdd_recovery: null },
+    { ...binding, task: { ...binding.task, locked_tests: [{ ...binding.task.locked_tests[0], fixture_paths: [] }] } }]) {
+    assert.equal(checkBaselineTaskTddRecovery(corrupted, hand).ok, false);
+  }
+  for (const corrupt of [{ producerCallId: "unclaimed" }, { sessionId: "foreign" }, { scopeViolations: ["src/a.mjs"] },
+    { frozenViolations: ["tests/a.test.mjs"] }, { outcome: "NEEDS_CONTEXT" }]) {
+    assert.equal(checkBaselineTaskTddRecovery(binding, { ...hand, ...corrupt }).ok, false);
+  }
+  fs.writeFileSync(path.join(entry.worktree, "src/a.mjs"), "export const guests = 2;\n");
+  git(entry.worktree, "add", "src/a.mjs"); git(entry.worktree, "commit", "-qm", "unproven product");
+  assert.equal(checkBaselineTaskTddRecovery(binding, hand).ok, false, "unproven product cannot bypass capture with this exception");
+  assert.notEqual(dispatchApi.uncapturedImplementationReason(entry.worktree, "local-a", "feature", "a", binding), null);
+  approve(f.plan);
+  assert.equal(readTaskRunBinding(entry.worktree, "local-a").ok, false, "reapproving original baseline cannot erase admitted TDD");
+  approve(corrected);
+  const registry = f.registry();
+  registry.tasks.a.proof_recovery_snapshots[0].text += " ";
+  write(taskRegistryPath(f.dir, "parent"), registry);
+  assert.equal(readTaskRunBinding(entry.worktree, "local-a").ok, false, "proof upgrade remains bound to its native approval hash");
 });
 
 test("scope port preserves contracts and refuses changing plans underneath a running task", async (t) => {

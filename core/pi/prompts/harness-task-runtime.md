@@ -74,6 +74,15 @@ para depois pedir executor sem delta nem fabrique RED. Se a cobertura demonstrar
 defeito de produto, preserve a evidência e peça a emenda revisada do plano para
 o escopo dono e TDD normal antes de alterar produto. Isso não dispensa um requisito
 falhando nem transforma um teste vazio ou zero testes coletados em validação.
+Se a cobertura fiel revelar defeito de produto, o pai pode recuperar a mesma task
+com plano revisado e aprovado que eleva `no_tests:true` para TDD: `no_tests:false`
+ou ausente, testes/fixtures anteriores travados e menor escopo produtivo aditivo.
+Preserve o commit de cobertura e o grant original; acrescente uma nota de recuperação
+ao contrato, sem reescrever os observáveis anteriores. O host admite test-author
+somente com essa autoridade atual e cobertura limpa/commitada, sem delta produtivo.
+Depois execute RED comportamental, fidelidade, freeze e implementação/captura/olhos
+normais. As orientações históricas de baseline descrevem a fase inicial; não dispensam
+essas novas obrigações. O retorno a `no_tests:true` não é recuperação admitida.
 
 Nas tasks com testes travados há um RED/freeze inicial por task; retomar ou corrigir produto preserva a fidelidade
 válida. Em uma task nova, não presuma fidelity, freeze, captura, revisão ou re-gate. Siga esta

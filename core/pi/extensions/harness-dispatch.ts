@@ -8,7 +8,7 @@ import { findShadowedCanonicalRoles, validateSubagentDispatch } from "../lib/dis
 import { loadModelProfileFromEnv, profilePrompt } from "../lib/model-profile.mjs";
 import { isDiscussionRole, isParallelReviewRole, isSupportRole } from "../lib/roles.mjs";
 import { canonicalTaskReviewPrompt, classifyPiReviewDispatch } from "../lib/pi-review-concurrency.mjs";
-import { readTaskRunBinding, checkBlockedTaskRepairCheckpoint } from "../lib/task-run.mjs";
+import { readTaskRunBinding, checkBlockedTaskRepairCheckpoint, checkBaselineTaskTddRecovery } from "../lib/task-run.mjs";
 import { isChildSession, isPiHeadlessContext, piSessionId, piSubagentArgs } from "../lib/pi-adapter-map.mjs";
 import { loadPiGateStateFromDisk } from "../lib/pi-gate-state.mjs";
 import { piHandRecordPath } from "../lib/pi-paths.mjs";
@@ -49,7 +49,7 @@ function canonicalTaskPrompt(prompt: unknown, task: unknown) {
     `${JSON.stringify(task)}\n${CANONICAL_TASK_CLOSE}`;
 }
 
-function uncapturedImplementationReason(projectRoot: string, sessionId: string, featureId: string, taskId: string, binding: any = readTaskRunBinding(projectRoot, sessionId)) {
+function uncapturedImplementationReason(projectRoot: string, sessionId: string, featureId: string, taskId: string, binding: any = readTaskRunBinding(projectRoot, sessionId), sessionEntries: any[] = []) {
   const resolved = piHandRecordPath({ projectRoot, sessionId, featureId }, taskId);
   if (!resolved.ok) return null;
   let record: any;
@@ -57,6 +57,7 @@ function uncapturedImplementationReason(projectRoot: string, sessionId: string, 
   if (!["harness-executor", "harness-sniper"].includes(record.agent) ||
       record.featureId !== featureId || record.taskId !== taskId || record.sessionId !== sessionId ||
       (typeof record.capturedVerifiedAt === "string" && record.capturedVerifiedAt.length > 0)) return null;
+  if (checkBaselineTaskTddRecovery(binding, record, sessionEntries).ok) return null;
   if (!isCaptureEligibleHandRecord(record)) {
     // BLOCKED is not approval. An admitted task may repair its frozen tests
     // after preserving product in a selective checkpoint, as task-run already
@@ -130,7 +131,7 @@ export default function harnessDispatch(pi: ExtensionAPI, injected: {
       const featureId = loaded?.ok === true && typeof loaded.state?.feature_id === "string" ? loaded.state.feature_id : "";
       const taskId = canonical.canonicalTask?.id;
       const captureReason = sessionId && featureId && typeof taskId === "string"
-        ? uncapturedImplementationReason(ctx.cwd, sessionId, featureId, taskId, readTaskBinding(ctx.cwd, sessionId))
+        ? uncapturedImplementationReason(ctx.cwd, sessionId, featureId, taskId, readTaskBinding(ctx.cwd, sessionId), ctx.sessionManager?.getEntries?.() ?? [])
         : null;
       if (captureReason) return { block: true, reason: `harness dispatch blocked: ${captureReason}` };
       // Resolve before routing and native execution; all later hooks/records see
