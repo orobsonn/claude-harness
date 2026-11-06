@@ -233,6 +233,17 @@ Keep low/medium work cohesive. Scorer absence/error does not prevent planning.
    Do not pre-apply that delta with test-author and then request a no-op executor;
    a new task does not inherit native captured implementation lineage from Git
    commits or another session. Existing captured-task recovery remains unchanged.
+   A spec that explicitly requests new tests/fixtures for already implemented
+   behavior is also real baseline-coverage work, not a parent-only verification
+   task. Use canonical `no_tests: true`, `locked_tests: []`, and writable scope
+   restricted to the actual test/fixture/documentation deliverables; keep the SUT
+   read-only. Here `no_tests` means no preceding RED/freeze, not no tests to write
+   or run. State the approved observables and focal GREEN commands explicitly;
+   the executor creates the real coverage delta and applicable eyes inspect its
+   fidelity to the spec. Do not promise a product defect, manufacture RED, revert
+   working product or add a no-op executor after test-author pre-applies the work.
+   A genuine discovered product failure requires a reviewed plan correction with
+   owning product scope and the normal locked-test/TDD path before product edits.
    Validate RED on the exact base plus already integrated dependencies. Prefer an
    existing importable entry point when it exercises the approved behavior; a
    genuinely new standalone module does not require an artificial existing caller.
@@ -375,7 +386,7 @@ dispatch; do not create an alternate plan path. Confirm all of the following:
 
 1. Every approved acceptance criterion is owned by at least one task.
 2. Every task criterion has an observable locked test on that task, except a genuine
-   documentation task or existing test-fixture maintenance described above,
+   documentation task, existing test-fixture maintenance or baseline-coverage task described above,
    required by the sealed spec with `no_tests: true` and explicit verification.
 3. IDs, dependencies, severity, complexity, scope paths, criterion refs,
    locked tests, and model strategy conform to the schema above.

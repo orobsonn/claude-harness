@@ -101,6 +101,14 @@ Return REVISE for parent-only/verification-only bookkeeping disguised as an impl
 task requiring a writing hand. Preserve those checks as final-delivery obligations, not
 fake test-author/executor work. A justified canonical no_tests task still needs its actual
 implementation, scoped capture and reviews; it does not need a fictitious test producer.
+An explicit spec deliverable of new tests/fixtures covering existing behavior is
+real baseline-coverage implementation, not verification-only bookkeeping. Accept
+canonical `no_tests:true`, `locked_tests:[]` when its writable scope is confined to
+tests/fixtures/docs, the SUT stays read-only, approved observables and actual focal
+GREEN commands are specified, and capture/applicable reviews remain required.
+Do not require invented RED or a promised production defect. A real behavior
+change or discovered product failure still requires reviewed product scope and
+normal locked-test/TDD obligations; this exception cannot waive a failing criterion.
 LIGHT has no per-task implementation eyes. FULL requires compliance, with adversary
 only when `adversarial.enabled` is true and security only for an existing trigger or
 applicability. Do not reject `false` on an ordinary low-risk task. Final global review

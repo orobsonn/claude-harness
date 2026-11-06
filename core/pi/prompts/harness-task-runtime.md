@@ -64,6 +64,17 @@ chamar executor sem delta; recovery test-only sem executor adicional exige a
 implementação anterior já capturada na mesma task. Se o plano for incompatível,
 reporte a contradição antes da mão, sem inventar RED ou alterar grants/recibos.
 
+Uma tarefa canônica `no_tests:true`, `locked_tests:[]` também pode entregar novos
+testes/fixtures de cobertura de comportamento já implementado, quando a spec
+exige esse artefato e o escopo aprovado contém somente testes, fixtures e docs.
+O executor escreve a cobertura real; o SUT permanece somente leitura. Execute os
+comandos focais GREEN declarados, preserve assertions existentes e obtenha captura
+e olhos aplicáveis sobre o novo teste. Não pré-aplique o trabalho com test-author
+para depois pedir executor sem delta nem fabrique RED. Se a cobertura demonstrar
+defeito de produto, preserve a evidência e peça a emenda revisada do plano para
+o escopo dono e TDD normal antes de alterar produto. Isso não dispensa um requisito
+falhando nem transforma um teste vazio ou zero testes coletados em validação.
+
 Nas tasks com testes travados há um RED/freeze inicial por task; retomar ou corrigir produto preserva a fidelidade
 válida. Em uma task nova, não presuma fidelity, freeze, captura, revisão ou re-gate. Siga esta
 ordem exata: (1) test-author; (2) RED comportamental executável ou a exceção new-SUT abaixo; (3) aprovação de

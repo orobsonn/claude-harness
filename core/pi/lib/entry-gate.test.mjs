@@ -1439,6 +1439,47 @@ test("plano canônico no_tests despacha executor e ainda exige hand/captura", as
   }
 });
 
+test("canonical baseline coverage writes runnable tests without RED and cannot write the SUT", () => {
+  for (const productDrift of [false, true]) {
+    const f = completionFixture({ noTests: true });
+    try {
+      const planPath = join(f.root, ".pi/harness/plans", f.featureId, "execution-plan.json");
+      const plan = JSON.parse(readFileSync(planPath, "utf8"));
+      Object.assign(plan.tasks[0], {
+        title: "Add baseline coverage",
+        description: "Observe the existing public value; product is read-only.",
+        scope_paths: ["tests/baseline.test.mjs"],
+        verification_commands: ["node --test tests/baseline.test.mjs"],
+      });
+      writeFileSync(planPath, JSON.stringify(plan));
+      const dispatched = decidePiDispatchGate({ projectRoot: f.root, sessionId: f.sessionId,
+        subagentType: "harness-executor", toolCallId: "baseline-coverage",
+        toolArgs: { prompt: '[HARNESS_TASK_CONTEXT]{"task_id":"task-1"}[/HARNESS_TASK_CONTEXT]' }, env: {} });
+      assert.equal(dispatched.decision, "allow", dispatched.reason);
+      mkdirSync(join(f.root, "tests"));
+      writeFileSync(join(f.root, "tests/baseline.test.mjs"),
+        'import test from "node:test";\nimport assert from "node:assert/strict";\n' +
+        'import { value } from "../src/a.ts";\ntest("existing public value", () => assert.equal(value, 1));\n');
+      const baselineChildEnv = { ...process.env };
+      delete baselineChildEnv.NODE_TEST_CONTEXT;
+      const output = execFileSync(process.execPath, ["--test", "tests/baseline.test.mjs"],
+        { cwd: f.root, encoding: "utf8", env: baselineChildEnv });
+      assert.match(output, /# pass 1/);
+      if (productDrift) writeFileSync(join(f.root, "src/a.ts"), "export const value = 2;\n");
+      const completed = recordPiTaskCompletion({ projectRoot: f.root, sessionId: f.sessionId,
+        featureId: f.featureId, taskId: "task-1", role: "harness-executor",
+        producerCallId: "baseline-coverage", outputText: "Status: DONE" });
+      assert.equal(completed.ok, true, completed.reason);
+      assert.equal(completed.capturePending, !productDrift, "test-only scope never approves a SUT edit");
+      const resolved = piHandRecordPath({ projectRoot: f.root, featureId: f.featureId, sessionId: f.sessionId }, "task-1");
+      const hand = JSON.parse(readFileSync(resolved.path, "utf8"));
+      assert.equal(hand.outcome, productDrift ? "BLOCKED" : "DONE");
+      assert.deepEqual(hand.scopeViolations, productDrift ? ["src/a.ts"] : []);
+      assert.equal(hand.capturedVerifiedAt, undefined, "GREEN coverage still requires independent native capture");
+    } finally { f.close(); }
+  }
+});
+
 test("no_tests declarado no prompt não libera tarefa canônica com teste travado", () => {
   const f = completionFixture();
   try {
