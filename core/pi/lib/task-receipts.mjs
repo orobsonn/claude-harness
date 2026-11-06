@@ -19,7 +19,7 @@ import { PARALLEL_REVIEW_ROLES, requiredPiTaskReviewRoles } from "./roles.mjs";
 import { canonicalTaskReviewPrompt, classifyPiReviewDispatch } from "./pi-review-concurrency.mjs";
 import { piGateStatePath, piHandRecordPath } from "./pi-paths.mjs";
 import { readTaskProcess } from "./task-process.mjs";
-import { capturePlanReviewInput, readTaskRunBinding, validateTaskRepairCheckpoint } from "./task-run.mjs";
+import { capturePlanReviewInput, readTaskRunBinding, validateTaskRepairCheckpoint, checkBlockedTaskRepairCheckpoint } from "./task-run.mjs";
 import { readPiSpecApproval } from "./spec-approval.mjs";
 import { taskScopeBase, taskReconciliationDigest, inheritedTaskFidelity, revalidatedTaskFidelity, isNoWriteTaskFidelityAuthor } from "./task-reconciliation.mjs";
 import { isUnwrittenBlockedWriter } from "./native-writer.mjs";
@@ -729,6 +729,8 @@ export function inspectTaskRun(entry, dependencies = {}) {
         const text = eventText(producer.end.result);
         if (text.trim()) details.hand_report = { producer_call_id: producer.callId,
           agent: hand.agent, text: text.slice(0, 6000), truncated: text.length > 6000 };
+        const repair = checkBlockedTaskRepairCheckpoint(binding, hand);
+        if (repair.reason) details.recovery_guidance = repair.reason;
       }
       // These are explanations only. Capture/fidelity/review failures below retain
       // their authority; a DONE sentence must never produce a ready receipt.
@@ -890,6 +892,13 @@ export function inspectTaskRun(entry, dependencies = {}) {
           event.args?.action === "fidelity" && event.args?.task_id === entry.task_id && markerSucceeded(event));
         const originalFreeze = markerIndex < 0 ? null : beforeImplementation.slice(0, markerIndex)
           .map((event) => commitFromEvent(event, worktree)).filter(Boolean).at(-1);
+        // taskScopeBase already verified this exact host merge, its tree and
+        // sealed receipts. A later writer restores the imported frozen baseline;
+        // comparing to the pre-reconciliation freeze would misattribute other
+        // owners' approved product to this task. Own deltas remain scoped below.
+        const checkpointBase = reconciliation && repairImplementation.launchIndex >= reconciliation.launch_count &&
+          ancestor(worktree, reconciliation.merged_head, hand.freezeCommitSha)
+          ? reconciliation.merged_head : originalFreeze;
         const checkpointObserved = native.events.slice(implementationIndex + 1, firstAuthorIndex).some((event) =>
           Number.isInteger(repairImplementation.endLine) && Number.isInteger(event.endLine) &&
           (event.launchIndex > repairImplementation.launchIndex || event.line > repairImplementation.endLine) &&
@@ -897,10 +906,10 @@ export function inspectTaskRun(entry, dependencies = {}) {
           /\bgit\s+commit\b/.test(event.args?.command ?? "") &&
           /^\[[^\]\n]+\s+[0-9a-f]{7,40}\]/m.test(eventText(event.end?.result)) &&
           commitFromEvent(event, worktree) === hand.freezeCommitSha);
-        const restoredFrozen = originalFreeze && splitZero(git(worktree, ["log", "--format=", "--name-only", "-z",
-          `${originalFreeze}..${hand.freezeCommitSha}`, "--", ...frozenPaths(binding.task)])).length > 0;
+        const restoredFrozen = checkpointBase && splitZero(git(worktree, ["log", "--format=", "--name-only", "-z",
+          `${checkpointBase}..${hand.freezeCommitSha}`, "--", ...frozenPaths(binding.task)])).length > 0;
         if (checkpointObserved && restoredFrozen && validateTaskRepairCheckpoint({ root: worktree, task: binding.task,
-          baseSha: originalFreeze, headSha: hand.freezeCommitSha }).ok) {
+          baseSha: checkpointBase, headSha: hand.freezeCommitSha }).ok) {
           recoveryOrigin = { head_sha: hand.freezeCommitSha, producer_call_id: repairImplementation.callId,
             producer_launch_index: repairImplementation.launchIndex, derived_from: "pre-author-product-commit" };
         }

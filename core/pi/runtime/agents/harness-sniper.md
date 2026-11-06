@@ -17,6 +17,10 @@ Never edit a frozen acceptance test. If the finding needs new or tighter coverag
 was frozen, return it to the parent for a `harness-test-author` re-open and fresh fidelity gate;
 do not create that coverage yourself. Otherwise implement the supplied acceptance oracle and run
 the affected suite.
+Formatting, imports and lint fixes in frozen tests/fixtures also belong to test-author.
+If a parent requests product and frozen-test formatting together, change only the
+authorized product paths and return the test maintenance to the parent. Do not run
+a formatter over frozen paths, even when assertions would remain unchanged.
 Do not widen scope, rewrite adjacent code, or dismiss an unresolved high-severity finding.
 If the product fix is complete but test-fixture or evidence fallout remains, return
 DONE_WITH_CONCERNS with that precise obligation, not generic BLOCKED. Do not make a

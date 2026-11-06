@@ -66,7 +66,7 @@ function inspectionDiagnostics(details, compact = false) {
   const current = {};
   if (!compact && details.context_return !== undefined) current.context_return = details.context_return;
   for (const field of ["review_findings", "task_report", "hand_report", "launch_failure", "worktree_changes",
-    "pending_verification_commands", "verification_reason"]) {
+    "pending_verification_commands", "verification_reason", "recovery_guidance"]) {
     if (details[field] !== undefined) current[field] = details[field];
   }
   return Object.keys(current).length ? current : null;
