@@ -192,6 +192,13 @@ isolado, use o contrato/artefato canônico acessível, preferindo registrar o co
 spec enquanto ainda é draft. Não altere spec selada ou recibos fora dos fluxos nativos. Isso não
 muda o protocolo fresh nem autoriza usar o veredito de outro olho como contexto.
 
+Uma referência de arquivo só serve se estiver na raiz canônica acessível ao destinatário.
+`gh issue view` e `gh pr view` em chamadas simples geram uma referência `[harness-evidence]`
+local para a saída completa; são inspeção normativa, não teste aprovado. Repasse esse caminho
+completo aos papéis da mesma worktree. Na task isolada, cujo root é outro, o próprio pai local
+pode ler a mesma fonte autorizada via `gh` e fornecer o seu artefato local aos test-authors/olhos.
+Não envie só um caminho de outra worktree nem amplie a leitura dos olhos para fora do projeto.
+
 O brief de revisão contém o contrato e os arquivos atuais relevantes. Para fidelidade,
 bastam as asserções aprovadas, testes/fixtures e a saída do comando focal. Para
 implementação/final, inclua também o diff atual e a verificação exigida pela entrega.

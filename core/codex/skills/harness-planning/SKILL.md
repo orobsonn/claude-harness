@@ -24,6 +24,10 @@ new permission. Preserve valid task IDs, scopes and decisions during recovery.
 Keep the same literal source accessible to isolated task parents and eyes;
 prefer an appendix in the canonical spec while it is still a draft. Use native
 revision flows for sealed artifacts, never mutate their state or receipts.
+References must be readable within each recipient's canonical project root.
+For Pi tasks in another worktree, the local parent can retrieve the same approved
+issue/PR with a standalone `gh ... view` inspection and pass its native archived
+output to local eyes; do not widen their filesystem or network permissions.
 
 - Each task names files, interfaces, failing test, expected failure, minimal code, green test, and verification command.
 - Order steps by dependency and make every handoff independently checkable.
