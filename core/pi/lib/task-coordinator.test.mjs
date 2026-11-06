@@ -804,6 +804,9 @@ test("blocked status returns fresh diagnostics without persisting or replaying t
       launch_failure: { timed_out: true, signal: "SIGTERM" },
       context_return: contextReturn,
       review_findings: [{ severity: "high", finding: "Missing boundary check" }],
+      pending_verification_commands: ["npm test -- test/current.test.ts"],
+      verification_reason: "Run the declared focal command on the committed input.",
+      unrelated_internal_payload: "must not be transported",
     },
   });
 
@@ -819,6 +822,8 @@ test("blocked status returns fresh diagnostics without persisting or replaying t
       launch_failure: { timed_out: true, signal: "SIGTERM" },
       context_return: contextReturn,
       review_findings: [{ severity: "high", finding: "Missing boundary check" }],
+      pending_verification_commands: ["npm test -- test/current.test.ts"],
+      verification_reason: "Run the declared focal command on the committed input.",
     },
   });
   assert.equal(blocked.tasks[0].context_return, undefined);
@@ -832,6 +837,8 @@ test("blocked status returns fresh diagnostics without persisting or replaying t
   );
   assert.equal(compactBlocked.diagnostics.a.context_return, undefined);
   assert.deepEqual(compactBlocked.diagnostics.a.review_findings, [{ severity: "high", finding: "Missing boundary check" }]);
+  assert.deepEqual(compactBlocked.diagnostics.a.pending_verification_commands, ["npm test -- test/current.test.ts"]);
+  assert.equal(compactBlocked.diagnostics.a.verification_reason, "Run the declared focal command on the committed input.");
 
   f.deps.inspectRun = () => ({ ok: false, reason: "receipt still incomplete" });
   const next = await executeTaskAction(
@@ -841,6 +848,34 @@ test("blocked status returns fresh diagnostics without persisting or replaying t
   );
   assert.equal(next.diagnostics, undefined);
   assert.equal(next.tasks[0].context_return, undefined);
+});
+test("integration retains current actionable inspection diagnostics without merging or persisting them", async (t) => {
+  const f = fixture(t);
+  await executeTaskAction({ action: "dispatch", task_ids: ["a"] }, f.context, f.deps);
+  const entry = f.registry().tasks.a;
+  const head = git(entry.worktree, "rev-parse", "HEAD");
+  const parentHead = git(f.dir, "rev-parse", "HEAD");
+  const details = {
+    pending_verification_commands: ["npm test -- test/current.test.ts"],
+    verification_reason: "Use the pending command as a standalone bash call.",
+    task_report: { text: "36/36 passed inline; native evidence unavailable" },
+    unrelated_internal_payload: "not public diagnostics",
+  };
+  f.deps.inspectRun = () => ({ ok: false, reason: "verification missing", details });
+  const result = await executeTaskAction({ action: "integrate", task_id: "a", attempt_id: entry.attempt_id,
+    expected_head: head }, f.context, f.deps);
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, "[harness_tasks] verification missing");
+  const { unrelated_internal_payload: _private, ...expected } = details;
+  assert.deepEqual(result.diagnostics, { a: expected });
+  assert.equal(git(f.dir, "rev-parse", "HEAD"), parentHead);
+  assert.equal(f.registry().integration_intent, undefined);
+  assert.equal(f.registry().tasks.a.integration, null);
+  assert.equal(f.registry().tasks.a.diagnostics, undefined);
+  f.deps.inspectRun = () => ({ ok: false, reason: "legacy marker missing" });
+  const legacy = await executeTaskAction({ action: "integrate", task_id: "a", attempt_id: entry.attempt_id,
+    expected_head: head }, f.context, f.deps);
+  assert.deepEqual(legacy, { ok: false, reason: "[harness_tasks] legacy marker missing" });
 });
 test("summary exposes durable context only for ready or integrated tasks", async (t) => {
   const f = fixture(t);

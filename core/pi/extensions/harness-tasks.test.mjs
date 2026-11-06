@@ -329,6 +329,29 @@ test("native task error preserves recovery identity and uncertain external effec
   assert.deepEqual(JSON.parse(result.content[0].text), result.details);
 });
 
+test("native status, compact wait and integrate preserve exact pending verification diagnostics", async () => {
+  const diagnostics = { a: {
+    pending_verification_commands: ["npm test -- test/focal.test.ts"],
+    verification_reason: "Run the focal command as a standalone bash call.",
+    task_report: { text: "GREEN inline is not an archived command receipt" },
+  } };
+  for (const action of ["status", "wait", "integrate"]) {
+    const resultPayload = action === "integrate"
+      ? { ok: false, reason: "verification missing", diagnostics }
+      : { ok: true, tasks: [{ task_id: "a", status: "blocked", ...(action === "wait"
+        ? { context_return: { text: "old task diary" } } : {}) }], diagnostics: action === "wait"
+        ? { a: { ...diagnostics.a, context_return: { text: "old task diary" } } } : diagnostics };
+    const tool = taskTool({ executeAction: async () => resultPayload });
+    const input = { action, task_id: "a", ...(action === "integrate"
+      ? { attempt_id: "attempt-a", expected_head: "a".repeat(40) } : { compact: true }) };
+    const { result } = await runNativeToolCall({ tool, input, hooks: tool.testHooks, ctx: toolContext });
+    assert.equal(result.isError, action === "integrate", action);
+    assert.deepEqual(result.details.diagnostics, diagnostics, action);
+    assert.deepEqual(JSON.parse(result.content[0].text).diagnostics, diagnostics, action);
+    if (action !== "integrate") assert.equal(result.details.tasks[0].context_return, undefined, action);
+  }
+});
+
 test("a stale Orca handle falls back to status observation without deciding completion", async () => {
   let statusReads = 0;
   let localWaits = 0;
