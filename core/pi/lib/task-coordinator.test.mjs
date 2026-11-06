@@ -16,7 +16,7 @@ import { hashTaskReceipt } from "./task-contract.mjs";
 import { snapshotWorktreeBaseline, pathsChangedSinceBaseline } from "../../opencode/lib/worktree-baseline.mjs";
 import { hashTaskArtifact, admitTaskRun, readTaskRunBinding, checkBaselineTaskTddRecovery } from "./task-run.mjs";
 import { preserveTaskPlanForPlanner, readTaskPlanAuthority, validateTaskScopeRecovery } from "./task-plan-recovery.mjs";
-import { canonicalPiDispatchFromPlan, claimPiDispatchForRuntime } from "./pi-state-records.mjs";
+import { canonicalPiDispatchFromPlan, claimPiDispatchForRuntime, removePiDispatchRecord } from "./pi-state-records.mjs";
 import { recordPiTaskCompletion } from "./entry-gate.mjs";
 import { piHandRecordPath } from "./pi-paths.mjs";
 import { testApi as dispatchApi } from "../extensions/harness-dispatch.ts";
@@ -511,6 +511,20 @@ test("same-attempt baseline→TDD admits authorship only after approval and seal
   assert.equal(dispatchApi.uncapturedImplementationReason(entry.worktree, "local-a", "feature", "a", binding), null);
   assert.equal(JSON.parse(fs.readFileSync(handPath)).outcome, "BLOCKED", "permission to author never promotes the old hand");
   assert.equal(f.registry().tasks.a.proof_recovery_snapshots.length, 1);
+  assert.equal(removePiDispatchRecord(entry.worktree, { sessionId: "local-a", callId: "baseline-writer" }).ok, true);
+  const nativeEntries = [
+    { type: "message", message: { role: "assistant", content: [{ type: "toolCall", id: "baseline-writer", name: "subagent",
+      arguments: { subagent_type: "harness-executor", prompt: '[HARNESS_TASK_CONTEXT]{"task_id":"a"}[/HARNESS_TASK_CONTEXT]' } }] } },
+    { type: "message", message: { role: "toolResult", toolCallId: "baseline-writer", isError: false,
+      details: { status: "completed" }, content: [{ type: "text", text: "Coverage exposed missing guests. Status: BLOCKED" }] } },
+  ];
+  assert.equal(checkBaselineTaskTddRecovery(binding, hand).ok, false, "a removed lease alone is not proof");
+  assert.equal(checkBaselineTaskTddRecovery(binding, hand, nativeEntries).ok, true, "normal BLOCKED lease cleanup retains native producer proof");
+  assert.equal(dispatchApi.uncapturedImplementationReason(entry.worktree, "local-a", "feature", "a", binding, nativeEntries), null);
+  for (const altered of [
+    [{ ...nativeEntries[0], message: { ...nativeEntries[0].message, stopReason: "aborted" } }, nativeEntries[1]],
+    [nativeEntries[0], { ...nativeEntries[1], message: { ...nativeEntries[1].message, isError: true } }],
+  ]) assert.equal(checkBaselineTaskTddRecovery(binding, hand, altered).ok, false);
   const future = structuredClone(corrected);
   future.tasks[1].description = "Clarify an unadmitted future task";
   approve(future);

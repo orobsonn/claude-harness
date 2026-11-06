@@ -627,7 +627,7 @@ export function checkBlockedTaskRepairCheckpoint(binding, record) {
 }
 
 /** Permit test authorship after reviewed baseline→TDD recovery, never capture or product approval. */
-export function checkBaselineTaskTddRecovery(binding, record) {
+export function checkBaselineTaskTddRecovery(binding, record, sessionEntries = []) {
   try {
     const recovery = binding?.baseline_tdd_recovery;
     if (binding?.ok !== true || !recovery || !HEX_64.test(binding.recovered_task_contract_sha256 ?? "") ||
@@ -639,9 +639,19 @@ export function checkBaselineTaskTddRecovery(binding, record) {
         (record.scopeViolations ?? []).length || (record.frozenViolations ?? []).length ||
         !HEX_40.test(record.freezeCommitSha ?? "")) return { ok: false };
     const producer = readPiDispatchRecord(binding.root, { parentSessionId: binding.sessionId, callId: record.producerCallId });
-    if (!producer.ok || producer.record.plan_hash !== recovery.plan_sha256 ||
-        producer.record.feature_id !== record.featureId || producer.record.task_id !== record.taskId ||
-        producer.record.role !== record.agent || producer.record.frozen_paths?.length !== 0) return { ok: false };
+    // Non-DONE hands release their active dispatch lease. Its absence is normal;
+    // the completed native call remains bound to this task's validated session.
+    if (producer.ok) {
+      if (producer.record.plan_hash !== recovery.plan_sha256 || producer.record.feature_id !== record.featureId ||
+          producer.record.task_id !== record.taskId || producer.record.role !== record.agent ||
+          producer.record.frozen_paths?.length !== 0) return { ok: false };
+    } else {
+      if (!producer.absent) return { ok: false };
+      const call = fidelityCalls(sessionEntries).findLast(item => item.id === record.producerCallId);
+      if (call?.name !== "subagent" || call.args?.subagent_type !== record.agent ||
+          parseTaskDispatchIdentity(call.args?.prompt).taskId !== record.taskId ||
+          call.result?.isError !== false || call.result?.details?.status !== "completed") return { ok: false };
+    }
     if (git(binding.root, "status", "--porcelain", "--untracked-files=all", "--", ".",
       ":(exclude).pi/harness/", ":(exclude)node_modules/")) return { ok: false };
     const head = git(binding.root, "rev-parse", "HEAD");
