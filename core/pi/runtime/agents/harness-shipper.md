@@ -98,6 +98,11 @@ Action: siga somente a política de release existente e a operação autorizada.
 No merge funcional, use `gh pr merge <PR> --squash` sem `--delete-branch`. Continue
 merge e release na mesma sessão e worktree do Orca; não dispute `main` ocupada por
 outro worktree nem altere seu checkout. Registre o SHA revisado e o merge remoto exato.
+Após confirmar o merge remoto, execute `git fetch origin main` antes de retornar
+`Status: DONE`: a prova local precisa dos objetos da base efetiva, que pode ter
+avançado durante o CI. Esse fetch atualiza referências; não mergeie, rebaseie ou
+resete a branch local apenas para registrar o recibo. Se o fetch falhar, reporte
+esse erro preciso, preservando o merge já confirmado, sem publicar novamente.
 Antes de preparar a branch de release, execute `git fetch origin` e parta da
 `origin/main` atual, incluindo o merge funcional confirmado; não use a referência
 local anterior ao merge para preparar a próxima versão.
