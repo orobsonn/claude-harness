@@ -296,6 +296,9 @@ focal e os fatos para suporte read-only; não peça nova implementação às ceg
   olhos de implementação afetados no HEAD atual; não reimplemente para gerar recibo.
   Antes de devolver essa recuperação como pronta, execute os comandos focais já
   declarados dos testes/fixtures congelados alterados sobre o input commitado.
+  Use uma chamada `bash` isolada por comando focal, sem prefixo `git`, `&&` ou
+  outro comando, e confirme `command_evidence.status=available`. Um GREEN inline
+  pode explicar a fidelidade, mas não substitui o recibo nativo de prontidão.
   O host reutiliza evidência verde do mesmo input; recaptura sem mudança de testes
   não exige nova execução. Fidelity/capture de um RED são válidos para preservar
   o teste, mas não tornam a correção pronta: complete o produto pelo sniper usando

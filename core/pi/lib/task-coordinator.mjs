@@ -59,6 +59,18 @@ const git = (cwd, ...args) =>
     maxBuffer: 8 * 1024 * 1024,
   }).trim();
 const fail = (reason) => ({ ok: false, reason: `[harness_tasks] ${reason}` });
+// Inspection explains the current blocker. Keep its actionable fields through
+// every response path without persisting them or exposing unrelated payloads.
+function inspectionDiagnostics(details, compact = false) {
+  if (!details || typeof details !== "object" || Array.isArray(details)) return null;
+  const current = {};
+  if (!compact && details.context_return !== undefined) current.context_return = details.context_return;
+  for (const field of ["review_findings", "task_report", "hand_report", "launch_failure", "worktree_changes",
+    "pending_verification_commands", "verification_reason"]) {
+    if (details[field] !== undefined) current[field] = details[field];
+  }
+  return Object.keys(current).length ? current : null;
+}
 const read = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
 const isAncestor = (root, a, b) => {
   try {
@@ -976,18 +988,8 @@ export async function executeTaskAction(params, context = {}, injected = {}) {
         } else {
           entry.status = "blocked";
           entry.reason = inspected.reason;
-          if (inspected.details && typeof inspected.details === "object") {
-            const current = {};
-            if (inspected.details.context_return !== undefined)
-              if (!params.compact) current.context_return = inspected.details.context_return;
-            if (inspected.details.review_findings !== undefined)
-              current.review_findings = inspected.details.review_findings;
-            for (const field of ["task_report", "hand_report", "launch_failure", "worktree_changes"]) {
-              if (inspected.details[field] !== undefined) current[field] = inspected.details[field];
-            }
-            if (Object.keys(current).length > 0)
-              diagnostics[entry.task_id] = current;
-          }
+          const current = inspectionDiagnostics(inspected.details, params.compact === true);
+          if (current) diagnostics[entry.task_id] = current;
         }
       }
       persist();
@@ -1361,7 +1363,10 @@ export async function executeTaskAction(params, context = {}, injected = {}) {
     }
     taskScopeBase(entry, entry.worktree, params.expected_head);
     const inspected = await deps.inspectRun(entry);
-    if (!inspected.ok) throw new Error(inspected.reason);
+    if (!inspected.ok) {
+      const current = inspectionDiagnostics(inspected.details);
+      return { ...fail(inspected.reason), ...(current ? { diagnostics: { [entry.task_id]: current } } : {}) };
+    }
     if (inspected.result.child_head !== params.expected_head)
       throw new Error("verified task HEAD differs from expected_head");
     entry.result = inspected.result;
