@@ -9,7 +9,7 @@ import { createAgentSession, createBashToolDefinition, createReadToolDefinition,
 import { fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai";
 import harnessPolicy from "./harness-policy.ts";
 import { writePiChildIdentity } from "../lib/pi-child-identity.mjs";
-import { attachPiReviewEvidencePacket } from "../lib/pi-command-evidence.mjs";
+import { attachPiReviewEvidencePacket, checkPiFinalCommands } from "../lib/pi-command-evidence.mjs";
 
 function fixture(t) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "pi-command-evidence-")));
@@ -189,6 +189,50 @@ test("source searches for security words remain ordinary command evidence", asyn
   const patch = await f.hooks.get("tool_result")(event, f.context());
   assert.equal(patch.details.command_evidence.status, "available");
   assert.equal(readFileSync(patch.details.command_evidence.path, "utf8"), event.content[0].text);
+});
+
+test("GitHub issue/PR view keeps literal normative input readable without becoming test evidence", async (t) => {
+  const f = fixture(t);
+  const body = JSON.stringify({ body: "Olá {{1}} — contrato literal; preservar parâmetros.\n".repeat(400) });
+  for (const [index, command] of [
+    "gh issue view 259 --json number,title,body,state,labels,url",
+    "gh pr view 271 --repo org/project --json body --jq .body",
+  ].entries()) {
+    const event = { toolName: "bash", toolCallId: `normative-${index}`, input: { command },
+      content: [{ type: "text", text: body }], isError: false };
+    const patch = await f.hooks.get("tool_result")(event, f.context());
+    const evidence = patch.details.command_evidence;
+    assert.equal(evidence.status, "available", command);
+    assert.equal(readFileSync(evidence.path, "utf8"), body);
+    assert.deepEqual(patch.content.slice(0, event.content.length), event.content);
+    assert.equal(writePiChildIdentity(f.root, {
+      parentSessionId: "task-session", childSessionId: `planner-${index}`,
+      role: "harness-planner", callId: `plan-${index}`,
+    }).ok, true);
+    const planner = { cwd: f.root, hasUI: true, sessionManager: {
+      getSessionId: () => `planner-${index}`, getHeader: () => ({ parentSession: "task-session" }),
+    } };
+    const input = { path: evidence.path, offset: 1, limit: 1000 };
+    assert.equal(f.hooks.get("tool_call")({ toolName: "read", input }, planner), undefined);
+    const read = await createReadToolDefinition(f.root).execute(`source-${index}`, input, undefined, undefined, {});
+    assert.ok(read.content[0].text.includes("contrato literal"));
+    const inputPacket = { toolName: "subagent", input: { subagent_type: "harness-compliance",
+      prompt: `[HARNESS_FINAL_REVIEW]\nNormative input: ${evidence.path}` } };
+    const packet = attachPiReviewEvidencePacket({ projectRoot: f.root, sessionId: "task-session", event: inputPacket });
+    assert.equal(packet.status, "available");
+    const manifest = JSON.parse(readFileSync(packet.command_evidence_path, "utf8"));
+    assert.equal(manifest.exact_current.some(record => record.command.startsWith("gh ")), false);
+    assert.ok(manifest.supplied.some(record => record.command === command), "explicit normative references remain readable context");
+  }
+  const required = checkPiFinalCommands({ projectRoot: f.root, sessionId: "task-session", commands: ["npm test"] });
+  assert.equal(required.ok, false);
+  assert.deepEqual(required.commands, ["npm test"], "a readable contract does not satisfy implementation verification");
+  for (const command of ["gh issue edit 259 --body private", "gh api user", "gh issue view 259 && printenv"]) {
+    const event = { toolName: "bash", toolCallId: command, input: { command },
+      content: [{ type: "text", text: "unrelated output" }], isError: false };
+    const patch = await f.hooks.get("tool_result")(event, f.context());
+    assert.equal(patch.details.command_evidence.status, "not-archived", command);
+  }
 });
 
 test("opaque short commands do not automatically share output with reviewers", async (t) => {
