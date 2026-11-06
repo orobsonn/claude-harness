@@ -41,6 +41,12 @@ function preservesJudgments(before, after) {
       stableTaskJson(value) === stableTaskJson(after[key]));
 }
 
+/** Only strengthen proof requirements; never use recovery to drop locked TDD. */
+function baselineToTdd(before, after) {
+  return before.no_tests === true && before.kind !== "docs" && before.locked_tests?.length === 0 &&
+    after.no_tests !== true && after.kind !== "docs" && after.locked_tests?.length > 0;
+}
+
 /** Scope, corrective proof and reviewed clarifications can grow; admitted evidence stays intact. */
 export function validateTaskScopeRecovery(before, after, admittedTasks) {
   const valid = validatePlan(after, { expect: "full", expectedModelStrategy: before.model_strategy });
@@ -60,6 +66,11 @@ export function validateTaskScopeRecovery(before, after, admittedTasks) {
       resolved_judgments_model_resolved, ...rest }) => rest;
     const behavior = task => {
       const value = contract(task);
+      if (baselineToTdd(previous, current)) {
+        delete value.no_tests;
+        if (typeof previous.description === "string" &&
+            current.description?.startsWith(`${previous.description}\n`)) delete value.description;
+      }
       if (!admitted) delete value.description;
       return value;
     };
@@ -101,15 +112,21 @@ function admittedTaskContracts(registry, originalPlan, sessionId, featureId, spe
     const original = originalPlan.tasks.find(task => task.id === id);
     if (!original || entry.task_id !== undefined && entry.task_id !== id)
       throw new Error("task admission registry identity mismatch");
-    const snapshot = entry.admission_plan_snapshot;
-    if (snapshot === undefined) { admitted.set(id, original); continue; }
-    if (snapshot?.written_by !== "host-task-admission-plan" || typeof snapshot.text !== "string" ||
-        Buffer.byteLength(snapshot.text) > 16 * 1024 * 1024 ||
-        !approvalValid(snapshot.approval, sessionId, featureId, hash(snapshot.text), specSha256))
-      throw new Error("task admission plan snapshot is invalid");
-    const plan = JSON.parse(snapshot.text);
-    validateTaskScopeRecovery(originalPlan, plan, new Map());
-    admitted.set(id, plan.tasks.find(task => task.id === id));
+    if (entry.proof_recovery_snapshots !== undefined && !Array.isArray(entry.proof_recovery_snapshots))
+      throw new Error("task proof recovery snapshots are invalid");
+    let current = original;
+    const snapshots = [entry.admission_plan_snapshot, ...(entry.proof_recovery_snapshots ?? [])];
+    for (const [index, snapshot] of snapshots.entries()) {
+      if (snapshot === undefined && index === 0) continue;
+      if (snapshot?.written_by !== "host-task-admission-plan" || typeof snapshot.text !== "string" ||
+          Buffer.byteLength(snapshot.text) > 16 * 1024 * 1024 ||
+          !approvalValid(snapshot.approval, sessionId, featureId, hash(snapshot.text), specSha256))
+        throw new Error("task admission plan snapshot is invalid");
+      const plan = JSON.parse(snapshot.text);
+      validateTaskScopeRecovery(originalPlan, plan, index === 0 ? new Map() : new Map([[id, current]]));
+      current = plan.tasks.find(task => task.id === id);
+    }
+    admitted.set(id, current);
   }
   return admitted;
 }
@@ -171,7 +188,7 @@ export function readTaskPlanAuthority({ projectRoot, sessionId, featureId, planS
       const registry = read(registryFile);
       // Legacy exact-plan receipts need no schema migration. Only a later
       // admission snapshot can add an obligation absent from these old bytes.
-      if (Object.values(registry.tasks ?? {}).some(entry => entry.admission_plan_snapshot !== undefined)) {
+      if (Object.values(registry.tasks ?? {}).some(entry => entry.admission_plan_snapshot !== undefined || entry.proof_recovery_snapshots?.length)) {
         if (registry.parent_session_id !== sessionId || registry.feature_id !== featureId ||
             registry.plan_sha256 !== planSha256 || registry.spec_sha256 !== specSha256)
           throw new Error("task admission registry identity mismatch");
@@ -194,18 +211,26 @@ export function readTaskPlanAuthority({ projectRoot, sessionId, featureId, planS
   // Identical bytes cannot add or remove a task obligation. Keep the same
   // validation behavior as the original exact-plan path, including old plans.
   if (currentHash === planSha256) {
-    if (Object.values(registry.tasks ?? {}).some(entry => entry.admission_plan_snapshot !== undefined))
+    if (Object.values(registry.tasks ?? {}).some(entry => entry.admission_plan_snapshot !== undefined || entry.proof_recovery_snapshots?.length))
       validateTaskScopeRecovery(originalPlan, plan,
         admittedTaskContracts(registry, originalPlan, sessionId, featureId, specSha256));
     return { plan, planHash: currentHash, originalPlan, affectedTasks: [], approval: state.plan_review_evidence };
   }
-  const affectedTasks = validateTaskScopeRecovery(originalPlan, plan,
-    admittedTaskContracts(registry, originalPlan, sessionId, featureId, specSha256));
+  const admitted = admittedTaskContracts(registry, originalPlan, sessionId, featureId, specSha256);
+  const affectedTasks = validateTaskScopeRecovery(originalPlan, plan, admitted);
   const admissionPlanHashes = Object.fromEntries(Object.entries(registry.tasks)
-    .filter(([, entry]) => entry.admission_plan_snapshot !== undefined)
-    .map(([id, entry]) => [id, hash(entry.admission_plan_snapshot.text)]));
+    .flatMap(([id, entry]) => {
+      const snapshot = entry.proof_recovery_snapshots?.at(-1) ?? entry.admission_plan_snapshot;
+      return snapshot ? [[id, hash(snapshot.text)]] : [];
+    }));
+  const baselineTddRecoveries = Object.fromEntries(Object.entries(registry.tasks).flatMap(([id, entry]) => {
+    const snapshot = entry.admission_plan_snapshot;
+    const task = (snapshot ? JSON.parse(snapshot.text) : originalPlan).tasks.find(item => item.id === id);
+    return baselineToTdd(task, plan.tasks.find(item => item.id === id))
+      ? [[id, { plan_sha256: snapshot ? hash(snapshot.text) : planSha256, task }]] : [];
+  }));
   return { plan, planHash: currentHash, originalPlan, affectedTasks, approval: state.plan_review_evidence,
-    admissionPlanHashes };
+    admissionPlanHashes, baselineTddRecoveries };
 }
 
 /** Read-only resume proof; an interrupted scope correction need not be approved yet. */

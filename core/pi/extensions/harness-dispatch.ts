@@ -8,7 +8,7 @@ import { findShadowedCanonicalRoles, validateSubagentDispatch } from "../lib/dis
 import { loadModelProfileFromEnv, profilePrompt } from "../lib/model-profile.mjs";
 import { isDiscussionRole, isParallelReviewRole, isSupportRole } from "../lib/roles.mjs";
 import { canonicalTaskReviewPrompt, classifyPiReviewDispatch } from "../lib/pi-review-concurrency.mjs";
-import { readTaskRunBinding, checkBlockedTaskRepairCheckpoint } from "../lib/task-run.mjs";
+import { readTaskRunBinding, checkBlockedTaskRepairCheckpoint, checkBaselineTaskTddRecovery } from "../lib/task-run.mjs";
 import { isChildSession, isPiHeadlessContext, piSessionId, piSubagentArgs } from "../lib/pi-adapter-map.mjs";
 import { loadPiGateStateFromDisk } from "../lib/pi-gate-state.mjs";
 import { piHandRecordPath } from "../lib/pi-paths.mjs";
@@ -57,6 +57,7 @@ function uncapturedImplementationReason(projectRoot: string, sessionId: string, 
   if (!["harness-executor", "harness-sniper"].includes(record.agent) ||
       record.featureId !== featureId || record.taskId !== taskId || record.sessionId !== sessionId ||
       (typeof record.capturedVerifiedAt === "string" && record.capturedVerifiedAt.length > 0)) return null;
+  if (checkBaselineTaskTddRecovery(binding, record).ok) return null;
   if (!isCaptureEligibleHandRecord(record)) {
     // BLOCKED is not approval. An admitted task may repair its frozen tests
     // after preserving product in a selective checkpoint, as task-run already

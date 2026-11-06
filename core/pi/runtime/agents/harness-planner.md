@@ -244,6 +244,13 @@ Keep low/medium work cohesive. Scorer absence/error does not prevent planning.
    working product or add a no-op executor after test-author pre-applies the work.
    A genuine discovered product failure requires a reviewed plan correction with
    owning product scope and the normal locked-test/TDD path before product edits.
+   For that correction, preserve task IDs, existing observables, scope entries,
+   commands and judgments. Remove `no_tests:true` (or set it false), append the
+   minimum production paths and locked tests/fixtures covering the existing
+   baseline artifacts, and append a recovery note to description/judgments.
+   Historical baseline wording records the initial phase; the new locked TDD
+   governs recovery. The same attempt/grant is preserved, and native approval
+   is required before resuming. Never downgrade an admitted TDD task to no_tests.
    Validate RED on the exact base plus already integrated dependencies. Prefer an
    existing importable entry point when it exercises the approved behavior; a
    genuinely new standalone module does not require an artificial existing caller.

@@ -32,6 +32,7 @@ export { TASK_PIPELINE_VERSION, TASK_RUN_ENV } from "./task-contract.mjs";
 import { readTaskPlanAuthority, recoveredTaskContractHash } from "./task-plan-recovery.mjs";
 import { inheritedTaskFidelity, revalidatedTaskFidelity, isNoWriteTaskFidelityAuthor } from "./task-reconciliation.mjs";
 import { piHandRecordPath, piGateStatePath } from "./pi-paths.mjs";
+import { readPiDispatchRecord } from "./pi-state-records.mjs";
 
 const TASK_ROLES = new Set([
   "harness-test-author",
@@ -231,6 +232,7 @@ function inspectGrant(grantPath, cwd, { allowHistoricalDeps = false } = {}) {
     parentRoot,
     plan: authority.plan,
     recovered_task_contract_sha256: recoveredTaskContractHash(authority, grant.task_id),
+    baseline_tdd_recovery: authority.baselineTddRecoveries?.[grant.task_id] ?? null,
     task,
     planPath: artifacts.planPath,
     specPath: artifacts.specPath,
@@ -621,6 +623,36 @@ export function checkBlockedTaskRepairCheckpoint(binding, record) {
     const checkpoint = validateTaskRepairCheckpoint({ root: binding.root, task: binding.task,
       baseSha: record.freezeCommitSha, headSha: git(binding.root, "rev-parse", "HEAD") });
     return checkpoint.ok ? checkpoint : failed();
+  } catch { return { ok: false }; }
+}
+
+/** Permit test authorship after reviewed baseline→TDD recovery, never capture or product approval. */
+export function checkBaselineTaskTddRecovery(binding, record) {
+  try {
+    const recovery = binding?.baseline_tdd_recovery;
+    if (binding?.ok !== true || !recovery || !HEX_64.test(binding.recovered_task_contract_sha256 ?? "") ||
+        recovery.task?.no_tests !== true || recovery.task.locked_tests?.length !== 0 ||
+        binding.task.no_tests === true || !binding.task.locked_tests?.length ||
+        record?.outcome !== "BLOCKED" || record.writtenBy !== "host-hand-finished" ||
+        record.featureId !== binding.grant.feature_id || record.taskId !== binding.grant.task_id ||
+        record.sessionId !== binding.sessionId || !["harness-executor", "harness-sniper"].includes(record.agent) ||
+        (record.scopeViolations ?? []).length || (record.frozenViolations ?? []).length ||
+        !HEX_40.test(record.freezeCommitSha ?? "")) return { ok: false };
+    const producer = readPiDispatchRecord(binding.root, { parentSessionId: binding.sessionId, callId: record.producerCallId });
+    if (!producer.ok || producer.record.plan_hash !== recovery.plan_sha256 ||
+        producer.record.feature_id !== record.featureId || producer.record.task_id !== record.taskId ||
+        producer.record.role !== record.agent || producer.record.frozen_paths?.length !== 0) return { ok: false };
+    if (git(binding.root, "status", "--porcelain", "--untracked-files=all", "--", ".",
+      ":(exclude).pi/harness/", ":(exclude)node_modules/")) return { ok: false };
+    const head = git(binding.root, "rev-parse", "HEAD");
+    git(binding.root, "merge-base", "--is-ancestor", record.freezeCommitSha, head);
+    const paths = git(binding.root, "diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--name-only", "-z",
+      record.freezeCommitSha, head, "--", ".", ":(exclude).pi/harness/").split("\0").filter(Boolean);
+    const frozen = binding.task.locked_tests.flatMap(test => [test.path, ...(test.fixture_paths ?? [])]);
+    const oldScope = [...recovery.task.scope_paths, ...(recovery.task.allowed_writes ?? [])];
+    const touched = [...new Set([...paths, ...(record.touchedPaths ?? [])])];
+    if (!paths.length || checkScope(touched, oldScope).length || checkScope(touched, frozen).length) return { ok: false };
+    return { ok: true };
   } catch { return { ok: false }; }
 }
 
