@@ -103,6 +103,7 @@ const REQUIRED_LIBS = [
   "core/pi/lib/pi-auth-path-patch.mjs",
   "core/pi/lib/pi-child-identity.mjs",
   "core/pi/lib/pi-child-extensions.mjs",
+  "core/pi/lib/child-prompt-context.mjs",
   "core/pi/lib/pi-command-evidence.mjs",
   "core/pi/lib/vitest-shard-reporter.mjs",
   "core/pi/lib/reviewer-grep.mjs",
