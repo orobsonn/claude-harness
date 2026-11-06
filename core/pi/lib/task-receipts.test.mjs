@@ -1030,7 +1030,7 @@ test("missing-capture recovery rejects absent commit proof, unresolved review an
 });
 
 function reconciledTestRecovery({ productDelta = false, memoryDelta = false, childProductDelta = false, aggregateRefresh = false, readOnlyAuthor = false, importOwnFrozen = false,
-  replayExistingAuthor = false, expandedDependency = false } = {}) {
+  replayExistingAuthor = false, expandedDependency = false, blockedCheckpoint = null } = {}) {
   const f = replayExistingAuthor ? testOnlyRecovery() : inspectionFixture();
   bindPinnedRuntime(f);
   appendImplementationReviews(f);
@@ -1112,9 +1112,49 @@ function reconciledTestRecovery({ productDelta = false, memoryDelta = false, chi
     f.dependencies.captureReviewInputFn = () => ({ ok: true, snapshot: { head_sha: f.head, input_digest: DIGEST } });
     return f;
   }
-  return testOnlyRecovery({ fixture: { ...f, head: merged }, capturedImplementation: false,
+  let repairBaseline = merged;
+  if (blockedCheckpoint) {
+    const file = f.entry.launches.at(-1).events_path;
+    const prompt = `[HARNESS_TASK_CONTEXT]{"task_id":"${TASK}"}[/HARNESS_TASK_CONTEXT]`;
+    write(path.join(f.root, "src/task.mjs"), "export const actual = 1; // formatted product\n");
+    write(path.join(f.root, "src/task.spec.mjs"), "// unauthorized formatter change\n");
+    run(f.root, "git", "add", "src/task.mjs", "src/task.spec.mjs");
+    run(f.root, "git", "commit", "-m", "mixed formatter");
+    if (blockedCheckpoint !== "unrestored") {
+      run(f.root, "git", "restore", `--source=${merged}`, "--", "src/task.spec.mjs");
+      run(f.root, "git", "add", "src/task.spec.mjs");
+      run(f.root, "git", "commit", "-m", "restore native frozen baseline");
+    }
+    repairBaseline = run(f.root, "git", "rev-parse", "HEAD");
+    fs.appendFileSync(file, [
+      event("tool_execution_start", { toolCallId: "formatter", toolName: "subagent", args: { subagent_type: "harness-sniper", prompt } }),
+      event("tool_execution_end", { toolCallId: "formatter", toolName: "subagent", result: {
+        details: { status: "completed" }, content: [{ type: "text", text: "Status: DONE" }] } }),
+      ...(blockedCheckpoint === "missing-native" ? [] : [
+        event("tool_execution_start", { toolCallId: "checkpoint", toolName: "bash", args: { command: "git commit -m restore" } }),
+        event("tool_execution_end", { toolCallId: "checkpoint", toolName: "bash", result: {
+          content: [{ type: "text", text: `[task ${repairBaseline.slice(0, 7)}] restore native frozen baseline` }] } }),
+      ]), "",
+    ].join("\n"));
+  }
+  return testOnlyRecovery({ fixture: { ...f, head: repairBaseline }, capturedImplementation: false,
     productDelta: childProductDelta, readOnlyAuthor });
 }
+
+test("restored formatter checkpoint uses the sealed aggregate baseline and retains current review requirements", () => {
+  for (const blockedCheckpoint of ["restored", "unrestored", "missing-native"]) {
+    const f = reconciledTestRecovery({ aggregateRefresh: true, productDelta: true, importOwnFrozen: true, blockedCheckpoint });
+    const inspected = inspectTaskRun(f.entry, f.dependencies);
+    assert.equal(inspected.ok, blockedCheckpoint === "restored", inspected.reason);
+    if (!inspected.ok) continue;
+    assert.equal(inspected.result.hand_capture.recovery_origin.producer_call_id, "formatter");
+    assert.equal(inspected.result.hand_capture.recovery_origin.head_sha, f.recoveryBaseline);
+    const state = JSON.parse(fs.readFileSync(f.statePath));
+    delete state.task_review_evidence[`${FEATURE}/${TASK}`].compliance;
+    write(f.statePath, state);
+    assert.equal(inspectTaskRun(f.entry, f.dependencies).ok, false, "a restored checkpoint is not review approval");
+  }
+});
 
 test("a reviewed read-only author can revalidate exact aggregate-imported frozen tests without a fake commit", () => {
   const f = reconciledTestRecovery({ aggregateRefresh: true, readOnlyAuthor: true });
