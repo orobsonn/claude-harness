@@ -33,6 +33,7 @@ import {
   recordPiReviewReceipt,
 } from "../lib/pi-review-evidence.mjs";
 import { registerPiCommandEvidence } from "../lib/pi-command-evidence.mjs";
+import { checkMemoryShipperReady } from "../lib/memory-cycle.mjs";
 
 /** @description Fake do barramento de eventos do Pi (pi.events), por canal. */
 function fakeEvents() {
@@ -112,6 +113,52 @@ const MODEL_STRATEGY = {
   shipper: "openai/shipper",
   harvester: "openai/harvester",
 };
+
+test("native child drops only its parent's historical cold-resume memo without granting delivery approval", async () => {
+  const f = fixture();
+  try {
+    const h = handlers();
+    const parent = ctxOf(f.root);
+    const child = ctxOf(f.root, { child: true, sessionId: CHILD_SESSION });
+    h.get("session_start")({}, parent);
+    const statePath = join(f.root, ".pi/harness/state", SESSION, "gate-state.json");
+    const stateBefore = readFileSync(statePath, "utf8");
+    execFileSync("git", ["init", "-q"], { cwd: f.root });
+    execFileSync("git", ["-c", "user.name=fixture", "-c", "user.email=fixture@example.test", "commit", "--allow-empty", "-qm", "baseline"], { cwd: f.root });
+    const dispatch = { toolName: "subagent", toolCallId: "shipping-unapproved",
+      input: { subagent_type: "harness-shipper", description: "ship", prompt: "deliver", shipment_operation: "merge" } };
+    const before = await h.get("tool_call")(dispatch, parent);
+    let originalReadinessError;
+    assert.throws(() => checkMemoryShipperReady(f.root, SESSION), error => {
+      originalReadinessError = error.message;
+      return /review/i.test(error.message);
+    }, "missing actual reviews still block shipping");
+    const memo = (session = "ses-pi-parent") => `<HARNESS_PARENT_RECOVERY>\n${JSON.stringify({
+      schema: "harness.parent-recovery.v1", session_id: session, feature_id: FEATURE,
+      stage: "plan", spec_approval: "not_verified_by_recovery", plan_approval: "not_verified_by_recovery",
+    })}\n</HARNESS_PARENT_RECOVERY>`;
+    const policy = "Role policy and immutable scope remain in force.\n<HARNESS_MODEL_PROFILE>route</HARNESS_MODEL_PROFILE>";
+    const event = { systemPrompt: `${policy}\n${memo()}\nTask-specific canonical contract stays intact.` };
+    const hook = h.get("before_agent_start");
+    assert.equal(typeof hook, "function", "the child-bound entry extension must sanitize inherited launch context");
+    const result = await hook(event, child);
+    assert.ok(result.systemPrompt.includes(policy));
+    assert.ok(result.systemPrompt.includes("Task-specific canonical contract stays intact."));
+    assert.ok(!result.systemPrompt.includes('"stage":"plan"'));
+    assert.ok(result.systemPrompt.includes(".pi/harness/state/ses-pi-parent/gate-state.json"));
+    assert.equal(await hook({ systemPrompt: result.systemPrompt }, child), undefined, "sanitization is idempotent");
+    assert.equal(await hook(event, parent), undefined, "the actual parent's recovery remains available");
+    assert.equal(await hook({ systemPrompt: memo("other-parent") }, child), undefined, "do not strip another identity's context");
+    assert.equal(await hook({ systemPrompt: "<HARNESS_PARENT_RECOVERY>\nnot-json\n</HARNESS_PARENT_RECOVERY>" }, child), undefined);
+    assert.equal(await hook({ systemPrompt: event.systemPrompt.replace("harness.parent-recovery.v1", "unknown.v2") }, child), undefined);
+    assert.equal(await hook(event, { sessionManager: { getHeader() { throw new Error("broken header"); } } }), undefined);
+    assert.equal(await hook({}, child), undefined);
+    assert.equal(event.systemPrompt.includes(memo()), true, "the shared original prompt is not mutated");
+    assert.deepEqual(await h.get("tool_call")(dispatch, parent), before);
+    assert.throws(() => checkMemoryShipperReady(f.root, SESSION), error => error.message === originalReadinessError);
+    assert.equal(readFileSync(statePath, "utf8"), stateBefore, "no approval, grant or receipt is rewritten");
+  } finally { f.close(); }
+});
 
 /** @description Projeto Pi real com plano estável, gate-state FULL e formulário de issue vendorizado. */
 function fixture() {

@@ -432,6 +432,13 @@ pai global com `harness_memory reconcile` e sua revalidação. Preserve as prova
 compatíveis e siga até atualizar o PR, conferir CI e concluir o merge autorizado.
 CI vermelho também é um finding da entrega: leia o job e a primeira falha, compare
 com o comando local, lifecycle/pretest, versões e ambiente efetivamente usados.
+Se o log de `gh run view --log-failed` estiver truncado, consulte as anotações do
+check do mesmo job/SHA antes de declarar que a causa não está disponível:
+`gh api repos/OWNER/REPO/actions/jobs/JOB_ID --jq .check_run_url`, depois
+`gh api CHECK_RUN_URL/annotations --paginate`. Colete todos os paths e asserções
+disponíveis para a recuperação dos respectivos donos; não execute outra suíte
+inteira só para redescobrir um erro já identificado. Isso não dispensa a reprodução
+necessária, a correção, a validação afetada nem CI verde no SHA publicado.
 Recupere pela task dona; um path de CI fora do escopo exige a emenda aditiva já
 aprovável por planner/plan-reviewer, não abandono da entrega nem waiver do check.
 Um draft finalizado não impede essa correção enquanto seu novo merge permanece pendente.

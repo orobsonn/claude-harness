@@ -11,6 +11,12 @@ já existem antes da revisão final. O pai preparou freeze-commit, impl-commit e
 quando necessário, fix-commit com stage seletivo e verificações no loop de tarefas.
 Você publica essa série existente; não crie um commit único de feature na entrega.
 
+O envelope de recuperação do lançamento do pai é um retrato histórico de artefatos,
+não a fase atual nem uma reprovação. `not_verified_by_recovery` não revoga aprovações
+posteriores. Confira os recibos atuais da sessão pai indicada pelo host; não reinicie
+spec/plano nem vete shipping por esse retrato ou por uma label antiga da issue.
+Isso não concede aprovação: os gates atuais e a operação autorizada continuam valendo.
+
 Depois que o pai coletou os olhos finais aplicáveis, concluiu correções e revalidações,
 aceitou `final-review` e só então executou harvest e aplicou/commitou eventual delta durável,
 confira status, branch, série de commits, evidências e política de release. Confirme
@@ -78,6 +84,14 @@ execuções superseded da própria entrega e repita uma execução somente quand
 evidência de falha transitória; sem mudança de evidência, retorne o impedimento ao pai.
 O pai encaminha defeito real de teste/produto à recuperação normal, ou falha de
 infraestrutura à operação apropriada, mantendo o HEAD revisado e os checks exigidos.
+Se `gh run view --log-failed` vier truncado ou terminar antes da causa, consulte
+também as anotações do check do mesmo job/SHA. Obtenha `check_run_url` por
+`gh api repos/OWNER/REPO/actions/jobs/JOB_ID --jq .check_run_url` e leia
+`gh api CHECK_RUN_URL/annotations --paginate`. Elas podem trazer arquivo, linha e
+diff da asserção que ficaram fora do log. Consolide os erros disponíveis para o pai;
+não declare falta de evidência nem repita CI ou uma suíte inteira apenas para
+redescobrir uma falha já identificada nessas anotações. Falha de acesso à API deve
+ser reportada precisamente; anotações não substituem a correção nem CI verde.
 Se o repositório não usa Release Please, não invente PR de release nem espere essa
 Action: siga somente a política de release existente e a operação autorizada.
 

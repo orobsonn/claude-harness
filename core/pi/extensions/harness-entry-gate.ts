@@ -41,6 +41,7 @@ import {
 import { capturePlanReviewInput, parsePlanReviewCompletion } from "../lib/task-run.mjs";
 import { preserveTaskPlanForPlanner } from "../lib/task-plan-recovery.mjs";
 import { attachPiReviewEvidencePacket } from "../lib/pi-command-evidence.mjs";
+import { childPromptWithoutParentRecovery } from "../lib/child-prompt-context.mjs";
 
 const SUBAGENTS_SERVICE_KEY = Symbol.for("@gotgenes/pi-subagents:service");
 
@@ -74,6 +75,16 @@ const SUBAGENTS_SERVICE_KEY = Symbol.for("@gotgenes/pi-subagents:service");
  * mesmo estado de antes desta ligação existir), nunca um palpite.
  */
 export default function harnessEntryGate(pi: ExtensionAPI) {
+  // Native children share the launcher's append-system-prompt even without
+  // conversation inheritance. Its cold-resume snapshot must not become a later
+  // shipper/reviewer's claim that the parent is still awaiting plan approval.
+  pi.on("before_agent_start", (event: any, ctx) => {
+    try {
+      if (!isChildSession(ctx) || typeof event?.systemPrompt !== "string") return;
+      const prompt = childPromptWithoutParentRecovery(event.systemPrompt, ctx.sessionManager.getHeader()?.parentSession);
+      if (prompt !== event.systemPrompt) return { systemPrompt: prompt };
+    } catch { /* Context cleanup is advisory; actual authority remains in the host gates. */ }
+  });
   let projectRoot = process.cwd();
   /** args do dispatch memorizados no início da tool, por toolCallId (só a tool `subagent`). */
   const pendingArgs = new Map<string, unknown>();
