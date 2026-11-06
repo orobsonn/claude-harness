@@ -52,6 +52,14 @@ decomposition does not change planning or dispatch for other hosts.
 
 Within this Pi task pipeline:
 
+- When the spec explicitly requests new tests/fixtures for already implemented
+  behavior, plan real baseline-coverage deliverables with canonical `no_tests:true`
+  and `locked_tests:[]`. Restrict writes to tests/fixtures/docs and keep the SUT
+  read-only. Name the approved observables and focal GREEN commands; the executor
+  writes that real coverage delta and capture/applicable reviews remain required.
+  No preceding RED/freeze or artificial product rollback is needed. A discovered
+  product defect requires a reviewed plan correction and normal product TDD;
+  do not use this path to waive new behavior or a failing acceptance criterion.
 - Validate each planned RED on its exact base plus integrated dependencies. Prefer
   an existing entry point when it exercises the approved behavior, but do not
   require an artificial caller for a genuinely new standalone module.
