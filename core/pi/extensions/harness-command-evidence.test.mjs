@@ -490,6 +490,66 @@ test("final review packet uses origin/main when origin HEAD is absent and carrie
   assert.match(readFileSync(packet.diff_path, "utf8"), /committed review delta/);
 });
 
+test("post-squash reconciliation review carries the imported delta instead of an empty remote diff", (t) => {
+  const f = fixture(t);
+  const git = (...args) => execFileSync("git", args, { cwd: f.root, encoding: "utf8" }).trim();
+  git("checkout", "-q", "-b", "delivery");
+  writeFileSync(join(f.root, "tracked.txt"), "approved product\n");
+  git("commit", "-qam", "feat: approved delivery");
+  const delivery = git("rev-parse", "HEAD");
+  git("checkout", "-q", "main");
+  mkdirSync(join(f.root, ".pi/harness/lib"), { recursive: true });
+  writeFileSync(join(f.root, ".pi/harness/lib/runtime.mjs"), "export const recovery = true;\n");
+  git("add", ".pi/harness/lib/runtime.mjs");
+  git("commit", "-qm", "fix: distribute runtime");
+  git("merge", "--squash", "delivery");
+  git("commit", "-qm", "feat: squash approved delivery");
+  const merged = git("rev-parse", "HEAD");
+  git("update-ref", "refs/remotes/origin/main", merged);
+  git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main");
+  git("checkout", "-q", "delivery");
+  git("merge", "--no-ff", "-qm", "Reconcile verified merge", "main");
+  assert.equal(git("rev-parse", "HEAD^{tree}"), git("rev-parse", `${merged}^{tree}`));
+  const event = { toolName: "subagent", toolCallId: "post-merge-review", input: {
+    subagent_type: "harness-compliance", prompt: "[HARNESS_FINAL_REVIEW]\nReview the reconciled runtime.",
+  } };
+  const packet = attachPiReviewEvidencePacket({ projectRoot: f.root, sessionId: "task-session", event });
+  assert.equal(packet.status, "available");
+  const snapshot = JSON.parse(readFileSync(packet.snapshot_path, "utf8"));
+  assert.equal(snapshot.baseline.sha, delivery);
+  assert.equal(snapshot.baseline.source, "reconciled-head-first-parent");
+  const diff = readFileSync(packet.diff_path, "utf8");
+  assert.match(diff, /\+export const recovery = true/);
+  assert.doesNotMatch(diff, /\+approved product/, "already merged application work is not introduced again");
+  assert.equal(git("status", "--porcelain", "--", ".", ":(exclude).pi/harness/state/"), "", "packet transport does not edit delivery inputs");
+});
+
+test("reconciliation keeps a nonempty remote product diff instead of switching to the first parent", (t) => {
+  const f = fixture(t);
+  const git = (...args) => execFileSync("git", args, { cwd: f.root, encoding: "utf8" }).trim();
+  git("checkout", "-q", "-b", "delivery");
+  writeFileSync(join(f.root, "tracked.txt"), "unmerged product\n");
+  git("commit", "-qam", "feat: unmerged delivery");
+  git("checkout", "-q", "main");
+  writeFileSync(join(f.root, "runtime.txt"), "base update\n");
+  git("add", "runtime.txt");
+  git("commit", "-qm", "fix: base update");
+  const remote = git("rev-parse", "HEAD");
+  git("update-ref", "refs/remotes/origin/main", remote);
+  git("checkout", "-q", "delivery");
+  git("merge", "--no-ff", "-qm", "Reconcile base", "main");
+  const packet = attachPiReviewEvidencePacket({ projectRoot: f.root, sessionId: "task-session", event: {
+    toolName: "subagent", toolCallId: "nonempty-remote-review", input: {
+      subagent_type: "harness-compliance", prompt: "[HARNESS_FINAL_REVIEW]\nReview the application.",
+    },
+  } });
+  assert.equal(packet.status, "available");
+  const snapshot = JSON.parse(readFileSync(packet.snapshot_path, "utf8"));
+  assert.equal(snapshot.baseline.sha, remote);
+  assert.equal(snapshot.baseline.source, "refs/remotes/origin/main");
+  assert.match(readFileSync(packet.diff_path, "utf8"), /\+unmerged product/);
+});
+
 test("final review diff includes committed runtime code while omitting private and volatile files", (t) => {
   const f = fixture(t);
   const publicPaths = [".pi/harness/lib/policy.mjs", ".pi/harness/vendor/codex/hooks/policy.mjs"];

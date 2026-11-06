@@ -232,7 +232,21 @@ function reviewBaseline(root, sessionId, audience, headSha) {
       const sha = execFileSync("git", ["merge-base", headSha, candidate], {
         cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 10000,
       }).trim();
-      if (FULL_GIT_SHA.test(sha)) return { status: "available", sha, source: candidate };
+      if (FULL_GIT_SHA.test(sha)) {
+        // After a squash has landed, reconciling main can produce a merge whose
+        // tree equals its second parent. The remote diff is then empty, hiding
+        // the very delta the final reviewers were asked to inspect. Git's exact
+        // first parent preserves that delta without trusting a brief's SHA or
+        // changing any approval, verification or shipment decision.
+        const parents = gitBuffer(root, ["show", "-s", "--format=%P", headSha]).toString("utf8").trim().split(" ");
+        if (parents.length === 2 && parents[1] === sha && parents.every(value => FULL_GIT_SHA.test(value))) {
+          const tree = ref => gitBuffer(root, ["rev-parse", `${ref}^{tree}`]).toString("utf8").trim();
+          const currentTree = tree(headSha);
+          if (currentTree === tree(sha) && currentTree !== tree(parents[0]))
+            return { status: "available", sha: parents[0], source: "reconciled-head-first-parent" };
+        }
+        return { status: "available", sha, source: candidate };
+      }
     } catch { /* try the next explicit remote baseline */ }
   }
   return { status: "unavailable", reason: "remote review baseline unavailable" };
