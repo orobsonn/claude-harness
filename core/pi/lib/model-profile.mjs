@@ -4,7 +4,7 @@ import path from "node:path";
 
 export const MODEL_PROFILE_ENV = "PI_HARNESS_MODEL_PROFILE";
 export const MODEL_PROFILE_HASH_ENV = "PI_HARNESS_MODEL_PROFILE_SHA256";
-export const MODEL_PROFILE_VERSION = 5;
+export const MODEL_PROFILE_VERSION = 6;
 export const OLLAMA_CONTEXT_WINDOW = 262_144;
 export const LEGACY_OLLAMA_CONTEXT_WINDOW = 1_000_000;
 export const OLLAMA_PROVIDER = "ollama-cloud";
@@ -37,7 +37,7 @@ export function readDefaultModelProfile(userHome) {
 }
 
 const COMPLEXITIES = Object.freeze(["low", "medium", "high", "max"]);
-const SUPPORTED_MODEL_PROFILE_VERSIONS = new Set([1, 2, 3, 4, MODEL_PROFILE_VERSION]);
+const SUPPORTED_MODEL_PROFILE_VERSIONS = new Set([1, 2, 3, 4, 5, MODEL_PROFILE_VERSION]);
 const PARENT_TARGETS = new Set(["baseline", "deepseek", "luna", "terra"]);
 
 const BASELINE_FIXED = Object.freeze({
@@ -111,8 +111,8 @@ function ollamaRoute(model, provider = OLLAMA_PROVIDER) {
   return { model: `${provider}/${model}`, thinking: "high" };
 }
 
-function parentRoute(target, provider = OLLAMA_PROVIDER) {
-  if (target === "terra") return { provider: "openai-codex", model: "gpt-5.6-terra", thinking_requested: "medium", thinking_effective: "medium" };
+function parentRoute(target, provider = OLLAMA_PROVIDER, version = MODEL_PROFILE_VERSION) {
+  if (target === "terra") return { provider: "openai-codex", model: version < 6 ? "gpt-5.6-terra" : "gpt-6.1-terra", thinking_requested: "medium", thinking_effective: "medium" };
   if (target === "luna") return { provider: "openai-codex", model: "gpt-6-luna", thinking_requested: "high", thinking_effective: "high" };
   return target === "deepseek"
     ? { provider, model: DEEPSEEK_MODEL, thinking_requested: "high", thinking_effective: "high" }
@@ -172,8 +172,8 @@ export function resolveModelProfile({ profile = DEFAULT_MODEL_PROFILE, globalPar
       glm: { id: GLM_MODEL, context_window: contextWindow, max_output_tokens: 32768 },
     },
     parents: {
-      global: { target: selectedGlobal, route: parentRoute(selectedGlobal, provider) },
-      local: { target: selectedLocal, route: parentRoute(selectedLocal, provider) },
+      global: { target: selectedGlobal, route: parentRoute(selectedGlobal, provider, version) },
+      local: { target: selectedLocal, route: parentRoute(selectedLocal, provider, version) },
     },
     routes: {
       fixed: Object.fromEntries(Object.entries(fixedRoutes).map(([role, route]) => [role,

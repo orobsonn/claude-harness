@@ -411,7 +411,7 @@ test("pinned Pi overlay keeps one global auth path for parent and subagents", ()
   const packagePath = join(runtime, "package.json");
   const subagentsPackagePath = join(subagentsRuntime, "package.json");
   const sessionManager = join(runtime, "dist/core/session-manager.js");
-  // Restore this test copy to the exact published 1.4.0 bytes, even if another
+  // Restore this test copy to the exact published 1.5.2 bytes, even if another
   // test/launcher already patched node_modules. The digest was checked against
   // npm's original tarball; never accept an already-patched fixture as pristine.
   const pristineSessionManager = readFileSync(sessionManager, "utf8")
@@ -419,7 +419,7 @@ test("pinned Pi overlay keeps one global auth path for parent and subagents", ()
     .replace(/        \/\/ Only the exact recovered parent[\s\S]*?        if \(\(resume && this.sessionFile === resume.file\) \|\| existsSync\(this.sessionFile\)\) \{/, "        if (existsSync(this.sessionFile)) {")
     .replace(/\n$/, "");
   assert.equal(createHash("sha256").update(pristineSessionManager).digest("hex"),
-    "046b6a1109ac3f0ed893bb85bf0648709362fa926a5da75761216cf2fcf9d926");
+    "7e24f1c857c9f0e7be6485e9be12ba528fad9eea3423abf2c96fc27585a88b61");
   writeFileSync(sessionManager, pristineSessionManager);
   const before = verifyPiAuthPathPatch(packagePath);
   assert.deepEqual(before, { ok: false, reason: "unpatched:dist/core/session-manager.js" });
@@ -441,7 +441,7 @@ test("pinned Pi overlay keeps one global auth path for parent and subagents", ()
   assert.throws(() => applyPiAuthPathPatch(packagePath, subagentsPackagePath), /altered patched bytes/);
 });
 
-test("runtime defaults select Sol 6.1/high from Pi's real registry without a CLI model override", async () => {
+test("runtime defaults select Terra 6.1/high from Pi's real registry without a CLI model override", async () => {
   const directory = mkdtempSync(join(tmpdir(), "pi-harness-runtime-test-"));
   const runtimeDir = join(directory, "runtime");
   try {
@@ -461,7 +461,7 @@ test("runtime defaults select Sol 6.1/high from Pi's real registry without a CLI
           expires: Date.now() + 60_000,
         },
       }),
-      modelsPath: null,
+      modelsPath: join(runtimeDir, "models.json"),
       allowModelNetwork: false,
       refreshOnCreate: true,
     });
@@ -475,13 +475,13 @@ test("runtime defaults select Sol 6.1/high from Pi's real registry without a CLI
     });
 
     assert.equal(settingsManager.getDefaultProvider(), "openai-codex");
-    assert.equal(settingsManager.getDefaultModel(), "gpt-6.1-sol");
+    assert.equal(settingsManager.getDefaultModel(), "gpt-6.1-terra");
     assert.equal(settingsManager.getDefaultThinkingLevel(), "high");
     assert.equal(selected.thinkingLevel, "high");
-    assert.ok(modelRuntime.getModels("openai-codex").some((model) => model.id === "gpt-5.6-terra"), "the installed Pi catalog contains Terra");
+    assert.ok(modelRuntime.getModels("openai-codex").some((model) => model.id === "gpt-6.1-terra"), "the installed Pi catalog contains Terra");
     assert.deepEqual(selected.model && { provider: selected.model.provider, id: selected.model.id }, {
       provider: "openai-codex",
-      id: "gpt-6.1-sol",
+      id: "gpt-6.1-terra",
     });
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
@@ -597,7 +597,7 @@ test("runtime já materializado migra somente o antigo default do harness para o
 
       assert.deepEqual(JSON.parse(readFileSync(join(runtimeDir, "settings.json"), "utf8")), {
         defaultProvider: "openai-codex",
-        defaultModel: "gpt-6.1-sol",
+        defaultModel: "gpt-6.1-terra",
         defaultThinkingLevel: "high",
         hideThinkingBlock: true,
         theme: "dark",
@@ -610,24 +610,38 @@ test("runtime já materializado migra somente o antigo default do harness para o
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
 
-test("runtime já materializado migra o default distribuído Sol 6 para Sol 6.1", () => {
-  const directory = mkdtempSync(join(tmpdir(), "pi-harness-sol-default-migration-"));
+for (const previousModel of ["gpt-6-sol", "gpt-6.1-sol"]) {
+  test(`runtime migrates the distributed ${previousModel}/high default to Terra 6.1`, () => {
+    const directory = mkdtempSync(join(tmpdir(), "pi-harness-sol-default-migration-"));
+    try {
+      const runtimeDir = join(directory, "runtime");
+      mkdirSync(runtimeDir, { recursive: true });
+      writeFileSync(join(runtimeDir, "settings.json"), JSON.stringify({
+        defaultProvider: "openai-codex", defaultModel: previousModel,
+        defaultThinkingLevel: "high", retained: true,
+      }));
+      materializeRuntime(process.cwd(), runtimeDir);
+      const settings = JSON.parse(readFileSync(join(runtimeDir, "settings.json"), "utf8"));
+      assert.equal(settings.defaultProvider, "openai-codex");
+      assert.equal(settings.defaultModel, "gpt-6.1-terra");
+      assert.equal(settings.defaultThinkingLevel, "high");
+      assert.equal(settings.retained, true);
+    } finally { rmSync(directory, { recursive: true, force: true }); }
+  });
+}
+
+test("resumed baseline profiles retain their era default when runtime settings are absent", () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-historical-defaults-"));
   try {
-    const runtimeDir = join(directory, "runtime");
-    mkdirSync(runtimeDir, { recursive: true });
-    writeFileSync(join(runtimeDir, "settings.json"), JSON.stringify({
-      defaultProvider: "openai-codex", defaultModel: "gpt-6-sol",
-      defaultThinkingLevel: "high", retained: true,
-    }));
-
-    materializeRuntime(process.cwd(), runtimeDir);
-
-    const settings = JSON.parse(readFileSync(join(runtimeDir, "settings.json"), "utf8"));
-    assert.equal(settings.defaultProvider, "openai-codex");
-    assert.equal(settings.defaultModel, "gpt-6.1-sol");
-    assert.equal(settings.defaultThinkingLevel, "high");
-    assert.equal(settings.retained, true);
-  } finally { rmSync(directory, { recursive: true, force: true }); }
+    for (const [version, model] of [[4, "gpt-6-sol"], [5, "gpt-6.1-sol"]]) {
+      const runtimeDir = join(root, String(version));
+      materializeRuntime(process.cwd(), runtimeDir, undefined,
+        resolveModelProfile({ profile: "baseline", version }));
+      const settings = JSON.parse(readFileSync(join(runtimeDir, "settings.json"), "utf8"));
+      assert.equal(settings.defaultModel, model);
+      assert.equal(settings.defaultThinkingLevel, "high");
+    }
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
 test("retomada com perfil v4 preserva o default Sol 6 já materializado", () => {
@@ -824,7 +838,7 @@ test("delegated task persists the inherited profile for its own resume identity"
 
 for (const [target, model, thinking, originalProfile] of [
   ["openai-economy", "gpt-6-luna", "high", "trial-orchestration-deepseek"],
-  ["openai-economy-terra", "gpt-5.6-terra", "medium", "openai-economy"],
+  ["openai-economy-terra", "gpt-6.1-terra", "medium", "openai-economy"],
 ]) test(`operator routing recovery resumes with ${target} while preserving the admitted plan and profile`, () => {
   const directory = mkdtempSync(join(tmpdir(), "pi-routing-launch-"));
   const original = resolveModelProfile({ profile: originalProfile });
@@ -872,7 +886,7 @@ test("OpenAI new-session default starts Terra medium without a DeepSeek API cred
       spawnSyncFn: (command, args, options) => { spawned = { args, env: options.env }; return { status: 0 }; },
     });
     assert.equal(result.exitCode, 0);
-    assert.deepEqual(spawned.args.slice(0, 6), ["--provider", "openai-codex", "--model", "gpt-5.6-terra", "--thinking", "medium"]);
+    assert.deepEqual(spawned.args.slice(0, 6), ["--provider", "openai-codex", "--model", "gpt-6.1-terra", "--thinking", "medium"]);
     assert.equal(JSON.parse(readFileSync(spawned.env.PI_HARNESS_MODEL_PROFILE, "utf8")).profile, "openai-economy-terra");
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });

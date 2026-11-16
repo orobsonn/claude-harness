@@ -75,7 +75,7 @@ Na worktree onde o harness foi instalado, rode:
 node .pi/harness/pi-harness.mjs --verify
 ```
 
-O resultado precisa incluir `"ok":true`, `"runtimeVersion":"1.4.0"` e `"subagentsVersion":"23.0.0"`. Ele não chama modelo, lê credenciais, instala ou corrige dependências. Cache ausente ou alterado é um erro: execute o init/update do harness nesse host antes de iniciar a run.
+O resultado precisa incluir `"ok":true`, `"runtimeVersion":"1.5.2"` e `"subagentsVersion":"23.0.0"`. Ele não chama modelo, lê credenciais, instala ou corrige dependências. Cache ausente ou alterado é um erro: execute o init/update do harness nesse host antes de iniciar a run.
 
 O init/update que inclui Pi prepara primeiro o runtime fixado em um cache do usuário (`~/.cache/claude-harness/pi-runtime`, ou sob `XDG_CACHE_HOME` absoluto). Worktrees no mesmo host reutilizam a mesma geração; plataformas e versões incompatíveis usam gerações distintas. O launcher não usa nem modifica o Pi global ou `node_modules` do produto. Uma falha de provisionamento impede a atualização dos arquivos do harness. O pacote nativo Pi mantém suas dependências próprias para preservar `pi install`; isso pode duplicar downloads no instalador npx, mas não muda o runtime isolado usado pelo launcher.
 
@@ -304,7 +304,7 @@ O launcher não injeta provedor nem `--model`. O default vem de `core/pi/runtime
 
 ## Rota de modelos
 
-O orquestrador usa Terra/high como padrão no runtime materializado, inclusive quando
+O orquestrador usa GPT-6.1 Terra/high como padrão no runtime materializado, inclusive quando
 o Pi ignora recursos de projeto não confiável. Preferências explícitas usam a
 precedência nativa do Pi; o harness não contorna trust. O rail mantém planner
 Sol/high, plan-reviewer Astra/high, adversary Sol/medium, security Sol padrão,
@@ -315,7 +315,7 @@ Executor/sniper mantêm low Luna/high, medium Terra/medium, high/max Terra/xhigh
 O transporte mantém limite de inatividade de 15 minutos por chamada de modelo.
 
 Sessões novas usam temporariamente `openai-economy-terra` por padrão: pais global e
-local em Terra 5.6/medium; executor/sniper low em Luna 6/high, medium em Terra
+local em Terra 6.1/medium; executor/sniper low em Luna 6/high, medium em Terra
 5.6/medium e high/max em Terra 5.6/xhigh. Planner, suporte, autor de testes e
 avaliações usam Sol 6.1; plan-reviewer usa Astra 6/high; harvester e shipper
 continuam em Luna 6/high. O perfil usa a autenticação Codex do operador.
@@ -492,7 +492,7 @@ documenta filas, disponibilidade, custo, entregas e as proteções implementadas
 
 ## Runtime Pi 1.0
 
-A distribuição fixa Pi e pi-ai em `1.4.0`, com pi-subagents `23.0.0`,
+A distribuição fixa Pi e pi-ai em `1.5.2`, com pi-subagents `23.0.0`,
 compatível com a major 1.0. O cache do runtime continua sendo provisionado
 e verificado pelo init/update; gerações anteriores não são sobrescritas.
 Autenticação compartilhada, retomada exata e validação dos recursos das filhas

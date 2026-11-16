@@ -587,10 +587,7 @@ test("colisão aborta uma sessão SDK real antes de payload ou ferramenta", asyn
   assert.equal(payloadEvents, 0, "não monta payload de provider após o abort");
   assert.equal(sessionEvents.some((event) => event.type === "tool_execution_start"), false);
   const assistant = [...session.messages].reverse().find((message) => message.role === "assistant");
-  // Nesta versão do SDK o abort antes da chamada do provider é representado como `error`
-  // com esta causa literal (não como stopReason `aborted`). O comportamento relevante é o
-  // signal já abortado e a ausência de payload/tool executado acima.
-  assert.equal(assistant?.stopReason, "error");
+  assert.equal(assistant?.stopReason, "aborted");
   assert.equal(assistant?.errorMessage, "This operation was aborted");
 });
 

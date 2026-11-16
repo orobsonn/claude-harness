@@ -28,7 +28,8 @@ import {
   SessionManager,
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
-import { fauxAssistantMessage, fauxProvider, fauxToolCall, Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
+import { fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai";
 import harnessMemory from "./harness-memory.ts";
 import { capturePiReviewInput } from "../lib/pi-review-evidence.mjs";
 import { runNativeToolCall } from "./pi-native-tool.test.mjs";

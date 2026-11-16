@@ -321,6 +321,8 @@ export function buildPiHarnessInvocation({ root, argv, env, runtimePrompt = "", 
  * @param {string} [stateDir]
  */
 export function materializeRuntime(root, runtimeDir, stateDir = harnessStateDir(runtimeDir), modelProfile = resolveModelProfile()) {
+  const historicalParentModel = modelProfile.version < 5 ? "gpt-6-sol"
+    : modelProfile.version === 5 ? "gpt-6.1-sol" : null;
   materializePiReviewConfig(runtimeDir, join(root, "core/pi/runtime/harness.json"));
   mkdirSync(runtimeDir, { recursive: true });
   mkdirSync(stateDir, { recursive: true });
@@ -344,7 +346,12 @@ export function materializeRuntime(root, runtimeDir, stateDir = harnessStateDir(
         if (existsSync(artifact) && lstatSync(artifact).isFile() && !lstatSync(artifact).isSymbolicLink()) rmSync(artifact);
       }
     }
-    else if (!existsSync(target)) cpSync(source, target, { recursive: true });
+    else if (!existsSync(target)) {
+      if (name === "settings.json" && historicalParentModel) {
+        const settings = JSON.parse(readFileSync(source, "utf8"));
+        writeFileSync(target, `${JSON.stringify({ ...settings, defaultModel: historicalParentModel }, null, 2)}\n`, "utf8");
+      } else cpSync(source, target, { recursive: true });
+    }
   }
   // The Pi model catalog follows the admitted session profile. Old immutable
   // snapshots retain 1M on exact resume; new sessions use 256 Ki. Only the two
@@ -360,7 +367,7 @@ export function materializeRuntime(root, runtimeDir, stateDir = harnessStateDir(
     }
     const distributedProvider = expected?.providers?.["ollama-cloud"];
     const currentProvider = current?.providers?.["ollama-cloud"];
-    if (!distributedProvider || ![1, 2, 3, 4, MODEL_PROFILE_VERSION].includes(modelProfile?.version) ||
+    if (!distributedProvider || ![1, 2, 3, 4, 5, MODEL_PROFILE_VERSION].includes(modelProfile?.version) ||
         distributedProvider.models?.length !== 2 ||
         distributedProvider.models[0]?.id !== DEEPSEEK_MODEL || distributedProvider.models[1]?.id !== GLM_MODEL) {
       throw new Error("distributed Ollama model profile invalid");
@@ -396,7 +403,7 @@ export function materializeRuntime(root, runtimeDir, stateDir = harnessStateDir(
   try {
     const expected = JSON.parse(readFileSync(settingsSource, "utf8"));
     // Resumed snapshots keep the parent default from their admitted model era.
-    if (modelProfile.version < MODEL_PROFILE_VERSION) expected.defaultModel = "gpt-6-sol";
+    if (historicalParentModel) expected.defaultModel = historicalParentModel;
     const current = JSON.parse(readFileSync(settingsTarget, "utf8"));
     for (const key of ["defaultProvider", "defaultModel"]) {
       if (current[key] !== undefined && (typeof current[key] !== "string" || !current[key].trim() || /\s/.test(current[key]))) {
@@ -419,7 +426,7 @@ export function materializeRuntime(root, runtimeDir, stateDir = harnessStateDir(
     const oldParentDefault = current.defaultProvider === "openai-codex" && current.defaultModel === "gpt-5.6-sol" && current.defaultThinkingLevel === undefined;
     const previousHarnessDefault = modelProfile.version === MODEL_PROFILE_VERSION &&
       current.defaultProvider === "openai-codex" &&
-      current.defaultModel === "gpt-6-sol" && current.defaultThinkingLevel === "high";
+      ["gpt-6-sol", "gpt-6.1-sol"].includes(current.defaultModel) && current.defaultThinkingLevel === "high";
     const needsThinkingDefault = current.defaultThinkingLevel === undefined;
     const needsChildResources =
       JSON.stringify(current?.extensions) !== JSON.stringify(childResources.extensions) ||
