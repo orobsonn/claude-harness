@@ -1,5 +1,5 @@
 /**
- * Compatibility overlay for the pinned Pi 1.4.0 runtime.
+ * Compatibility overlay for the pinned Pi 1.5.2 runtime.
  *
  * Pi binds credentials to PI_CODING_AGENT_DIR. The harness keeps that directory
  * per worktree, so this sealed patch introduces PI_CODING_AGENT_AUTH_PATH while
@@ -15,7 +15,7 @@ export const PI_SUBAGENTS_AUTH_PATH_PATCH_MARKER = "CLAUDE_HARNESS_SUBAGENTS_AUT
 export const PI_AUTH_PATH_ENV = "PI_CODING_AGENT_AUTH_PATH";
 export const PI_RESUME_ENV = "PI_HARNESS_RESUME";
 const PI_RESUME_PATCH_MARKER = "CLAUDE_HARNESS_EXACT_RESUME_PATCH_v1";
-const PINNED_PI_VERSION = "1.4.0";
+const PINNED_PI_VERSION = "1.5.2";
 const PINNED_SUBAGENTS_VERSION = "23.0.0";
 
 function sha256(content) {
@@ -35,8 +35,8 @@ function mark(content) {
 const PATCHES = [
   {
     rel: "dist/core/session-manager.js",
-    sha256: "046b6a1109ac3f0ed893bb85bf0648709362fa926a5da75761216cf2fcf9d926",
-    patchedSha256: "37972b2e76986e1cd75d50c4e2fa926923197c676db48a3d1f0cfbafe97bf3ec",
+    sha256: "7e24f1c857c9f0e7be6485e9be12ba528fad9eea3423abf2c96fc27585a88b61",
+    patchedSha256: "9524b6b2dac4cbe1a9c7e2c02356faf73f565ae040e80ce330079253f28895e5",
     marker: PI_RESUME_PATCH_MARKER,
     transform(content) {
       let next = replaceExactly(content,
@@ -72,7 +72,7 @@ const PATCHES = [
   },
   {
     rel: "dist/config.js",
-    sha256: "b53418ca3bc54b70e18ccb192eb471696f5211c5aa2e80d68fe6fe3851ff23ae",
+    sha256: "8d84a58d53f1bd4360188f787b56b16444c20e00452d075cdc77056054387926",
     transform(content) {
       let next = replaceExactly(
         content,
@@ -89,7 +89,7 @@ const PATCHES = [
   },
   {
     rel: "dist/core/auth-storage.js",
-    sha256: "59791d54e50bfb86f0bb9e8dcee776547ae1744fc4aeb2fe14ff6610c1f5c567",
+    sha256: "85c773c95be71695a27f5ed2f9f5bfaedc6c2ab3fe1fa7fcdf09707a3a73ce48",
     transform(content) {
       let next = replaceExactly(content, 'import { getAgentDir } from "../config.js";', 'import { getAuthPath } from "../config.js";');
       next = replaceExactly(next, 'join(getAgentDir(), "auth.json")', "getAuthPath()", 4);
@@ -107,7 +107,7 @@ const PATCHES = [
   },
   {
     rel: "dist/core/sdk.js",
-    sha256: "992a539079e42f9dc577064e971afa9972a01dbffedb035f7cb68ab204d36964",
+    sha256: "c43e4e1d49ac3ec4b9f48465bf2081bc5980b55f23d44040d02e9046dea45725",
     transform(content) {
       let next = replaceExactly(content, 'import { getAgentDir } from "../config.js";', 'import { getAgentDir, getAuthPath } from "../config.js";');
       next = replaceExactly(next, 'const authPath = options.agentDir ? join(agentDir, "auth.json") : undefined;', "const authPath = getAuthPath();");
@@ -130,12 +130,12 @@ const PATCHES = [
   },
   {
     rel: "dist/package-manager-cli.js",
-    sha256: "995c619ea322428cb943b9d9ebcc1d2873cc329d5d480ceddf58654d6509639b",
+    sha256: "8a4970b14fde1db1a226c91bbc900a8c63d38462920fa017dbaf05195befcfeb",
     transform(content) {
       let next = replaceExactly(
         content,
-        "import { APP_NAME, CONFIG_DIR_NAME, detectInstallMethod, getAgentDir, getPackageDir, getSelfUpdateCommand, getSelfUpdateUnavailableInstruction, PACKAGE_NAME, VERSION, } from \"./config.js\";",
-        "import { APP_NAME, CONFIG_DIR_NAME, detectInstallMethod, getAgentDir, getAuthPath, getPackageDir, getSelfUpdateCommand, getSelfUpdateUnavailableInstruction, PACKAGE_NAME, VERSION, } from \"./config.js\";",
+        "import { APP_NAME, CONFIG_DIR_NAME, detectInstallChange, detectInstallMethod, getAgentDir, getConfiguredSelfUpdateArgv, getPackageDir, getSelfUpdateCommand, getSelfUpdateUnavailableInstruction, makeConfiguredSelfUpdateCommand, PACKAGE_NAME, VERSION, } from \"./config.js\";",
+        "import { APP_NAME, CONFIG_DIR_NAME, detectInstallChange, detectInstallMethod, getAgentDir, getAuthPath, getConfiguredSelfUpdateArgv, getPackageDir, getSelfUpdateCommand, getSelfUpdateUnavailableInstruction, makeConfiguredSelfUpdateCommand, PACKAGE_NAME, VERSION, } from \"./config.js\";",
       );
       next = replaceExactly(next, 'authPath: join(agentDir, "auth.json"),', "authPath: getAuthPath(),");
       return mark(next);
@@ -165,7 +165,7 @@ function patchFile(path, spec) {
 
 
 // Pinned internal PromptOptions.preflightResult seam, not a stable public SDK API.
-const PI_REVIEW_PREFLIGHT_SHA = "436e8be3bbab2db475ce30bb5d0bb30f0046b19a3476f8cd57b8133e68891162";
+const PI_REVIEW_PREFLIGHT_SHA = "ee756f6f74afe9f8930ebf216c95334605d913a275a0eec2c9702f101baef3c3";
 const PI_SUBAGENTS_LIFECYCLE_MARKER = "CLAUDE_HARNESS_SUBAGENTS_LIFECYCLE_PATCH_v1";
 const SUBAGENTS_LIFECYCLE_PATCHES = [
   {

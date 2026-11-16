@@ -67,13 +67,13 @@ function draftFixture(patch = {}) {
 }
 
 // A ceremony can recover its route before its first plan is approved/admitted.
-function routedAdmissionFixture() {
+function routedAdmissionFixture(version) {
   const f = fixture();
-  writeModelProfileSnapshot(f.root, SESSION, resolveModelProfile({ profile: "baseline" }));
+  writeModelProfileSnapshot(f.root, SESSION, resolveModelProfile({ profile: "baseline", version }));
   writeRoutingRecovery(f.root, SESSION, readModelProfileSnapshot(f.root, SESSION),
-    resolveModelProfile({ profile: "openai-economy-terra" }));
+    resolveModelProfile({ profile: "openai-economy-terra", version }));
   const plan = JSON.parse(fs.readFileSync(f.plan, "utf8"));
-  plan.model_strategy = modelStrategyFromProfile(resolveModelProfile({ profile: "openai-economy-terra" }));
+  plan.model_strategy = modelStrategyFromProfile(resolveModelProfile({ profile: "openai-economy-terra", version }));
   fs.writeFileSync(f.plan, JSON.stringify(plan));
   const state = JSON.parse(fs.readFileSync(f.state, "utf8"));
   state.plan_review_evidence = {
@@ -92,8 +92,9 @@ function routedAdmissionFixture() {
   return f;
 }
 
-test("native launcher resumes a plan admitted after routing recovery without rewriting authority", () => {
-  const f = routedAdmissionFixture();
+for (const [profileVersion, parentModel] of [[5, "gpt-5.6-terra"], [6, "gpt-6.1-terra"]]) {
+test(`native launcher resumes an admitted v${profileVersion} routing recovery without rewriting authority`, () => {
+  const f = routedAdmissionFixture(profileVersion);
   try {
     const files = [f.state, f.plan, f.registry, ...fs.readdirSync(path.join(f.root, ".pi/harness/state/model-profiles"))
       .map((name) => path.join(f.root, ".pi/harness/state/model-profiles", name))];
@@ -113,10 +114,12 @@ test("native launcher resumes a plan admitted after routing recovery without rew
     assert.equal(result.exitCode, 0, errors.join("\n"));
     assert.match(prompt, /admitted-routing-recovery-profile/);
     assert.match(prompt, /"plan_approval":"not_verified_by_recovery"/);
-    assert.equal(spawned[3], "gpt-5.6-terra");
+    assert.equal(spawned[3], parentModel);
     files.forEach((file, index) => assert.deepEqual(fs.readFileSync(file), before[index]));
   } finally { f.cleanup(); }
 });
+
+}
 
 test("a routed admission remains resumable after a native additive scope correction", () => {
   const f = routedAdmissionFixture();

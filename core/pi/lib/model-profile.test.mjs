@@ -24,8 +24,8 @@ test("AC-01 baseline uses the new Pi OpenAI routes and needs no Ollama credentia
 
 test("historical resolver default preserves DeepSeek snapshot canonicalization", () => {
   const profile = resolveModelProfile();
-  assert.equal(MODEL_PROFILE_VERSION, 5);
-  assert.equal(profile.version, 5);
+  assert.equal(MODEL_PROFILE_VERSION, 6);
+  assert.equal(profile.version, 6);
   assert.equal(DEFAULT_MODEL_PROFILE, "trial-orchestration-deepseek");
   assert.equal(profile.profile, DEFAULT_MODEL_PROFILE);
   assert.equal(profile.parents.global.route.model, DEEPSEEK_MODEL);
@@ -154,7 +154,7 @@ test("AC-08 legacy absence resolves baseline while malformed snapshots are rejec
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   assert.equal(readModelProfileSnapshot(root, "legacy").absent, true);
   assert.equal(loadModelProfileFromEnv({}).profile, "baseline");
-  assert.equal(loadModelProfileFromEnv({}).version, 5);
+  assert.equal(loadModelProfileFromEnv({}).version, 6);
   const saved = writeModelProfileSnapshot(root, "bad", resolveModelProfile());
   fs.writeFileSync(saved.path, "{}\n");
   assert.throws(() => loadModelProfileFromEnv({
@@ -298,7 +298,7 @@ test("Terra economy changes only global/local orchestrators and preserves histor
   assert.deepEqual(terra.provider, luna.provider);
   assert.deepEqual(terra.models, luna.models);
   for (const kind of ["global", "local"]) {
-    assert.deepEqual(terra.parents[kind], { target: "terra", route: { provider: "openai-codex", model: "gpt-5.6-terra",
+    assert.deepEqual(terra.parents[kind], { target: "terra", route: { provider: "openai-codex", model: "gpt-6.1-terra",
       thinking_requested: "medium", thinking_effective: "medium" } });
     assert.equal(luna.parents[kind].route.model, "gpt-6-luna");
   }
@@ -311,4 +311,20 @@ test("Terra economy changes only global/local orchestrators and preserves histor
   assert.deepEqual(readRoutingRecovery(root, "session", admitted).snapshot, terra);
   assert.equal(fs.readFileSync(saved.path, "utf8"), bytes);
   assert.deepEqual(readModelProfileSnapshot(root, "session").snapshot, luna);
+});
+
+
+test("Terra 6.1 defaults preserve admitted version-5 parent routes", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-v5-terra-profile-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const legacy = resolveModelProfile({ profile: "openai-economy-terra", version: 5 });
+  const current = resolveModelProfile({ profile: "openai-economy-terra" });
+  for (const kind of ["global", "local"]) {
+    assert.equal(legacy.parents[kind].route.model, "gpt-5.6-terra");
+    assert.equal(current.parents[kind].route.model, "gpt-6.1-terra");
+  }
+  assert.deepEqual(current.routes, legacy.routes);
+  const saved = writeModelProfileSnapshot(root, "legacy", legacy);
+  assert.deepEqual(readModelProfileSnapshot(root, "legacy").snapshot, legacy);
+  assert.deepEqual(loadModelProfileFromEnv({ [MODEL_PROFILE_ENV]: saved.path, [MODEL_PROFILE_HASH_ENV]: saved.sha256 }), legacy);
 });
