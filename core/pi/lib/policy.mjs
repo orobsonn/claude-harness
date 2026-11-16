@@ -290,8 +290,8 @@ export function isPiReviewSecretPath(path) {
 }
 
 /** @description Restringe revisores de implementação e fidelidade a leituras canônicas do projeto.
- * Para grep recursivo sem glob, devolve a exclusão fixa aceita pela tool nativa. Quando há
- * filtro do modelo, sinaliza o adaptador que executa o rg com ambos os globs como argv separados. */
+ * Grep recursivo usa o adaptador que aplica a exclusão fixa relativa à raiz do projeto,
+ * preservando um eventual filtro do modelo em um argumento separado. */
 function decideReviewerReadPolicy(toolName, input, options) {
   if (!isPiReadOnlyReviewerRole(options?.reviewerRole)) return ALLOW
 
@@ -320,7 +320,7 @@ function decideReviewerReadPolicy(toolName, input, options) {
     if (/[\r\n]/.test(input.glob)) return { block: true, reason: REVIEWER_READ_REASON }
     return { block: false, reviewerGrepGuard: { projectRoot: root, target } }
   }
-  return { block: false, inputPatch: { glob: REVIEWER_GREP_GUARD } }
+  return { block: false, inputPatch: { glob: REVIEWER_GREP_GUARD }, reviewerGrepGuard: { projectRoot: root, target } }
 }
 
 /** @description Traduz a decisão do motor Codex ({hookSpecificOutput}) para {block, reason}. */

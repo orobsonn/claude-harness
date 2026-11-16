@@ -98,7 +98,9 @@ async function executeGuardedReviewerGrep(cwd, input, signal, approved) {
   if (input.ignoreCase) args.push('--ignore-case')
   if (input.literal) args.push('--fixed-strings')
   if (context > 0) args.push('--context', String(context))
-  args.push('--glob', scopeModelGlob(input.glob, scope.targetFromRoot))
+  if (typeof input.glob === 'string' && input.glob !== REVIEWER_GREP_GUARD) {
+    args.push('--glob', scopeModelGlob(input.glob, scope.targetFromRoot))
+  }
   args.push('--glob', REVIEWER_GREP_GUARD, '--', input.pattern, scope.targetFromRoot)
 
   return runGuardedGrep(rgPath, args, scope.root, scope.targetFromRoot, limit, signal)
