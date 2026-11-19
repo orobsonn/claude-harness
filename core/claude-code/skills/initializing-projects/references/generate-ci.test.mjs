@@ -85,6 +85,30 @@ describe("generateCi", () => {
     );
   });
 
+  it("assertion 5: lean CI (rules/ci.md) → workflow concurrency cancels stale PR runs, every job has timeout-minutes, no push trigger", () => {
+    const yaml = generateCi({
+      stack: NODE_TEST_STACK,
+      secrets: ["OLLAMA_HAND_TOKEN"],
+      nodeVersion: "22",
+      jobName: "test",
+    });
+
+    assert.ok(
+      yaml.includes(
+        "concurrency:\n  group: ${{ github.workflow }}-${{ github.ref }}\n  cancel-in-progress: true"
+      ),
+      `workflow must declare top-level concurrency keyed by workflow+ref with cancel-in-progress. Got:\n${yaml}`
+    );
+
+    const jobCount = (yaml.match(/^ {4}runs-on: /gm) ?? []).length;
+    const timeoutCount = (yaml.match(/^ {4}timeout-minutes: \d+$/gm) ?? []).length;
+    assert.equal(jobCount, 2, `expected both jobs emitted. Got:\n${yaml}`);
+    assert.equal(timeoutCount, jobCount, `every job must carry timeout-minutes. Got:\n${yaml}`);
+
+    // The PR is the gate: the suite must not re-run on push to main after merge.
+    assert.ok(!/^  push:/m.test(yaml), `workflow must not trigger on push. Got:\n${yaml}`);
+  });
+
   it("assertion 4: jobName 'test' → jobs object has key exactly 'test' (required status-check context derivable from job id)", () => {
     const yaml = generateCi({
       stack: NODE_TEST_STACK,
