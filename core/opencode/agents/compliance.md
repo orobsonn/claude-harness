@@ -122,6 +122,7 @@ A green happy-path test does NOT clear a race — the test must exercise the haz
 - Error messages sanitized (no raw stack/message leaked to the client)
 - External input validated at the boundary (Zod or equivalent)
 - No writes outside `scope_paths`
+- CI: when the diff touches `.github/workflows/**`, check it against `.opencode/rules/ci.md` (suite not re-run on push to `main`, `concurrency`, `timeout-minutes`, dependency cache, minimal `permissions`, third-party actions pinned by SHA, expensive job/runner behind its own `paths:`). Each gap is a `medium` problem
 - JSDoc on new `.ts` files
 
 ---

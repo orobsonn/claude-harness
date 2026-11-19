@@ -102,6 +102,10 @@ semantics**: if the project already has an existing `.github/workflows/ci.yml`, 
 overwritten** — the CI generation respects the project's customizations and will only create the
 file if it does not yet exist or will update it only if instructed.
 
+Because an existing workflow is never rewritten, audit `.github/workflows/` against
+`.claude/rules/ci.md` and report each gap to the operator as estimated minutes/month (e.g. the suite
+re-running on push to `main`, a `windows-latest` job on every PR). Fix only on the operator's OK.
+
 ---
 
 ## Step 3 — Reconcile

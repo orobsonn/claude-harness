@@ -75,6 +75,7 @@ Carrega ao editar `CHANGELOG.md` ou `package.json`. Define padrao de versionamen
 ### CI green — release prerequisite
 - **Postura aditiva**: CI verde (testes passando, gates verdes) e um prerequisito de release — **mandatory para new projetos, advisory (recomendado) para existing**
 - Esta regra nao quebra fluxos de release em andamento; novos projetos entram com a pratica desde o inicio
+- **CI verde = check do PR + ultima suite completa verde**: o PR roda so os testes afetados e a `main` nao repete a suite (ver `ci.md`), entao antes de cortar release confirmar que o ultimo run da suite completa (noturno ou `workflow_dispatch`) passou no commit atual ou em um anterior sem mudanca de codigo; se nao, disparar via `workflow_dispatch` antes
 - **No-admin-token fallback**: quando nao ha token de admin configurado no repo pra branch protection, o gate de CI fica disponivel (testes rodam, pode ser verificado localmente) mas nao e enforçado automaticamente no GitHub — a responsabilidade recai no time de validar manualmente antes do merge
 - Postura aditiva: projetos que ja tem CI rodan continuam (advisory). Projetos novos ou que onboardam no harness devem adicionar step de CI check no fluxo de release (CHANGELOG + package.json + git hooks validam antes do commit)
 

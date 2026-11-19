@@ -20,6 +20,10 @@
  *   - Job 1 never receives any `${{ secrets.* }}` reference, keeping the required
  *     gate independent of secret availability.
  *
+ * LEAN-CI baseline (rules/ci.md): workflow-level `concurrency` cancels a stale PR run,
+ * every job carries `timeout-minutes`, and there is no push-to-main trigger (the PR is
+ * the gate — the suite never re-runs after merge).
+ *
  * Uses Node builtins only — no external YAML library.
  *
  * @module generate-ci
@@ -30,6 +34,9 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { detectStack } from "./detect-stack.mjs";
 import { detectRequiredSecrets } from "./detect-secrets.mjs";
+
+/** Per-job cap so a hung run never burns GitHub's 360-minute default (rules/ci.md). */
+const TIMEOUT_MINUTES = 15;
 
 /**
  * @description Generates a GitHub Actions CI workflow YAML string for a given
@@ -92,6 +99,12 @@ export function generateCi({
   lines.push("    branches:");
   lines.push("      - main");
   // No paths: filter — runs on every PR against main regardless of changed files
+  // (a paths-filtered workflow as required check would hang the merge forever).
+  lines.push("");
+  // Lean CI (rules/ci.md): a newer push to the same PR cancels the stale run.
+  lines.push("concurrency:");
+  lines.push("  group: ${{ github.workflow }}-${{ github.ref }}");
+  lines.push("  cancel-in-progress: true");
   lines.push("");
   // Fix 4: least-privilege — read-only default permission
   lines.push("permissions:");
@@ -104,6 +117,8 @@ export function generateCi({
   // It must never depend on secrets so it always runs on Dependabot and fork PRs.
   lines.push(`  ${jobName}:`);
   lines.push("    runs-on: ubuntu-latest");
+  // A hung job burns GitHub's 360-minute default; cap it (rules/ci.md).
+  lines.push(`    timeout-minutes: ${TIMEOUT_MINUTES}`);
   lines.push("    steps:");
   lines.push("      - uses: actions/checkout@v4");
   lines.push("      - uses: actions/setup-node@v4");
@@ -118,6 +133,7 @@ export function generateCi({
     lines.push("");
     lines.push("  check-env:");
     lines.push("    runs-on: ubuntu-latest");
+    lines.push(`    timeout-minutes: ${TIMEOUT_MINUTES}`);
     // SECURITY: exact same-repo condition — must not be weakened (e.g. no wildcard,
     // no actor-based check). This is the only condition that reliably prevents
     // fork-submitted code from accessing repository secrets via pull_request.

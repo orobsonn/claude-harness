@@ -129,6 +129,8 @@ If the file already exists, the CLI prints "Skipped (exists)" and exits 0 withou
 commands for all detected secrets — the operator must run these before the workflow runs for the
 first time.
 
+**Further workflows:** the generated `ci.yml` is the minimal PR gate. Any workflow added later (e2e, Docker image, nightly full suite, deploy) follows `.claude/rules/ci.md` — PR is the gate, affected tests only on the PR, expensive jobs behind their own `paths:`.
+
 **Stack skip:** If `detect-stack` returns `status: "skip"` (e.g. unrecognised runner), the CLI prints
 the skip reason and writes nothing.
 
