@@ -27,7 +27,7 @@ Carrega em arquivos E2E e config do Playwright. Stack default: **Playwright** co
 ### Cobertura — focada em jornadas
 - 1 spec por user journey relevante (signup, checkout, dashboard load, criar/editar/deletar recurso principal)
 - NAO duplicar testes unit em E2E — E2E e caro, focar em integracao real
-- Smoke tests em CI (5-10 jornadas criticas), suite completa em deploy/nightly
+- Smoke tests no PR (5-10 jornadas criticas), suite completa no noturno/`workflow_dispatch`/label `ci-completo` (ver `ci.md`)
 
 ### Selectors — ordem de preferencia
 1. **`getByRole`** — `getByRole("button", { name: /entrar/i })`. Acessivel + robusto
@@ -48,7 +48,8 @@ Carrega em arquivos E2E e config do Playwright. Stack default: **Playwright** co
 - Dados criados durante o teste devem ser limpos em `afterEach` ou via DB efemero
 
 ### CI
-- Playwright em workflow separado (paralelo ao unit), runs on `pull_request`
+- Playwright em workflow proprio (`e2e.yml`), com `paths:` restrito ao que afeta as jornadas (codigo do app, `e2e/`, `tests/`, `playwright.config.*`, o proprio workflow) — nunca dentro do workflow de unit e nunca repetido no push da `main` (o PR e a porta, ver `ci.md`)
+- `concurrency` com `cancel-in-progress` em PR, `timeout-minutes` no job e cache dos browsers (`~/.cache/ms-playwright`, chave pela versao do Playwright); instalar so o browser usado (`npx playwright install --with-deps chromium`)
 - Use `retries: 2` em CI (flaky reduce); `retries: 0` em dev
 - Trace + screenshot em failure: `use: { trace: 'retain-on-failure', screenshot: 'only-on-failure' }`
 

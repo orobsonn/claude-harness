@@ -118,6 +118,7 @@ A green happy-path test does NOT clear a race — the test must exercise the haz
 - Code quality: naming, atomicity, no dead code, no `any`, JSDoc on new `.ts` files.
 - Security: no hardcoded secrets, error messages sanitized, input validated at the boundary.
 - Scope: no writes outside `scope_paths`.
+- CI: when the diff touches `.github/workflows/**`, check it against `.claude/rules/ci.md` (suite not re-run on push to `main`, `concurrency`, `timeout-minutes`, dependency cache, minimal `permissions`, third-party actions pinned by SHA, expensive job/runner behind its own `paths:`). Each gap is a `medium` PROBLEMA.
 
 ### 9. Documented-CLI entry-block check
 - Grep the task's docs (SKILL.md, a README, a nested CLAUDE.md, or a CI comment — any doc the operator would follow) for a documented runnable invocation of the module (`node <path>.mjs`, or an npm-script / shell wrapper that resolves to it).

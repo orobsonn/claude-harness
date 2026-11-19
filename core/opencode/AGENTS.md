@@ -99,7 +99,7 @@ request's triage requires it. The operator never changes primary role to plan or
 - Atomic functions; DRY with limit; TypeScript strict (no `any`).
 - Comments only for WHY. JSDoc `/** @description ... */` on every new `.ts`/`.tsx`.
 - Forbidden generic files: `helpers.ts`, `utils.ts`, `misc.ts`, `common.ts`.
-- Full law also lives under `.opencode/rules/` (git, security, testing, architecture, unarmed-defects) — load when relevant; AGENTS is the summary.
+- Full law also lives under `.opencode/rules/` (git, security, testing, architecture, ci, unarmed-defects) — load when relevant; AGENTS is the summary.
 
 ---
 
